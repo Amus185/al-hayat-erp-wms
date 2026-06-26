@@ -1,0 +1,66 @@
+# Project Folder Structure
+
+```text
+al-hayat-erp-wms/
+  README.md
+  docker-compose.yml
+  package.json
+  docs/
+  database/
+    schema.sql
+    seed.sql
+  backend/
+    package.json
+    tsconfig.json
+    src/
+      main.ts
+      app.module.ts
+      common/
+        decorators/
+        guards/
+        interceptors/
+        filters/
+      config/
+      database/
+      modules/
+        auth/
+        users/
+        products/
+        warehouses/
+        inventory/
+        branches/
+        transfers/
+        purchasing/
+        sales/
+        reports/
+        notifications/
+        audit/
+        files/
+      realtime/
+  web/
+    package.json
+    tsconfig.json
+    vite.config.ts
+    src/
+      main.tsx
+      App.tsx
+      api/
+      components/
+      features/
+      layouts/
+      styles/
+      types/
+  mobile/
+    package.json
+    tsconfig.json
+    app.json
+    src/
+      App.tsx
+      api/
+      components/
+      navigation/
+      screens/
+      theme/
+      types/
+```
+

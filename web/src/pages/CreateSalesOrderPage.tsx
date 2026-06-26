@@ -1,0 +1,361 @@
+import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { ShoppingCart, ArrowLeft, Plus, Trash2 } from 'lucide-react';
+import { apiGet, apiPost } from '../api/client';
+import { FormField, InputField, TextareaField } from '../components/FormField';
+import { SearchInput } from '../components/SearchInput';
+import { useToast } from '../contexts/ToastContext';
+
+interface Customer {
+  id: string;
+  name: string;
+}
+
+interface Branch {
+  id: string;
+  name: string;
+}
+
+interface ProductVariant {
+  id: string;
+  sku: string;
+  barcode: string;
+  productName: string;
+  sellingPrice: number;
+}
+
+export function CreateSalesOrderPage() {
+  const navigate = useNavigate();
+  const { addToast } = useToast();
+
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [branches, setBranches] = useState<Branch[]>([]);
+  const [variants, setVariants] = useState<ProductVariant[]>([]);
+
+  // Form states
+  const [customerId, setCustomerId] = useState('');
+  const [branchId, setBranchId] = useState('');
+  const [notes, setNotes] = useState('');
+
+  // Searching variants
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<ProductVariant[]>([]);
+
+  // Selected lines
+  const [lines, setLines] = useState<{ variantId: string; sku: string; name: string; quantity: number; unitPrice: number }[]>([]);
+
+  useEffect(() => {
+    async function loadData() {
+      try {
+        const custs = await apiGet<Customer[]>('/customers');
+        const brs = await apiGet<Branch[]>('/branches');
+        const products = await apiGet<any[]>('/products');
+        
+        setCustomers(custs || []);
+        setBranches(brs || []);
+
+        // Build flat variant list
+        const flatList: ProductVariant[] = [];
+        products?.forEach((p) => {
+          p.variants?.forEach((v: any) => {
+            flatList.push({
+              id: v.id,
+              sku: v.sku,
+              barcode: v.barcode,
+              productName: p.name,
+              sellingPrice: p.selling_price,
+            });
+          });
+        });
+        setVariants(flatList);
+      } catch (err) {
+        console.error('Failed to load Sales Order creation metadata', err);
+      }
+    }
+    loadData();
+  }, []);
+
+  // Search filter
+  useEffect(() => {
+    if (!searchQuery) {
+      setSearchResults([]);
+      return;
+    }
+    const filtered = variants.filter(
+      (v) =>
+        v.sku.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        v.barcode.includes(searchQuery) ||
+        v.productName.toLowerCase().includes(searchQuery.toLowerCase())
+    );
+    setSearchResults(filtered.slice(0, 5));
+  }, [searchQuery, variants]);
+
+  const addLine = (v: ProductVariant) => {
+    if (lines.some((l) => l.variantId === v.id)) {
+      addToast('warning', 'Variant already added to order lines');
+      return;
+    }
+    setLines((prev) => [
+      ...prev,
+      { variantId: v.id, sku: v.sku, name: v.productName, quantity: 1, unitPrice: v.sellingPrice || 0 },
+    ]);
+    setSearchQuery('');
+  };
+
+  const removeLine = (idx: number) => {
+    setLines((prev) => prev.filter((_, i) => i !== idx));
+  };
+
+  const updateLine = (idx: number, field: 'quantity' | 'unitPrice', val: number) => {
+    setLines((prev) => {
+      const copy = [...prev];
+      copy[idx] = {
+        ...copy[idx],
+        [field]: field === 'quantity' ? Math.max(1, val) : Math.max(0, val),
+      };
+      return copy;
+    });
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!customerId) {
+      addToast('error', 'Please select a customer');
+      return;
+    }
+    if (!branchId) {
+      addToast('error', 'Please select a retail branch');
+      return;
+    }
+    if (lines.length === 0) {
+      addToast('error', 'Please add at least one line item to sales order');
+      return;
+    }
+
+    const payload = {
+      customerId,
+      branchId,
+      notes: notes || undefined,
+      lines: lines.map((l) => ({
+        variantId: l.variantId,
+        quantity: l.quantity,
+        unitPrice: l.unitPrice,
+      })),
+    };
+
+    try {
+      await apiPost('/sales-orders', payload);
+      addToast('success', 'Sales order created successfully');
+      navigate('/sales');
+    } catch (err: any) {
+      addToast('error', err?.message || 'Failed to submit Sales Order');
+    }
+  };
+
+  const totalOrderAmount = lines.reduce((acc, curr) => acc + (curr.quantity * curr.unitPrice), 0);
+
+  return (
+    <div className="module-page">
+      <section style={{ marginBottom: '10px' }}>
+        <button
+          type="button"
+          className="btn btn--outline"
+          onClick={() => navigate('/sales')}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+        >
+          <ArrowLeft size={16} /> Back to Sales
+        </button>
+      </section>
+
+      <section className="module-header">
+        <div className="module-header__icon">
+          <ShoppingCart size={24} />
+        </div>
+        <div>
+          <p>Revenue Wizard</p>
+          <h2>Draft and Issue New Sales Order (SO)</h2>
+        </div>
+        <div></div>
+      </section>
+
+      <form onSubmit={handleSubmit} style={{ display: 'grid', gap: '16px' }}>
+        <div className="panel" style={{ padding: '20px' }}>
+          <h3 style={{ margin: '0 0 14px', color: '#066006' }}>Customer & Branch Information</h3>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
+            <FormField label="Customer *">
+              <select
+                className="form-select"
+                value={customerId}
+                onChange={(e) => setCustomerId(e.target.value)}
+                required
+              >
+                <option value="">Select Customer...</option>
+                {customers.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+            </FormField>
+
+            <FormField label="Originating Branch *">
+              <select
+                className="form-select"
+                value={branchId}
+                onChange={(e) => setBranchId(e.target.value)}
+                required
+              >
+                <option value="">Select Branch...</option>
+                {branches.map((b) => (
+                  <option key={b.id} value={b.id}>
+                    {b.name}
+                  </option>
+                ))}
+              </select>
+            </FormField>
+          </div>
+
+          <div style={{ marginTop: '10px' }}>
+            <TextareaField
+              label="Order Notes"
+              id="soNotes"
+              placeholder="e.g. Scheduled delivery dates, special item packing instructions..."
+              value={notes}
+              onChange={setNotes}
+            />
+          </div>
+        </div>
+
+        {/* Lines selection */}
+        <div className="panel" style={{ padding: '20px' }}>
+          <h3 style={{ margin: '0 0 14px', color: '#066006' }}>Ordered Items</h3>
+
+          <div style={{ position: 'relative' }}>
+            <SearchInput
+              value={searchQuery}
+              onChange={setSearchQuery}
+              placeholder="Search / Scan variant to add to Order..."
+            />
+            {/* Search autocomplete dropdown */}
+            {searchResults.length > 0 && (
+              <div style={{
+                position: 'absolute',
+                top: '100%',
+                left: '0',
+                right: '0',
+                background: '#fff',
+                border: '1px solid #d9e2d9',
+                borderRadius: '8px',
+                boxShadow: '0 6px 20px rgba(0,0,0,0.1)',
+                zIndex: '10',
+                marginTop: '4px',
+                overflow: 'hidden'
+              }}>
+                {searchResults.map((v) => (
+                  <div
+                    key={v.id}
+                    onClick={() => addLine(v)}
+                    style={{
+                      padding: '10px 14px',
+                      borderBottom: '1px solid #edf1ed',
+                      cursor: 'pointer',
+                      fontSize: '13px'
+                    }}
+                    onMouseEnter={(e) => (e.currentTarget.style.background = '#e9f6e8')}
+                    onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                  >
+                    <strong>{v.productName}</strong> <span style={{ color: '#667066' }}>({v.sku} - {v.barcode})</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Table of selected lines */}
+          <div style={{ marginTop: '20px' }}>
+            {lines.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '24px', color: '#667066', border: '1px dashed #d9e2d9', borderRadius: '8px' }}>
+                No variants added to this order. Scan or search for variants above.
+              </div>
+            ) : (
+              <div>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Variant SKU</th>
+                      <th>Product Description</th>
+                      <th>Qty Ordered</th>
+                      <th>Unit Price (SAR)</th>
+                      <th>Subtotal (SAR)</th>
+                      <th>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {lines.map((l, index) => (
+                      <tr key={l.variantId}>
+                        <td>{l.sku}</td>
+                        <td>{l.name}</td>
+                        <td>
+                          <input
+                            type="number"
+                            value={l.quantity}
+                            min={1}
+                            onChange={(e) => updateLine(index, 'quantity', Number(e.target.value))}
+                            className="form-input"
+                            style={{ width: '80px', minHeight: '32px', textAlign: 'center' }}
+                          />
+                        </td>
+                        <td>
+                          <input
+                            type="number"
+                            value={l.unitPrice}
+                            min={0}
+                            step="0.01"
+                            onChange={(e) => updateLine(index, 'unitPrice', Number(e.target.value))}
+                            className="form-input"
+                            style={{ width: '100px', minHeight: '32px', textAlign: 'center' }}
+                          />
+                        </td>
+                        <td>
+                          <strong>{(l.quantity * l.unitPrice).toLocaleString(undefined, { minimumFractionDigits: 2 })}</strong>
+                        </td>
+                        <td>
+                          <button type="button" className="btn btn--danger btn--sm" onClick={() => removeLine(index)}>
+                            <Trash2 size={14} />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+
+                {/* Summary Panel */}
+                <div style={{
+                  display: 'flex',
+                  justifyContent: 'flex-end',
+                  borderTop: '1px solid #edf1ed',
+                  paddingTop: '16px',
+                  marginTop: '16px'
+                }}>
+                  <div style={{ fontSize: '18px', color: '#066006' }}>
+                    Total Order Value: <strong>SAR {totalOrderAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</strong>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+          <button type="button" className="btn btn--outline" onClick={() => navigate('/sales')}>
+            Cancel
+          </button>
+          <button type="submit" className="btn btn--primary" disabled={lines.length === 0}>
+            Create Sales Order
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}

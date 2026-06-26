@@ -1,0 +1,19 @@
+{
+  "expo": {
+    "name": "Al Hayat WMS",
+    "slug": "al-hayat-wms",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "scheme": "alhayatwms",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": false
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#0B8F08"
+      }
+    }
+  }
+}
+

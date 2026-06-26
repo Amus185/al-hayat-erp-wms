@@ -1,0 +1,32 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: al-hayat-postgres
+    environment:
+      POSTGRES_DB: al_hayat_erp
+      POSTGRES_USER: al_hayat
+      POSTGRES_PASSWORD: al_hayat_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - ./database/seed.sql:/docker-entrypoint-initdb.d/02-seed.sql:ro
+
+  minio:
+    image: minio/minio:latest
+    container_name: al-hayat-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: alhayatminio
+      MINIO_ROOT_PASSWORD: alhayatminiosecret
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+
+volumes:
+  postgres_data:
+  minio_data:
+

@@ -1,0 +1,406 @@
+import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { PackageSearch, Plus, Trash2, Edit } from 'lucide-react';
+import { apiGet, apiPost, apiDelete } from '../api/client';
+import { DataTable, type Column } from '../components/DataTable';
+import { SearchInput } from '../components/SearchInput';
+import { Modal } from '../components/Modal';
+import { FormField, InputField } from '../components/FormField';
+import { useToast } from '../contexts/ToastContext';
+import { useAuth } from '../contexts/AuthContext';
+
+interface Category {
+  id: string;
+  name: string;
+}
+
+interface Brand {
+  id: string;
+  name: string;
+}
+
+interface Product {
+  id: string;
+  sku: string;
+  name: string;
+  category_id: string | null;
+  brand_id: string | null;
+  cost_price: number;
+  selling_price: number;
+  reorder_level: number;
+  is_active: boolean;
+  category?: string;
+  brand?: string;
+}
+
+export function ProductsPage() {
+  const navigate = useNavigate();
+  const { addToast } = useToast();
+  const { hasPermission } = useAuth();
+
+  const [products, setProducts] = useState<Product[]>([]);
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [brands, setBrands] = useState<Brand[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState('');
+  const [selectedCategory, setSelectedCategory] = useState('');
+
+  // Modals state
+  const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [newProduct, setNewProduct] = useState({
+    sku: '',
+    name: '',
+    description: '',
+    categoryId: '',
+    brandId: '',
+    costPrice: 0,
+    sellingPrice: 0,
+    reorderLevel: 5,
+    variants: [] as { sku: string; barcode: string; color: string; material: string; dimensions: string }[],
+  });
+
+  // Variant helper states
+  const [vSku, setVSku] = useState('');
+  const [vBarcode, setVBarcode] = useState('');
+  const [vColor, setVColor] = useState('');
+  const [vMaterial, setVMaterial] = useState('');
+  const [vDimensions, setVDimensions] = useState('');
+
+  const loadData = async () => {
+    try {
+      setLoading(true);
+      const prs = await apiGet<Product[]>('/products', { q: search });
+      setProducts(prs || []);
+    } catch (err: any) {
+      addToast('error', err?.message || 'Failed to fetch products');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadData();
+  }, [search]);
+
+  useEffect(() => {
+    async function fetchMetadata() {
+      try {
+        const cats = await apiGet<Category[]>('/products/categories');
+        const brs = await apiGet<Brand[]>('/products/brands');
+        setCategories(cats || []);
+        setBrands(brs || []);
+      } catch (err) {
+        console.error('Failed to load categories/brands', err);
+      }
+    }
+    fetchMetadata();
+  }, []);
+
+  const handleCreateProduct = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newProduct.sku || !newProduct.name) {
+      addToast('error', 'SKU and Name are required');
+      return;
+    }
+    if (newProduct.variants.length === 0) {
+      addToast('error', 'At least one variant is required');
+      return;
+    }
+
+    try {
+      await apiPost('/products', newProduct);
+      addToast('success', 'Product created successfully');
+      setIsCreateOpen(false);
+      setNewProduct({
+        sku: '',
+        name: '',
+        description: '',
+        categoryId: '',
+        brandId: '',
+        costPrice: 0,
+        sellingPrice: 0,
+        reorderLevel: 5,
+        variants: [],
+      });
+      loadData();
+    } catch (err: any) {
+      addToast('error', err?.message || 'Failed to create product');
+    }
+  };
+
+  const handleDelete = async (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!window.confirm('Are you sure you want to delete this product?')) return;
+    try {
+      await apiDelete(`/products/${id}`);
+      addToast('success', 'Product deleted successfully');
+      loadData();
+    } catch (err: any) {
+      addToast('error', err?.message || 'Failed to delete product');
+    }
+  };
+
+  const addVariantToNewProduct = () => {
+    if (!vSku || !vBarcode) {
+      addToast('error', 'Variant SKU and Barcode are required');
+      return;
+    }
+    setNewProduct((prev) => ({
+      ...prev,
+      variants: [...prev.variants, { sku: vSku, barcode: vBarcode, color: vColor, material: vMaterial, dimensions: vDimensions }],
+    }));
+    // reset variant inputs
+    setVSku('');
+    setVBarcode('');
+    setVColor('');
+    setVMaterial('');
+    setVDimensions('');
+  };
+
+  const removeVariantFromNewProduct = (index: number) => {
+    setNewProduct((prev) => ({
+      ...prev,
+      variants: prev.variants.filter((_, idx) => idx !== index),
+    }));
+  };
+
+  const filteredProducts = products.filter((p) => {
+    if (!selectedCategory) return true;
+    return p.category_id === selectedCategory;
+  });
+
+  const columns: Column<Product>[] = [
+    { key: 'sku', label: 'SKU', sortable: true },
+    { key: 'name', label: 'Name', sortable: true },
+    { key: 'category', label: 'Category', render: (row) => row.category || 'N/A' },
+    { key: 'brand', label: 'Brand', render: (row) => row.brand || 'N/A' },
+    { key: 'cost_price', label: 'Cost Price', render: (row) => `SAR ${Number(row.cost_price).toLocaleString()}` },
+    { key: 'selling_price', label: 'Selling Price', render: (row) => `SAR ${Number(row.selling_price).toLocaleString()}` },
+    {
+      key: 'actions',
+      label: 'Actions',
+      render: (row) => (
+        <div style={{ display: 'flex', gap: '8px' }}>
+          <button
+            type="button"
+            className="btn btn--outline btn--sm"
+            onClick={(e) => {
+              e.stopPropagation();
+              navigate(`/products/${row.id}`);
+            }}
+          >
+            View Details
+          </button>
+          {hasPermission('products.write') && (
+            <button
+              type="button"
+              className="btn btn--danger btn--sm"
+              onClick={(e) => handleDelete(row.id, e)}
+            >
+              <Trash2 size={14} />
+            </button>
+          )}
+        </div>
+      ),
+    },
+  ];
+
+  return (
+    <div className="module-page">
+      <section className="module-header">
+        <div className="module-header__icon">
+          <PackageSearch size={24} />
+        </div>
+        <div>
+          <p>Catalog</p>
+          <h2>Products, variants, images, and barcode lookup</h2>
+        </div>
+        {hasPermission('products.write') && (
+          <button type="button" onClick={() => setIsCreateOpen(true)}>
+            <Plus size={16} style={{ marginRight: '6px', inlineSize: 'auto' }} /> New Product
+          </button>
+        )}
+      </section>
+
+      <section className="panel" style={{ display: 'flex', gap: '14px', alignItems: 'center', flexWrap: 'wrap' }}>
+        <div style={{ flex: '1', minWidth: '240px' }}>
+          <SearchInput value={search} onChange={setSearch} placeholder="Search by SKU, Name or Description..." />
+        </div>
+        <div>
+          <select
+            value={selectedCategory}
+            onChange={(e) => setSelectedCategory(e.target.value)}
+            className="form-select"
+            style={{ minHeight: '38px', borderRadius: '8px', border: '1px solid #d9e2d9', padding: '0 10px' }}
+          >
+            <option value="">All Categories</option>
+            {categories.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </select>
+        </div>
+      </section>
+
+      <section className="panel">
+        <DataTable
+          columns={columns}
+          data={filteredProducts}
+          keyExtractor={(row) => row.id}
+          loading={loading}
+          onRowClick={(row) => navigate(`/products/${row.id}`)}
+          emptyMessage="No products match the criteria"
+        />
+      </section>
+
+      {/* Create Modal */}
+      <Modal isOpen={isCreateOpen} onClose={() => setIsCreateOpen(false)} title="Create New Product" width="lg">
+        <form onSubmit={handleCreateProduct}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
+            <InputField
+              label="Product SKU"
+              id="sku"
+              value={newProduct.sku}
+              onChange={(val) => setNewProduct((prev) => ({ ...prev, sku: val }))}
+              required
+            />
+            <InputField
+              label="Product Name"
+              id="name"
+              value={newProduct.name}
+              onChange={(val) => setNewProduct((prev) => ({ ...prev, name: val }))}
+              required
+            />
+          </div>
+
+          <div style={{ marginTop: '10px' }}>
+            <label className="form-field__label">Description</label>
+            <textarea
+              className="form-textarea"
+              value={newProduct.description}
+              onChange={(e) => setNewProduct((prev) => ({ ...prev, description: e.target.value }))}
+              rows={2}
+            />
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px', marginTop: '10px' }}>
+            <FormField label="Category">
+              <select
+                className="form-select"
+                value={newProduct.categoryId}
+                onChange={(e) => setNewProduct((prev) => ({ ...prev, categoryId: e.target.value }))}
+              >
+                <option value="">Select Category</option>
+                {categories.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+            </FormField>
+            <FormField label="Brand">
+              <select
+                className="form-select"
+                value={newProduct.brandId}
+                onChange={(e) => setNewProduct((prev) => ({ ...prev, brandId: e.target.value }))}
+              >
+                <option value="">Select Brand</option>
+                {brands.map((b) => (
+                  <option key={b.id} value={b.id}>
+                    {b.name}
+                  </option>
+                ))}
+              </select>
+            </FormField>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '14px', marginTop: '10px' }}>
+            <InputField
+              label="Cost Price (SAR)"
+              id="costPrice"
+              type="number"
+              value={newProduct.costPrice}
+              onChange={(val) => setNewProduct((prev) => ({ ...prev, costPrice: Number(val) }))}
+              required
+            />
+            <InputField
+              label="Selling Price (SAR)"
+              id="sellingPrice"
+              type="number"
+              value={newProduct.sellingPrice}
+              onChange={(val) => setNewProduct((prev) => ({ ...prev, sellingPrice: Number(val) }))}
+              required
+            />
+            <InputField
+              label="Reorder Level"
+              id="reorderLevel"
+              type="number"
+              value={newProduct.reorderLevel}
+              onChange={(val) => setNewProduct((prev) => ({ ...prev, reorderLevel: Number(val) }))}
+              required
+            />
+          </div>
+
+          {/* Variants Section */}
+          <div style={{ marginTop: '20px', borderTop: '1px solid #edf1ed', paddingTop: '14px' }}>
+            <h3>Product Variants</h3>
+            <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1.5fr 1fr 1fr 1fr auto', gap: '8px', alignItems: 'end' }}>
+              <InputField label="Var SKU" id="vSku" value={vSku} onChange={setVSku} />
+              <InputField label="Barcode" id="vBarcode" value={vBarcode} onChange={setVBarcode} />
+              <InputField label="Color" id="vColor" value={vColor} onChange={setVColor} />
+              <InputField label="Material" id="vMaterial" value={vMaterial} onChange={setVMaterial} />
+              <InputField label="Dimensions" id="vDimensions" value={vDimensions} onChange={setVDimensions} />
+              <button type="button" className="btn btn--outline" onClick={addVariantToNewProduct} style={{ minHeight: '38px', marginBottom: '4px' }}>
+                Add
+              </button>
+            </div>
+
+            {/* List of added variants */}
+            <div style={{ marginTop: '12px' }}>
+              {newProduct.variants.length === 0 ? (
+                <p style={{ color: '#b91c1c', fontSize: '13px' }}>* At least one variant must be added</p>
+              ) : (
+                <table style={{ fontSize: '12px' }}>
+                  <thead>
+                    <tr>
+                      <th>Variant SKU</th>
+                      <th>Barcode</th>
+                      <th>Attributes</th>
+                      <th>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {newProduct.variants.map((v, index) => (
+                      <tr key={index}>
+                        <td>{v.sku}</td>
+                        <td>{v.barcode}</td>
+                        <td>
+                          {[v.color, v.material, v.dimensions].filter(Boolean).join(' | ') || 'N/A'}
+                        </td>
+                        <td>
+                          <button type="button" className="btn btn--danger btn--sm" onClick={() => removeVariantFromNewProduct(index)}>
+                            Remove
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '20px' }}>
+            <button type="button" className="btn btn--outline" onClick={() => setIsCreateOpen(false)}>
+              Cancel
+            </button>
+            <button type="submit" className="btn btn--primary">
+              Create Product
+            </button>
+          </div>
+        </form>
+      </Modal>
+    </div>
+  );
+}
