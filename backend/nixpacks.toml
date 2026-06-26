@@ -1,0 +1,6 @@
+[phases.build]
+nixPkgs = ["nodejs_20"]
+cmds = ["npm install --legacy-peer-deps", "npm run build"]
+
+[start]
+cmd = "npm run start:prod"
