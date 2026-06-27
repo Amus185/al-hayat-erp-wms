@@ -22,9 +22,9 @@ import { AuditPage } from './pages/AuditPage';
 import { UsersPage } from './pages/UsersPage';
 
 function ProtectedRoute({ permission }: { permission?: string }) {
-  const { isAuthenticated, hasPermission, loading } = useAuth();
+  const { isAuthenticated, hasPermission, isLoading } = useAuth();
 
-  if (loading) {
+  if (isLoading) {
     return (
       <div style={{ display: 'flex', height: '100vh', justifyContent: 'center', alignItems: 'center', background: '#f4fbf4' }}>
         <div style={{ textAlign: 'center' }}>
