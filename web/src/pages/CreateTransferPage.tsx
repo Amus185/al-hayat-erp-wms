@@ -327,6 +327,7 @@ export function CreateTransferPage() {
                       <td>
                         <button type="button" className="btn btn--danger btn--sm" onClick={() => removeLine(index)}>
                           <Trash2 size={14} />
+                        </button>
                         </td>
                       </tr>
                     ))}
