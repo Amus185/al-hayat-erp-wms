@@ -15,9 +15,7 @@ import { PG_POOL } from './database.constants';
         new Pool({
           connectionString: config.get<string>('DATABASE_URL'),
           max: Number(config.get<string>('PG_POOL_SIZE') ?? 20),
-          ssl: config.get<string>('NODE_ENV') === 'production'
-            ? { rejectUnauthorized: true }
-            : { rejectUnauthorized: false }, // Supabase requires SSL even in dev
+          ssl: { rejectUnauthorized: false },
         })
     },
     DatabaseService
