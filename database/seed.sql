@@ -37,6 +37,19 @@ SELECT r.id, p.id FROM roles r CROSS JOIN permissions p
 WHERE r.name = 'SUPER_ADMIN'
 ON CONFLICT DO NOTHING;
 
+-- ── Default Super Admin User ─────────────────────────
+-- Email: admin@alhayat.com | Password: Admin@1234
+INSERT INTO users (id, email, full_name, password_hash, role_id, is_active)
+SELECT
+  '00000000-0000-0000-0000-000000000001'::uuid,
+  'admin@alhayat.com',
+  'System Administrator',
+  '$2b$12$7Uasu85LNvhI8M2Jc6qwr.Nx0JqbVCWNWY2vqBH3wl6IiH3uyrcv6',
+  r.id,
+  true
+FROM roles r WHERE r.name = 'SUPER_ADMIN'
+ON CONFLICT (email) DO NOTHING;
+
 -- ── Warehouse Manager permissions ───────────────────
 INSERT INTO role_permissions (role_id, permission_id)
 SELECT r.id, p.id FROM roles r JOIN permissions p ON p.code IN (
