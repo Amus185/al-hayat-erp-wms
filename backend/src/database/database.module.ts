@@ -2,8 +2,7 @@ import { Global, Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { Pool } from 'pg';
 import { DatabaseService } from './database.service';
-
-export const PG_POOL = Symbol('PG_POOL');
+import { PG_POOL } from './database.constants';
 
 @Global()
 @Module({
