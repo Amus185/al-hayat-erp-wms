@@ -5,6 +5,7 @@ import { DataTable, type Column } from '../components/DataTable';
 import { SearchInput } from '../components/SearchInput';
 import { FormField } from '../components/FormField';
 import { LoadingSpinner } from '../components/LoadingSpinner';
+import { Modal } from '../components/Modal';
 import { useToast } from '../contexts/ToastContext';
 
 interface AuditLog {
