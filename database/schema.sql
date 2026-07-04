@@ -8,10 +8,11 @@ CREATE TYPE location_owner_type AS ENUM ('WAREHOUSE','BRANCH');
 
 CREATE TABLE branches (
   id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
-  code varchar(20) UNIQUE NOT NULL,
+  code varchar(20) UNIQUE,
   name varchar(160) NOT NULL,
   city varchar(120) NOT NULL,
   address text,
+  phone varchar(80),
   is_active boolean NOT NULL DEFAULT true,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
@@ -19,10 +20,11 @@ CREATE TABLE branches (
 
 CREATE TABLE warehouses (
   id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
-  code varchar(20) UNIQUE NOT NULL,
+  code varchar(20) UNIQUE,
   name varchar(160) NOT NULL,
   city varchar(120) NOT NULL,
   address text,
+  phone varchar(80),
   is_active boolean NOT NULL DEFAULT true,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
@@ -36,8 +38,9 @@ CREATE TABLE permissions (
 
 CREATE TABLE roles (
   id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
-  code varchar(60) UNIQUE NOT NULL,
-  name varchar(120) NOT NULL
+  code varchar(60) UNIQUE,
+  name varchar(120) UNIQUE NOT NULL,
+  description text
 );
 
 CREATE TABLE role_permissions (
@@ -78,8 +81,8 @@ CREATE TABLE refresh_tokens (
 CREATE TABLE categories (
   id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
   parent_id uuid REFERENCES categories(id),
-  name varchar(140) NOT NULL,
-  slug varchar(160) UNIQUE NOT NULL
+  name varchar(140) UNIQUE NOT NULL,
+  slug varchar(160) UNIQUE
 );
 
 CREATE TABLE brands (
@@ -204,6 +207,7 @@ CREATE TABLE stock_count_lines (
 CREATE TABLE suppliers (
   id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
   name varchar(180) NOT NULL,
+  contact_name varchar(180),
   phone varchar(80),
   email varchar(180),
   address text,

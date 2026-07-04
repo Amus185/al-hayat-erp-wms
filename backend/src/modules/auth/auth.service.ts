@@ -27,7 +27,14 @@ export class AuthService {
   ) {}
 
   async login(dto: LoginDto) {
-    const user = await this.findUserWithPermissions(dto.email);
+    let user: UserRecord | null;
+    try {
+      user = await this.findUserWithPermissions(dto.email);
+    } catch (error) {
+      this.logger.error(`Login DB query failed: ${(error as Error).message}`, (error as Error).stack);
+      throw new UnauthorizedException('Authentication service unavailable. Please try again.');
+    }
+
     if (!user || !(await compare(dto.password, user.password_hash))) {
       throw new UnauthorizedException('Invalid credentials');
     }
@@ -42,19 +49,26 @@ export class AuthService {
     const accessToken = await this.jwt.signAsync(payload);
     const refreshToken = await this.jwt.signAsync(
       { sub: user.id, type: 'refresh' },
-      { expiresIn: '7d' },
+      { expiresIn: this.config.get<string>('JWT_REFRESH_EXPIRY') ?? '7d' },
     );
 
     // Store hashed refresh token
-    const tokenHash = this.hashToken(refreshToken);
-    await this.db.query(
-      `INSERT INTO refresh_tokens (user_id, token_hash, expires_at)
-       VALUES ($1, $2, NOW() + INTERVAL '7 days')`,
-      [user.id, tokenHash],
-    );
+    try {
+      const tokenHash = this.hashToken(refreshToken);
+      await this.db.query(
+        `INSERT INTO refresh_tokens (user_id, token_hash, expires_at)
+         VALUES ($1, $2, NOW() + INTERVAL '7 days')`,
+        [user.id, tokenHash],
+      );
+    } catch (error) {
+      this.logger.warn(`Failed to store refresh token: ${(error as Error).message}`);
+      // Continue — access token still works
+    }
 
-    // Update last login
-    await this.db.query('UPDATE users SET last_login_at = NOW() WHERE id = $1', [user.id]);
+    // Update last login (non-critical)
+    this.db.query('UPDATE users SET last_login_at = NOW() WHERE id = $1', [user.id]).catch((err) =>
+      this.logger.warn(`Failed to update last_login_at: ${(err as Error).message}`),
+    );
 
     return {
       accessToken,

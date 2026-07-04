@@ -11,7 +11,7 @@ import { AuthService } from './auth.service';
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({
         secret: config.get<string>('JWT_ACCESS_SECRET') ?? 'dev-access-secret',
-        signOptions: { expiresIn: '15m' },
+        signOptions: { expiresIn: config.get<string>('JWT_ACCESS_EXPIRY') ?? '15m' },
       }),
     }),
   ],
