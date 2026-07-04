@@ -31,8 +31,9 @@ export class AuthService {
     try {
       user = await this.findUserWithPermissions(dto.email);
     } catch (error) {
-      this.logger.error(`Login DB query failed: ${(error as Error).message}`, (error as Error).stack);
-      throw new UnauthorizedException('Authentication service unavailable. Please try again.');
+      const errMsg = (error as Error).message;
+      this.logger.error(`Login DB query failed: ${errMsg}`, (error as Error).stack);
+      throw new UnauthorizedException(`DB error: ${errMsg}`);
     }
 
     if (!user || !(await compare(dto.password, user.password_hash))) {
