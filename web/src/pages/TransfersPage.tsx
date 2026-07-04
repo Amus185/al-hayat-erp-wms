@@ -263,7 +263,7 @@ export function TransfersPage() {
             }}>
               <button
                 type="button"
-                className="btn btn--outline"
+                className="btn btn-secondary"
                 onClick={() => setSelectedTransfer(null)}
                 disabled={actionLoading}
               >
@@ -274,7 +274,7 @@ export function TransfersPage() {
               {selectedTransfer.status === 'PENDING_APPROVAL' && hasPermission('transfers.approve') && (
                 <button
                   type="button"
-                  className="btn btn--primary"
+                  className="btn btn-primary"
                   onClick={() => handleApprove(selectedTransfer.id)}
                   disabled={actionLoading}
                 >
@@ -286,7 +286,7 @@ export function TransfersPage() {
               {selectedTransfer.status === 'APPROVED' && hasPermission('transfers.dispatch') && (
                 <button
                   type="button"
-                  className="btn btn--primary"
+                  className="btn btn-primary"
                   onClick={() => handleDispatch(selectedTransfer.id)}
                   disabled={actionLoading}
                 >
@@ -298,7 +298,7 @@ export function TransfersPage() {
               {selectedTransfer.status === 'DISPATCHED' && hasPermission('transfers.receive') && (
                 <button
                   type="button"
-                  className="btn btn--primary"
+                  className="btn btn-primary"
                   onClick={() => handleReceive(selectedTransfer.id)}
                   disabled={actionLoading}
                 >

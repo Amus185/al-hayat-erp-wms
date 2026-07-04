@@ -76,7 +76,7 @@ export function ProductDetailsPage() {
       <div className="empty-state">
         <Package size={48} />
         <p>Product not found</p>
-        <button type="button" className="btn btn--outline" onClick={() => navigate('/products')}>
+        <button type="button" className="btn btn-secondary" onClick={() => navigate('/products')}>
           Back to Catalog
         </button>
       </div>
@@ -135,7 +135,7 @@ export function ProductDetailsPage() {
   return (
     <div className="module-page">
       <section style={{ marginBottom: '10px' }}>
-        <button type="button" className="btn btn--outline" onClick={() => navigate('/products')} style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+        <button type="button" className="btn btn-secondary" onClick={() => navigate('/products')} style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
           <ArrowLeft size={16} /> Back to Catalog
         </button>
       </section>

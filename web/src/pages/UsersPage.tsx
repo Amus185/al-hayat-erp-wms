@@ -318,10 +318,10 @@ export function UsersPage() {
           </div>
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '20px' }}>
-            <button type="button" className="btn btn--outline" onClick={() => setIsOpen(false)}>
+            <button type="button" className="btn btn-secondary" onClick={() => setIsOpen(false)}>
               Cancel
             </button>
-            <button type="submit" className="btn btn--primary">
+            <button type="submit" className="btn btn-primary">
               Register User
             </button>
           </div>

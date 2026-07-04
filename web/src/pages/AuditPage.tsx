@@ -82,7 +82,7 @@ export function AuditPage() {
       render: (row) => (
         <button
           type="button"
-          className="btn btn--outline btn--sm"
+          className="btn btn-secondary btn-sm"
           onClick={(e) => {
             e.stopPropagation();
             setSelectedLog(row);
@@ -184,7 +184,7 @@ export function AuditPage() {
             </div>
 
             <div style={{ display: 'flex', justifyContent: 'flex-end', borderTop: '1px solid #edf1ed', paddingTop: '12px' }}>
-              <button type="button" className="btn btn--outline" onClick={() => setSelectedLog(null)}>
+              <button type="button" className="btn btn-secondary" onClick={() => setSelectedLog(null)}>
                 Close Viewer
               </button>
             </div>

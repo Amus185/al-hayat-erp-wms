@@ -156,7 +156,7 @@ export function CreateTransferPage() {
       <section style={{ marginBottom: '10px' }}>
         <button
           type="button"
-          className="btn btn--outline"
+          className="btn btn-secondary"
           onClick={() => navigate('/transfers')}
           style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
         >
@@ -325,7 +325,7 @@ export function CreateTransferPage() {
                         />
                       </td>
                       <td>
-                        <button type="button" className="btn btn--danger btn--sm" onClick={() => removeLine(index)}>
+                        <button type="button" className="btn btn-danger btn-sm" onClick={() => removeLine(index)}>
                           <Trash2 size={14} />
                         </button>
                         </td>
@@ -338,10 +338,10 @@ export function CreateTransferPage() {
         </div>
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
-          <button type="button" className="btn btn--outline" onClick={() => navigate('/transfers')}>
+          <button type="button" className="btn btn-secondary" onClick={() => navigate('/transfers')}>
             Cancel
           </button>
-          <button type="submit" className="btn btn--primary" disabled={lines.length === 0}>
+          <button type="submit" className="btn btn-primary" disabled={lines.length === 0}>
             Submit Transfer Request
           </button>
         </div>

@@ -168,7 +168,7 @@ export function WarehousesPage() {
               </span>
               <button
                 type="button"
-                className="btn btn--outline btn--sm"
+                className="btn btn-secondary btn-sm"
                 onClick={() => handleViewLocations(wh)}
                 style={{ display: 'flex', alignItems: 'center', gap: '4px' }}
               >
@@ -204,7 +204,7 @@ export function WarehousesPage() {
               {hasPermission('inventory.adjust') && (
                 <button
                   type="button"
-                  className="btn btn--primary btn--sm"
+                  className="btn btn-primary btn-sm"
                   onClick={() => setIsAddLocationOpen(true)}
                   style={{ display: 'flex', alignItems: 'center', gap: '4px' }}
                 >
@@ -275,10 +275,10 @@ export function WarehousesPage() {
           </div>
           
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '20px' }}>
-            <button type="button" className="btn btn--outline" onClick={() => setIsAddLocationOpen(false)}>
+            <button type="button" className="btn btn-secondary" onClick={() => setIsAddLocationOpen(false)}>
               Cancel
             </button>
-            <button type="submit" className="btn btn--primary">
+            <button type="submit" className="btn btn-primary">
               Create Location
             </button>
           </div>

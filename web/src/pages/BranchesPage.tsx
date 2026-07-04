@@ -98,7 +98,7 @@ export function BranchesPage() {
             }}>
               <button
                 type="button"
-                className="btn btn--outline btn--sm"
+                className="btn btn-secondary btn-sm"
                 onClick={() => navigate(`/branches/${b.id}`)}
                 style={{ display: 'flex', alignItems: 'center', gap: '4px' }}
               >

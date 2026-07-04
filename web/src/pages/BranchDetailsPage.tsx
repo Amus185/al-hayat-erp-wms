@@ -76,7 +76,7 @@ export function BranchDetailsPage() {
       <div className="empty-state">
         <Building2 size={48} />
         <p>Branch not found</p>
-        <button type="button" className="btn btn--outline" onClick={() => navigate('/branches')}>
+        <button type="button" className="btn btn-secondary" onClick={() => navigate('/branches')}>
           Back to Branches
         </button>
       </div>
@@ -110,7 +110,7 @@ export function BranchDetailsPage() {
       <section style={{ marginBottom: '10px' }}>
         <button
           type="button"
-          className="btn btn--outline"
+          className="btn btn-secondary"
           onClick={() => navigate('/branches')}
           style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
         >

@@ -36,7 +36,7 @@ export function ConfirmDialog({
         <div className="confirm-dialog__actions">
           <button
             type="button"
-            className="btn btn--outline"
+            className="btn btn-secondary"
             onClick={onClose}
             disabled={loading}
             id={`${id}-cancel`}

@@ -258,7 +258,7 @@ export function PurchasingPage() {
       key: 'actions',
       label: 'Actions',
       render: (row) => (
-        <button type="button" className="btn btn--outline btn--sm" onClick={() => viewPoDetails(row)}>
+        <button type="button" className="btn btn-secondary btn-sm" onClick={() => viewPoDetails(row)}>
           <Eye size={14} style={{ marginRight: '4px', inlineSize: 'auto' }} /> Details
         </button>
       ),
@@ -276,10 +276,10 @@ export function PurchasingPage() {
           <h2>Suppliers, purchase orders, receipts, and payments</h2>
         </div>
         <div style={{ display: 'flex', gap: '10px' }}>
-          <button type="button" className="btn btn--outline" onClick={() => setIsSupplierOpen(true)}>
+          <button type="button" className="btn btn-secondary" onClick={() => setIsSupplierOpen(true)}>
             <UserPlus size={16} style={{ marginRight: '6px', inlineSize: 'auto' }} /> Add Supplier
           </button>
-          <button type="button" className="btn btn--primary" onClick={() => navigate('/purchasing/new')}>
+          <button type="button" className="btn btn-primary" onClick={() => navigate('/purchasing/new')}>
             <Plus size={16} style={{ marginRight: '6px', inlineSize: 'auto' }} /> Create PO
           </button>
         </div>
@@ -339,10 +339,10 @@ export function PurchasingPage() {
           </div>
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '20px' }}>
-            <button type="button" className="btn btn--outline" onClick={() => setIsSupplierOpen(false)}>
+            <button type="button" className="btn btn-secondary" onClick={() => setIsSupplierOpen(false)}>
               Cancel
             </button>
-            <button type="submit" className="btn btn--primary">
+            <button type="submit" className="btn btn-primary">
               Register
             </button>
           </div>
@@ -476,28 +476,28 @@ export function PurchasingPage() {
                 </div>
 
                 <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '20px' }}>
-                  <button type="button" className="btn btn--outline" onClick={() => setIsReceiptOpen(false)}>
+                  <button type="button" className="btn btn-secondary" onClick={() => setIsReceiptOpen(false)}>
                     Back
                   </button>
-                  <button type="submit" className="btn btn--primary">
+                  <button type="submit" className="btn btn-primary">
                     Post Goods Receipt
                   </button>
                 </div>
               </form>
             ) : (
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', borderTop: '1px solid #edf1ed', paddingTop: '16px' }}>
-                <button type="button" className="btn btn--outline" onClick={() => setSelectedPO(null)}>
+                <button type="button" className="btn btn-secondary" onClick={() => setSelectedPO(null)}>
                   Close
                 </button>
 
                 {selectedPO.status === 'SUBMITTED' && hasPermission('purchasing.approve') && (
-                  <button type="button" className="btn btn--primary" onClick={() => handleApprovePO(selectedPO.id)}>
+                  <button type="button" className="btn btn-primary" onClick={() => handleApprovePO(selectedPO.id)}>
                     Approve PO
                   </button>
                 )}
 
                 {selectedPO.status === 'APPROVED' && (
-                  <button type="button" className="btn btn--primary" onClick={() => setIsReceiptOpen(true)}>
+                  <button type="button" className="btn btn-primary" onClick={() => setIsReceiptOpen(true)}>
                     <Truck size={14} style={{ marginRight: '4px', inlineSize: 'auto' }} /> Receive Goods
                   </button>
                 )}

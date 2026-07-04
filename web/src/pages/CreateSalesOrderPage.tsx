@@ -159,7 +159,7 @@ export function CreateSalesOrderPage() {
       <section style={{ marginBottom: '10px' }}>
         <button
           type="button"
-          className="btn btn--outline"
+          className="btn btn-secondary"
           onClick={() => navigate('/sales')}
           style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
         >
@@ -321,7 +321,7 @@ export function CreateSalesOrderPage() {
                           <strong>{(l.quantity * l.unitPrice).toLocaleString(undefined, { minimumFractionDigits: 2 })}</strong>
                         </td>
                         <td>
-                          <button type="button" className="btn btn--danger btn--sm" onClick={() => removeLine(index)}>
+                          <button type="button" className="btn btn-danger btn-sm" onClick={() => removeLine(index)}>
                             <Trash2 size={14} />
                           </button>
                         </td>
@@ -348,10 +348,10 @@ export function CreateSalesOrderPage() {
         </div>
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
-          <button type="button" className="btn btn--outline" onClick={() => navigate('/sales')}>
+          <button type="button" className="btn btn-secondary" onClick={() => navigate('/sales')}>
             Cancel
           </button>
-          <button type="submit" className="btn btn--primary" disabled={lines.length === 0}>
+          <button type="submit" className="btn btn-primary" disabled={lines.length === 0}>
             Create Sales Order
           </button>
         </div>

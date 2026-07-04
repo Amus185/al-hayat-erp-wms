@@ -183,7 +183,7 @@ export function ProductsPage() {
         <div style={{ display: 'flex', gap: '8px' }}>
           <button
             type="button"
-            className="btn btn--outline btn--sm"
+            className="btn btn-secondary btn-sm"
             onClick={(e) => {
               e.stopPropagation();
               navigate(`/products/${row.id}`);
@@ -194,7 +194,7 @@ export function ProductsPage() {
           {hasPermission('products.write') && (
             <button
               type="button"
-              className="btn btn--danger btn--sm"
+              className="btn btn-danger btn-sm"
               onClick={(e) => handleDelete(row.id, e)}
             >
               <Trash2 size={14} />
@@ -351,7 +351,7 @@ export function ProductsPage() {
               <InputField label="Color" id="vColor" value={vColor} onChange={setVColor} />
               <InputField label="Material" id="vMaterial" value={vMaterial} onChange={setVMaterial} />
               <InputField label="Dimensions" id="vDimensions" value={vDimensions} onChange={setVDimensions} />
-              <button type="button" className="btn btn--outline" onClick={addVariantToNewProduct} style={{ minHeight: '38px', marginBottom: '4px' }}>
+              <button type="button" className="btn btn-secondary" onClick={addVariantToNewProduct} style={{ minHeight: '38px', marginBottom: '4px' }}>
                 Add
               </button>
             </div>
@@ -379,7 +379,7 @@ export function ProductsPage() {
                           {[v.color, v.material, v.dimensions].filter(Boolean).join(' | ') || 'N/A'}
                         </td>
                         <td>
-                          <button type="button" className="btn btn--danger btn--sm" onClick={() => removeVariantFromNewProduct(index)}>
+                          <button type="button" className="btn btn-danger btn-sm" onClick={() => removeVariantFromNewProduct(index)}>
                             Remove
                           </button>
                         </td>
@@ -392,10 +392,10 @@ export function ProductsPage() {
           </div>
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '20px' }}>
-            <button type="button" className="btn btn--outline" onClick={() => setIsCreateOpen(false)}>
+            <button type="button" className="btn btn-secondary" onClick={() => setIsCreateOpen(false)}>
               Cancel
             </button>
-            <button type="submit" className="btn btn--primary">
+            <button type="submit" className="btn btn-primary">
               Create Product
             </button>
           </div>

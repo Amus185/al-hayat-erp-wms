@@ -418,10 +418,10 @@ export function InventoryPage() {
           </div>
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '20px' }}>
-            <button type="button" className="btn btn--outline" onClick={() => setIsAdjustOpen(false)}>
+            <button type="button" className="btn btn-secondary" onClick={() => setIsAdjustOpen(false)}>
               Cancel
             </button>
-            <button type="submit" className="btn btn--primary">
+            <button type="submit" className="btn btn-primary">
               Post Transaction
             </button>
           </div>

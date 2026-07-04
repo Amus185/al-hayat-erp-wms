@@ -196,7 +196,7 @@ export function SalesPage() {
       key: 'actions',
       label: 'Actions',
       render: (row) => (
-        <button type="button" className="btn btn--outline btn--sm" onClick={() => viewOrderDetails(row)}>
+        <button type="button" className="btn btn-secondary btn-sm" onClick={() => viewOrderDetails(row)}>
           <Eye size={14} style={{ marginRight: '4px', inlineSize: 'auto' }} /> Details
         </button>
       ),
@@ -214,10 +214,10 @@ export function SalesPage() {
           <h2>Customers, orders, invoices, and payments</h2>
         </div>
         <div style={{ display: 'flex', gap: '10px' }}>
-          <button type="button" className="btn btn--outline" onClick={() => setIsCustomerOpen(true)}>
+          <button type="button" className="btn btn-secondary" onClick={() => setIsCustomerOpen(true)}>
             <UserPlus size={16} style={{ marginRight: '6px', inlineSize: 'auto' }} /> Register Customer
           </button>
-          <button type="button" className="btn btn--primary" onClick={() => navigate('/sales/new')}>
+          <button type="button" className="btn btn-primary" onClick={() => navigate('/sales/new')}>
             <Plus size={16} style={{ marginRight: '6px', inlineSize: 'auto' }} /> New Order
           </button>
         </div>
@@ -271,10 +271,10 @@ export function SalesPage() {
           </div>
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '20px' }}>
-            <button type="button" className="btn btn--outline" onClick={() => setIsCustomerOpen(false)}>
+            <button type="button" className="btn btn-secondary" onClick={() => setIsCustomerOpen(false)}>
               Cancel
             </button>
-            <button type="submit" className="btn btn--primary">
+            <button type="submit" className="btn btn-primary">
               Register
             </button>
           </div>
@@ -335,27 +335,27 @@ export function SalesPage() {
 
             {/* Action Buttons */}
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', borderTop: '1px solid #edf1ed', paddingTop: '16px' }}>
-              <button type="button" className="btn btn--outline" onClick={() => setSelectedOrder(null)}>
+              <button type="button" className="btn btn-secondary" onClick={() => setSelectedOrder(null)}>
                 Close
               </button>
 
               {/* Status DRAFT -> Confirm */}
               {selectedOrder.status === 'DRAFT' && (
-                <button type="button" className="btn btn--primary" onClick={() => handleConfirmOrder(selectedOrder.id)}>
+                <button type="button" className="btn btn-primary" onClick={() => handleConfirmOrder(selectedOrder.id)}>
                   <CheckCircle size={14} style={{ marginRight: '4px', inlineSize: 'auto' }} /> Confirm Order
                 </button>
               )}
 
               {/* Status CONFIRMED -> Invoice */}
               {selectedOrder.status === 'CONFIRMED' && (
-                <button type="button" className="btn btn--primary" onClick={() => handleCreateInvoice(selectedOrder.id)}>
+                <button type="button" className="btn btn-primary" onClick={() => handleCreateInvoice(selectedOrder.id)}>
                   <FileText size={14} style={{ marginRight: '4px', inlineSize: 'auto' }} /> Issue Invoice
                 </button>
               )}
 
               {/* Status INVOICED -> Pay Invoice (using invoice details) */}
               {selectedOrder.status === 'INVOICED' && selectedOrder.invoice_id && (
-                <button type="button" className="btn btn--primary" onClick={() => handlePayInvoice(selectedOrder.invoice_id)}>
+                <button type="button" className="btn btn-primary" onClick={() => handlePayInvoice(selectedOrder.invoice_id)}>
                   <DollarSign size={14} style={{ marginRight: '4px', inlineSize: 'auto' }} /> Post Payment
                 </button>
               )}
