@@ -84,7 +84,7 @@ export function BranchDetailsPage() {
   }
 
   const invColumns: Column<BranchInventory>[] = [
-    { key: 'sku', label: 'SKU' },
+    { key: 'sku', label: 'Product ID' },
     { key: 'name', label: 'Product' },
     { key: 'barcode', label: 'Barcode' },
     { key: 'quantity_on_hand', label: 'On Hand' },
@@ -146,7 +146,7 @@ export function BranchDetailsPage() {
       <section className="metric-grid">
         <MetricCard
           label="Total Revenue"
-          value={`SAR ${invoicedAmount.toLocaleString()}`}
+          value={`$${invoicedAmount.toLocaleString()}`}
           trend={`${orderCount} orders total`}
           icon={<DollarSign size={20} />}
         />
@@ -158,7 +158,7 @@ export function BranchDetailsPage() {
         />
         <MetricCard
           label="Average Ticket"
-          value={`SAR ${avgOrderValue.toFixed(1)}`}
+          value={`$${avgOrderValue.toFixed(1)}`}
           trend="Per sales ticket"
           icon={<TrendingUp size={20} />}
         />

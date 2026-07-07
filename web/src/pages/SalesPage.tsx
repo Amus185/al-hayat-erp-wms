@@ -324,8 +324,8 @@ export function SalesPage() {
                       <tr key={line.id}>
                         <td><strong>{line.product_name}</strong><br /><span style={{ color: '#667066', fontSize: '12px' }}>{line.variant_sku}</span></td>
                         <td>{line.quantity}</td>
-                        <td>SAR {Number(line.unit_price).toLocaleString()}</td>
-                        <td><strong>SAR {(line.quantity * line.unit_price).toLocaleString()}</strong></td>
+                        <td>${Number(line.unit_price).toLocaleString()}</td>
+                        <td><strong>${(line.quantity * line.unit_price).toLocaleString()}</strong></td>
                       </tr>
                     ))}
                   </tbody>

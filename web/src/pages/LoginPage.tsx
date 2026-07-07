@@ -362,7 +362,7 @@ export function LoginPage() {
             <div className="login-logo-ring">
               <img
                 src="/logo.png"
-                alt="Al Hayat Furniture Group"
+                alt="Al Hayat"
                 onError={(e) => {
                   const target = e.currentTarget;
                   target.style.display = 'none';
@@ -372,8 +372,8 @@ export function LoginPage() {
               />
               <div className="login-logo-fallback" style={{ display: 'none' }}>AH</div>
             </div>
-            <h1 className="login-title">Al Hayat Furniture Group</h1>
-            <p className="login-subtitle">ERP &amp; Warehouse Management System</p>
+            <h1 className="login-title">Al Hayat</h1>
+            <p className="login-subtitle">Enterprise Resource Planning System</p>
           </div>
 
           <div className="login-divider" />

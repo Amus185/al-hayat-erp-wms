@@ -303,7 +303,7 @@ export function CreateTransferPage() {
               <table>
                 <thead>
                   <tr>
-                    <th>Variant SKU</th>
+                    <th>Variant Product ID</th>
                     <th>Product Description</th>
                     <th>Transfer Qty</th>
                     <th>Action</th>

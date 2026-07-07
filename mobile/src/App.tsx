@@ -22,7 +22,7 @@ function AppContent() {
     return (
       <View style={styles.loaderContainer}>
         <ActivityIndicator size="large" color={colors.primary} />
-        <Text style={styles.loaderText}>Al Hayat WMS starting...</Text>
+        <Text style={styles.loaderText}>Al Hayat ERP starting...</Text>
       </View>
     );
   }

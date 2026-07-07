@@ -9,7 +9,7 @@ export function ProfileScreen() {
   const { user, activeWarehouse, logout } = useAuth();
 
   const handleLogout = () => {
-    Alert.alert('Sign Out', 'Are you sure you want to sign out of Al Hayat WMS?', [
+    Alert.alert('Sign Out', 'Are you sure you want to sign out of Al Hayat ERP?', [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Sign Out',

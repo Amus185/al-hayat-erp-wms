@@ -283,11 +283,11 @@ export function CreateSalesOrderPage() {
                 <table>
                   <thead>
                     <tr>
-                      <th>Variant SKU</th>
+                      <th>Variant Product ID</th>
                       <th>Product Description</th>
                       <th>Qty Ordered</th>
-                      <th>Unit Price (SAR)</th>
-                      <th>Subtotal (SAR)</th>
+                      <th>Unit Price ($)</th>
+                      <th>Subtotal ($)</th>
                       <th>Action</th>
                     </tr>
                   </thead>
@@ -339,7 +339,7 @@ export function CreateSalesOrderPage() {
                   marginTop: '16px'
                 }}>
                   <div style={{ fontSize: '18px', color: '#066006' }}>
-                    Total Order Value: <strong>SAR {totalOrderAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</strong>
+                    Total Order Value: <strong>${totalOrderAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</strong>
                   </div>
                 </div>
               </div>

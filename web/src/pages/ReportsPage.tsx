@@ -57,7 +57,7 @@ export function ReportsPage() {
 
   // Low Stock Table Columns
   const lowStockColumns: Column<any>[] = [
-    { key: 'sku', label: 'SKU' },
+    { key: 'sku', label: 'Product ID' },
     { key: 'name', label: 'Product' },
     { key: 'reorder_level', label: 'Reorder Threshold' },
     {
@@ -77,7 +77,7 @@ export function ReportsPage() {
     {
       key: 'revenue',
       label: 'Invoiced Revenue',
-      render: (row) => `SAR ${Number(row.revenue).toLocaleString(undefined, { minimumFractionDigits: 2 })}`,
+      render: (row) => `$${Number(row.revenue).toLocaleString(undefined, { minimumFractionDigits: 2 })}`,
     },
   ];
 
@@ -92,7 +92,7 @@ export function ReportsPage() {
     {
       key: 'revenue',
       label: 'Gross Turnover',
-      render: (row) => `SAR ${Number(row.revenue).toLocaleString()}`,
+      render: (row) => `$${Number(row.revenue).toLocaleString()}`,
     },
   ];
 
@@ -122,7 +122,7 @@ export function ReportsPage() {
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
                 <AlertTriangle size={20} style={{ color: '#b45309' }} />
-                <h3 style={{ margin: '0' }}>SKUs Below Reorder Target</h3>
+                <h3 style={{ margin: '0' }}>Products Below Reorder Target</h3>
               </div>
               <DataTable
                 columns={lowStockColumns}
@@ -160,7 +160,7 @@ export function ReportsPage() {
               <div className="metric-grid" style={{ marginBottom: '24px' }}>
                 <MetricCard
                   label="Total Estimated Cost Value"
-                  value={`SAR ${Number(invValue?.inventory_value || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}`}
+                  value={`$${Number(invValue?.inventory_value || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}`}
                   trend="Calculated based on actual variant cost"
                   icon={<CircleDollarSign size={22} />}
                 />
@@ -193,7 +193,7 @@ export function ReportsPage() {
               <div className="metric-grid" style={{ marginBottom: '24px' }}>
                 <MetricCard
                   label="Gross profit amount"
-                  value={`SAR ${Number(profitVal?.gross_profit || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}`}
+                  value={`$${Number(profitVal?.gross_profit || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}`}
                   trend="Sum of all invoiced profit lines"
                   icon={<TrendingUp size={22} />}
                 />

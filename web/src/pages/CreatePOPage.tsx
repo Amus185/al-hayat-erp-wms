@@ -292,11 +292,11 @@ export function CreatePOPage() {
                 <table>
                   <thead>
                     <tr>
-                      <th>Variant SKU</th>
+                      <th>Variant Product ID</th>
                       <th>Product Description</th>
                       <th>Qty Ordered</th>
-                      <th>Unit Cost (SAR)</th>
-                      <th>Subtotal (SAR)</th>
+                      <th>Unit Cost ($)</th>
+                      <th>Subtotal ($)</th>
                       <th>Action</th>
                     </tr>
                   </thead>
@@ -348,7 +348,7 @@ export function CreatePOPage() {
                   marginTop: '16px'
                 }}>
                   <div style={{ fontSize: '18px', color: '#066006' }}>
-                    Total Estimated Amount: <strong>SAR {totalPOAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</strong>
+                    Total Estimated Amount: <strong>${totalPOAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</strong>
                   </div>
                 </div>
               </div>

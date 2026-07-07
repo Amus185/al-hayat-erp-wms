@@ -396,7 +396,7 @@ export function PurchasingPage() {
                         <td><strong>{line.product_name}</strong><br /><span style={{ color: '#667066', fontSize: '12px' }}>{line.variant_sku}</span></td>
                         <td>{line.quantity_ordered}</td>
                         <td>{line.quantity_received || 0}</td>
-                        <td>SAR {Number(line.unit_cost).toLocaleString()}</td>
+                        <td>${Number(line.unit_cost).toLocaleString()}</td>
                       </tr>
                     ))}
                   </tbody>

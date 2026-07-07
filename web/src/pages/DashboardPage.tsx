@@ -88,7 +88,7 @@ export function DashboardPage() {
   }
 
   const lowStockColumns: Column<any>[] = [
-    { key: 'sku', label: 'SKU' },
+    { key: 'sku', label: 'Product ID' },
     { key: 'name', label: 'Product Name' },
     { key: 'reorder_level', label: 'Reorder Level' },
     {
@@ -137,7 +137,7 @@ export function DashboardPage() {
       <section className="metric-grid">
         <MetricCard
           label="Total inventory value"
-          value={`SAR ${(metrics.totalValue / 1_000_000).toFixed(1)}M`}
+          value={`$${(metrics.totalValue / 1_000_000).toFixed(1)}M`}
           trend="Live cost appraisal"
           icon={<CircleDollarSign size={22} />}
         />

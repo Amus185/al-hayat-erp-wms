@@ -47,7 +47,7 @@ export function LoginScreen() {
           <View style={styles.logo}>
             <Text style={styles.logoText}>AH</Text>
           </View>
-          <Text style={styles.brandName}>Al Hayat ERP + WMS</Text>
+          <Text style={styles.brandName}>Al Hayat ERP</Text>
           <Text style={styles.subtitle}>Mobile Inventory Operations</Text>
         </View>
 

@@ -84,7 +84,7 @@ export function ProductDetailsPage() {
   }
 
   const variantColumns: Column<ProductVariant>[] = [
-    { key: 'sku', label: 'Variant SKU' },
+    { key: 'sku', label: 'Variant Product ID' },
     { key: 'barcode', label: 'Barcode' },
     { key: 'color', label: 'Color', render: (row) => row.color || 'N/A' },
     { key: 'material', label: 'Material', render: (row) => row.material || 'N/A' },
@@ -119,7 +119,7 @@ export function ProductDetailsPage() {
         }
       },
     },
-    { key: 'sku', label: 'Variant SKU' },
+    { key: 'sku', label: 'Variant Product ID' },
     { key: 'quantity_on_hand', label: 'Qty On Hand' },
     { key: 'quantity_reserved', label: 'Reserved' },
     {
@@ -150,16 +150,16 @@ export function ProductDetailsPage() {
           </div>
           <div style={{ background: '#f7f9f7', padding: '16px', borderRadius: '8px', border: '1px solid #e1e8e1', minWidth: '200px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
-              <span style={{ color: '#667066', fontSize: '13px' }}>SKU Prefix:</span>
+              <span style={{ color: '#667066', fontSize: '13px' }}>Product ID:</span>
               <strong style={{ fontSize: '13px' }}>{product.sku}</strong>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
               <span style={{ color: '#667066', fontSize: '13px' }}>Cost Price:</span>
-              <strong style={{ fontSize: '13px' }}>SAR {Number(product.cost_price).toLocaleString()}</strong>
+              <strong style={{ fontSize: '13px' }}>$${Number(product.cost_price).toLocaleString()}</strong>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
               <span style={{ color: '#667066', fontSize: '13px' }}>Selling Price:</span>
-              <strong style={{ fontSize: '13px' }}>SAR {Number(product.selling_price).toLocaleString()}</strong>
+              <strong style={{ fontSize: '13px' }}>$${Number(product.selling_price).toLocaleString()}</strong>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between' }}>
               <span style={{ color: '#667066', fontSize: '13px' }}>Reorder Level:</span>

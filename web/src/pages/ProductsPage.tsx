@@ -99,7 +99,7 @@ export function ProductsPage() {
   const handleCreateProduct = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newProduct.sku || !newProduct.name) {
-      addToast('error', 'SKU and Name are required');
+      addToast('error', 'Product ID and Name are required');
       return;
     }
     if (newProduct.variants.length === 0) {
@@ -142,7 +142,7 @@ export function ProductsPage() {
 
   const addVariantToNewProduct = () => {
     if (!vSku || !vBarcode) {
-      addToast('error', 'Variant SKU and Barcode are required');
+      addToast('error', 'Variant Product ID and Barcode are required');
       return;
     }
     setNewProduct((prev) => ({
@@ -170,12 +170,12 @@ export function ProductsPage() {
   });
 
   const columns: Column<Product>[] = [
-    { key: 'sku', label: 'SKU', sortable: true },
+    { key: 'sku', label: 'Product ID', sortable: true },
     { key: 'name', label: 'Name', sortable: true },
     { key: 'category', label: 'Category', render: (row) => row.category || 'N/A' },
     { key: 'brand', label: 'Brand', render: (row) => row.brand || 'N/A' },
-    { key: 'cost_price', label: 'Cost Price', render: (row) => `SAR ${Number(row.cost_price).toLocaleString()}` },
-    { key: 'selling_price', label: 'Selling Price', render: (row) => `SAR ${Number(row.selling_price).toLocaleString()}` },
+    { key: 'cost_price', label: 'Cost Price', render: (row) => `$${Number(row.cost_price).toLocaleString()}` },
+    { key: 'selling_price', label: 'Selling Price', render: (row) => `$${Number(row.selling_price).toLocaleString()}` },
     {
       key: 'actions',
       label: 'Actions',
@@ -224,7 +224,7 @@ export function ProductsPage() {
 
       <section className="panel" style={{ display: 'flex', gap: '14px', alignItems: 'center', flexWrap: 'wrap' }}>
         <div style={{ flex: '1', minWidth: '240px' }}>
-          <SearchInput value={search} onChange={setSearch} placeholder="Search by SKU, Name or Description..." />
+          <SearchInput value={search} onChange={setSearch} placeholder="Search by Product ID, Name or Description..." />
         </div>
         <div>
           <select
@@ -259,7 +259,7 @@ export function ProductsPage() {
         <form onSubmit={handleCreateProduct}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
             <InputField
-              label="Product SKU"
+              label="Product ID"
               id="sku"
               value={newProduct.sku}
               onChange={(val) => setNewProduct((prev) => ({ ...prev, sku: val }))}
@@ -317,7 +317,7 @@ export function ProductsPage() {
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '14px', marginTop: '10px' }}>
             <InputField
-              label="Cost Price (SAR)"
+              label="Cost Price ($)"
               id="costPrice"
               type="number"
               value={newProduct.costPrice}
@@ -325,7 +325,7 @@ export function ProductsPage() {
               required
             />
             <InputField
-              label="Selling Price (SAR)"
+              label="Selling Price ($)"
               id="sellingPrice"
               type="number"
               value={newProduct.sellingPrice}
@@ -346,7 +346,7 @@ export function ProductsPage() {
           <div style={{ marginTop: '20px', borderTop: '1px solid #edf1ed', paddingTop: '14px' }}>
             <h3>Product Variants</h3>
             <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1.5fr 1fr 1fr 1fr auto', gap: '8px', alignItems: 'end' }}>
-              <InputField label="Var SKU" id="vSku" value={vSku} onChange={setVSku} />
+              <InputField label="Var Product ID" id="vSku" value={vSku} onChange={setVSku} />
               <InputField label="Barcode" id="vBarcode" value={vBarcode} onChange={setVBarcode} />
               <InputField label="Color" id="vColor" value={vColor} onChange={setVColor} />
               <InputField label="Material" id="vMaterial" value={vMaterial} onChange={setVMaterial} />
@@ -364,7 +364,7 @@ export function ProductsPage() {
                 <table style={{ fontSize: '12px' }}>
                   <thead>
                     <tr>
-                      <th>Variant SKU</th>
+                      <th>Variant Product ID</th>
                       <th>Barcode</th>
                       <th>Attributes</th>
                       <th>Action</th>

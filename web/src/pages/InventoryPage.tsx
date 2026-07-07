@@ -203,7 +203,7 @@ export function InventoryPage() {
   };
 
   const stockColumns: Column<InventoryStock>[] = [
-    { key: 'sku', label: 'SKU' },
+    { key: 'sku', label: 'Product ID' },
     { key: 'name', label: 'Product' },
     {
       key: 'location',
@@ -226,7 +226,7 @@ export function InventoryPage() {
   ];
 
   const transactionColumns: Column<InventoryTransaction>[] = [
-    { key: 'sku', label: 'SKU' },
+    { key: 'sku', label: 'Product ID' },
     { key: 'name', label: 'Product' },
     {
       key: 'transaction_type',

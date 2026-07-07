@@ -21,7 +21,7 @@ const navItems = [
   { label: 'Products', path: '/products', icon: PackageSearch, permission: 'products.read' },
   { label: 'Warehouses', path: '/warehouses', icon: Boxes, permission: 'inventory.read' },
   { label: 'Inventory', path: '/inventory', icon: ClipboardList, permission: 'inventory.read' },
-  { label: 'Branches', path: '/branches', icon: Building2, permission: 'products.read' },
+  { label: 'Branches', path: '/branches', icon: Building2, permission: 'branches.manage' },
   { label: 'Transfers', path: '/transfers', icon: Truck, permission: 'transfers.create' },
   { label: 'Purchasing', path: '/purchasing', icon: ClipboardList, permission: 'purchasing.write' },
   { label: 'Sales', path: '/sales', icon: ShoppingCart, permission: 'sales.write' },
@@ -52,7 +52,7 @@ export function AppShell({ children }: AppShellProps) {
           </div>
           <div className="brand__text">
             <strong>Al Hayat</strong>
-            <span>ERP + WMS</span>
+            <span>ERP System</span>
           </div>
         </div>
         
@@ -94,8 +94,8 @@ export function AppShell({ children }: AppShellProps) {
       <main className="main">
         <header className="topbar">
           <div>
-            <p>Operations Command</p>
-            <h1>Furniture inventory, transfers, purchasing, and sales</h1>
+            <p>Operations Dashboard</p>
+            <h1>Inventory, purchasing, transfers, and sales</h1>
           </div>
           <div className="topbar__actions">
             <button type="button" title="Notifications">

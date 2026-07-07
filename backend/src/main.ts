@@ -18,8 +18,8 @@ async function bootstrap() {
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true, forbidNonWhitelisted: true }));
 
   const swagger = new DocumentBuilder()
-    .setTitle('Al Hayat ERP + WMS API')
-    .setDescription('Production ERP and Warehouse Management API')
+    .setTitle('Al Hayat ERP API')
+    .setDescription('Al Hayat Enterprise Resource Planning API')
     .setVersion('1.0')
     .addBearerAuth()
     .build();
@@ -33,7 +33,7 @@ async function bootstrap() {
 
   const port = config.get<number>('PORT') ?? 3000;
   await app.listen(port);
-  logger.log(`🚀 Al Hayat API running on port ${port}`);
+  logger.log(`🚀 API running on port ${port}`);
   logger.log(`📖 Swagger docs at /docs`);
 }
 
