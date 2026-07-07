@@ -45,7 +45,7 @@ button, input, select, textarea { font: inherit; }
 a { color: inherit; text-decoration: none; }
 
 @keyframes spin { to { transform: rotate(360deg); } }
-@keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 @keyframes slideInRight { from { transform: translateX(100%); } to { transform: translateX(0); } }
 @keyframes slideInUp { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
 
@@ -222,8 +222,8 @@ a { color: inherit; text-decoration: none; }
 }
 
 /* ── Dashboard ────────────────────────────────────── */
-.dashboard { display: grid; gap: 18px; animation: fadeIn 0.3s ease; }
-.module-page { display: grid; gap: 16px; animation: fadeIn 0.3s ease; }
+.dashboard { display: grid; gap: 18px; }
+.module-page { display: grid; gap: 16px; }
 
 /* ── Module Header ────────────────────────────────── */
 .module-header {
@@ -711,6 +711,15 @@ tbody tr:hover { background: var(--primary-lighter); }
 }
 .skeleton-row { display: flex; gap: 14px; padding: 12px 0; }
 .skeleton-cell { height: 18px; flex: 1; }
+
+.page-skeleton { padding: 4px 0; }
+.table-skeleton { padding: 8px 0; }
+.table-skeleton__header {
+  display: flex; gap: 24px; padding: 10px 0; border-bottom: 1px solid var(--border-light);
+}
+.table-skeleton__row {
+  display: flex; gap: 24px; padding: 14px 0; border-bottom: 1px solid var(--border-light);
+}
 
 /* ── Pagination ───────────────────────────────────── */
 .pagination {

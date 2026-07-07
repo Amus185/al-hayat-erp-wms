@@ -4,7 +4,7 @@ import { ArrowLeft, Package, Warehouse, Building, Layers } from 'lucide-react';
 import { apiGet } from '../api/client';
 import { DataTable, type Column } from '../components/DataTable';
 import { StatusBadge } from '../components/StatusBadge';
-import { LoadingSpinner } from '../components/LoadingSpinner';
+import { PageSkeleton } from '../components/LoadingSpinner';
 import { useToast } from '../contexts/ToastContext';
 
 interface ProductVariant {
@@ -68,7 +68,7 @@ export function ProductDetailsPage() {
   }, [id]);
 
   if (loading) {
-    return <LoadingSpinner label="Fetching product specifications..." />;
+    return <PageSkeleton />;
   }
 
   if (!product) {

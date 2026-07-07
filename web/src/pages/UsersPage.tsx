@@ -5,7 +5,7 @@ import { DataTable, type Column } from '../components/DataTable';
 import { Modal } from '../components/Modal';
 import { FormField, InputField } from '../components/FormField';
 import { StatusBadge } from '../components/StatusBadge';
-import { LoadingSpinner } from '../components/LoadingSpinner';
+import { PageSkeleton } from '../components/LoadingSpinner';
 import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -174,7 +174,7 @@ export function UsersPage() {
   ];
 
   if (loading) {
-    return <LoadingSpinner label="Retrieving IAM directory..." />;
+    return <PageSkeleton />;
   }
 
   return (

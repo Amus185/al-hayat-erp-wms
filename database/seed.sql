@@ -46,7 +46,7 @@ ON CONFLICT DO NOTHING;
 -- ── Default Admin User (password: Admin@123456) ─────
 -- bcrypt hash of "Admin@123456" with 10 rounds
 INSERT INTO users (email, password_hash, full_name, phone, is_active) VALUES
-  ('admin@alhayat.com', '$2b$10$rICGcBmJGxs8sLkzRa8BUOaF0GZdFkL.4jQ6YFRJi2Mch1LvqZkOm', 'System Administrator', NULL, true)
+  ('admin@alhayat.com', '$2b$10$UVSlDBxIbPjzIXvwTd9rFOaCFkSyrEoztcIXmvxidZH6J6nGUzZPS', 'System Administrator', NULL, true)
 ON CONFLICT (email) DO NOTHING;
 
 -- ── Assign admin role ───────────────────────────────

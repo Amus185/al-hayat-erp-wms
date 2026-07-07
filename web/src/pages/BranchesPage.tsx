@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Building2, MapPin, Phone, ArrowRight } from 'lucide-react';
 import { apiGet } from '../api/client';
 import { StatusBadge } from '../components/StatusBadge';
-import { LoadingSpinner } from '../components/LoadingSpinner';
+import { PageSkeleton } from '../components/LoadingSpinner';
 import { useToast } from '../contexts/ToastContext';
 
 interface Branch {
@@ -39,7 +39,7 @@ export function BranchesPage() {
   }, []);
 
   if (loading) {
-    return <LoadingSpinner label="Querying branch locations..." />;
+    return <PageSkeleton />;
   }
 
   return (

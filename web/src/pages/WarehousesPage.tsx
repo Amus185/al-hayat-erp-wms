@@ -4,7 +4,7 @@ import { apiGet, apiPost } from '../api/client';
 import { Modal } from '../components/Modal';
 import { InputField } from '../components/FormField';
 import { DataTable, type Column } from '../components/DataTable';
-import { LoadingSpinner } from '../components/LoadingSpinner';
+import { PageSkeleton } from '../components/LoadingSpinner';
 import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -104,7 +104,7 @@ export function WarehousesPage() {
   };
 
   if (loading) {
-    return <LoadingSpinner label="Loading fulfillment locations..." />;
+    return <PageSkeleton />;
   }
 
   const locationColumns: Column<WarehouseLocation>[] = [

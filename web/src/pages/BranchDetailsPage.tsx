@@ -4,7 +4,7 @@ import { ArrowLeft, Building2, TrendingUp, ShoppingBag, Box, DollarSign } from '
 import { apiGet } from '../api/client';
 import { DataTable, type Column } from '../components/DataTable';
 import { MetricCard } from '../components/MetricCard';
-import { LoadingSpinner } from '../components/LoadingSpinner';
+import { PageSkeleton } from '../components/LoadingSpinner';
 import { useToast } from '../contexts/ToastContext';
 
 interface BranchPerformance {
@@ -68,7 +68,7 @@ export function BranchDetailsPage() {
   }, [id]);
 
   if (loading) {
-    return <LoadingSpinner label="Fetching branch operations data..." />;
+    return <PageSkeleton />;
   }
 
   if (!branch) {

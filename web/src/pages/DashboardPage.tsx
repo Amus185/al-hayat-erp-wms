@@ -5,7 +5,7 @@ import { apiGet } from '../api/client';
 import { MetricCard } from '../components/MetricCard';
 import { DataTable, type Column } from '../components/DataTable';
 import { StatusBadge } from '../components/StatusBadge';
-import { LoadingSpinner } from '../components/LoadingSpinner';
+import { PageSkeleton } from '../components/LoadingSpinner';
 
 export function DashboardPage() {
   const navigate = useNavigate();
@@ -84,7 +84,7 @@ export function DashboardPage() {
   }, []);
 
   if (loading) {
-    return <LoadingSpinner label="Loading dashboard metrics..." />;
+    return <PageSkeleton />;
   }
 
   const lowStockColumns: Column<any>[] = [

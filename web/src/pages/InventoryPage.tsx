@@ -5,7 +5,7 @@ import { DataTable, type Column } from '../components/DataTable';
 import { Modal } from '../components/Modal';
 import { FormField, InputField } from '../components/FormField';
 import { Tabs } from '../components/Tabs';
-import { LoadingSpinner } from '../components/LoadingSpinner';
+// Loading is handled inline by DataTable
 import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
 
