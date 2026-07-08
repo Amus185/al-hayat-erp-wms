@@ -188,7 +188,7 @@ export function UsersPage() {
           <h2>Manage employee identities, credentials, roles, and assignments</h2>
         </div>
         {hasPermission('users.manage') && (
-          <button type="button" onClick={() => setIsOpen(true)}>
+          <button type="button" className="btn btn-primary" onClick={() => setIsOpen(true)}>
             <UserPlus size={16} style={{ marginRight: '6px', inlineSize: 'auto' }} /> Add Staff Account
           </button>
         )}

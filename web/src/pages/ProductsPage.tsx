@@ -215,7 +215,7 @@ export function ProductsPage() {
             </button>
           )}
           {hasPermission('products.write') && (
-            <button type="button" onClick={() => setIsCreateOpen(true)}>
+            <button type="button" className="btn btn-primary" onClick={() => setIsCreateOpen(true)}>
               <Plus size={16} style={{ marginRight: '6px', inlineSize: 'auto' }} /> New Product
             </button>
           )}

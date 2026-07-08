@@ -269,7 +269,7 @@ export function InventoryPage() {
           <h2>Realtime stock levels, adjustments, counts, and history</h2>
         </div>
         {hasPermission('inventory.adjust') && (
-          <button type="button" onClick={() => setIsAdjustOpen(true)}>
+          <button type="button" className="btn btn-primary" onClick={() => setIsAdjustOpen(true)}>
             <Plus size={16} style={{ marginRight: '6px', inlineSize: 'auto' }} /> Adjust Stock
           </button>
         )}

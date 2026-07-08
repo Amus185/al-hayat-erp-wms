@@ -173,7 +173,7 @@ export function TransfersPage() {
           <p>Movement</p>
           <h2>Warehouse-to-branch and branch-to-branch stock transfers</h2>
         </div>
-        <button type="button" onClick={() => navigate('/transfers/new')}>
+        <button type="button" className="btn btn-primary" onClick={() => navigate('/transfers/new')}>
           <Plus size={16} style={{ marginRight: '6px', inlineSize: 'auto' }} /> New Transfer
         </button>
       </section>

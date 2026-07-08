@@ -169,7 +169,7 @@ export function DashboardPage() {
               <p>Inventory Risk</p>
               <h2>Low stock requiring action</h2>
             </div>
-            <button type="button" onClick={() => navigate('/purchasing/new')}>
+            <button type="button" className="btn btn-primary" onClick={() => navigate('/purchasing/new')}>
               Create PO
             </button>
           </div>
@@ -207,7 +207,7 @@ export function DashboardPage() {
               <p>Transfers Queue</p>
               <h2>Approval and dispatch pipeline</h2>
             </div>
-            <button type="button" onClick={() => navigate('/transfers/new')}>
+            <button type="button" className="btn btn-primary" onClick={() => navigate('/transfers/new')}>
               New Transfer
             </button>
           </div>
