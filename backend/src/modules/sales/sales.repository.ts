@@ -72,7 +72,7 @@ export class SalesRepository {
 
       // 4. Copy order lines into invoice lines
       await client.query(
-        `INSERT INTO invoice_lines (invoice_id, product_id, quantity, unit_price)
+        `INSERT INTO invoice_lines (invoice_id, variant_id, quantity, unit_price)
          SELECT $1::uuid, product_id, quantity, unit_price FROM sales_order_lines WHERE sales_order_id = $2`,
         [invoiceId, orderId]
       );
