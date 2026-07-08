@@ -45,8 +45,13 @@ export class SalesController {
 
   @Post('sales-orders/:id/invoice')
   @Permissions('sales.write')
-  createInvoice(@Param('id') id: string, @Req() request: { user: { sub: string } }) {
-    return this.sales.createInvoice(id, request.user.sub);
+  async createInvoice(@Param('id') id: string, @Req() request: { user: { sub: string } }) {
+    try {
+      return await this.sales.createInvoice(id, request.user.sub);
+    } catch (error: any) {
+      console.error('INVOICE ERROR:', error?.message, error?.stack);
+      throw error;
+    }
   }
 
   @Patch('invoices/:id/pay')
