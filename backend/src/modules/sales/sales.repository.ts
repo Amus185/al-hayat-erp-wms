@@ -65,7 +65,7 @@ export class SalesRepository {
       );
       await client.query(
         `INSERT INTO invoice_lines (invoice_id, product_id, quantity, unit_price)
-         SELECT $1, product_id, quantity, unit_price FROM sales_order_lines WHERE sales_order_id = $2`,
+         SELECT $1::uuid, product_id, quantity, unit_price FROM sales_order_lines WHERE sales_order_id = $2`,
         [invoice.rows[0].id, orderId]
       );
       const lines = await client.query<{ product_id: string; quantity: number }>(
