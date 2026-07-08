@@ -35,7 +35,7 @@ export function CountScreen({ navigation }: CountScreenProps) {
   const [showLocationModal, setShowLocationModal] = useState(false);
 
   // Scanned item details
-  const [scannedVariant, setScannedVariant] = useState<any>(null);
+  const [scannedProduct, setScannedProduct] = useState<any | null>(null);
   const [recordedStock, setRecordedStock] = useState<number>(0);
   const [countedQty, setCountedQty] = useState<number>(0);
   
@@ -77,24 +77,24 @@ export function CountScreen({ navigation }: CountScreenProps) {
     }
 
     setLoading(true);
-    setScannedVariant(null);
+    setScannedProduct(null);
     setRecordedStock(0);
 
     try {
-      const variant = await barcodeLookup(scanValue.trim());
-      if (!variant) {
+      const product = await barcodeLookup(scanValue.trim());
+      if (!product) {
         Alert.alert('Not Found', 'Scanned barcode was not found in catalog.');
         setScanValue('');
         return;
       }
 
-      setScannedVariant(variant);
+      setScannedProduct(product);
 
       // Query current stock levels to find recorded amount for this specific location
       const allStocks = await getStock();
       const match = allStocks.find(
         (s) =>
-          s.variant_id === variant.id &&
+          s.product_id === product.id &&
           s.warehouse_location_id === selectedLocation.id
       );
 
@@ -110,7 +110,7 @@ export function CountScreen({ navigation }: CountScreenProps) {
   };
 
   const handleSubmitCount = async () => {
-    if (!scannedVariant || !selectedLocation || !activeWarehouse) return;
+    if (!scannedProduct || !selectedLocation || !activeWarehouse) return;
 
     const discrepancy = countedQty - recordedStock;
     
@@ -124,7 +124,7 @@ export function CountScreen({ navigation }: CountScreenProps) {
         const adjustmentQty = Math.abs(discrepancy);
 
         await adjustStock({
-          variantId: scannedVariant.id,
+          productId: scannedProduct.id,
           direction,
           quantity: adjustmentQty,
           warehouseId: activeWarehouse.id,
@@ -140,7 +140,7 @@ export function CountScreen({ navigation }: CountScreenProps) {
       
       setRecentCounts((prev) => [
         {
-          sku: scannedVariant.sku,
+          sku: scannedProduct.sku,
           location: locationLabel,
           counted: countedQty,
           recorded: recordedStock,
@@ -150,7 +150,7 @@ export function CountScreen({ navigation }: CountScreenProps) {
       ]);
 
       Alert.alert('Success', 'Stock count line submitted successfully.');
-      setScannedVariant(null);
+      setScannedProduct(null);
       setRecordedStock(0);
       setCountedQty(0);
     } catch (err: any) {
@@ -218,12 +218,12 @@ export function CountScreen({ navigation }: CountScreenProps) {
         />
 
         {/* Counting UI */}
-        {scannedVariant ? (
+        {scannedProduct ? (
           <View style={styles.countingCard}>
             <Text style={styles.countingTitle}>Item details</Text>
-            <Text style={styles.productName}>{scannedVariant.product?.name || 'Product'}</Text>
-            <Text style={styles.skuText}>SKU: {scannedVariant.sku}</Text>
-            <Text style={styles.skuText}>Barcode: {scannedVariant.barcode}</Text>
+            <Text style={styles.productName}>{scannedProduct.name || 'Product'}</Text>
+            <Text style={styles.skuText}>SKU: {scannedProduct.sku}</Text>
+            <Text style={styles.skuText}>Barcode: {scannedProduct.barcode}</Text>
 
             <View style={styles.divider} />
 

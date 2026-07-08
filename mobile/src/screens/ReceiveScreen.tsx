@@ -43,7 +43,7 @@ export function ReceiveScreen({ navigation }: ReceiveScreenProps) {
   const [showLocationModal, setShowLocationModal] = useState(false);
   
   // Tally of quantities received during this session
-  // Key: variantId, Value: quantity
+  // Key: productId, Value: quantity
   const [tally, setTally] = useState<Record<string, number>>({});
 
   useEffect(() => {
@@ -92,19 +92,19 @@ export function ReceiveScreen({ navigation }: ReceiveScreenProps) {
 
     setLoading(true);
     try {
-      const variant = await barcodeLookup(scanValue.trim());
-      if (!variant) {
+      const product = await barcodeLookup(scanValue.trim());
+      if (!product) {
         Alert.alert('Not Found', 'Scanned barcode was not found in catalog.');
         setScanValue('');
         return;
       }
 
-      // Check if this variant is part of the selected PO lines
-      const line = selectedPO.lines?.find((l) => l.variant_id === variant.id);
+      // Check if this product is part of the selected PO lines
+      const line = selectedPO.lines?.find((l) => l.product_id === product.id);
       if (!line) {
         Alert.alert(
-          'Mismatch',
-          `Variant SKU "${variant.sku}" is not listed in Purchase Order ${selectedPO.po_number}.`
+          'Unexpected Item',
+          `Product SKU "${product.sku}" is not listed in Purchase Order ${selectedPO.po_number}.`
         );
         setScanValue('');
         return;
@@ -112,19 +112,19 @@ export function ReceiveScreen({ navigation }: ReceiveScreenProps) {
 
       // Increment tally
       setTally((prev) => {
-        const currentQty = prev[variant.id] || 0;
-        const maxReceivable = line.quantity_ordered - line.quantity_received;
+        const currentQty = prev[product.id] || 0;
+        const maxReceivable = line.quantity_ordered - (line.quantity_received || 0);
         
         if (currentQty >= maxReceivable) {
           Alert.alert(
             'Warning',
-            `You are receiving more than ordered. Ordered: ${line.quantity_ordered}, Already Received: ${line.quantity_received}.`
+            `You are receiving more than ordered. Ordered: ${line.quantity_ordered}, Already Received: ${line.quantity_received || 0}.`
           );
         }
 
         return {
           ...prev,
-          [variant.id]: currentQty + 1,
+          [product.id]: currentQty + 1,
         };
       });
 
@@ -136,10 +136,10 @@ export function ReceiveScreen({ navigation }: ReceiveScreenProps) {
     }
   };
 
-  const handleUpdateTallyQty = (variantId: string, qty: number) => {
+  const handleUpdateTallyQty = (productId: string, qty: number) => {
     setTally((prev) => ({
       ...prev,
-      [variantId]: qty,
+      [productId]: qty,
     }));
   };
 
@@ -148,9 +148,9 @@ export function ReceiveScreen({ navigation }: ReceiveScreenProps) {
     
     const tallyKeys = Object.keys(tally);
     const receiptLines = tallyKeys
-      .map((variantId) => ({
-        variantId,
-        quantityReceived: tally[variantId],
+      .map((productId) => ({
+        productId,
+        quantityReceived: tally[productId],
         warehouseLocationId: selectedLocation?.id,
       }))
       .filter((l) => l.quantityReceived > 0);
@@ -277,16 +277,16 @@ export function ReceiveScreen({ navigation }: ReceiveScreenProps) {
         <Text style={styles.sectionTitle}>Tally Items</Text>
         <View style={styles.linesContainer}>
           {selectedPO.lines?.map((line: PurchaseOrderLine) => {
-            const scannedQty = tally[line.variant_id] || 0;
-            const remaining = line.quantity_ordered - line.quantity_received;
+            const scannedQty = tally[line.product_id] || 0;
+            const remaining = line.quantity_ordered - (line.quantity_received || 0);
 
             return (
               <View key={line.id} style={styles.lineRow}>
                 <View style={styles.lineMeta}>
                   <Text style={styles.lineProductName}>{line.product_name || 'Product'}</Text>
-                  <Text style={styles.lineSku}>SKU: {line.variant_sku || 'N/A'}</Text>
+                  <Text style={styles.lineSku}>SKU: {line.product_sku || 'N/A'}</Text>
                   <Text style={styles.lineOrdered}>
-                    Ordered: {line.quantity_ordered} | Received: {line.quantity_received} (Remaining: {remaining})
+                    Ordered: {line.quantity_ordered} | Received: {line.quantity_received || 0} (Remaining: {remaining})
                   </Text>
                 </View>
                 
@@ -294,7 +294,7 @@ export function ReceiveScreen({ navigation }: ReceiveScreenProps) {
                 <View style={styles.lineStepper}>
                   <QuantityInput
                     value={scannedQty}
-                    onChange={(qty) => handleUpdateTallyQty(line.variant_id, qty)}
+                    onChange={(qty) => handleUpdateTallyQty(line.product_id, qty)}
                     min={0}
                     max={remaining > 0 ? remaining : undefined}
                   />

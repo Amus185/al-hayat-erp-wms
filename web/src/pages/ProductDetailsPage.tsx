@@ -12,12 +12,6 @@ interface ProductVariant {
   product_id: string;
   sku: string;
   barcode: string;
-  color: string | null;
-  material: string | null;
-  dimensions: string | null;
-  is_active: boolean;
-}
-
 interface ProductDetail {
   id: string;
   sku: string;
@@ -31,7 +25,7 @@ interface ProductDetail {
   is_active: boolean;
   category?: string;
   brand?: string;
-  variants?: ProductVariant[];
+
 }
 
 export function ProductDetailsPage() {
@@ -55,8 +49,7 @@ export function ProductDetailsPage() {
         const stocks = await apiGet<any[]>('/inventory/stock');
         
         // Map variants to IDs for fast lookup
-        const variantIds = new Set(prod.variants?.map(v => v.id) || []);
-        const filteredStocks = (stocks || []).filter(s => variantIds.has(s.variant_id));
+        const filteredStocks = (stocks || []).filter(s => s.product_id === prod.id);
         setStockLevels(filteredStocks);
       } catch (err: any) {
         addToast('error', err?.message || 'Failed to load product details');
@@ -83,53 +76,19 @@ export function ProductDetailsPage() {
     );
   }
 
-  const variantColumns: Column<ProductVariant>[] = [
-    { key: 'sku', label: 'Variant Product ID' },
-    { key: 'barcode', label: 'Barcode' },
-    { key: 'color', label: 'Color', render: (row) => row.color || 'N/A' },
-    { key: 'material', label: 'Material', render: (row) => row.material || 'N/A' },
-    { key: 'dimensions', label: 'Dimensions', render: (row) => row.dimensions || 'N/A' },
-    {
-      key: 'status',
-      label: 'Status',
-      render: (row) => <StatusBadge label={row.is_active ? 'Active' : 'Inactive'} tone={row.is_active ? 'green' : 'neutral'} />,
-    },
-  ];
-
   const stockColumns: Column<any>[] = [
     {
       key: 'location',
       label: 'Location',
-      render: (row) => {
-        if (row.owner_type === 'WAREHOUSE') {
-          return (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <Warehouse size={14} style={{ color: '#0b8f08' }} />
-              <span>{row.warehouse || 'Warehouse'}</span>
-              {row.aisle && <span style={{ color: '#667066' }}>({row.aisle}-{row.rack}-{row.shelf}-{row.bin})</span>}
-            </div>
-          );
-        } else {
-          return (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <Building size={14} style={{ color: '#b45309' }} />
-              <span>{row.branch || 'Branch'}</span>
-            </div>
-          );
-        }
-      },
+      render: (row) => row.owner_type === 'WAREHOUSE' ? `Warehouse: ${row.warehouse || '-'}` : `Branch: ${row.branch || '-'}`,
     },
-    { key: 'sku', label: 'Variant Product ID' },
-    { key: 'quantity_on_hand', label: 'Qty On Hand' },
-    { key: 'quantity_reserved', label: 'Reserved' },
     {
-      key: 'available',
-      label: 'Available',
-      render: (row) => {
-        const avail = row.quantity_on_hand - row.quantity_reserved;
-        return <span style={{ fontWeight: '600' }}>{avail}</span>;
-      },
+      key: 'shelf',
+      label: 'Bin/Shelf',
+      render: (row) => row.owner_type === 'WAREHOUSE' && row.aisle ? `${row.aisle}-${row.rack}-${row.shelf}-${row.bin}` : '-',
     },
+    { key: 'quantity_on_hand', label: 'On Hand' },
+    { key: 'quantity_reserved', label: 'Reserved' },
   ];
 
   return (
@@ -169,26 +128,8 @@ export function ProductDetailsPage() {
         </div>
       </section>
 
-      {/* Details Grid */}
-      <section style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', alignItems: 'start' }}>
-        {/* Variants Panel */}
-        <div className="panel">
-          <div className="panel__header">
-            <div>
-              <p>Specification</p>
-              <h2>Defined Product Variants</h2>
-            </div>
-            <Layers size={18} style={{ color: '#0b8f08' }} />
-          </div>
-          <DataTable
-            columns={variantColumns}
-            data={product.variants || []}
-            keyExtractor={(row) => row.id}
-            emptyMessage="No variants defined for this product"
-          />
-        </div>
-
-        {/* Stock Levels Panel */}
+      {/* Stock Levels Panel */}
+      <section style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '16px', alignItems: 'start' }}>
         <div className="panel">
           <div className="panel__header">
             <div>
@@ -201,7 +142,7 @@ export function ProductDetailsPage() {
             columns={stockColumns}
             data={stockLevels}
             keyExtractor={(row) => row.id}
-            emptyMessage="No stock levels reported for these variants"
+            emptyMessage="No stock levels reported for this product"
           />
         </div>
       </section>

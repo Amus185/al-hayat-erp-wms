@@ -37,7 +37,7 @@ export function CreateSalesOrderPage() {
   const [branchId, setBranchId] = useState('');
   const [notes, setNotes] = useState('');
 
-  // Searching variants
+  // Searching products
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<ProductLine[]>([]);
 

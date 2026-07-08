@@ -215,7 +215,7 @@ export function ProductsPage() {
         </div>
         <div>
           <p>Catalog</p>
-          <h2>Products, variants, images, and barcode lookup</h2>
+          <h2>Products, images, and barcode lookup</h2>
         </div>
         <div style={{ display: 'flex', gap: '8px' }}>
           {hasPermission('products.manage') && (

@@ -64,7 +64,7 @@ export class ProductsRepository {
 
   barcodeLookup(barcode: string) {
     return this.db.query(
-      `SELECT p.id AS product_id, p.name, p.sku AS product_sku, p.barcode,
+      `SELECT p.id, p.name, p.sku, p.barcode, p.cost_price, p.selling_price,
               COALESCE(SUM(s.quantity_on_hand - s.quantity_reserved), 0) AS available_quantity
        FROM products p
        LEFT JOIN inventory_stock s ON s.product_id = p.id

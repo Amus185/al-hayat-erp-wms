@@ -30,7 +30,7 @@ interface SelectedDest {
 }
 
 interface TransferLineItem {
-  variantId: string;
+  productId: string;
   sku: string;
   name: string;
   quantityRequested: number;
@@ -93,8 +93,8 @@ export function TransferScreen({ navigation }: TransferScreenProps) {
     setLoading(true);
 
     try {
-      const variant = await barcodeLookup(scanValue.trim());
-      if (!variant) {
+      const product = await barcodeLookup(scanValue.trim());
+      if (!product) {
         Alert.alert('Not Found', 'Scanned barcode was not found in catalog.');
         setScanValue('');
         return;
@@ -102,10 +102,10 @@ export function TransferScreen({ navigation }: TransferScreenProps) {
 
       // Add to lines or increment existing line
       setLines((prev) => {
-        const existing = prev.find((l) => l.variantId === variant.id);
+        const existing = prev.find((l) => l.productId === product.id);
         if (existing) {
           return prev.map((l) =>
-            l.variantId === variant.id
+            l.productId === product.id
               ? { ...l, quantityRequested: l.quantityRequested + 1 }
               : l
           );
@@ -113,9 +113,9 @@ export function TransferScreen({ navigation }: TransferScreenProps) {
         return [
           ...prev,
           {
-            variantId: variant.id,
-            sku: variant.sku,
-            name: variant.product?.name || 'Unknown SKU',
+            productId: product.id,
+            sku: product.sku,
+            name: product.name || 'Unknown SKU',
             quantityRequested: 1,
           },
         ];
@@ -129,14 +129,14 @@ export function TransferScreen({ navigation }: TransferScreenProps) {
     }
   };
 
-  const handleUpdateLineQty = (variantId: string, qty: number) => {
+  const handleUpdateLineQty = (productId: string, qty: number) => {
     if (qty <= 0) {
       // Remove line
-      setLines((prev) => prev.filter((l) => l.variantId !== variantId));
+      setLines((prev) => prev.filter((l) => l.productId !== productId));
     } else {
       setLines((prev) =>
         prev.map((l) =>
-          l.variantId === variantId ? { ...l, quantityRequested: qty } : l
+          l.productId === productId ? { ...l, quantityRequested: qty } : l
         )
       );
     }
@@ -162,7 +162,7 @@ export function TransferScreen({ navigation }: TransferScreenProps) {
         destinationWarehouseId: selectedDest.type === 'WAREHOUSE' ? selectedDest.id : undefined,
         destinationBranchId: selectedDest.type === 'BRANCH' ? selectedDest.id : undefined,
         lines: lines.map((l) => ({
-          variantId: l.variantId,
+          productId: l.productId,
           quantityRequested: l.quantityRequested,
         })),
       };
@@ -253,13 +253,13 @@ export function TransferScreen({ navigation }: TransferScreenProps) {
         <Text style={styles.sectionTitle}>Transfer Lines ({lines.length})</Text>
         <View style={styles.linesList}>
           {lines.map((item) => (
-            <View key={item.variantId} style={styles.lineCard}>
+            <View key={item.productId} style={styles.lineCard}>
               <View style={styles.lineHeader}>
                 <Text style={styles.lineName} numberOfLines={1}>
                   {item.name}
                 </Text>
                 <TouchableOpacity
-                  onPress={() => handleUpdateLineQty(item.variantId, 0)}
+                  onPress={() => handleUpdateLineQty(item.productId, 0)}
                   style={styles.removeButton}
                 >
                   <Text style={styles.removeText}>Remove</Text>
@@ -271,7 +271,7 @@ export function TransferScreen({ navigation }: TransferScreenProps) {
                 <Text style={styles.qtyLabel}>Quantity:</Text>
                 <QuantityInput
                   value={item.quantityRequested}
-                  onChange={(qty) => handleUpdateLineQty(item.variantId, qty)}
+                  onChange={(qty) => handleUpdateLineQty(item.productId, qty)}
                   min={1}
                 />
               </View>

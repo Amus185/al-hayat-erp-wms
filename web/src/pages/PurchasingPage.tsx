@@ -60,8 +60,8 @@ export function PurchasingPage() {
   const [isReceiptOpen, setIsReceiptOpen] = useState(false);
   const [warehouses, setWarehouses] = useState<any[]>([]);
   const [selectedWHId, setSelectedWHId] = useState('');
-  const [receiptLines, setReceiptLines] = useState<Record<string, number>>({}); // variantId -> quantityReceived
-  const [receiptLocations, setReceiptLocations] = useState<Record<string, string>>({}); // variantId -> locationId
+  const [receiptLines, setReceiptLines] = useState<Record<string, number>>({}); // productId -> quantityReceived
+  const [receiptLocations, setReceiptLocations] = useState<Record<string, string>>({}); // productId -> locationId
   const [locationsList, setLocationsList] = useState<any[]>([]);
 
   const loadData = async () => {
@@ -165,9 +165,9 @@ export function PurchasingPage() {
       purchaseOrderId: selectedPO.id,
       warehouseId: selectedWHId,
       lines: selectedPO.lines.map((l: any) => ({
-        variantId: l.variant_id,
-        quantityReceived: Number(receiptLines[l.variant_id] || 0),
-        warehouseLocationId: receiptLocations[l.variant_id] || undefined,
+        productId: l.product_id,
+        quantityReceived: Number(receiptLines[l.product_id] || 0),
+        warehouseLocationId: receiptLocations[l.product_id] || undefined,
       })).filter((l: any) => l.quantityReceived > 0),
     };
 
@@ -202,7 +202,7 @@ export function PurchasingPage() {
         setSelectedPO(details);
         const initialReceipt: Record<string, number> = {};
         details.lines?.forEach((l: any) => {
-          initialReceipt[l.variant_id] = l.quantity_ordered - (l.quantity_received || 0);
+          initialReceipt[l.product_id] = l.quantity_ordered - (l.quantity_received || 0);
         });
         setReceiptLines(initialReceipt);
       } else {
@@ -436,25 +436,25 @@ export function PurchasingPage() {
                     </thead>
                     <tbody>
                       {selectedPO.lines?.map((l: any) => (
-                        <tr key={l.variant_id}>
+                        <tr key={l.product_id}>
                           <td>{l.variant_sku}</td>
                           <td>
                             <input
                               type="number"
                               className="form-input"
                               style={{ width: '80px', minHeight: '32px' }}
-                              value={receiptLines[l.variant_id] ?? 0}
+                              value={receiptLines[l.product_id] ?? 0}
                               min={0}
                               max={l.quantity_ordered - (l.quantity_received || 0)}
-                              onChange={(e) => setReceiptLines(prev => ({ ...prev, [l.variant_id]: Number(e.target.value) }))}
+                              onChange={(e) => setReceiptLines(prev => ({ ...prev, [l.product_id]: Number(e.target.value) }))}
                             />
                           </td>
                           <td>
                             <select
                               className="form-select"
                               style={{ minHeight: '32px' }}
-                              value={receiptLocations[l.variant_id] || ''}
-                              onChange={(e) => setReceiptLocations(prev => ({ ...prev, [l.variant_id]: e.target.value }))}
+                              value={receiptLocations[l.product_id] || ''}
+                              onChange={(e) => setReceiptLocations(prev => ({ ...prev, [l.product_id]: e.target.value }))}
                             >
                               <option value="">Default/System</option>
                               {locationsList.map(loc => (

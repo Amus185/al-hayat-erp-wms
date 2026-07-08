@@ -45,7 +45,7 @@ export function ScanScreen() {
       if (data) {
         setResult(data);
       } else {
-        setErrorMsg('Product variant not found.');
+        setErrorMsg('Product not found.');
       }
     } catch (err: any) {
       setErrorMsg(err.message || 'Product lookup failed.');

@@ -30,15 +30,13 @@ export function ProductLookupScreen({ navigation }: ProductLookupScreenProps) {
   // Results
   const [products, setProducts] = useState<Product[]>([]);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
-  const [selectedVariant, setSelectedVariant] = useState<ProductVariant | null>(null);
-  const [variantStocks, setVariantStocks] = useState<InventoryStock[]>([]);
+  const [productStocks, setProductStocks] = useState<InventoryStock[]>([]);
 
   const handleSearch = async () => {
     if (!searchQuery.trim()) return;
     setLoading(true);
     setSelectedProduct(null);
-    setSelectedVariant(null);
-    setVariantStocks([]);
+    setProductStocks([]);
 
     try {
       const data = await getProducts(searchQuery.trim());
@@ -55,28 +53,22 @@ export function ProductLookupScreen({ navigation }: ProductLookupScreenProps) {
     setLoading(true);
     setProducts([]);
     setSelectedProduct(null);
-    setSelectedVariant(null);
-    setVariantStocks([]);
+    setProductStocks([]);
 
     try {
-      const variant = await barcodeLookup(code.trim());
-      if (!variant) {
-        Alert.alert('Not Found', 'No variant matches the barcode.');
+      const product = await barcodeLookup(code.trim());
+      if (!product) {
+        Alert.alert('Not Found', 'No product matches the barcode.');
         setScanValue('');
         return;
       }
 
-      // If variant found, fetch its stock levels across warehouses/branches
+      // If product found, fetch its stock levels across warehouses/branches
       const allStocks = await getStock();
-      const stocksForVariant = allStocks.filter((s) => s.variant_id === variant.id);
+      const stocksForProduct = allStocks.filter((s) => s.product_id === product.id);
 
-      setSelectedVariant(variant);
-      setVariantStocks(stocksForVariant);
-
-      // If it has a related product object, fetch details
-      if (variant.product) {
-        setSelectedProduct(variant.product);
-      }
+      setSelectedProduct(product);
+      setProductStocks(stocksForProduct);
       setScanValue('');
     } catch (err: any) {
       Alert.alert('Lookup Failed', err.message || 'Failed to search barcode.');
@@ -86,20 +78,14 @@ export function ProductLookupScreen({ navigation }: ProductLookupScreenProps) {
   };
 
   const handleSelectProduct = async (product: Product) => {
-    setSelectedProduct(product);
-    setSelectedVariant(null);
-    setVariantStocks([]);
-  };
-
-  const handleSelectVariant = async (variant: ProductVariant) => {
     setLoading(true);
     try {
-      setSelectedVariant(variant);
+      setSelectedProduct(product);
       const allStocks = await getStock();
-      const filtered = allStocks.filter((s) => s.variant_id === variant.id);
-      setVariantStocks(filtered);
+      const stocks = allStocks.filter((s) => s.product_id === product.id);
+      setProductStocks(stocks);
     } catch (err: any) {
-      Alert.alert('Error', 'Failed to fetch variant stock: ' + err.message);
+      Alert.alert('Error', 'Failed to fetch product stock: ' + err.message);
     } finally {
       setLoading(false);
     }
@@ -111,9 +97,6 @@ export function ProductLookupScreen({ navigation }: ProductLookupScreenProps) {
       <Text style={styles.productCardSku}>SKU: {item.sku}</Text>
       <Text style={styles.productCardCategory}>
         Category: {item.category || 'N/A'} • Brand: {item.brand || 'N/A'}
-      </Text>
-      <Text style={styles.productCardVariants}>
-        Variants: {item.variants?.length || 0} items
       </Text>
     </TouchableOpacity>
   );
@@ -162,7 +145,7 @@ export function ProductLookupScreen({ navigation }: ProductLookupScreenProps) {
             );
           }}
           onSubmitEditing={() => handleBarcodeLookup(scanValue)}
-          placeholder="Scan variant barcode directly..."
+          placeholder="Scan product barcode directly..."
         />
 
         {/* Selected Product Drilldown */}
@@ -172,8 +155,7 @@ export function ProductLookupScreen({ navigation }: ProductLookupScreenProps) {
               style={styles.backToResultsButton}
               onPress={() => {
                 setSelectedProduct(null);
-                setSelectedVariant(null);
-                setVariantStocks([]);
+                setProductStocks([]);
               }}
             >
               <Text style={styles.backToResultsText}>← Clear Product Selection</Text>
@@ -185,45 +167,14 @@ export function ProductLookupScreen({ navigation }: ProductLookupScreenProps) {
             
             <View style={styles.divider} />
             
-            <Text style={styles.variantsHeader}>Select Variant to view stock</Text>
-            <View style={styles.variantsRow}>
-              {selectedProduct.variants?.map((v) => (
-                <TouchableOpacity
-                  key={v.id}
-                  style={[
-                    styles.variantBadge,
-                    selectedVariant?.id === v.id && styles.variantBadgeActive,
-                  ]}
-                  onPress={() => handleSelectVariant(v)}
-                >
-                  <Text
-                    style={[
-                      styles.variantBadgeText,
-                      selectedVariant?.id === v.id && styles.variantBadgeTextActive,
-                    ]}
-                  >
-                    {v.color || ''} {v.dimensions || ''} ({v.sku})
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          </View>
-        )}
-
-        {/* Selected Variant Stock Levels */}
-        {selectedVariant && (
-          <View style={styles.stockSection}>
-            <Text style={styles.stockSectionTitle}>
-              Stock Levels for variant: {selectedVariant.sku}
-            </Text>
-            
-            {variantStocks.length > 0 ? (
-              variantStocks.map((stock) => (
+            <Text style={styles.stockSectionTitle}>Stock Levels</Text>
+            {productStocks.length > 0 ? (
+              productStocks.map((stock) => (
                 <StockRow key={stock.id} stock={stock} />
               ))
             ) : (
               <Text style={styles.noStockText}>
-                No stock records found across warehouses/branches for this variant.
+                No stock records found across warehouses/branches for this product.
               </Text>
             )}
           </View>

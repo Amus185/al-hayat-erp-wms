@@ -16,7 +16,7 @@ interface Warehouse {
   name: string;
 }
 
-interface ProductVariant {
+interface ProductSearchItem {
   id: string;
   sku: string;
   barcode: string;
@@ -30,7 +30,7 @@ export function CreatePOPage() {
 
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
-  const [variants, setVariants] = useState<ProductVariant[]>([]);
+  const [productsList, setProductsList] = useState<ProductSearchItem[]>([]);
 
   // Form states
   const [supplierId, setSupplierId] = useState('');
@@ -40,10 +40,10 @@ export function CreatePOPage() {
 
   // Searching variants
   const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState<ProductVariant[]>([]);
+  const [searchResults, setSearchResults] = useState<ProductSearchItem[]>([]);
 
   // Selected lines
-  const [lines, setLines] = useState<{ variantId: string; sku: string; name: string; quantity: number; unitCost: number }[]>([]);
+  const [lines, setLines] = useState<{ productId: string; sku: string; name: string; quantity: number; unitCost: number }[]>([]);
 
   useEffect(() => {
     async function loadData() {
@@ -55,20 +55,18 @@ export function CreatePOPage() {
         setSuppliers(sups || []);
         setWarehouses(whs || []);
 
-        // Build flat variant list
-        const flatList: ProductVariant[] = [];
+        // Build product search list
+        const flatList: ProductSearchItem[] = [];
         products?.forEach((p) => {
-          p.variants?.forEach((v: any) => {
-            flatList.push({
-              id: v.id,
-              sku: v.sku,
-              barcode: v.barcode,
-              productName: p.name,
-              costPrice: p.cost_price,
-            });
+          flatList.push({
+            id: p.id,
+            sku: p.sku,
+            barcode: p.barcode || '',
+            productName: p.name,
+            costPrice: p.cost_price,
           });
         });
-        setVariants(flatList);
+        setProductsList(flatList);
       } catch (err) {
         console.error('Failed to load PO creation metadata', err);
       }
@@ -82,41 +80,37 @@ export function CreatePOPage() {
       setSearchResults([]);
       return;
     }
-    const filtered = variants.filter(
+    const filtered = productsList.filter(
       (v) =>
         v.sku.toLowerCase().includes(searchQuery.toLowerCase()) ||
         v.barcode.includes(searchQuery) ||
         v.productName.toLowerCase().includes(searchQuery.toLowerCase())
     );
     setSearchResults(filtered.slice(0, 5));
-  }, [searchQuery, variants]);
+  }, [searchQuery, productsList]);
 
-  const addLine = (v: ProductVariant) => {
-    if (lines.some((l) => l.variantId === v.id)) {
-      addToast('warning', 'Variant already added to purchase order lines');
+  const addLine = (v: ProductSearchItem) => {
+    if (lines.some((l) => l.productId === v.id)) {
+      addToast('warning', 'Product already added to the order');
       return;
     }
     setLines((prev) => [
       ...prev,
-      { productId: v.id, sku: v.sku, name: v.name, quantity: 1, unitCost: v.costPrice || 0 },
+      { productId: v.id, sku: v.sku, name: v.productName, quantity: 1, unitCost: v.costPrice || 0 },
     ]);
     setSearchQuery('');
   };
 
-  const removeLine = (idx: number) => {
-    setLines((prev) => prev.filter((_, i) => i !== idx));
+  const removeLine = (productId: string) => {
+    setLines((prev) => prev.filter((l) => l.productId !== productId));
   };
 
-  const updateLine = (idx: number, field: 'quantity' | 'unitCost', val: number) => {
-    const num = isNaN(val) ? 0 : val;
-    setLines((prev) => {
-      const copy = [...prev];
-      copy[idx] = {
-        ...copy[idx],
-        [field]: field === 'quantity' ? Math.max(1, num) : Math.max(0, num),
-      };
-      return copy;
-    });
+  const updateLine = (productId: string, field: 'quantity' | 'unitCost', value: number) => {
+    const num = isNaN(value) ? 0 : value;
+    setLines((prev) => prev.map((l) => l.productId === productId ? { 
+        ...l, 
+        [field]: field === 'quantity' ? Math.max(1, num) : Math.max(0, num) 
+    } : l));
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -300,7 +294,7 @@ export function CreatePOPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {lines.map((l, index) => (
+                    {lines.map((l) => (
                       <tr key={l.productId}>
                         <td>{l.sku}</td>
                         <td>{l.name}</td>
@@ -309,7 +303,7 @@ export function CreatePOPage() {
                             type="number"
                             value={l.quantity}
                             min={1}
-                            onChange={(e) => updateLine(index, 'quantity', Number(e.target.value))}
+                            onChange={(e) => updateLine(l.productId, 'quantity', Number(e.target.value))}
                             className="form-input"
                             style={{ width: '80px', minHeight: '32px', textAlign: 'center' }}
                           />
@@ -320,7 +314,7 @@ export function CreatePOPage() {
                             value={l.unitCost}
                             min={0}
                             step="0.01"
-                            onChange={(e) => updateLine(index, 'unitCost', Number(e.target.value))}
+                            onChange={(e) => updateLine(l.productId, 'unitCost', Number(e.target.value))}
                             className="form-input"
                             style={{ width: '100px', minHeight: '32px', textAlign: 'center' }}
                           />
@@ -329,7 +323,7 @@ export function CreatePOPage() {
                           <strong>{(l.quantity * l.unitCost).toLocaleString(undefined, { minimumFractionDigits: 2 })}</strong>
                         </td>
                         <td>
-                          <button type="button" className="btn btn-danger btn-sm" onClick={() => removeLine(index)}>
+                          <button type="button" className="btn btn-secondary" style={{ color: '#ef4444' }} onClick={() => removeLine(l.productId)}>
                             <Trash2 size={14} />
                           </button>
                         </td>

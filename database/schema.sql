@@ -101,21 +101,9 @@ CREATE TABLE products (
   selling_price numeric(14,2) NOT NULL CHECK (selling_price >= 0),
   reorder_level integer NOT NULL DEFAULT 5,
   is_active boolean NOT NULL DEFAULT true,
+  barcode varchar(90) UNIQUE,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
-);
-
-CREATE TABLE product_variants (
-  id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
-  product_id uuid NOT NULL REFERENCES products(id) ON DELETE CASCADE,
-  sku varchar(90) UNIQUE NOT NULL,
-  barcode varchar(90) UNIQUE NOT NULL,
-  color varchar(80),
-  material varchar(80),
-  dimensions varchar(120),
-  cost_price numeric(14,2),
-  selling_price numeric(14,2),
-  is_active boolean NOT NULL DEFAULT true
 );
 
 CREATE TABLE files (
@@ -151,7 +139,7 @@ CREATE TABLE warehouse_locations (
 
 CREATE TABLE inventory_stock (
   id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
-  variant_id uuid NOT NULL REFERENCES product_variants(id),
+  product_id uuid NOT NULL REFERENCES products(id),
   owner_type location_owner_type NOT NULL,
   warehouse_id uuid REFERENCES warehouses(id),
   branch_id uuid REFERENCES branches(id),
@@ -160,12 +148,12 @@ CREATE TABLE inventory_stock (
   quantity_reserved integer NOT NULL DEFAULT 0,
   updated_at timestamptz NOT NULL DEFAULT now(),
   CHECK ((owner_type = 'WAREHOUSE' AND warehouse_id IS NOT NULL) OR (owner_type = 'BRANCH' AND branch_id IS NOT NULL)),
-  UNIQUE (variant_id, owner_type, warehouse_id, branch_id, warehouse_location_id)
+  UNIQUE (product_id, owner_type, warehouse_id, branch_id, warehouse_location_id)
 );
 
 CREATE TABLE inventory_transactions (
   id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
-  variant_id uuid NOT NULL REFERENCES product_variants(id),
+  product_id uuid NOT NULL REFERENCES products(id),
   transaction_type inventory_transaction_type NOT NULL,
   quantity integer NOT NULL,
   source_owner_type location_owner_type,
@@ -198,7 +186,7 @@ CREATE TABLE stock_counts (
 CREATE TABLE stock_count_lines (
   id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
   stock_count_id uuid NOT NULL REFERENCES stock_counts(id) ON DELETE CASCADE,
-  variant_id uuid NOT NULL REFERENCES product_variants(id),
+  product_id uuid NOT NULL REFERENCES products(id),
   expected_quantity integer NOT NULL,
   counted_quantity integer NOT NULL,
   variance integer GENERATED ALWAYS AS (counted_quantity - expected_quantity) STORED
@@ -228,7 +216,7 @@ CREATE TABLE purchase_orders (
 CREATE TABLE purchase_order_lines (
   id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
   purchase_order_id uuid NOT NULL REFERENCES purchase_orders(id) ON DELETE CASCADE,
-  variant_id uuid NOT NULL REFERENCES product_variants(id),
+  product_id uuid NOT NULL REFERENCES products(id),
   quantity integer NOT NULL CHECK (quantity > 0),
   unit_cost numeric(14,2) NOT NULL CHECK (unit_cost >= 0)
 );
@@ -245,7 +233,7 @@ CREATE TABLE goods_receipts (
 CREATE TABLE goods_receipt_lines (
   id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
   goods_receipt_id uuid NOT NULL REFERENCES goods_receipts(id) ON DELETE CASCADE,
-  variant_id uuid NOT NULL REFERENCES product_variants(id),
+  product_id uuid NOT NULL REFERENCES products(id),
   warehouse_location_id uuid REFERENCES warehouse_locations(id),
   quantity_received integer NOT NULL CHECK (quantity_received > 0)
 );
@@ -282,7 +270,7 @@ CREATE TABLE transfers (
 CREATE TABLE transfer_lines (
   id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
   transfer_id uuid NOT NULL REFERENCES transfers(id) ON DELETE CASCADE,
-  variant_id uuid NOT NULL REFERENCES product_variants(id),
+  product_id uuid NOT NULL REFERENCES products(id),
   quantity_requested integer NOT NULL CHECK (quantity_requested > 0),
   quantity_dispatched integer NOT NULL DEFAULT 0,
   quantity_received integer NOT NULL DEFAULT 0
@@ -322,7 +310,7 @@ CREATE TABLE sales_orders (
 CREATE TABLE sales_order_lines (
   id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
   sales_order_id uuid NOT NULL REFERENCES sales_orders(id) ON DELETE CASCADE,
-  variant_id uuid NOT NULL REFERENCES product_variants(id),
+  product_id uuid NOT NULL REFERENCES products(id),
   quantity integer NOT NULL CHECK (quantity > 0),
   unit_price numeric(14,2) NOT NULL CHECK (unit_price >= 0)
 );
@@ -340,7 +328,7 @@ CREATE TABLE invoices (
 CREATE TABLE invoice_lines (
   id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
   invoice_id uuid NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
-  variant_id uuid NOT NULL REFERENCES product_variants(id),
+  product_id uuid NOT NULL REFERENCES products(id),
   quantity integer NOT NULL CHECK (quantity > 0),
   unit_price numeric(14,2) NOT NULL CHECK (unit_price >= 0)
 );
@@ -377,10 +365,9 @@ CREATE TABLE audit_logs (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE INDEX idx_inventory_stock_variant ON inventory_stock(variant_id);
 CREATE INDEX idx_inventory_stock_owner ON inventory_stock(owner_type, warehouse_id, branch_id);
-CREATE INDEX idx_inventory_transactions_variant_created ON inventory_transactions(variant_id, created_at DESC);
-CREATE INDEX idx_product_variants_barcode ON product_variants(barcode);
+CREATE INDEX idx_inventory_transactions_product_created ON inventory_transactions(product_id, created_at DESC);
+CREATE INDEX idx_products_barcode ON products(barcode);
 CREATE INDEX idx_products_search ON products USING gin (to_tsvector('english', name || ' ' || sku));
 CREATE INDEX idx_transfers_status ON transfers(status);
 CREATE INDEX idx_audit_logs_entity ON audit_logs(entity_type, entity_id);
