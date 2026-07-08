@@ -46,8 +46,8 @@ export class InventoryService {
 
     // Emit typed stock updated event
     this.realtime.emitStockUpdated({
-      variantId: dto.variantId,
-      sku: result.sku ?? dto.variantId,
+      productId: dto.productId,
+      sku: result.sku ?? dto.productId,
       productName: result.product_name ?? 'Unknown',
       ownerType: dto.warehouseId ? 'WAREHOUSE' : 'BRANCH',
       warehouseId: dto.warehouseId,

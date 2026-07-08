@@ -4,7 +4,7 @@ import { RealtimeGateway } from './realtime.gateway';
 // ── Typed Event Payloads ─────────────────────────────────────────────────────
 
 export interface StockUpdatedPayload {
-  variantId: string;
+  productId: string;
   sku: string;
   productName: string;
   ownerType: 'WAREHOUSE' | 'BRANCH';
@@ -18,7 +18,7 @@ export interface StockUpdatedPayload {
 }
 
 export interface LowStockPayload {
-  variantId: string;
+  productId: string;
   sku: string;
   productName: string;
   ownerType: 'WAREHOUSE' | 'BRANCH';

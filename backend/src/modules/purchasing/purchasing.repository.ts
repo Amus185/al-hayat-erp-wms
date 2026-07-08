@@ -72,6 +72,7 @@ export class PurchasingRepository {
            VALUES ($1,'PURCHASE_RECEIPT',$2,'WAREHOUSE',$3,$4,'GOODS_RECEIPT',$5,$6)`,
           [line.productId, line.quantityReceived, dto.warehouseId, line.warehouseLocationId ?? null, receipt.rows[0].id, userId]
         );
+        const updated = await client.query(
           `UPDATE inventory_stock
            SET quantity_on_hand = quantity_on_hand + $4, updated_at = now()
            WHERE product_id = $1
