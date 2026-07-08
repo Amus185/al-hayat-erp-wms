@@ -139,8 +139,8 @@ export function CreatePOPage() {
       expectedDate: expectedDate || undefined,
       lines: lines.map((l) => ({
         productId: l.productId,
-        quantity: l.quantity,
-        unitCost: l.unitCost,
+        quantity: Number(l.quantity),
+        unitCost: Number(l.unitCost),
       })),
     };
 

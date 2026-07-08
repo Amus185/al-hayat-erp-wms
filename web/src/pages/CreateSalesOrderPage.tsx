@@ -135,8 +135,8 @@ export function CreateSalesOrderPage() {
       branchId,
       lines: lines.map((l) => ({
         productId: l.productId,
-        quantity: l.quantity,
-        unitPrice: l.unitPrice,
+        quantity: Number(l.quantity),
+        unitPrice: Number(l.unitPrice),
       })),
     };
 
