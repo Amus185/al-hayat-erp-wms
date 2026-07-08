@@ -14,24 +14,8 @@ export class AuditController {
 
   @Get()
   @Permissions('audit.read')
-  search(
-    @Query('action') action?: string,
-    @Query('entityType') entityType?: string,
-    @Query('userId') userId?: string,
-    @Query('startDate') startDate?: string,
-    @Query('endDate') endDate?: string,
-    @Query('page') page?: number,
-    @Query('pageSize') pageSize?: number,
-  ) {
-    return this.audit.findPaginated({
-      action,
-      entityType,
-      userId,
-      startDate,
-      endDate,
-      page,
-      pageSize,
-    });
+  search(@Query('entityType') entityType?: string) {
+    return this.audit.search(entityType);
   }
 }
 

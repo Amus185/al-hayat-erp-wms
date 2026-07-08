@@ -72,6 +72,19 @@ export class ProductsService {
     return roots;
   }
 
+  async createCategory(dto: any) {
+    return (await this.products.createCategory(dto)).rows[0];
+  }
+
+  async updateCategory(id: string, dto: any) {
+    return (await this.products.updateCategory(id, dto)).rows[0];
+  }
+
+  async deleteCategory(id: string) {
+    await this.products.deleteCategory(id);
+    return { success: true };
+  }
+
   async listBrands() {
     return (await this.products.listBrands()).rows;
   }

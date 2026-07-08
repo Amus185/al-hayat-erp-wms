@@ -10,6 +10,17 @@ export class BranchesRepository {
     return this.db.query('SELECT id, code, name, city, address, phone, is_active FROM branches ORDER BY code');
   }
 
+  create(dto: any) {
+    return this.db.query(
+      `INSERT INTO branches (code, name, city, address, phone) VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+      [dto.code, dto.name, dto.city, dto.address ?? null, dto.phone ?? null]
+    );
+  }
+
+  delete(id: string) {
+    return this.db.query(`DELETE FROM branches WHERE id = $1`, [id]);
+  }
+
   findById(id: string) {
     return this.db.query(
       'SELECT id, code, name, city, address, phone, is_active FROM branches WHERE id = $1',

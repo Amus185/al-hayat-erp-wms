@@ -10,6 +10,15 @@ export class BranchesService {
     return (await this.branches.list()).rows;
   }
 
+  async create(dto: any) {
+    return (await this.branches.create(dto)).rows[0];
+  }
+
+  async delete(id: string) {
+    await this.branches.delete(id);
+    return { success: true };
+  }
+
   async retrieve(id: string) {
     const result = await this.branches.findById(id);
     if (result.rowCount === 0) {

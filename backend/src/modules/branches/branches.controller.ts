@@ -1,10 +1,10 @@
-import { Body, Controller, Get, Param, Patch, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, Delete, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Permissions } from '../../common/decorators/permissions.decorator';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { BranchesService } from './branches.service';
-import { UpdateBranchDto } from './dto/update-branch.dto';
+import { CreateBranchDto, UpdateBranchDto } from './dto/update-branch.dto';
 
 @ApiTags('Branches')
 @ApiBearerAuth()
@@ -17,6 +17,18 @@ export class BranchesController {
   @Permissions('inventory.read')
   list() {
     return this.branches.list();
+  }
+
+  @Post()
+  @Permissions('branches.manage')
+  create(@Body() dto: CreateBranchDto) {
+    return this.branches.create(dto);
+  }
+
+  @Delete(':id')
+  @Permissions('branches.manage')
+  remove(@Param('id') id: string) {
+    return this.branches.delete(id);
   }
 
   @Get(':id')

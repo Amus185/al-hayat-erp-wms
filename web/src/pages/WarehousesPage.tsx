@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Boxes, MapPin, Plus, List } from 'lucide-react';
 import { apiGet, apiPost } from '../api/client';
 import { Modal } from '../components/Modal';
-import { InputField } from '../components/FormField';
+import { InputField, FormField } from '../components/FormField';
 import { DataTable, type Column } from '../components/DataTable';
 import { PageSkeleton } from '../components/LoadingSpinner';
 import { useToast } from '../contexts/ToastContext';
@@ -50,6 +50,9 @@ export function WarehousesPage() {
     barcode: '',
   });
 
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [newWh, setNewWh] = useState({ code: '', name: '', city: '', address: '' });
+
   const loadWarehouses = async () => {
     try {
       setLoading(true);
@@ -65,6 +68,19 @@ export function WarehousesPage() {
   useEffect(() => {
     loadWarehouses();
   }, []);
+
+  const handleCreate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      await apiPost('/warehouses', newWh);
+      addToast('success', 'Warehouse created successfully');
+      setNewWh({ code: '', name: '', city: '', address: '' });
+      setIsModalOpen(false);
+      loadWarehouses();
+    } catch (err: any) {
+      addToast('error', err?.message || 'Failed to create warehouse');
+    }
+  };
 
   const handleViewLocations = async (wh: Warehouse) => {
     setSelectedWarehouse(wh);
@@ -125,8 +141,33 @@ export function WarehousesPage() {
           <p>Locations</p>
           <h2>Warehouses, aisles, racks, shelves, and bins</h2>
         </div>
-        <div></div>
+        <div>
+          <button type="button" className="btn btn-primary" onClick={() => setIsModalOpen(true)}>
+            + New Warehouse
+          </button>
+        </div>
       </section>
+
+      <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title="Create Warehouse">
+        <form onSubmit={handleCreate} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          <FormField label="Code">
+            <input type="text" className="form-input" required value={newWh.code} onChange={e => setNewWh({...newWh, code: e.target.value})} />
+          </FormField>
+          <FormField label="Name">
+            <input type="text" className="form-input" required value={newWh.name} onChange={e => setNewWh({...newWh, name: e.target.value})} />
+          </FormField>
+          <FormField label="City">
+            <input type="text" className="form-input" required value={newWh.city} onChange={e => setNewWh({...newWh, city: e.target.value})} />
+          </FormField>
+          <FormField label="Address">
+            <input type="text" className="form-input" value={newWh.address} onChange={e => setNewWh({...newWh, address: e.target.value})} />
+          </FormField>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+            <button type="button" className="btn btn-secondary" onClick={() => setIsModalOpen(false)}>Cancel</button>
+            <button type="submit" className="btn btn-primary">Create</button>
+          </div>
+        </form>
+      </Modal>
 
       {/* Grid of Warehouses */}
       <section style={{

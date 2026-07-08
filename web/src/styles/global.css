@@ -799,6 +799,39 @@ tbody tr:hover { background: var(--primary-lighter); }
   gap: 8px;
 }
 
+.toast {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 300px;
+  max-width: 400px;
+  padding: 14px 16px;
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  font-size: 14px;
+  font-weight: 500;
+  animation: slideInRight 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  background: var(--bg-card);
+  border-left: 4px solid transparent;
+}
+.toast--success { border-left-color: #22c55e; color: #166534; background: #f0fdf4; }
+.toast--error { border-left-color: #ef4444; color: #991b1b; background: #fef2f2; }
+.toast--warning { border-left-color: #f59e0b; color: #92400e; background: #fffbeb; }
+.toast--info { border-left-color: #3b82f6; color: #1e40af; background: #eff6ff; }
+
+.toast__message { flex: 1; margin-right: 12px; }
+.toast__close {
+  background: transparent;
+  border: none;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.6;
+  padding: 0;
+  color: inherit;
+}
+.toast__close:hover { opacity: 1; }
+
 /* ── Responsive ───────────────────────────────────── */
 @media (max-width: 1024px) {
   .metric-grid { grid-template-columns: repeat(2, 1fr); }

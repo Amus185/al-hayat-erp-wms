@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { PackageSearch, Plus, Trash2, Edit } from 'lucide-react';
+import { PackageSearch, Plus, Trash2, List, Settings } from 'lucide-react';
 import { apiGet, apiPost, apiDelete } from '../api/client';
 import { DataTable, type Column } from '../components/DataTable';
 import { SearchInput } from '../components/SearchInput';
@@ -47,6 +47,9 @@ export function ProductsPage() {
 
   // Modals state
   const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
+  const [newCategoryName, setNewCategoryName] = useState('');
+  
   const [newProduct, setNewProduct] = useState({
     sku: '',
     name: '',
@@ -66,6 +69,19 @@ export function ProductsPage() {
   const [vMaterial, setVMaterial] = useState('');
   const [vDimensions, setVDimensions] = useState('');
 
+  const fetchFilters = async () => {
+    try {
+      const [cats, brs] = await Promise.all([
+        apiGet<Category[]>('/products/categories'),
+        apiGet<Brand[]>('/products/brands'),
+      ]);
+      setCategories(cats || []);
+      setBrands(brs || []);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
   const loadData = async () => {
     try {
       setLoading(true);
@@ -80,21 +96,10 @@ export function ProductsPage() {
 
   useEffect(() => {
     loadData();
+    fetchFilters();
   }, [search]);
 
-  useEffect(() => {
-    async function fetchMetadata() {
-      try {
-        const cats = await apiGet<Category[]>('/products/categories');
-        const brs = await apiGet<Brand[]>('/products/brands');
-        setCategories(cats || []);
-        setBrands(brs || []);
-      } catch (err) {
-        console.error('Failed to load categories/brands', err);
-      }
-    }
-    fetchMetadata();
-  }, []);
+
 
   const handleCreateProduct = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -215,12 +220,39 @@ export function ProductsPage() {
           <p>Catalog</p>
           <h2>Products, variants, images, and barcode lookup</h2>
         </div>
-        {hasPermission('products.write') && (
-          <button type="button" onClick={() => setIsCreateOpen(true)}>
-            <Plus size={16} style={{ marginRight: '6px', inlineSize: 'auto' }} /> New Product
-          </button>
-        )}
+        <div style={{ display: 'flex', gap: '8px' }}>
+          {hasPermission('products.manage') && (
+            <button type="button" className="btn btn-secondary" onClick={() => setIsCategoryModalOpen(true)}>
+              Manage Categories
+            </button>
+          )}
+          {hasPermission('products.write') && (
+            <button type="button" onClick={() => setIsCreateOpen(true)}>
+              <Plus size={16} style={{ marginRight: '6px', inlineSize: 'auto' }} /> New Product
+            </button>
+          )}
+        </div>
       </section>
+
+      <Modal isOpen={isCategoryModalOpen} onClose={() => setIsCategoryModalOpen(false)} title="Manage Categories">
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          <form onSubmit={handleCreateCategory} style={{ display: 'flex', gap: '8px' }}>
+            <input type="text" className="form-input" style={{ flex: 1 }} required placeholder="New Category Name" value={newCategoryName} onChange={e => setNewCategoryName(e.target.value)} />
+            <button type="submit" className="btn btn-primary">Add</button>
+          </form>
+          <div style={{ maxHeight: '300px', overflowY: 'auto', border: '1px solid #e1e8e1', borderRadius: '8px' }}>
+            {categories.map(c => (
+              <div key={c.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 12px', borderBottom: '1px solid #e1e8e1' }}>
+                <span>{c.name}</span>
+                <button type="button" onClick={() => handleDeleteCategory(c.id)} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer' }}>
+                  <Trash2 size={16} />
+                </button>
+              </div>
+            ))}
+            {categories.length === 0 && <div style={{ padding: '12px', textAlign: 'center', color: '#667066' }}>No categories found</div>}
+          </div>
+        </div>
+      </Modal>
 
       <section className="panel" style={{ display: 'flex', gap: '14px', alignItems: 'center', flexWrap: 'wrap' }}>
         <div style={{ flex: '1', minWidth: '240px' }}>

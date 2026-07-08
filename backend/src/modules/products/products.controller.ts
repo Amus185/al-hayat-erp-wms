@@ -5,6 +5,7 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
+import { CreateCategoryDto, UpdateCategoryDto } from './dto/category.dto';
 import { ProductsService } from './products.service';
 
 @ApiTags('Products')
@@ -24,6 +25,24 @@ export class ProductsController {
   @Permissions('products.read')
   categories() {
     return this.products.listCategories();
+  }
+
+  @Post('categories')
+  @Permissions('products.manage')
+  createCategory(@Body() dto: CreateCategoryDto) {
+    return this.products.createCategory(dto);
+  }
+
+  @Patch('categories/:id')
+  @Permissions('products.manage')
+  updateCategory(@Param('id') id: string, @Body() dto: UpdateCategoryDto) {
+    return this.products.updateCategory(id, dto);
+  }
+
+  @Delete('categories/:id')
+  @Permissions('products.manage')
+  deleteCategory(@Param('id') id: string) {
+    return this.products.deleteCategory(id);
   }
 
   @Get('brands')

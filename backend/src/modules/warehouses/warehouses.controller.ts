@@ -4,6 +4,7 @@ import { Permissions } from '../../common/decorators/permissions.decorator';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { CreateLocationBodyDto } from './dto/create-location.dto';
+import { CreateWarehouseDto, UpdateWarehouseDto } from './dto/warehouse.dto';
 import { WarehousesService } from './warehouses.service';
 
 @ApiTags('Warehouses')
@@ -17,6 +18,24 @@ export class WarehousesController {
   @Permissions('inventory.read')
   list() {
     return this.warehouses.list();
+  }
+
+  @Post()
+  @Permissions('inventory.adjust') // Usually admin
+  create(@Body() dto: CreateWarehouseDto) {
+    return this.warehouses.create(dto);
+  }
+
+  @Patch(':id')
+  @Permissions('inventory.adjust')
+  update(@Param('id') id: string, @Body() dto: UpdateWarehouseDto) {
+    return this.warehouses.update(id, dto);
+  }
+
+  @Delete(':id')
+  @Permissions('inventory.adjust')
+  remove(@Param('id') id: string) {
+    return this.warehouses.delete(id);
   }
 
   @Get(':id/locations')
