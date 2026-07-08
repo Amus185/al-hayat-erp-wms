@@ -37,6 +37,12 @@ export class SalesController {
     return this.sales.createOrder(dto, request.user.sub);
   }
 
+  @Get('sales-orders/:id')
+  @Permissions('sales.write')
+  orderDetail(@Param('id') id: string) {
+    return this.sales.orderDetail(id);
+  }
+
   @Patch('sales-orders/:id/confirm')
   @Permissions('sales.write')
   confirmOrder(@Param('id') id: string) {

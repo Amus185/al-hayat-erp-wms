@@ -147,9 +147,7 @@ export function SalesPage() {
   const viewOrderDetails = async (so: SalesOrder) => {
     setOrderDetailsLoading(true);
     try {
-      // Fetch details
-      const list = await apiGet<any[]>('/sales-orders');
-      const details = list?.find((item) => item.id === so.id);
+      const details = await apiGet<any>(`/sales-orders/${so.id}`);
       setSelectedOrder(details || so);
     } catch {
       setSelectedOrder(so);
@@ -322,7 +320,7 @@ export function SalesPage() {
                   <tbody>
                     {selectedOrder.lines?.map((line: any) => (
                       <tr key={line.id}>
-                        <td><strong>{line.product_name}</strong><br /><span style={{ color: '#667066', fontSize: '12px' }}>{line.variant_sku}</span></td>
+                        <td><strong>{line.product_name}</strong><br /><span style={{ color: '#667066', fontSize: '12px' }}>{line.product_sku}</span></td>
                         <td>{line.quantity}</td>
                         <td>${Number(line.unit_price).toLocaleString()}</td>
                         <td><strong>${(line.quantity * line.unit_price).toLocaleString()}</strong></td>

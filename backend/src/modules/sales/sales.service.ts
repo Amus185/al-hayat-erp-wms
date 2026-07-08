@@ -24,6 +24,10 @@ export class SalesService {
     return (await this.sales.orders()).rows;
   }
 
+  async orderDetail(id: string) {
+    return this.sales.orderDetail(id);
+  }
+
   async createOrder(dto: CreateSalesOrderDto, userId: string) {
     const order = await this.sales.createOrder(dto, userId);
     await this.audit.logAction(userId, 'CREATE_SALES_ORDER', 'sales_orders', order.id, undefined, order);

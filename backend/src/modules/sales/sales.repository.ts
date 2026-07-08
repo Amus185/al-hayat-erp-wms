@@ -19,13 +19,36 @@ export class SalesRepository {
 
   orders() {
     return this.db.query(
-      `SELECT so.*, c.name AS customer_name, b.name AS branch_name
+      `SELECT so.*, c.name AS customer_name, b.name AS branch_name,
+              i.id AS invoice_id
        FROM sales_orders so
        LEFT JOIN customers c ON c.id = so.customer_id
        JOIN branches b ON b.id = so.branch_id
+       LEFT JOIN invoices i ON i.sales_order_id = so.id
        ORDER BY so.created_at DESC
        LIMIT 100`
     );
+  }
+
+  async orderDetail(id: string) {
+    const order = await this.db.query(
+      `SELECT so.*, c.name AS customer_name, b.name AS branch_name,
+              i.id AS invoice_id, i.invoice_number, i.total_amount AS invoice_total, i.status AS invoice_status
+       FROM sales_orders so
+       LEFT JOIN customers c ON c.id = so.customer_id
+       JOIN branches b ON b.id = so.branch_id
+       LEFT JOIN invoices i ON i.sales_order_id = so.id
+       WHERE so.id = $1`,
+      [id]
+    );
+    const lines = await this.db.query(
+      `SELECT sol.*, p.name AS product_name, p.sku AS product_sku
+       FROM sales_order_lines sol
+       LEFT JOIN products p ON p.id = sol.product_id
+       WHERE sol.sales_order_id = $1`,
+      [id]
+    );
+    return { ...order.rows[0], lines: lines.rows };
   }
 
   async createOrder(dto: CreateSalesOrderDto, userId: string) {
