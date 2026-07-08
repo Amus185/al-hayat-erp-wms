@@ -35,10 +35,15 @@ export class SalesService {
   }
 
   async createInvoice(orderId: string, userId: string) {
-    const invoice = await this.sales.createInvoice(orderId, userId);
-    this.realtime.emit('sales.invoice_created', invoice);
-    this.realtime.emit('inventory.stock.updated', { source: 'invoice', invoiceId: invoice.id });
-    return invoice;
+    try {
+      const invoice = await this.sales.createInvoice(orderId, userId);
+      this.realtime.emit('sales.invoice_created', invoice);
+      this.realtime.emit('inventory.stock.updated', { source: 'invoice', invoiceId: invoice.id });
+      return invoice;
+    } catch (error) {
+      console.error('createInvoice FAILED:', error);
+      throw error;
+    }
   }
 
   async payInvoice(id: string) {

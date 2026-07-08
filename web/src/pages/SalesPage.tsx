@@ -119,7 +119,7 @@ export function SalesPage() {
   const handleCreateInvoice = async (id: string) => {
     try {
       setOrderDetailsLoading(true);
-      await apiPost(`/sales-orders/${id}/invoice`);
+      await apiPost(`/sales-orders/${id}/invoice`, {});
       addToast('success', 'Invoice issued successfully');
       setSelectedOrder(null);
       loadData();

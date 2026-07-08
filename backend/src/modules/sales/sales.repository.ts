@@ -52,41 +52,58 @@ export class SalesRepository {
 
   async createInvoice(orderId: string, userId: string) {
     return this.db.transaction(async (client) => {
+      // 1. Calculate total from order lines
       const totalResult = await client.query(
         'SELECT COALESCE(SUM(quantity * unit_price), 0) AS total FROM sales_order_lines WHERE sales_order_id = $1',
         [orderId]
       );
+
+      // 2. Get branch from the sales order
       const orderResult = await client.query('SELECT branch_id FROM sales_orders WHERE id = $1', [orderId]);
-      const branchId = orderResult.rows[0]?.branch_id as string | undefined;
+      const branchId = orderResult.rows[0]?.branch_id ?? null;
+
+      // 3. Create the invoice header
       const invoice = await client.query(
         `INSERT INTO invoices (invoice_number, sales_order_id, total_amount)
-         VALUES ($1,$2,$3) RETURNING *`,
+         VALUES ($1, $2, $3) RETURNING *`,
         [`INV-${Date.now()}`, orderId, totalResult.rows[0].total]
       );
+      const invoiceId = invoice.rows[0].id;
+
+      // 4. Copy order lines into invoice lines
       await client.query(
         `INSERT INTO invoice_lines (invoice_id, product_id, quantity, unit_price)
          SELECT $1::uuid, product_id, quantity, unit_price FROM sales_order_lines WHERE sales_order_id = $2`,
-        [invoice.rows[0].id, orderId]
+        [invoiceId, orderId]
       );
-      const lines = await client.query<{ product_id: string; quantity: number }>(
-        'SELECT product_id, quantity FROM sales_order_lines WHERE sales_order_id = $1',
-        [orderId]
-      );
-      for (const line of lines.rows) {
-        await client.query(
-          `UPDATE inventory_stock
-           SET quantity_on_hand = quantity_on_hand - $1, updated_at = now()
-           WHERE product_id = $2 AND branch_id = $3`,
-          [line.quantity, line.product_id, branchId]
+
+      // 5. Deduct inventory and log transactions (only if branch exists)
+      if (branchId) {
+        const lines = await client.query<{ product_id: string; quantity: number }>(
+          'SELECT product_id, quantity FROM sales_order_lines WHERE sales_order_id = $1',
+          [orderId]
         );
-        await client.query(
-          `INSERT INTO inventory_transactions
-           (product_id, transaction_type, quantity, source_owner_type, source_branch_id, reference_type, reference_id, created_by)
-           VALUES ($1,'SALE_ISSUE',$2,'BRANCH',$3,'INVOICE',$4,$5)`,
-          [line.product_id, -line.quantity, branchId, invoice.rows[0].id, userId]
-        );
+        for (const line of lines.rows) {
+          // Deduct stock – silently skips if no matching row exists
+          await client.query(
+            `UPDATE inventory_stock
+             SET quantity_on_hand = quantity_on_hand - $1, updated_at = now()
+             WHERE product_id = $2 AND branch_id = $3`,
+            [line.quantity, line.product_id, branchId]
+          );
+          // Record the transaction
+          await client.query(
+            `INSERT INTO inventory_transactions
+             (product_id, transaction_type, quantity, source_owner_type, source_branch_id, reference_type, reference_id, created_by)
+             VALUES ($1, 'SALE_ISSUE', $2, 'BRANCH', $3, 'INVOICE', $4, $5)`,
+            [line.product_id, -line.quantity, branchId, invoiceId, userId]
+          );
+        }
       }
+
+      // 6. Update order status
       await client.query("UPDATE sales_orders SET status = 'INVOICED' WHERE id = $1", [orderId]);
+
       return invoice.rows[0];
     });
   }
