@@ -137,7 +137,7 @@ export function DashboardPage() {
       <section className="metric-grid">
         <MetricCard
           label="Total inventory value"
-          value={`$${(metrics.totalValue / 1_000_000).toFixed(1)}M`}
+          value={new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(metrics.totalValue)}
           trend="Live cost appraisal"
           icon={<CircleDollarSign size={22} />}
         />
