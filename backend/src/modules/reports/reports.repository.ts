@@ -145,10 +145,9 @@ export class ReportsRepository {
          b.phone,
          b.is_active,
          COALESCE((
-           SELECT SUM(s.quantity_on_hand * COALESCE(v.cost_price, p.cost_price))
+           SELECT SUM(s.quantity_on_hand * p.cost_price)
            FROM inventory_stock s
-           JOIN product_variants v ON v.id = s.variant_id
-           JOIN products p ON p.id = v.product_id
+           JOIN products p ON p.id = s.product_id
            WHERE s.branch_id = b.id
          ), 0)::float AS inventory_value,
          COALESCE((
@@ -157,7 +156,7 @@ export class ReportsRepository {
            WHERE so.branch_id = b.id AND so.status != 'CANCELLED'
          ), 0)::int AS total_orders,
          COALESCE((
-           SELECT COUNT(DISTINCT s.variant_id)
+           SELECT COUNT(DISTINCT s.product_id)
            FROM inventory_stock s
            WHERE s.branch_id = b.id AND s.quantity_on_hand > 0
          ), 0)::int AS sku_count

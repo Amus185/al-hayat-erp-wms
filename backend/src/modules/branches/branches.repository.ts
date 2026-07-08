@@ -52,11 +52,10 @@ export class BranchesRepository {
 
   inventory(branchId: string) {
     return this.db.query(
-      `SELECT p.name, v.sku, v.barcode, s.quantity_on_hand, s.quantity_reserved,
+      `SELECT p.name, p.sku, p.barcode, s.quantity_on_hand, s.quantity_reserved,
               (s.quantity_on_hand - s.quantity_reserved) AS available_quantity
        FROM inventory_stock s
-       JOIN product_variants v ON v.id = s.variant_id
-       JOIN products p ON p.id = v.product_id
+       JOIN products p ON p.id = s.product_id
        WHERE s.branch_id = $1
        ORDER BY p.name`,
       [branchId]
