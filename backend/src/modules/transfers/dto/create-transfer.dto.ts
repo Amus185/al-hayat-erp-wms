@@ -8,7 +8,7 @@ export enum OwnerType {
 
 export class TransferLineDto {
   @IsUUID()
-  variantId!: string;
+  productId!: string;
 
   @IsInt()
   quantityRequested!: number;

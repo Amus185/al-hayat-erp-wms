@@ -38,8 +38,8 @@ export class PurchasingRepository {
       );
       for (const line of dto.lines) {
         await client.query(
-          'INSERT INTO purchase_order_lines (purchase_order_id, variant_id, quantity, unit_cost) VALUES ($1,$2,$3,$4)',
-          [po.rows[0].id, line.variantId, line.quantity, line.unitCost]
+          'INSERT INTO purchase_order_lines (purchase_order_id, product_id, quantity, unit_cost) VALUES ($1,$2,$3,$4)',
+          [po.rows[0].id, line.productId, line.quantity, line.unitCost]
         );
       }
       return po.rows[0];
@@ -63,30 +63,29 @@ export class PurchasingRepository {
       );
       for (const line of dto.lines) {
         await client.query(
-          'INSERT INTO goods_receipt_lines (goods_receipt_id, variant_id, warehouse_location_id, quantity_received) VALUES ($1,$2,$3,$4)',
-          [receipt.rows[0].id, line.variantId, line.warehouseLocationId ?? null, line.quantityReceived]
+          'INSERT INTO goods_receipt_lines (goods_receipt_id, product_id, warehouse_location_id, quantity_received) VALUES ($1,$2,$3,$4)',
+          [receipt.rows[0].id, line.productId, line.warehouseLocationId ?? null, line.quantityReceived]
         );
         await client.query(
           `INSERT INTO inventory_transactions
-           (variant_id, transaction_type, quantity, destination_owner_type, destination_warehouse_id, destination_location_id, reference_type, reference_id, created_by)
+           (product_id, transaction_type, quantity, destination_owner_type, destination_warehouse_id, destination_location_id, reference_type, reference_id, created_by)
            VALUES ($1,'PURCHASE_RECEIPT',$2,'WAREHOUSE',$3,$4,'GOODS_RECEIPT',$5,$6)`,
-          [line.variantId, line.quantityReceived, dto.warehouseId, line.warehouseLocationId ?? null, receipt.rows[0].id, userId]
+          [line.productId, line.quantityReceived, dto.warehouseId, line.warehouseLocationId ?? null, receipt.rows[0].id, userId]
         );
-        const updated = await client.query(
           `UPDATE inventory_stock
            SET quantity_on_hand = quantity_on_hand + $4, updated_at = now()
-           WHERE variant_id = $1
+           WHERE product_id = $1
              AND owner_type = 'WAREHOUSE'
              AND warehouse_id IS NOT DISTINCT FROM $2
              AND branch_id IS NULL
              AND warehouse_location_id IS NOT DISTINCT FROM $3`,
-          [line.variantId, dto.warehouseId, line.warehouseLocationId ?? null, line.quantityReceived]
+          [line.productId, dto.warehouseId, line.warehouseLocationId ?? null, line.quantityReceived]
         );
         if (updated.rowCount === 0) {
           await client.query(
-            `INSERT INTO inventory_stock (variant_id, owner_type, warehouse_id, warehouse_location_id, quantity_on_hand)
+            `INSERT INTO inventory_stock (product_id, owner_type, warehouse_id, warehouse_location_id, quantity_on_hand)
              VALUES ($1,'WAREHOUSE',$2,$3,$4)`,
-            [line.variantId, dto.warehouseId, line.warehouseLocationId ?? null, line.quantityReceived]
+            [line.productId, dto.warehouseId, line.warehouseLocationId ?? null, line.quantityReceived]
           );
         }
       }

@@ -10,12 +10,12 @@ export class ProductsRepository {
   search(q?: string) {
     const search = `%${q ?? ''}%`;
     return this.db.query(
-      `SELECT p.id, p.sku, p.name, p.cost_price, p.selling_price, p.reorder_level, p.is_active,
+      `SELECT p.id, p.sku, p.barcode, p.name, p.cost_price, p.selling_price, p.reorder_level, p.is_active,
               c.name AS category, b.name AS brand
        FROM products p
        LEFT JOIN categories c ON c.id = p.category_id
        LEFT JOIN brands b ON b.id = p.brand_id
-       WHERE (p.name ILIKE $1 OR p.sku ILIKE $1) AND p.is_active = true
+       WHERE (p.name ILIKE $1 OR p.sku ILIKE $1 OR p.barcode ILIKE $1) AND p.is_active = true
        ORDER BY p.updated_at DESC
        LIMIT 100`,
       [search],
@@ -24,7 +24,7 @@ export class ProductsRepository {
 
   findById(id: string) {
     return this.db.query(
-      `SELECT p.id, p.sku, p.name, p.description, p.cost_price, p.selling_price,
+      `SELECT p.id, p.sku, p.barcode, p.name, p.description, p.cost_price, p.selling_price,
               p.reorder_level, p.is_active, p.created_at, p.updated_at,
               p.category_id, p.brand_id,
               c.name AS category, b.name AS brand
@@ -36,18 +36,7 @@ export class ProductsRepository {
     );
   }
 
-  findVariantsByProductId(productId: string) {
-    return this.db.query(
-      `SELECT v.id, v.product_id, v.sku, v.barcode, v.color, v.material, v.dimensions, v.is_active,
-              COALESCE(SUM(s.quantity_on_hand - s.quantity_reserved), 0)::int AS available_quantity
-       FROM product_variants v
-       LEFT JOIN inventory_stock s ON s.variant_id = v.id
-       WHERE v.product_id = $1
-       GROUP BY v.id
-       ORDER BY v.sku`,
-      [productId],
-    );
-  }
+
 
   findImagesByProductId(productId: string) {
     return this.db.query(
@@ -68,21 +57,19 @@ export class ProductsRepository {
               COUNT(DISTINCT s.warehouse_id) FILTER (WHERE s.warehouse_id IS NOT NULL)::int AS warehouse_count,
               COUNT(DISTINCT s.branch_id) FILTER (WHERE s.branch_id IS NOT NULL)::int AS branch_count
        FROM inventory_stock s
-       JOIN product_variants v ON v.id = s.variant_id
-       WHERE v.product_id = $1`,
+       WHERE s.product_id = $1`,
       [productId],
     );
   }
 
   barcodeLookup(barcode: string) {
     return this.db.query(
-      `SELECT p.id AS product_id, p.name, p.sku AS product_sku, v.id AS variant_id, v.sku AS variant_sku, v.barcode,
+      `SELECT p.id AS product_id, p.name, p.sku AS product_sku, p.barcode,
               COALESCE(SUM(s.quantity_on_hand - s.quantity_reserved), 0) AS available_quantity
-       FROM product_variants v
-       JOIN products p ON p.id = v.product_id
-       LEFT JOIN inventory_stock s ON s.variant_id = v.id
-       WHERE v.barcode = $1
-       GROUP BY p.id, v.id`,
+       FROM products p
+       LEFT JOIN inventory_stock s ON s.product_id = p.id
+       WHERE p.barcode = $1
+       GROUP BY p.id`,
       [barcode],
     );
   }
@@ -90,17 +77,10 @@ export class ProductsRepository {
   async create(dto: CreateProductDto) {
     return this.db.transaction(async (client) => {
       const product = await client.query(
-        `INSERT INTO products (sku, name, description, category_id, brand_id, cost_price, selling_price)
-         VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
-        [dto.sku, dto.name, dto.description ?? null, dto.categoryId ?? null, dto.brandId ?? null, dto.costPrice, dto.sellingPrice],
+        `INSERT INTO products (sku, barcode, name, description, category_id, brand_id, cost_price, selling_price)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+        [dto.sku, dto.barcode, dto.name, dto.description ?? null, dto.categoryId ?? null, dto.brandId ?? null, dto.costPrice, dto.sellingPrice],
       );
-      for (const variant of dto.variants) {
-        await client.query(
-          `INSERT INTO product_variants (product_id, sku, barcode, color, material, dimensions)
-           VALUES ($1,$2,$3,$4,$5,$6)`,
-          [product.rows[0].id, variant.sku, variant.barcode, variant.color ?? null, variant.material ?? null, variant.dimensions ?? null],
-        );
-      }
       return product.rows[0];
     });
   }

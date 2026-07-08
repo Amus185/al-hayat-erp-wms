@@ -16,11 +16,11 @@ interface Branch {
   name: string;
 }
 
-interface ProductVariant {
+interface ProductLine {
   id: string;
   sku: string;
   barcode: string;
-  productName: string;
+  name: string;
   sellingPrice: number;
 }
 
@@ -30,7 +30,7 @@ export function CreateSalesOrderPage() {
 
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [branches, setBranches] = useState<Branch[]>([]);
-  const [variants, setVariants] = useState<ProductVariant[]>([]);
+  const [products, setProducts] = useState<ProductLine[]>([]);
 
   // Form states
   const [customerId, setCustomerId] = useState('');
@@ -39,35 +39,32 @@ export function CreateSalesOrderPage() {
 
   // Searching variants
   const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState<ProductVariant[]>([]);
+  const [searchResults, setSearchResults] = useState<ProductLine[]>([]);
 
   // Selected lines
-  const [lines, setLines] = useState<{ variantId: string; sku: string; name: string; quantity: number; unitPrice: number }[]>([]);
+  const [lines, setLines] = useState<{ productId: string; sku: string; name: string; quantity: number; unitPrice: number }[]>([]);
 
   useEffect(() => {
     async function loadData() {
       try {
         const custs = await apiGet<Customer[]>('/customers');
         const brs = await apiGet<Branch[]>('/branches');
-        const products = await apiGet<any[]>('/products');
+        const productsList = await apiGet<any[]>('/products');
         
         setCustomers(custs || []);
         setBranches(brs || []);
 
-        // Build flat variant list
-        const flatList: ProductVariant[] = [];
-        products?.forEach((p) => {
-          p.variants?.forEach((v: any) => {
-            flatList.push({
-              id: v.id,
-              sku: v.sku,
-              barcode: v.barcode,
-              productName: p.name,
-              sellingPrice: p.selling_price,
-            });
+        const flatList: ProductLine[] = [];
+        productsList?.forEach((p) => {
+          flatList.push({
+            id: p.id,
+            sku: p.sku,
+            barcode: p.barcode,
+            name: p.name,
+            sellingPrice: p.selling_price,
           });
         });
-        setVariants(flatList);
+        setProducts(flatList);
       } catch (err) {
         console.error('Failed to load Sales Order creation metadata', err);
       }
@@ -81,23 +78,23 @@ export function CreateSalesOrderPage() {
       setSearchResults([]);
       return;
     }
-    const filtered = variants.filter(
+    const filtered = products.filter(
       (v) =>
         v.sku.toLowerCase().includes(searchQuery.toLowerCase()) ||
         v.barcode.includes(searchQuery) ||
-        v.productName.toLowerCase().includes(searchQuery.toLowerCase())
+        v.name.toLowerCase().includes(searchQuery.toLowerCase())
     );
     setSearchResults(filtered.slice(0, 5));
-  }, [searchQuery, variants]);
+  }, [searchQuery, products]);
 
-  const addLine = (v: ProductVariant) => {
-    if (lines.some((l) => l.variantId === v.id)) {
-      addToast('warning', 'Variant already added to order lines');
+  const addLine = (v: ProductLine) => {
+    if (lines.some((l) => l.productId === v.id)) {
+      addToast('warning', 'Product already added to order lines');
       return;
     }
     setLines((prev) => [
       ...prev,
-      { variantId: v.id, sku: v.sku, name: v.productName, quantity: 1, unitPrice: v.sellingPrice || 0 },
+      { productId: v.id, sku: v.sku, name: v.name, quantity: 1, unitPrice: v.sellingPrice || 0 },
     ]);
     setSearchQuery('');
   };
@@ -137,7 +134,7 @@ export function CreateSalesOrderPage() {
       branchId,
       notes: notes || undefined,
       lines: lines.map((l) => ({
-        variantId: l.variantId,
+        productId: l.productId,
         quantity: l.quantity,
         unitPrice: l.unitPrice,
       })),
@@ -235,7 +232,7 @@ export function CreateSalesOrderPage() {
             <SearchInput
               value={searchQuery}
               onChange={setSearchQuery}
-              placeholder="Search / Scan variant to add to Order..."
+              placeholder="Search / Scan product to add to Order..."
             />
             {/* Search autocomplete dropdown */}
             {searchResults.length > 0 && (
@@ -265,7 +262,7 @@ export function CreateSalesOrderPage() {
                     onMouseEnter={(e) => (e.currentTarget.style.background = '#e9f6e8')}
                     onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
                   >
-                    <strong>{v.productName}</strong> <span style={{ color: '#667066' }}>({v.sku} - {v.barcode})</span>
+                    <strong>{v.name}</strong> <span style={{ color: '#667066' }}>({v.sku} - {v.barcode})</span>
                   </div>
                 ))}
               </div>
@@ -276,14 +273,14 @@ export function CreateSalesOrderPage() {
           <div style={{ marginTop: '20px' }}>
             {lines.length === 0 ? (
               <div style={{ textAlign: 'center', padding: '24px', color: '#667066', border: '1px dashed #d9e2d9', borderRadius: '8px' }}>
-                No variants added to this order. Scan or search for variants above.
+                No products added to this order. Scan or search for products above.
               </div>
             ) : (
               <div>
                 <table>
                   <thead>
                     <tr>
-                      <th>Variant Product ID</th>
+                      <th>Product ID</th>
                       <th>Product Description</th>
                       <th>Qty Ordered</th>
                       <th>Unit Price ($)</th>
@@ -293,7 +290,7 @@ export function CreateSalesOrderPage() {
                   </thead>
                   <tbody>
                     {lines.map((l, index) => (
-                      <tr key={l.variantId}>
+                      <tr key={l.productId}>
                         <td>{l.sku}</td>
                         <td>{l.name}</td>
                         <td>

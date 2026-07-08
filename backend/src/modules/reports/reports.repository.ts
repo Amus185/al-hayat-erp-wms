@@ -8,11 +8,10 @@ export class ReportsRepository {
   inventoryValueOverview() {
     return this.db.query(
       `SELECT
-         COALESCE(SUM(s.quantity_on_hand * COALESCE(v.cost_price, p.cost_price)), 0)::float AS total_value,
-         COUNT(DISTINCT v.sku)::int AS total_skus
+         COALESCE(SUM(s.quantity_on_hand * p.cost_price), 0)::float AS total_value,
+         COUNT(DISTINCT p.sku)::int AS total_skus
        FROM inventory_stock s
-       JOIN product_variants v ON v.id = s.variant_id
-       JOIN products p ON p.id = v.product_id`
+       JOIN products p ON p.id = s.product_id`
     );
   }
 
@@ -20,11 +19,10 @@ export class ReportsRepository {
     return this.db.query(
       `SELECT
          COALESCE(w.name, 'Unknown') AS warehouse,
-         COALESCE(SUM(s.quantity_on_hand * COALESCE(v.cost_price, p.cost_price)), 0)::float AS value,
-         COUNT(DISTINCT v.sku)::int AS sku_count
+         COALESCE(SUM(s.quantity_on_hand * p.cost_price), 0)::float AS value,
+         COUNT(DISTINCT p.sku)::int AS sku_count
        FROM inventory_stock s
-       JOIN product_variants v ON v.id = s.variant_id
-       JOIN products p ON p.id = v.product_id
+       JOIN products p ON p.id = s.product_id
        LEFT JOIN warehouses w ON w.id = s.warehouse_id
        WHERE s.owner_type = 'WAREHOUSE'
        GROUP BY w.id, w.name
@@ -36,11 +34,10 @@ export class ReportsRepository {
     return this.db.query(
       `SELECT
          COALESCE(c.name, 'Uncategorized') AS category,
-         COALESCE(SUM(s.quantity_on_hand * COALESCE(v.cost_price, p.cost_price)), 0)::float AS value,
-         COUNT(DISTINCT v.sku)::int AS sku_count
+         COALESCE(SUM(s.quantity_on_hand * p.cost_price), 0)::float AS value,
+         COUNT(DISTINCT p.sku)::int AS sku_count
        FROM inventory_stock s
-       JOIN product_variants v ON v.id = s.variant_id
-       JOIN products p ON p.id = v.product_id
+       JOIN products p ON p.id = s.product_id
        LEFT JOIN categories c ON c.id = p.category_id
        GROUP BY c.id, c.name
        ORDER BY value DESC`
@@ -51,16 +48,15 @@ export class ReportsRepository {
     return this.db.query(
       `SELECT
          p.name AS product_name,
-         v.sku AS variant_sku,
-         v.barcode AS barcode,
+         p.sku AS variant_sku,
+         p.barcode AS barcode,
          COALESCE(s.quantity_on_hand, 0)::int AS current_stock,
          p.reorder_level::int AS reorder_level,
          (p.reorder_level - COALESCE(s.quantity_on_hand, 0))::int AS deficit,
          w.name AS warehouse,
          b.name AS branch
-       FROM product_variants v
-       JOIN products p ON p.id = v.product_id
-       LEFT JOIN inventory_stock s ON s.variant_id = v.id
+       FROM products p
+       LEFT JOIN inventory_stock s ON s.product_id = p.id
        LEFT JOIN warehouses w ON w.id = s.warehouse_id
        LEFT JOIN branches b ON b.id = s.branch_id
        WHERE COALESCE(s.quantity_on_hand, 0) < p.reorder_level
@@ -113,11 +109,10 @@ export class ReportsRepository {
     return this.db.query(
       `SELECT
          COALESCE(SUM(sol.quantity * sol.unit_price), 0)::float AS total_revenue,
-         COALESCE(SUM(sol.quantity * COALESCE(v.cost_price, p.cost_price)), 0)::float AS total_cost
+         COALESCE(SUM(sol.quantity * p.cost_price), 0)::float AS total_cost
        FROM sales_order_lines sol
        JOIN sales_orders so ON so.id = sol.sales_order_id
-       JOIN product_variants v ON v.id = sol.variant_id
-       JOIN products p ON p.id = v.product_id
+       JOIN products p ON p.id = sol.product_id
        WHERE so.status != 'CANCELLED'`
     );
   }
@@ -127,12 +122,11 @@ export class ReportsRepository {
       `SELECT
          COALESCE(c.name, 'Uncategorized') AS category,
          COALESCE(SUM(sol.quantity * sol.unit_price), 0)::float AS revenue,
-         COALESCE(SUM(sol.quantity * COALESCE(v.cost_price, p.cost_price)), 0)::float AS cost,
-         COALESCE(SUM(sol.quantity * (sol.unit_price - COALESCE(v.cost_price, p.cost_price))), 0)::float AS profit
+         COALESCE(SUM(sol.quantity * p.cost_price), 0)::float AS cost,
+         COALESCE(SUM(sol.quantity * (sol.unit_price - p.cost_price)), 0)::float AS profit
        FROM sales_order_lines sol
        JOIN sales_orders so ON so.id = sol.sales_order_id
-       JOIN product_variants v ON v.id = sol.variant_id
-       JOIN products p ON p.id = v.product_id
+       JOIN products p ON p.id = sol.product_id
        LEFT JOIN categories c ON c.id = p.category_id
        WHERE so.status != 'CANCELLED'
        GROUP BY c.id, c.name

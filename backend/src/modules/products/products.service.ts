@@ -18,15 +18,13 @@ export class ProductsService {
     }
     const product = productResult.rows[0];
 
-    const [variants, images, stockSummary] = await Promise.all([
-      this.products.findVariantsByProductId(id),
+    const [images, stockSummary] = await Promise.all([
       this.products.findImagesByProductId(id),
       this.products.stockSummaryByProductId(id),
     ]);
 
     return {
       ...product,
-      variants: variants.rows,
       images: images.rows,
       stock_summary: stockSummary.rows[0] ?? null,
     };

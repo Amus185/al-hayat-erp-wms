@@ -20,7 +20,7 @@ export class CreateCustomerDto {
 
 export class SalesOrderLineDto {
   @IsUUID()
-  variantId!: string;
+  productId!: string;
 
   @IsInt()
   @Min(1)

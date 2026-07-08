@@ -52,6 +52,7 @@ export function ProductsPage() {
   
   const [newProduct, setNewProduct] = useState({
     sku: '',
+    barcode: '',
     name: '',
     description: '',
     categoryId: '',
@@ -59,15 +60,7 @@ export function ProductsPage() {
     costPrice: 0,
     sellingPrice: 0,
     reorderLevel: 5,
-    variants: [] as { sku: string; barcode: string; color: string; material: string; dimensions: string }[],
   });
-
-  // Variant helper states
-  const [vSku, setVSku] = useState('');
-  const [vBarcode, setVBarcode] = useState('');
-  const [vColor, setVColor] = useState('');
-  const [vMaterial, setVMaterial] = useState('');
-  const [vDimensions, setVDimensions] = useState('');
 
   const fetchFilters = async () => {
     try {
@@ -124,12 +117,8 @@ export function ProductsPage() {
 
   const handleCreateProduct = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newProduct.sku || !newProduct.name) {
-      addToast('error', 'Product ID and Name are required');
-      return;
-    }
-    if (newProduct.variants.length === 0) {
-      addToast('error', 'At least one variant is required');
+    if (!newProduct.sku || !newProduct.name || !newProduct.barcode) {
+      addToast('error', 'Product ID, Barcode, and Name are required');
       return;
     }
 
@@ -139,6 +128,7 @@ export function ProductsPage() {
       setIsCreateOpen(false);
       setNewProduct({
         sku: '',
+        barcode: '',
         name: '',
         description: '',
         categoryId: '',
@@ -146,7 +136,6 @@ export function ProductsPage() {
         costPrice: 0,
         sellingPrice: 0,
         reorderLevel: 5,
-        variants: [],
       });
       loadData();
     } catch (err: any) {
@@ -166,29 +155,7 @@ export function ProductsPage() {
     }
   };
 
-  const addVariantToNewProduct = () => {
-    if (!vSku || !vBarcode) {
-      addToast('error', 'Variant Product ID and Barcode are required');
-      return;
-    }
-    setNewProduct((prev) => ({
-      ...prev,
-      variants: [...prev.variants, { sku: vSku, barcode: vBarcode, color: vColor, material: vMaterial, dimensions: vDimensions }],
-    }));
-    // reset variant inputs
-    setVSku('');
-    setVBarcode('');
-    setVColor('');
-    setVMaterial('');
-    setVDimensions('');
-  };
 
-  const removeVariantFromNewProduct = (index: number) => {
-    setNewProduct((prev) => ({
-      ...prev,
-      variants: prev.variants.filter((_, idx) => idx !== index),
-    }));
-  };
 
   const filteredProducts = products.filter((p) => {
     if (!selectedCategory) return true;
@@ -310,12 +277,19 @@ export function ProductsPage() {
       {/* Create Modal */}
       <Modal isOpen={isCreateOpen} onClose={() => setIsCreateOpen(false)} title="Create New Product" width="lg">
         <form onSubmit={handleCreateProduct}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1.5fr', gap: '14px' }}>
             <InputField
               label="Product ID"
               id="sku"
               value={newProduct.sku}
               onChange={(val) => setNewProduct((prev) => ({ ...prev, sku: val }))}
+              required
+            />
+            <InputField
+              label="Barcode"
+              id="barcode"
+              value={newProduct.barcode}
+              onChange={(val) => setNewProduct((prev) => ({ ...prev, barcode: val }))}
               required
             />
             <InputField
@@ -395,54 +369,7 @@ export function ProductsPage() {
             />
           </div>
 
-          {/* Variants Section */}
-          <div style={{ marginTop: '20px', borderTop: '1px solid #edf1ed', paddingTop: '14px' }}>
-            <h3>Product Variants</h3>
-            <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1.5fr 1fr 1fr 1fr auto', gap: '8px', alignItems: 'end' }}>
-              <InputField label="Var Product ID" id="vSku" value={vSku} onChange={setVSku} />
-              <InputField label="Barcode" id="vBarcode" value={vBarcode} onChange={setVBarcode} />
-              <InputField label="Color" id="vColor" value={vColor} onChange={setVColor} />
-              <InputField label="Material" id="vMaterial" value={vMaterial} onChange={setVMaterial} />
-              <InputField label="Dimensions" id="vDimensions" value={vDimensions} onChange={setVDimensions} />
-              <button type="button" className="btn btn-secondary" onClick={addVariantToNewProduct} style={{ minHeight: '38px', marginBottom: '4px' }}>
-                Add
-              </button>
-            </div>
 
-            {/* List of added variants */}
-            <div style={{ marginTop: '12px' }}>
-              {newProduct.variants.length === 0 ? (
-                <p style={{ color: '#b91c1c', fontSize: '13px' }}>* At least one variant must be added</p>
-              ) : (
-                <table style={{ fontSize: '12px' }}>
-                  <thead>
-                    <tr>
-                      <th>Variant Product ID</th>
-                      <th>Barcode</th>
-                      <th>Attributes</th>
-                      <th>Action</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {newProduct.variants.map((v, index) => (
-                      <tr key={index}>
-                        <td>{v.sku}</td>
-                        <td>{v.barcode}</td>
-                        <td>
-                          {[v.color, v.material, v.dimensions].filter(Boolean).join(' | ') || 'N/A'}
-                        </td>
-                        <td>
-                          <button type="button" className="btn btn-danger btn-sm" onClick={() => removeVariantFromNewProduct(index)}>
-                            Remove
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </div>
-          </div>
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '20px' }}>
             <button type="button" className="btn btn-secondary" onClick={() => setIsCreateOpen(false)}>

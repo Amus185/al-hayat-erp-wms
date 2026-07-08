@@ -3,7 +3,7 @@ import { IsArray, IsInt, IsOptional, IsUUID, Min, ValidateNested } from 'class-v
 
 export class GoodsReceiptLineDto {
   @IsUUID()
-  variantId!: string;
+  productId!: string;
 
   @IsOptional()
   @IsUUID()

@@ -8,8 +8,8 @@ export class AuditRepository {
   search(entityType?: string) {
     return this.db.query(
       `SELECT a.id, a.actor_user_id AS user_id, a.action, a.entity_type, a.entity_id,
-              a.old_value AS old_values, a.new_value AS new_values, a.ip_address, a.created_at,
-              u.full_name AS user_name, u.email AS user_email
+              a.old_value, a.new_value, a.ip_address, a.created_at,
+              u.full_name AS actor_name, u.email AS actor_email
        FROM audit_logs a
        LEFT JOIN users u ON u.id = a.actor_user_id
        WHERE ($1::varchar IS NULL OR a.entity_type = $1)
@@ -69,8 +69,8 @@ export class AuditRepository {
 
     const dataSql = `
       SELECT a.id, a.actor_user_id AS user_id, a.action, a.entity_type, a.entity_id,
-             a.old_value AS old_values, a.new_value AS new_values, a.ip_address, a.created_at,
-             u.full_name AS user_name, u.email AS user_email
+             a.old_value, a.new_value, a.ip_address, a.created_at,
+             u.full_name AS actor_name, u.email AS actor_email
       FROM audit_logs a
       LEFT JOIN users u ON u.id = a.actor_user_id
       ${whereClause}

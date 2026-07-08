@@ -16,11 +16,11 @@ interface Branch {
   name: string;
 }
 
-interface ProductVariant {
+interface ProductLine {
   id: string;
   sku: string;
   barcode: string;
-  productName: string;
+  name: string;
 }
 
 export function CreateTransferPage() {
@@ -29,7 +29,7 @@ export function CreateTransferPage() {
 
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
   const [branches, setBranches] = useState<Branch[]>([]);
-  const [variants, setVariants] = useState<ProductVariant[]>([]);
+  const [products, setProducts] = useState<ProductLine[]>([]);
   
   // Selection state
   const [sourceType, setSourceType] = useState<'WAREHOUSE' | 'BRANCH'>('WAREHOUSE');
@@ -39,34 +39,31 @@ export function CreateTransferPage() {
 
   // Searching variants
   const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState<ProductVariant[]>([]);
+  const [searchResults, setSearchResults] = useState<ProductLine[]>([]);
 
   // Selected lines
-  const [lines, setLines] = useState<{ variantId: string; sku: string; name: string; quantity: number }[]>([]);
+  const [lines, setLines] = useState<{ productId: string; sku: string; name: string; quantity: number }[]>([]);
 
   useEffect(() => {
     async function loadMetadata() {
       try {
         const whs = await apiGet<Warehouse[]>('/warehouses');
         const brs = await apiGet<Branch[]>('/branches');
-        const products = await apiGet<any[]>('/products');
+        const productsList = await apiGet<any[]>('/products');
         
         setWarehouses(whs || []);
         setBranches(brs || []);
 
-        // Build flat variant list
-        const flatList: ProductVariant[] = [];
-        products?.forEach((p) => {
-          p.variants?.forEach((v: any) => {
-            flatList.push({
-              id: v.id,
-              sku: v.sku,
-              barcode: v.barcode,
-              productName: p.name,
-            });
+        const flatList: ProductLine[] = [];
+        productsList?.forEach((p) => {
+          flatList.push({
+            id: p.id,
+            sku: p.sku,
+            barcode: p.barcode,
+            name: p.name,
           });
         });
-        setVariants(flatList);
+        setProducts(flatList);
       } catch (err) {
         console.error('Failed to load transfer metadata', err);
       }
@@ -80,21 +77,21 @@ export function CreateTransferPage() {
       setSearchResults([]);
       return;
     }
-    const filtered = variants.filter(
+    const filtered = products.filter(
       (v) =>
         v.sku.toLowerCase().includes(searchQuery.toLowerCase()) ||
         v.barcode.includes(searchQuery) ||
-        v.productName.toLowerCase().includes(searchQuery.toLowerCase())
+        v.name.toLowerCase().includes(searchQuery.toLowerCase())
     );
     setSearchResults(filtered.slice(0, 5));
-  }, [searchQuery, variants]);
+  }, [searchQuery, products]);
 
-  const addLine = (v: ProductVariant) => {
-    if (lines.some((l) => l.variantId === v.id)) {
-      addToast('warning', 'Variant already added to transfer lines');
+  const addLine = (v: ProductLine) => {
+    if (lines.some((l) => l.productId === v.id)) {
+      addToast('warning', 'Product already added to transfer lines');
       return;
     }
-    setLines((prev) => [...prev, { variantId: v.id, sku: v.sku, name: v.productName, quantity: 1 }]);
+    setLines((prev) => [...prev, { productId: v.id, sku: v.sku, name: v.name, quantity: 1 }]);
     setSearchQuery('');
   };
 
@@ -137,7 +134,7 @@ export function CreateTransferPage() {
       destinationWarehouseId: destType === 'WAREHOUSE' ? destId : undefined,
       destinationBranchId: destType === 'BRANCH' ? destId : undefined,
       lines: lines.map((l) => ({
-        variantId: l.variantId,
+        productId: l.productId,
         quantityRequested: l.quantity,
       })),
     };
@@ -256,7 +253,7 @@ export function CreateTransferPage() {
             <SearchInput
               value={searchQuery}
               onChange={setSearchQuery}
-              placeholder="Search / Scan barcode of product variant..."
+              placeholder="Search / Scan barcode of product..."
             />
             {/* Search autocomplete dropdown */}
             {searchResults.length > 0 && (
@@ -286,7 +283,7 @@ export function CreateTransferPage() {
                     onMouseEnter={(e) => (e.currentTarget.style.background = '#e9f6e8')}
                     onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
                   >
-                    <strong>{v.productName}</strong> <span style={{ color: '#667066' }}>({v.sku} - {v.barcode})</span>
+                    <strong>{v.name}</strong> <span style={{ color: '#667066' }}>({v.sku} - {v.barcode})</span>
                   </div>
                 ))}
               </div>
@@ -297,13 +294,13 @@ export function CreateTransferPage() {
           <div style={{ marginTop: '20px' }}>
             {lines.length === 0 ? (
               <div style={{ textAlign: 'center', padding: '24px', color: '#667066', border: '1px dashed #d9e2d9', borderRadius: '8px' }}>
-                No variants added yet. Scan or search for variants above to add lines.
+                No products added yet. Scan or search for products above to add lines.
               </div>
             ) : (
               <table>
                 <thead>
                   <tr>
-                    <th>Variant Product ID</th>
+                    <th>Product ID</th>
                     <th>Product Description</th>
                     <th>Transfer Qty</th>
                     <th>Action</th>
@@ -311,7 +308,7 @@ export function CreateTransferPage() {
                 </thead>
                 <tbody>
                   {lines.map((l, index) => (
-                    <tr key={l.variantId}>
+                    <tr key={l.productId}>
                       <td>{l.sku}</td>
                       <td>{l.name}</td>
                       <td>

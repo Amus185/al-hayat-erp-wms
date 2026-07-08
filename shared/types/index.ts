@@ -60,6 +60,7 @@ export interface CreateUserRequest {
 export interface Product {
   id: string;
   sku: string;
+  barcode: string;
   name: string;
   description: string | null;
   category_id: string | null;
@@ -73,22 +74,10 @@ export interface Product {
   // Joined fields
   category?: string;
   brand?: string;
-  variants?: ProductVariant[];
   images?: ProductImage[];
 }
 
-export interface ProductVariant {
-  id: string;
-  product_id: string;
-  sku: string;
-  barcode: string;
-  color: string | null;
-  material: string | null;
-  dimensions: string | null;
-  is_active: boolean;
-  // Computed
-  available_quantity?: number;
-}
+
 
 export interface ProductImage {
   id: string;
@@ -100,6 +89,7 @@ export interface ProductImage {
 
 export interface CreateProductRequest {
   sku: string;
+  barcode: string;
   name: string;
   description?: string;
   categoryId?: string;
@@ -107,15 +97,6 @@ export interface CreateProductRequest {
   costPrice: number;
   sellingPrice: number;
   reorderLevel?: number;
-  variants: CreateVariantRequest[];
-}
-
-export interface CreateVariantRequest {
-  sku: string;
-  barcode: string;
-  color?: string;
-  material?: string;
-  dimensions?: string;
 }
 
 // ── Categories & Brands ─────────────────────────────
@@ -179,7 +160,7 @@ export interface Branch {
 // ── Inventory ───────────────────────────────────────
 export interface InventoryStock {
   id: string;
-  variant_id: string;
+  product_id: string;
   owner_type: 'WAREHOUSE' | 'BRANCH';
   warehouse_id: string | null;
   branch_id: string | null;
@@ -201,7 +182,7 @@ export interface InventoryStock {
 
 export interface InventoryTransaction {
   id: string;
-  variant_id: string;
+  product_id: string;
   transaction_type: TransactionType;
   quantity: number;
   notes: string | null;
@@ -225,7 +206,7 @@ export type TransactionType =
   | 'STOCK_COUNT';
 
 export interface CreateAdjustmentRequest {
-  variantId: string;
+  productId: string;
   direction: 'increase' | 'decrease';
   quantity: number;
   warehouseId?: string;
@@ -271,12 +252,12 @@ export interface Transfer {
 export interface TransferLine {
   id: string;
   transfer_id: string;
-  variant_id: string;
+  product_id: string;
   quantity_requested: number;
   quantity_dispatched: number;
   quantity_received: number;
   // Joined
-  variant_sku?: string;
+  product_barcode?: string;
   product_name?: string;
 }
 
@@ -287,7 +268,7 @@ export interface CreateTransferRequest {
   destinationOwnerType: 'WAREHOUSE' | 'BRANCH';
   destinationWarehouseId?: string;
   destinationBranchId?: string;
-  lines: { variantId: string; quantityRequested: number }[];
+  lines: { productId: string; quantityRequested: number }[];
 }
 
 // ── Purchasing ──────────────────────────────────────
@@ -338,12 +319,12 @@ export interface PurchaseOrder {
 export interface PurchaseOrderLine {
   id: string;
   purchase_order_id: string;
-  variant_id: string;
+  product_id: string;
   quantity_ordered: number;
   quantity_received: number;
   unit_cost: number;
   // Joined
-  variant_sku?: string;
+  product_barcode?: string;
   product_name?: string;
 }
 
@@ -352,13 +333,13 @@ export interface CreatePurchaseOrderRequest {
   expectedDate?: string;
   notes?: string;
   warehouseId: string;
-  lines: { variantId: string; quantityOrdered: number; unitCost: number }[];
+  lines: { productId: string; quantityOrdered: number; unitCost: number }[];
 }
 
 export interface CreateGoodsReceiptRequest {
   purchaseOrderId: string;
   warehouseId: string;
-  lines: { variantId: string; quantityReceived: number; warehouseLocationId?: string }[];
+  lines: { productId: string; quantityReceived: number; warehouseLocationId?: string }[];
 }
 
 // ── Sales ───────────────────────────────────────────
@@ -405,11 +386,11 @@ export interface SalesOrder {
 export interface SalesOrderLine {
   id: string;
   sales_order_id: string;
-  variant_id: string;
+  product_id: string;
   quantity: number;
   unit_price: number;
   // Joined
-  variant_sku?: string;
+  product_barcode?: string;
   product_name?: string;
 }
 
@@ -417,7 +398,7 @@ export interface CreateSalesOrderRequest {
   customerId: string;
   branchId: string;
   notes?: string;
-  lines: { variantId: string; quantity: number; unitPrice: number }[];
+  lines: { productId: string; quantity: number; unitPrice: number }[];
 }
 
 export interface Invoice {
@@ -443,7 +424,6 @@ export interface InventoryValueReport {
 
 export interface LowStockItem {
   product_name: string;
-  variant_sku: string;
   barcode: string;
   current_stock: number;
   reorder_level: number;

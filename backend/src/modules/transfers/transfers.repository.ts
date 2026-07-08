@@ -14,7 +14,7 @@ export class TransfersRepository {
     return this.db.query(
       `SELECT t.*, json_agg(
          json_build_object(
-           'id', tl.id, 'variant_id', tl.variant_id,
+           'id', tl.id, 'product_id', tl.product_id,
            'quantity_requested', tl.quantity_requested,
            'quantity_dispatched', tl.quantity_dispatched,
            'quantity_received', tl.quantity_received
@@ -39,8 +39,8 @@ export class TransfersRepository {
       );
       for (const line of dto.lines) {
         await client.query(
-          'INSERT INTO transfer_lines (transfer_id, variant_id, quantity_requested) VALUES ($1,$2,$3)',
-          [transfer.rows[0].id, line.variantId, line.quantityRequested]
+          'INSERT INTO transfer_lines (transfer_id, product_id, quantity_requested) VALUES ($1,$2,$3)',
+          [transfer.rows[0].id, line.productId, line.quantityRequested]
         );
       }
       return transfer.rows[0];
@@ -58,8 +58,8 @@ export class TransfersRepository {
     return this.db.transaction(async (client) => {
       const transferResult = await client.query('SELECT * FROM transfers WHERE id = $1 FOR UPDATE', [id]);
       const transfer = transferResult.rows[0];
-      const lines = await client.query<{ variant_id: string; quantity_requested: number }>(
-        'SELECT variant_id, quantity_requested FROM transfer_lines WHERE transfer_id = $1',
+      const lines = await client.query<{ product_id: string; quantity_requested: number }>(
+        'SELECT product_id, quantity_requested FROM transfer_lines WHERE transfer_id = $1',
         [id]
       );
 
@@ -67,19 +67,19 @@ export class TransfersRepository {
         await client.query(
           `UPDATE inventory_stock
            SET quantity_on_hand = quantity_on_hand - $1, updated_at = now()
-           WHERE variant_id = $2
+           WHERE product_id = $2
              AND owner_type = $3
              AND warehouse_id IS NOT DISTINCT FROM $4
              AND branch_id IS NOT DISTINCT FROM $5`,
-          [line.quantity_requested, line.variant_id, transfer.source_owner_type, transfer.source_warehouse_id, transfer.source_branch_id]
+          [line.quantity_requested, line.product_id, transfer.source_owner_type, transfer.source_warehouse_id, transfer.source_branch_id]
         );
         await client.query(
           `INSERT INTO inventory_transactions
-           (variant_id, transaction_type, quantity, source_owner_type, source_warehouse_id, source_branch_id, reference_type, reference_id, created_by)
+           (product_id, transaction_type, quantity, source_owner_type, source_warehouse_id, source_branch_id, reference_type, reference_id, created_by)
            VALUES ($1,'TRANSFER_OUT',$2,$3,$4,$5,'TRANSFER',$6,$7)`,
-          [line.variant_id, -line.quantity_requested, transfer.source_owner_type, transfer.source_warehouse_id, transfer.source_branch_id, id, userId]
+          [line.product_id, -line.quantity_requested, transfer.source_owner_type, transfer.source_warehouse_id, transfer.source_branch_id, id, userId]
         );
-        await client.query('UPDATE transfer_lines SET quantity_dispatched = quantity_requested WHERE transfer_id = $1 AND variant_id = $2', [id, line.variant_id]);
+        await client.query('UPDATE transfer_lines SET quantity_dispatched = quantity_requested WHERE transfer_id = $1 AND product_id = $2', [id, line.product_id]);
       }
 
       const updated = await client.query(
@@ -94,8 +94,8 @@ export class TransfersRepository {
     return this.db.transaction(async (client) => {
       const transferResult = await client.query('SELECT * FROM transfers WHERE id = $1 FOR UPDATE', [id]);
       const transfer = transferResult.rows[0];
-      const lines = await client.query<{ variant_id: string; quantity_dispatched: number }>(
-        'SELECT variant_id, quantity_dispatched FROM transfer_lines WHERE transfer_id = $1',
+      const lines = await client.query<{ product_id: string; quantity_dispatched: number }>(
+        'SELECT product_id, quantity_dispatched FROM transfer_lines WHERE transfer_id = $1',
         [id]
       );
 
@@ -103,26 +103,26 @@ export class TransfersRepository {
         const updatedStock = await client.query(
           `UPDATE inventory_stock
            SET quantity_on_hand = quantity_on_hand + $1, updated_at = now()
-           WHERE variant_id = $2
+           WHERE product_id = $2
              AND owner_type = $3
              AND warehouse_id IS NOT DISTINCT FROM $4
              AND branch_id IS NOT DISTINCT FROM $5`,
-          [line.quantity_dispatched, line.variant_id, transfer.destination_owner_type, transfer.destination_warehouse_id, transfer.destination_branch_id]
+          [line.quantity_dispatched, line.product_id, transfer.destination_owner_type, transfer.destination_warehouse_id, transfer.destination_branch_id]
         );
         if (updatedStock.rowCount === 0) {
           await client.query(
-            `INSERT INTO inventory_stock (variant_id, owner_type, warehouse_id, branch_id, quantity_on_hand)
+            `INSERT INTO inventory_stock (product_id, owner_type, warehouse_id, branch_id, quantity_on_hand)
              VALUES ($1,$2,$3,$4,$5)`,
-            [line.variant_id, transfer.destination_owner_type, transfer.destination_warehouse_id, transfer.destination_branch_id, line.quantity_dispatched]
+            [line.product_id, transfer.destination_owner_type, transfer.destination_warehouse_id, transfer.destination_branch_id, line.quantity_dispatched]
           );
         }
         await client.query(
           `INSERT INTO inventory_transactions
-           (variant_id, transaction_type, quantity, destination_owner_type, destination_warehouse_id, destination_branch_id, reference_type, reference_id, created_by)
+           (product_id, transaction_type, quantity, destination_owner_type, destination_warehouse_id, destination_branch_id, reference_type, reference_id, created_by)
            VALUES ($1,'TRANSFER_IN',$2,$3,$4,$5,'TRANSFER',$6,$7)`,
-          [line.variant_id, line.quantity_dispatched, transfer.destination_owner_type, transfer.destination_warehouse_id, transfer.destination_branch_id, id, userId]
+          [line.product_id, line.quantity_dispatched, transfer.destination_owner_type, transfer.destination_warehouse_id, transfer.destination_branch_id, id, userId]
         );
-        await client.query('UPDATE transfer_lines SET quantity_received = quantity_dispatched WHERE transfer_id = $1 AND variant_id = $2', [id, line.variant_id]);
+        await client.query('UPDATE transfer_lines SET quantity_received = quantity_dispatched WHERE transfer_id = $1 AND product_id = $2', [id, line.product_id]);
       }
 
       const updated = await client.query(

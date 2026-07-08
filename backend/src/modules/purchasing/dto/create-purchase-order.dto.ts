@@ -3,7 +3,7 @@ import { IsArray, IsDateString, IsInt, IsNumber, IsOptional, IsString, IsUUID, M
 
 export class PurchaseOrderLineDto {
   @IsUUID()
-  variantId!: string;
+  productId!: string;
 
   @IsInt()
   @Min(1)

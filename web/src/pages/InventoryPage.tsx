@@ -11,7 +11,7 @@ import { useAuth } from '../contexts/AuthContext';
 
 interface InventoryStock {
   id: string;
-  variant_id: string;
+  product_id: string;
   owner_type: 'WAREHOUSE' | 'BRANCH';
   warehouse_id: string | null;
   branch_id: string | null;
@@ -32,7 +32,7 @@ interface InventoryStock {
 
 interface InventoryTransaction {
   id: string;
-  variant_id: string;
+  product_id: string;
   transaction_type: string;
   quantity: number;
   notes: string | null;
@@ -61,7 +61,7 @@ export function InventoryPage() {
   // Adjustment Modal state
   const [isAdjustOpen, setIsAdjustOpen] = useState(false);
   const [adjustForm, setAdjustForm] = useState({
-    variantId: '',
+    productId: '',
     direction: 'increase' as 'increase' | 'decrease',
     quantity: 1,
     ownerType: 'WAREHOUSE' as 'WAREHOUSE' | 'BRANCH',
@@ -111,18 +111,16 @@ export function InventoryPage() {
         const whs = await apiGet<any[]>('/warehouses');
         const brs = await apiGet<any[]>('/branches');
         
-        // Flatten variants from all products
-        const variantsList: any[] = [];
+        // Map products
+        const productsListMapped: any[] = [];
         prods?.forEach((p) => {
-          p.variants?.forEach((v: any) => {
-            variantsList.push({
-              id: v.id,
-              label: `${p.name} (${v.sku} - ${v.barcode})`,
-            });
+          productsListMapped.push({
+            id: p.id,
+            label: `${p.name} (${p.sku} - ${p.barcode})`,
           });
         });
 
-        setProductsList(variantsList);
+        setProductsList(productsListMapped);
         setWarehouses(whs || []);
         setBranches(brs || []);
       } catch (err) {
@@ -153,13 +151,13 @@ export function InventoryPage() {
 
   const handleAdjustmentSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!adjustForm.variantId || !adjustForm.quantity) {
-      addToast('error', 'Variant and Quantity are required');
+    if (!adjustForm.productId || !adjustForm.quantity) {
+      addToast('error', 'Product and Quantity are required');
       return;
     }
 
     const payload: any = {
-      variantId: adjustForm.variantId,
+      productId: adjustForm.productId,
       direction: adjustForm.direction,
       quantity: Number(adjustForm.quantity),
       notes: adjustForm.notes,
@@ -187,7 +185,7 @@ export function InventoryPage() {
       addToast('success', 'Stock adjustment recorded');
       setIsAdjustOpen(false);
       setAdjustForm({
-        variantId: '',
+        productId: '',
         direction: 'increase',
         quantity: 1,
         ownerType: 'WAREHOUSE',
@@ -305,14 +303,14 @@ export function InventoryPage() {
       <Modal isOpen={isAdjustOpen} onClose={() => setIsAdjustOpen(false)} title="Post Stock Adjustment" width="md">
         <form onSubmit={handleAdjustmentSubmit}>
           <div style={{ display: 'grid', gap: '14px' }}>
-            <FormField label="Select Variant">
+            <FormField label="Select Product">
               <select
                 className="form-select"
-                value={adjustForm.variantId}
-                onChange={(e) => setAdjustForm((prev) => ({ ...prev, variantId: e.target.value }))}
+                value={adjustForm.productId}
+                onChange={(e) => setAdjustForm((prev) => ({ ...prev, productId: e.target.value }))}
                 required
               >
-                <option value="">Select a variant...</option>
+                <option value="">Select a product...</option>
                 {productsList.map((p) => (
                   <option key={p.id} value={p.id}>
                     {p.label}

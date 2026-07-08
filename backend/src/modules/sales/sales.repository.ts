@@ -38,8 +38,8 @@ export class SalesRepository {
       );
       for (const line of dto.lines) {
         await client.query(
-          'INSERT INTO sales_order_lines (sales_order_id, variant_id, quantity, unit_price) VALUES ($1,$2,$3,$4)',
-          [order.rows[0].id, line.variantId, line.quantity, line.unitPrice]
+          'INSERT INTO sales_order_lines (sales_order_id, product_id, quantity, unit_price) VALUES ($1,$2,$3,$4)',
+          [order.rows[0].id, line.productId, line.quantity, line.unitPrice]
         );
       }
       return order.rows[0];
@@ -64,26 +64,26 @@ export class SalesRepository {
         [`INV-${Date.now()}`, orderId, totalResult.rows[0].total]
       );
       await client.query(
-        `INSERT INTO invoice_lines (invoice_id, variant_id, quantity, unit_price)
-         SELECT $1, variant_id, quantity, unit_price FROM sales_order_lines WHERE sales_order_id = $2`,
+        `INSERT INTO invoice_lines (invoice_id, product_id, quantity, unit_price)
+         SELECT $1, product_id, quantity, unit_price FROM sales_order_lines WHERE sales_order_id = $2`,
         [invoice.rows[0].id, orderId]
       );
-      const lines = await client.query<{ variant_id: string; quantity: number }>(
-        'SELECT variant_id, quantity FROM sales_order_lines WHERE sales_order_id = $1',
+      const lines = await client.query<{ product_id: string; quantity: number }>(
+        'SELECT product_id, quantity FROM sales_order_lines WHERE sales_order_id = $1',
         [orderId]
       );
       for (const line of lines.rows) {
         await client.query(
           `UPDATE inventory_stock
            SET quantity_on_hand = quantity_on_hand - $1, updated_at = now()
-           WHERE variant_id = $2 AND branch_id = $3`,
-          [line.quantity, line.variant_id, branchId]
+           WHERE product_id = $2 AND branch_id = $3`,
+          [line.quantity, line.product_id, branchId]
         );
         await client.query(
           `INSERT INTO inventory_transactions
-           (variant_id, transaction_type, quantity, source_owner_type, source_branch_id, reference_type, reference_id, created_by)
+           (product_id, transaction_type, quantity, source_owner_type, source_branch_id, reference_type, reference_id, created_by)
            VALUES ($1,'SALE_ISSUE',$2,'BRANCH',$3,'INVOICE',$4,$5)`,
-          [line.variant_id, -line.quantity, branchId, invoice.rows[0].id, userId]
+          [line.product_id, -line.quantity, branchId, invoice.rows[0].id, userId]
         );
       }
       await client.query("UPDATE sales_orders SET status = 'INVOICED' WHERE id = $1", [orderId]);

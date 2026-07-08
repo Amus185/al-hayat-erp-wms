@@ -7,7 +7,7 @@ export enum AdjustmentDirection {
 
 export class CreateAdjustmentDto {
   @IsUUID()
-  variantId!: string;
+  productId!: string;
 
   @IsEnum(AdjustmentDirection)
   direction!: AdjustmentDirection;
