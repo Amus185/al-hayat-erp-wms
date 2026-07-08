@@ -1,17 +1,12 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Package, Warehouse, Building, Layers } from 'lucide-react';
+import { ArrowLeft, Package, Warehouse, Building } from 'lucide-react';
 import { apiGet } from '../api/client';
 import { DataTable, type Column } from '../components/DataTable';
 import { StatusBadge } from '../components/StatusBadge';
 import { PageSkeleton } from '../components/LoadingSpinner';
 import { useToast } from '../contexts/ToastContext';
 
-interface ProductVariant {
-  id: string;
-  product_id: string;
-  sku: string;
-  barcode: string;
 interface ProductDetail {
   id: string;
   sku: string;
@@ -25,7 +20,6 @@ interface ProductDetail {
   is_active: boolean;
   category?: string;
   brand?: string;
-
 }
 
 export function ProductDetailsPage() {
