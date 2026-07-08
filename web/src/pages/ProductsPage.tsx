@@ -59,7 +59,6 @@ export function ProductsPage() {
     brandId: '',
     costPrice: 0,
     sellingPrice: 0,
-    reorderLevel: 5,
   });
 
   const fetchFilters = async () => {
@@ -122,8 +121,19 @@ export function ProductsPage() {
       return;
     }
 
+    const payload: any = {
+      sku: newProduct.sku,
+      barcode: newProduct.barcode,
+      name: newProduct.name,
+      description: newProduct.description,
+      costPrice: newProduct.costPrice,
+      sellingPrice: newProduct.sellingPrice,
+    };
+    if (newProduct.categoryId) payload.categoryId = newProduct.categoryId;
+    if (newProduct.brandId) payload.brandId = newProduct.brandId;
+
     try {
-      await apiPost('/products', newProduct);
+      await apiPost('/products', payload);
       addToast('success', 'Product created successfully');
       setIsCreateOpen(false);
       setNewProduct({
@@ -135,7 +145,6 @@ export function ProductsPage() {
         brandId: '',
         costPrice: 0,
         sellingPrice: 0,
-        reorderLevel: 5,
       });
       loadData();
     } catch (err: any) {
@@ -357,14 +366,6 @@ export function ProductsPage() {
               type="number"
               value={newProduct.sellingPrice}
               onChange={(val) => setNewProduct((prev) => ({ ...prev, sellingPrice: Number(val) }))}
-              required
-            />
-            <InputField
-              label="Reorder Level"
-              id="reorderLevel"
-              type="number"
-              value={newProduct.reorderLevel}
-              onChange={(val) => setNewProduct((prev) => ({ ...prev, reorderLevel: Number(val) }))}
               required
             />
           </div>

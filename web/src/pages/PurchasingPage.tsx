@@ -47,7 +47,6 @@ export function PurchasingPage() {
   const [isSupplierOpen, setIsSupplierOpen] = useState(false);
   const [supplierForm, setSupplierForm] = useState({
     name: '',
-    contactName: '',
     email: '',
     phone: '',
     address: '',
@@ -134,7 +133,7 @@ export function PurchasingPage() {
       await apiPost('/suppliers', supplierForm);
       addToast('success', 'Supplier registered successfully');
       setIsSupplierOpen(false);
-      setSupplierForm({ name: '', contactName: '', email: '', phone: '', address: '' });
+      setSupplierForm({ name: '', email: '', phone: '', address: '' });
       loadData();
     } catch (err: any) {
       addToast('error', err?.message || 'Failed to register supplier');
@@ -310,12 +309,6 @@ export function PurchasingPage() {
               value={supplierForm.name}
               onChange={(val) => setSupplierForm((prev) => ({ ...prev, name: val }))}
               required
-            />
-            <InputField
-              label="Contact Name"
-              id="supContact"
-              value={supplierForm.contactName}
-              onChange={(val) => setSupplierForm((prev) => ({ ...prev, contactName: val }))}
             />
             <InputField
               label="Email Address"

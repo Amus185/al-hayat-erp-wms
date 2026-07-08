@@ -93,7 +93,7 @@ export function SalesPage() {
     }
     try {
       await apiPost('/customers', customerForm);
-      addToast('success', 'Customer registered successfully');
+      addToast('success', 'Customer registered successfully. They are now available when creating a New Order.');
       setIsCustomerOpen(false);
       setCustomerForm({ name: '', email: '', phone: '', address: '' });
       loadData();
