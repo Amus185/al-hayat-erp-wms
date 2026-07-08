@@ -101,9 +101,9 @@ export function AuditPage() {
         <div className="module-header__icon">
           <FileClock size={24} />
         </div>
-        <div>
+        <div className="module-header__info">
           <p>Governance</p>
-          <h2>Critical action audit logs and security telemetry logs</h2>
+          <h2>System-wide immutable audit trail and security events</h2>
         </div>
         <div></div>
       </section>

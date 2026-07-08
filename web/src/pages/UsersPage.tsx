@@ -183,7 +183,7 @@ export function UsersPage() {
         <div className="module-header__icon">
           <Users size={24} />
         </div>
-        <div>
+        <div className="module-header__info">
           <p>IAM Governance</p>
           <h2>Manage employee identities, credentials, roles, and assignments</h2>
         </div>

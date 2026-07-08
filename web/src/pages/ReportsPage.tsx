@@ -102,7 +102,7 @@ export function ReportsPage() {
         <div className="module-header__icon">
           <BarChart3 size={24} />
         </div>
-        <div>
+        <div className="module-header__info">
           <p>Management</p>
           <h2>Analytical overview of low stock, branch operations, values, and profitability</h2>
         </div>

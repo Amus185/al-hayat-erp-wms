@@ -264,7 +264,7 @@ export function InventoryPage() {
         <div className="module-header__icon">
           <ClipboardCheck size={24} />
         </div>
-        <div>
+        <div className="module-header__info">
           <p>Stock Ledger</p>
           <h2>Realtime stock levels, adjustments, counts, and history</h2>
         </div>

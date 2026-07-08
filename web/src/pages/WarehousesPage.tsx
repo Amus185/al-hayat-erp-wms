@@ -137,7 +137,7 @@ export function WarehousesPage() {
         <div className="module-header__icon">
           <Boxes size={24} />
         </div>
-        <div>
+        <div className="module-header__info">
           <p>Locations</p>
           <h2>Warehouses, aisles, racks, shelves, and bins</h2>
         </div>

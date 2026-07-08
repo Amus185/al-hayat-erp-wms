@@ -169,7 +169,7 @@ export function TransfersPage() {
         <div className="module-header__icon">
           <Truck size={24} />
         </div>
-        <div>
+        <div className="module-header__info">
           <p>Movement</p>
           <h2>Warehouse-to-branch and branch-to-branch stock transfers</h2>
         </div>

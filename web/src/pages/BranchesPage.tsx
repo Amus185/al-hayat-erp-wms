@@ -65,7 +65,7 @@ export function BranchesPage() {
         <div className="module-header__icon">
           <Building2 size={24} />
         </div>
-        <div>
+        <div className="module-header__info">
           <p>Retail Network</p>
           <h2>Branch inventory monitoring and performance statistics</h2>
         </div>
