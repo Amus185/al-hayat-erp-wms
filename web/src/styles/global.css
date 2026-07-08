@@ -320,7 +320,7 @@ a { color: inherit; text-decoration: none; }
 }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
-.btn-primary, .module-header button, .panel__header button {
+.btn-primary {
   background: linear-gradient(135deg, var(--primary), var(--primary-dark));
   color: #fff;
   box-shadow: 0 2px 8px rgba(11,143,8,0.25);
@@ -336,12 +336,12 @@ a { color: inherit; text-decoration: none; }
   align-items: center;
   gap: 8px;
 }
-.btn-primary:hover, .module-header button:hover, .panel__header button:hover {
-  background: linear-gradient(135deg, #0ea30b, var(--primary));
-  box-shadow: 0 4px 14px rgba(11,143,8,0.35);
+.btn-primary:hover {
+  background: linear-gradient(135deg, var(--primary-dark), var(--primary-darker));
+  box-shadow: 0 4px 16px rgba(11,143,8,0.45);
   transform: translateY(-1px);
 }
-.btn-primary:disabled, .module-header button:disabled, .panel__header button:disabled {
+.btn-primary:disabled {
   opacity: 0.5; cursor: not-allowed; transform: none;
 }
 
