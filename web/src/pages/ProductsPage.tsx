@@ -99,7 +99,28 @@ export function ProductsPage() {
     fetchFilters();
   }, [search]);
 
+  const handleCreateCategory = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      await apiPost('/products/categories', { name: newCategoryName });
+      addToast('success', 'Category created successfully');
+      setNewCategoryName('');
+      fetchFilters();
+    } catch (err: any) {
+      addToast('error', err?.message || 'Failed to create category');
+    }
+  };
 
+  const handleDeleteCategory = async (id: string) => {
+    if (!window.confirm('Are you sure you want to delete this category?')) return;
+    try {
+      await apiDelete(`/products/categories/${id}`);
+      addToast('success', 'Category deleted successfully');
+      fetchFilters();
+    } catch (err: any) {
+      addToast('error', err?.message || 'Failed to delete category');
+    }
+  };
 
   const handleCreateProduct = async (e: React.FormEvent) => {
     e.preventDefault();
