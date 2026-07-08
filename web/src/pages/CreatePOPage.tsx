@@ -98,7 +98,7 @@ export function CreatePOPage() {
     }
     setLines((prev) => [
       ...prev,
-      { variantId: v.id, sku: v.sku, name: v.productName, quantity: 1, unitCost: v.costPrice || 0 },
+      { productId: v.id, sku: v.sku, name: v.name, quantity: 1, unitCost: v.costPrice || 0 },
     ]);
     setSearchQuery('');
   };
@@ -108,11 +108,12 @@ export function CreatePOPage() {
   };
 
   const updateLine = (idx: number, field: 'quantity' | 'unitCost', val: number) => {
+    const num = isNaN(val) ? 0 : val;
     setLines((prev) => {
       const copy = [...prev];
       copy[idx] = {
         ...copy[idx],
-        [field]: field === 'quantity' ? Math.max(1, val) : Math.max(0, val),
+        [field]: field === 'quantity' ? Math.max(1, num) : Math.max(0, num),
       };
       return copy;
     });
@@ -135,12 +136,10 @@ export function CreatePOPage() {
 
     const payload = {
       supplierId,
-      warehouseId,
       expectedDate: expectedDate || undefined,
-      notes: notes || undefined,
       lines: lines.map((l) => ({
-        variantId: l.variantId,
-        quantityOrdered: l.quantity,
+        productId: l.productId,
+        quantity: l.quantity,
         unitCost: l.unitCost,
       })),
     };
@@ -302,7 +301,7 @@ export function CreatePOPage() {
                   </thead>
                   <tbody>
                     {lines.map((l, index) => (
-                      <tr key={l.variantId}>
+                      <tr key={l.productId}>
                         <td>{l.sku}</td>
                         <td>{l.name}</td>
                         <td>

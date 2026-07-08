@@ -40,7 +40,7 @@ export class ProductsRepository {
 
   findImagesByProductId(productId: string) {
     return this.db.query(
-      `SELECT pi.id, pi.product_id, pi.file_id, pi.sort_order, f.url
+      `SELECT pi.id, pi.product_id, pi.file_id, pi.sort_order, f.object_key as url
        FROM product_images pi
        LEFT JOIN files f ON f.id = pi.file_id
        WHERE pi.product_id = $1

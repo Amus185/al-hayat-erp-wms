@@ -104,11 +104,12 @@ export function CreateSalesOrderPage() {
   };
 
   const updateLine = (idx: number, field: 'quantity' | 'unitPrice', val: number) => {
+    const num = isNaN(val) ? 0 : val;
     setLines((prev) => {
       const copy = [...prev];
       copy[idx] = {
         ...copy[idx],
-        [field]: field === 'quantity' ? Math.max(1, val) : Math.max(0, val),
+        [field]: field === 'quantity' ? Math.max(1, num) : Math.max(0, num),
       };
       return copy;
     });
@@ -132,7 +133,6 @@ export function CreateSalesOrderPage() {
     const payload = {
       customerId,
       branchId,
-      notes: notes || undefined,
       lines: lines.map((l) => ({
         productId: l.productId,
         quantity: l.quantity,
