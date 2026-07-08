@@ -54,6 +54,7 @@ DROP TYPE IF EXISTS location_owner_type CASCADE;
 -- =========================================================
 
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
 CREATE TYPE transfer_status AS ENUM ('DRAFT','PENDING_APPROVAL','APPROVED','REJECTED','DISPATCHED','PARTIALLY_RECEIVED','RECEIVED','CANCELLED');
 CREATE TYPE purchase_status AS ENUM ('DRAFT','SUBMITTED','APPROVED','PARTIALLY_RECEIVED','RECEIVED','CLOSED','CANCELLED');
@@ -489,9 +490,10 @@ SELECT r.id, p.id FROM roles r JOIN permissions p ON p.code IN (
 ON CONFLICT DO NOTHING;
 
 -- ── Default Admin User (password: Admin@123456) ─────
+-- Using pgcrypto crypt() to generate a bcrypt hash directly in Postgres
 INSERT INTO users (email, password_hash, full_name, phone, is_active) VALUES
-  ('admin@alhayat.com', '$2b$10$UVSlDBxIbPjzIXvwTd9rFOaCFkSyrEoztcIXmvxidZH6J6nGUzZPS', 'System Administrator', NULL, true)
-ON CONFLICT (email) DO NOTHING;
+  ('admin@alhayat.com', crypt('Admin@123456', gen_salt('bf', 10)), 'System Administrator', NULL, true)
+ON CONFLICT (email) DO UPDATE SET password_hash = EXCLUDED.password_hash;
 
 -- ── Assign admin role ───────────────────────────────
 INSERT INTO user_roles (user_id, role_id)
