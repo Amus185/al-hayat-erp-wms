@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { useNavigate } from 'react-router-dom';
+import { Mail, Lock, Eye, EyeOff, ShieldCheck, ArrowRight, AlertCircle } from 'lucide-react';
 
 export function LoginPage() {
   const { login } = useAuth();
@@ -37,58 +38,25 @@ export function LoginPage() {
   return (
     <>
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
 
         .login-root {
           font-family: 'Inter', sans-serif;
           min-height: 100vh;
           display: flex;
-          background: #0d5c0a;
+          background: #09120a;
           position: relative;
           overflow: hidden;
         }
 
-        /* Animated background blobs */
-        .login-bg-blob {
-          position: absolute;
-          border-radius: 50%;
-          filter: blur(80px);
-          opacity: 0.35;
-          animation: blobFloat 8s ease-in-out infinite;
-        }
-        .login-bg-blob-1 {
-          width: 500px; height: 500px;
-          background: #1a9e16;
-          top: -150px; left: -100px;
-          animation-delay: 0s;
-        }
-        .login-bg-blob-2 {
-          width: 400px; height: 400px;
-          background: #FFD700;
-          bottom: -100px; right: -80px;
-          animation-delay: -3s;
-        }
-        .login-bg-blob-3 {
-          width: 300px; height: 300px;
-          background: #0a8c07;
-          top: 40%; left: 60%;
-          animation-delay: -6s;
-        }
-
-        @keyframes blobFloat {
-          0%, 100% { transform: translateY(0px) scale(1); }
-          50% { transform: translateY(-30px) scale(1.05); }
-        }
-
-        /* Grid overlay pattern */
-        .login-grid {
+        /* Sophisticated subtle background */
+        .login-bg-pattern {
           position: absolute;
           inset: 0;
           background-image:
-            linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px),
-            linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px);
-          background-size: 50px 50px;
-          pointer-events: none;
+            radial-gradient(circle at 15% 50%, rgba(26, 140, 22, 0.08), transparent 25%),
+            radial-gradient(circle at 85% 30%, rgba(26, 140, 22, 0.06), transparent 25%);
+          z-index: 1;
         }
 
         /* Card */
@@ -97,21 +65,17 @@ export function LoginPage() {
           z-index: 10;
           margin: auto;
           width: 100%;
-          max-width: 440px;
-          background: rgba(255, 255, 255, 0.97);
-          backdrop-filter: blur(20px);
-          border-radius: 24px;
-          box-shadow:
-            0 32px 80px rgba(0,0,0,0.4),
-            0 0 0 1px rgba(255,255,255,0.15),
-            inset 0 1px 0 rgba(255,255,255,0.8);
-          padding: 44px 40px 40px;
-          animation: cardIn 0.5s ease-out;
+          max-width: 420px;
+          background: #ffffff;
+          border-radius: 16px;
+          box-shadow: 0 24px 48px -12px rgba(0,0,0,0.4);
+          padding: 48px 40px;
+          animation: fadeUp 0.5s cubic-bezier(0.16, 1, 0.3, 1);
         }
 
-        @keyframes cardIn {
-          from { opacity: 0; transform: translateY(24px) scale(0.97); }
-          to   { opacity: 1; transform: translateY(0) scale(1); }
+        @keyframes fadeUp {
+          from { opacity: 0; transform: translateY(16px); }
+          to   { opacity: 1; transform: translateY(0); }
         }
 
         /* Logo area */
@@ -123,13 +87,12 @@ export function LoginPage() {
         }
 
         .login-logo-ring {
-          width: 100px;
-          height: 100px;
-          border-radius: 50%;
-          border: 4px solid #1a8c16;
-          box-shadow: 0 8px 24px rgba(26,140,22,0.35), 0 0 0 8px rgba(26,140,22,0.08);
+          width: 72px;
+          height: 72px;
+          border-radius: 12px;
+          box-shadow: 0 4px 12px rgba(0,0,0,0.05);
           overflow: hidden;
-          margin-bottom: 16px;
+          margin-bottom: 20px;
           background: #fff;
           display: flex;
           align-items: center;
@@ -139,8 +102,8 @@ export function LoginPage() {
         .login-logo-ring img {
           width: 100%;
           height: 100%;
-          object-fit: cover;
-          border-radius: 50%;
+          object-fit: contain;
+          padding: 8px;
         }
 
         .login-logo-fallback {
@@ -149,73 +112,53 @@ export function LoginPage() {
           display: flex;
           align-items: center;
           justify-content: center;
-          background: linear-gradient(135deg, #1a8c16, #0d5c0a);
-          color: #FFD700;
-          font-size: 32px;
-          font-weight: 900;
-          letter-spacing: -1px;
+          background: #0d5c0a;
+          color: #ffffff;
+          font-size: 24px;
+          font-weight: 800;
         }
 
         .login-title {
-          margin: 0 0 4px;
-          font-size: 22px;
-          font-weight: 800;
-          color: #0d5c0a;
+          margin: 0 0 6px;
+          font-size: 24px;
+          font-weight: 700;
+          color: #0f172a;
           text-align: center;
-          letter-spacing: -0.5px;
+          letter-spacing: -0.02em;
         }
 
         .login-subtitle {
           margin: 0;
-          font-size: 13px;
-          color: #6b7c6b;
+          font-size: 14px;
+          color: #64748b;
           text-align: center;
-          font-weight: 500;
-        }
-
-        /* Divider */
-        .login-divider {
-          height: 1px;
-          background: linear-gradient(90deg, transparent, #d4e8d0, transparent);
-          margin: 24px 0;
+          font-weight: 400;
         }
 
         /* Error */
         .login-error {
           display: flex;
           align-items: center;
-          gap: 10px;
-          background: #fff1f1;
-          border: 1px solid #fbc8c8;
-          border-left: 4px solid #e53e3e;
-          color: #c53030;
-          padding: 12px 14px;
-          border-radius: 10px;
+          gap: 12px;
+          background: #fef2f2;
+          border: 1px solid #fecaca;
+          color: #b91c1c;
+          padding: 12px 16px;
+          border-radius: 8px;
           font-size: 13px;
-          font-weight: 600;
-          margin-bottom: 20px;
-          animation: shake 0.4s ease;
-        }
-
-        @keyframes shake {
-          0%, 100% { transform: translateX(0); }
-          20% { transform: translateX(-6px); }
-          40% { transform: translateX(6px); }
-          60% { transform: translateX(-4px); }
-          80% { transform: translateX(4px); }
+          font-weight: 500;
+          margin-bottom: 24px;
         }
 
         /* Form */
-        .login-form { display: grid; gap: 18px; }
+        .login-form { display: grid; gap: 20px; }
 
         .login-field-label {
           display: block;
-          font-size: 12px;
-          font-weight: 700;
-          color: #2d4a2d;
-          margin-bottom: 6px;
-          text-transform: uppercase;
-          letter-spacing: 0.5px;
+          font-size: 13px;
+          font-weight: 600;
+          color: #334155;
+          margin-bottom: 8px;
         }
 
         .login-input-wrap {
@@ -227,33 +170,31 @@ export function LoginPage() {
         .login-input-icon {
           position: absolute;
           left: 14px;
-          color: #7a9a7a;
+          color: #94a3b8;
+          display: flex;
           pointer-events: none;
-          font-size: 16px;
         }
 
         .login-input {
           width: 100%;
-          height: 48px;
-          border: 1.5px solid #d0e4cc;
-          border-radius: 12px;
-          padding: 0 44px;
+          height: 44px;
+          border: 1px solid #cbd5e1;
+          border-radius: 8px;
+          padding: 0 40px;
           font-size: 14px;
           font-family: 'Inter', sans-serif;
-          color: #1a2e1a;
-          background: #f8fdf8;
+          color: #0f172a;
+          background: #ffffff;
           transition: all 0.2s;
           outline: none;
-          box-sizing: border-box;
         }
 
         .login-input:focus {
-          border-color: #1a8c16;
-          background: #fff;
-          box-shadow: 0 0 0 4px rgba(26,140,22,0.1);
+          border-color: #0d5c0a;
+          box-shadow: 0 0 0 3px rgba(13, 92, 10, 0.1);
         }
 
-        .login-input::placeholder { color: #b0c4b0; }
+        .login-input::placeholder { color: #94a3b8; }
 
         .login-eye-btn {
           position: absolute;
@@ -261,100 +202,74 @@ export function LoginPage() {
           background: none;
           border: none;
           cursor: pointer;
-          color: #7a9a7a;
-          font-size: 16px;
-          padding: 4px;
+          color: #94a3b8;
           display: flex;
           align-items: center;
+          padding: 4px;
           transition: color 0.2s;
         }
-        .login-eye-btn:hover { color: #1a8c16; }
+        .login-eye-btn:hover { color: #0d5c0a; }
 
         /* Submit button */
         .login-btn {
           width: 100%;
-          height: 52px;
-          background: linear-gradient(135deg, #1a8c16, #0d5c0a);
+          height: 44px;
+          background: #0d5c0a;
           color: #fff;
           border: none;
-          border-radius: 12px;
-          font-size: 15px;
-          font-weight: 700;
+          border-radius: 8px;
+          font-size: 14px;
+          font-weight: 600;
           font-family: 'Inter', sans-serif;
           cursor: pointer;
           display: flex;
           align-items: center;
           justify-content: center;
           gap: 8px;
-          transition: all 0.25s;
-          box-shadow: 0 4px 16px rgba(13,92,10,0.4);
-          margin-top: 4px;
-          letter-spacing: 0.2px;
+          transition: all 0.2s;
+          margin-top: 8px;
         }
 
         .login-btn:hover:not(:disabled) {
-          background: linear-gradient(135deg, #20a81b, #107a0e);
-          box-shadow: 0 6px 24px rgba(13,92,10,0.5);
-          transform: translateY(-1px);
-        }
-
-        .login-btn:active:not(:disabled) {
-          transform: translateY(0px);
+          background: #0a4608;
         }
 
         .login-btn:disabled {
-          opacity: 0.75;
+          opacity: 0.7;
           cursor: not-allowed;
         }
 
         /* Spinner */
         .login-spinner {
-          width: 18px;
-          height: 18px;
-          border: 2.5px solid rgba(255,255,255,0.35);
+          width: 16px;
+          height: 16px;
+          border: 2px solid rgba(255,255,255,0.3);
           border-top-color: #fff;
           border-radius: 50%;
-          animation: spin 0.7s linear infinite;
+          animation: spin 0.6s linear infinite;
         }
         @keyframes spin { to { transform: rotate(360deg); } }
 
-        /* Footer badge */
+        /* Footer */
         .login-footer {
           display: flex;
           align-items: center;
           justify-content: center;
           gap: 6px;
-          margin-top: 24px;
-          font-size: 11px;
-          color: #8fa88f;
+          margin-top: 32px;
+          font-size: 12px;
+          color: #64748b;
           font-weight: 500;
         }
 
-        .login-badge {
-          display: inline-flex;
-          align-items: center;
-          gap: 4px;
-          background: #f0f8f0;
-          border: 1px solid #c8e0c4;
-          color: #2d6e2a;
-          padding: 3px 10px;
-          border-radius: 20px;
-          font-size: 11px;
-          font-weight: 600;
-        }
-
         @media (max-width: 480px) {
-          .login-card { margin: 16px; padding: 32px 24px 28px; }
-          .login-title { font-size: 19px; }
+          .login-card { margin: 16px; padding: 32px 24px; border-radius: 12px; }
+          .login-title { font-size: 20px; }
         }
       `}</style>
 
       <div className="login-root">
-        {/* Animated background */}
-        <div className="login-bg-blob login-bg-blob-1" />
-        <div className="login-bg-blob login-bg-blob-2" />
-        <div className="login-bg-blob login-bg-blob-3" />
-        <div className="login-grid" />
+        <div className="login-bg-pattern" />
 
         <div className="login-card">
           {/* Logo & Title */}
@@ -372,16 +287,14 @@ export function LoginPage() {
               />
               <div className="login-logo-fallback" style={{ display: 'none' }}>AH</div>
             </div>
-            <h1 className="login-title">Al Hayat</h1>
+            <h1 className="login-title">Sign in to Al Hayat</h1>
             <p className="login-subtitle">Enterprise Resource Planning System</p>
           </div>
-
-          <div className="login-divider" />
 
           {/* Error alert */}
           {error && (
             <div className="login-error">
-              <span>⚠</span>
+              <AlertCircle size={16} />
               <span>{error}</span>
             </div>
           )}
@@ -391,7 +304,7 @@ export function LoginPage() {
             <div>
               <label htmlFor="login-email" className="login-field-label">Email Address</label>
               <div className="login-input-wrap">
-                <span className="login-input-icon">✉</span>
+                <span className="login-input-icon"><Mail size={16} /></span>
                 <input
                   id="login-email"
                   type="email"
@@ -409,7 +322,7 @@ export function LoginPage() {
             <div>
               <label htmlFor="login-password" className="login-field-label">Password</label>
               <div className="login-input-wrap">
-                <span className="login-input-icon">🔒</span>
+                <span className="login-input-icon"><Lock size={16} /></span>
                 <input
                   id="login-password"
                   type={showPassword ? 'text' : 'password'}
@@ -426,7 +339,7 @@ export function LoginPage() {
                   onClick={() => setShowPassword(p => !p)}
                   aria-label={showPassword ? 'Hide password' : 'Show password'}
                 >
-                  {showPassword ? '🙈' : '👁'}
+                  {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
                 </button>
               </div>
             </div>
@@ -435,11 +348,11 @@ export function LoginPage() {
               {loading ? (
                 <>
                   <div className="login-spinner" />
-                  Signing in...
+                  Authenticating...
                 </>
               ) : (
                 <>
-                  <span>🔐</span> Sign In to Dashboard
+                  Sign In <ArrowRight size={16} />
                 </>
               )}
             </button>
@@ -447,7 +360,8 @@ export function LoginPage() {
 
           {/* Footer */}
           <div className="login-footer">
-            <span className="login-badge">🔒 Secure Enterprise System</span>
+            <ShieldCheck size={14} />
+            Secure Enterprise Connection
           </div>
         </div>
       </div>
