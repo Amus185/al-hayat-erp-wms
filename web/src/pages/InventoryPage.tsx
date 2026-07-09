@@ -236,6 +236,22 @@ export function InventoryPage() {
       ),
     },
     {
+      key: 'location',
+      label: 'Location',
+      render: (row) => {
+        if (row.destination_owner_type === 'WAREHOUSE') {
+          return `${row.destination_warehouse || 'Warehouse'} ${row.aisle ? `(${row.aisle}-${row.rack}-${row.shelf}-${row.bin})` : ''}`;
+        } else {
+          return row.destination_branch || 'Branch';
+        }
+      },
+    },
+    {
+      key: 'user',
+      label: 'User',
+      render: (row) => row.user_name || 'System',
+    },
+    {
       key: 'quantity',
       label: 'Qty Change',
       render: (row) => {

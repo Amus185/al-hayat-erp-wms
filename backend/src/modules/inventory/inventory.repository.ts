@@ -91,9 +91,17 @@ export class InventoryRepository {
 
   transactions() {
     return this.db.query(
-      `SELECT t.*, p.name, p.sku, p.barcode
+      `SELECT t.*, p.name, p.sku, p.barcode,
+              w.name AS destination_warehouse,
+              b.name AS destination_branch,
+              l.aisle, l.rack, l.shelf, l.bin,
+              u.full_name AS user_name
        FROM inventory_transactions t
        JOIN products p ON p.id = t.product_id
+       LEFT JOIN warehouses w ON w.id = t.destination_warehouse_id
+       LEFT JOIN branches b ON b.id = t.destination_branch_id
+       LEFT JOIN warehouse_locations l ON l.id = t.destination_location_id
+       LEFT JOIN users u ON u.id = t.created_by
        ORDER BY t.created_at DESC
        LIMIT 200`
     );
