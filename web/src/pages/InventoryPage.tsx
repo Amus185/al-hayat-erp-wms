@@ -62,7 +62,7 @@ export function InventoryPage() {
   const [isAdjustOpen, setIsAdjustOpen] = useState(false);
   const [adjustForm, setAdjustForm] = useState({
     productId: '',
-    direction: 'increase' as 'increase' | 'decrease',
+    direction: 'INCREASE' as 'INCREASE' | 'DECREASE',
     quantity: 1,
     ownerType: 'WAREHOUSE' as 'WAREHOUSE' | 'BRANCH',
     warehouseId: '',
@@ -343,8 +343,8 @@ export function InventoryPage() {
                   onChange={(e) => setAdjustForm((prev) => ({ ...prev, direction: e.target.value as any }))}
                   required
                 >
-                  <option value="increase">Increase (+)</option>
-                  <option value="decrease">Decrease (-)</option>
+                  <option value="INCREASE">Increase (+)</option>
+                  <option value="DECREASE">Decrease (-)</option>
                 </select>
               </FormField>
 
