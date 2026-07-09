@@ -154,14 +154,20 @@ export class ReportsRepository {
            SELECT COUNT(DISTINCT so.id)
            FROM sales_orders so
            WHERE so.branch_id = b.id AND so.status != 'CANCELLED'
-         ), 0)::int AS total_orders,
+         ), 0)::int AS orders,
+         COALESCE((
+           SELECT SUM(i.total_amount)
+           FROM sales_orders so
+           JOIN invoices i ON i.sales_order_id = so.id
+           WHERE so.branch_id = b.id AND so.status != 'CANCELLED' AND i.status != 'CANCELLED'
+         ), 0)::float AS revenue,
          COALESCE((
            SELECT COUNT(DISTINCT s.product_id)
            FROM inventory_stock s
            WHERE s.branch_id = b.id AND s.quantity_on_hand > 0
          ), 0)::int AS sku_count
        FROM branches b
-       ORDER BY inventory_value DESC`
+       ORDER BY revenue DESC`
     );
   }
 }
