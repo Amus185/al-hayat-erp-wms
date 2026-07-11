@@ -24,17 +24,13 @@ export function DashboardPage() {
     async function fetchDashboardData() {
       try {
         setLoading(true);
-        // Fetch inventory value report
-        const invValueData = await apiGet<any>('/reports/inventory-value');
-        
-        // Fetch low stock items
-        const lowStockData = await apiGet<any[]>('/reports/low-stock');
-
-        // Fetch transfers
-        const transfersData = await apiGet<any[]>('/transfers');
-
-        // Fetch transactions for scans today count & recent alerts
-        const transactions = await apiGet<any[]>('/inventory/transactions');
+        // Fetch ALL dashboard data in parallel
+        const [invValueData, lowStockData, transfersData, transactions] = await Promise.all([
+          apiGet<any>('/reports/inventory-value'),
+          apiGet<any[]>('/reports/low-stock'),
+          apiGet<any[]>('/transfers'),
+          apiGet<any[]>('/inventory/transactions'),
+        ]);
 
         // Parse metrics
         const totalValue = invValueData?.inventory_value ? Number(invValueData.inventory_value) : 0;

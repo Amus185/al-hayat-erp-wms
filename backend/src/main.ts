@@ -4,6 +4,7 @@ import { NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
+import { DatabaseService } from './database/database.service';
 
 async function bootstrap() {
   const logger = new Logger('Bootstrap');
@@ -12,7 +13,8 @@ async function bootstrap() {
 
   app.enableCors({
     origin: config.get<string>('WEB_ORIGIN')?.split(',') ?? true,
-    credentials: true
+    credentials: true,
+    maxAge: 86400,
   });
 
   app.setGlobalPrefix('api/v1');
@@ -37,6 +39,15 @@ async function bootstrap() {
   await app.listen(port);
   logger.log(`🚀 API running on port ${port}`);
   logger.log(`📖 Swagger docs at /docs`);
+
+  // Prevent Railway cold starts — keep DB pool connections alive
+  if (process.env.RAILWAY_ENVIRONMENT) {
+    const db = app.get(DatabaseService);
+    setInterval(() => {
+      db.query('SELECT 1').catch(() => {});
+    }, 30_000);
+    logger.log('🔥 Railway keepalive enabled (30s interval)');
+  }
 }
 
 void bootstrap();
