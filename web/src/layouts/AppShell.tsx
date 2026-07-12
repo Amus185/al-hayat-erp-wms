@@ -18,16 +18,16 @@ import { useAuth } from '../contexts/AuthContext';
 
 const navItems = [
   { label: 'Dashboard', path: '/', icon: Home, permission: '' },
-  { label: 'Products', path: '/products', icon: PackageSearch, permission: 'products.read' },
-  { label: 'Warehouses', path: '/warehouses', icon: Boxes, permission: 'inventory.read' },
-  { label: 'Inventory', path: '/inventory', icon: ClipboardList, permission: 'inventory.read' },
-  { label: 'Branches', path: '/branches', icon: Building2, permission: 'branches.manage' },
-  { label: 'Transfers', path: '/transfers', icon: Truck, permission: 'transfers.create' },
-  { label: 'Purchasing', path: '/purchasing', icon: ClipboardList, permission: 'purchasing.write' },
-  { label: 'Sales', path: '/sales', icon: ShoppingCart, permission: 'sales.write' },
-  { label: 'Reports', path: '/reports', icon: BarChart3, permission: 'reports.read' },
-  { label: 'Audit Log', path: '/audit', icon: FileClock, permission: 'audit.read' },
-  { label: 'Users', path: '/users', icon: Users, permission: 'users.manage' },
+  { label: 'Products', path: '/products', icon: PackageSearch, permission: 'manage_inventory' },
+  { label: 'Warehouses', path: '/warehouses', icon: Boxes, permission: 'manage_inventory' },
+  { label: 'Inventory', path: '/inventory', icon: ClipboardList, permission: 'manage_inventory' },
+  { label: 'Branches', path: '/branches', icon: Building2, permission: 'manage_users' },
+  { label: 'Transfers', path: '/transfers', icon: Truck, permission: 'manage_transfers' },
+  { label: 'Purchasing', path: '/purchasing', icon: ClipboardList, permission: 'manage_purchasing' },
+  { label: 'Sales', path: '/sales', icon: ShoppingCart, permission: 'manage_sales' },
+  { label: 'Reports', path: '/reports', icon: BarChart3, permission: 'view_reports' },
+  { label: 'Audit Log', path: '/audit', icon: FileClock, permission: 'view_reports' },
+  { label: 'Users', path: '/users', icon: Users, permission: 'manage_users' },
 ];
 
 type AppShellProps = {
