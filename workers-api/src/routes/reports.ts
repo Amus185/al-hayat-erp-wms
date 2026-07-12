@@ -45,4 +45,44 @@ reports.get('/sales-summary', async (c) => {
   return c.json(results);
 });
 
+reports.get('/branches', async (c) => {
+  const { results } = await c.env.DB.prepare(`
+    SELECT b.name as branch_name,
+           COUNT(so.id) as total_orders,
+           SUM(i.total_amount) as revenue
+    FROM branches b
+    LEFT JOIN sales_orders so ON so.branch_id = b.id
+    LEFT JOIN invoices i ON i.sales_order_id = so.id
+    GROUP BY b.id, b.name
+    ORDER BY revenue DESC
+  `).all();
+  return c.json(results);
+});
+
+reports.get('/profit', async (c) => {
+  const { results } = await c.env.DB.prepare(`
+    SELECT 
+      SUM(i.total_amount) as total_revenue,
+      SUM(il.quantity * p.cost_price) as total_cost
+    FROM invoices i
+    JOIN invoice_lines il ON il.invoice_id = i.id
+    JOIN products p ON p.id = il.product_id
+  `).all();
+  return c.json(results[0]);
+});
+
+reports.get('/sales', async (c) => {
+  const { results } = await c.env.DB.prepare(`
+    SELECT 
+      DATE(created_at) as date,
+      COUNT(id) as total_orders,
+      SUM(total_amount) as revenue
+    FROM sales_orders
+    WHERE created_at >= DATE('now', '-30 days')
+    GROUP BY DATE(created_at)
+    ORDER BY date ASC
+  `).all();
+  return c.json(results);
+});
+
 export default reports;

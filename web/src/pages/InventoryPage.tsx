@@ -181,7 +181,7 @@ export function InventoryPage() {
     }
 
     try {
-      await apiPost('/inventory/adjustments', payload);
+      await apiPost('/inventory/adjust', payload);
       addToast('success', 'Stock adjustment recorded');
       setIsAdjustOpen(false);
       setAdjustForm({

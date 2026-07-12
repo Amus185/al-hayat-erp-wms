@@ -57,8 +57,8 @@ export function SalesPage() {
   const loadData = async () => {
     try {
       setLoading(true);
-      const salesOrders = await apiGet<SalesOrder[]>('/sales-orders');
-      const custs = await apiGet<Customer[]>('/customers');
+      const salesOrders = await apiGet<SalesOrder[]>('/sales/orders');
+      const custs = await apiGet<Customer[]>('/sales/customers');
       const branches = await apiGet<any[]>('/branches');
 
       setCustomers(custs || []);
@@ -92,7 +92,7 @@ export function SalesPage() {
       return;
     }
     try {
-      await apiPost('/customers', customerForm);
+      await apiPost('/sales/customers', customerForm);
       addToast('success', 'Customer registered successfully. They are now available when creating a New Order.');
       setIsCustomerOpen(false);
       setCustomerForm({ name: '', email: '', phone: '', address: '' });
@@ -105,7 +105,7 @@ export function SalesPage() {
   const handleConfirmOrder = async (id: string) => {
     try {
       setOrderDetailsLoading(true);
-      await apiPatch(`/sales-orders/${id}/confirm`);
+      await apiPost(`/sales/orders/${id}/confirm`, {});
       addToast('success', 'Sales order confirmed successfully');
       setSelectedOrder(null);
       loadData();
@@ -119,7 +119,7 @@ export function SalesPage() {
   const handleCreateInvoice = async (id: string) => {
     try {
       setOrderDetailsLoading(true);
-      await apiPost(`/sales-orders/${id}/invoice`, {});
+      await apiPost(`/sales/orders/${id}/invoice`, {});
       addToast('success', 'Invoice issued successfully');
       setSelectedOrder(null);
       loadData();
@@ -133,7 +133,7 @@ export function SalesPage() {
   const handlePayInvoice = async (invoiceId: string) => {
     try {
       setOrderDetailsLoading(true);
-      await apiPatch(`/invoices/${invoiceId}/pay`);
+      await apiPost(`/sales/orders/${invoiceId}/pay`, {});
       addToast('success', 'Payment recorded successfully');
       setSelectedOrder(null);
       loadData();
@@ -147,7 +147,7 @@ export function SalesPage() {
   const viewOrderDetails = async (so: SalesOrder) => {
     setOrderDetailsLoading(true);
     try {
-      const details = await apiGet<any>(`/sales-orders/${so.id}`);
+      const details = await apiGet<any>(`/sales/orders/${so.id}`);
       setSelectedOrder(details || so);
     } catch {
       setSelectedOrder(so);

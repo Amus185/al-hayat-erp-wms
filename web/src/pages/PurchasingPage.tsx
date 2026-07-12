@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { PackagePlus, Plus, UserPlus, Eye, CheckCircle, Truck, FileText } from 'lucide-react';
-import { apiGet, apiPost, apiPatch } from '../api/client';
+import { apiGet, apiPost } from '../api/client';
 import { DataTable, type Column } from '../components/DataTable';
 import { Tabs } from '../components/Tabs';
 import { Modal } from '../components/Modal';
@@ -67,10 +67,10 @@ export function PurchasingPage() {
   const loadData = async () => {
     try {
       setLoading(true);
-      const orders = await apiGet<PurchaseOrder[]>('/purchase-orders');
+      const orders = await apiGet<PurchaseOrder[]>('/purchasing/orders');
       
       // Resolve supplier name mappings
-      const sups = await apiGet<Supplier[]>('/suppliers');
+      const sups = await apiGet<Supplier[]>('/purchasing/suppliers');
       setSuppliers(sups || []);
 
       const ordersWithSupplier = orders?.map(po => {
@@ -130,7 +130,7 @@ export function PurchasingPage() {
       return;
     }
     try {
-      await apiPost('/suppliers', supplierForm);
+      await apiPost('/purchasing/suppliers', supplierForm);
       addToast('success', 'Supplier registered successfully');
       setIsSupplierOpen(false);
       setSupplierForm({ name: '', email: '', phone: '', address: '' });
@@ -143,7 +143,7 @@ export function PurchasingPage() {
   const handleApprovePO = async (poId: string) => {
     try {
       setPoDetailsLoading(true);
-      await apiPatch(`/purchase-orders/${poId}/approve`);
+      await apiPost(`/purchasing/orders/${poId}/approve`, {});
       addToast('success', 'Purchase order approved');
       setSelectedPO(null);
       loadData();
@@ -178,7 +178,7 @@ export function PurchasingPage() {
 
     try {
       setPoDetailsLoading(true);
-      await apiPost('/goods-receipts', payload);
+      await apiPost('/purchasing/receipts', payload);
       addToast('success', 'Goods Receipt generated and inventory updated');
       setIsReceiptOpen(false);
       setSelectedPO(null);
@@ -194,7 +194,7 @@ export function PurchasingPage() {
     setPoDetailsLoading(true);
     try {
       // Fetch matching lines for this PO
-      const res = await apiGet<any>(`/purchase-orders`);
+      const res = await apiGet<any>(`/purchasing/orders`);
       const details = res?.find((r: any) => r.id === po.id);
       
       // If lines are returned, setup default receiving quantities

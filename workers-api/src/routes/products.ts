@@ -47,4 +47,15 @@ products.post('/categories', requirePermissions(['manage_inventory']), async (c)
   return c.json(results[0], 201);
 });
 
+products.get('/brands', async (c) => {
+  const { results } = await c.env.DB.prepare('SELECT * FROM brands ORDER BY name ASC').all();
+  return c.json(results);
+});
+
+products.delete('/categories/:id', requirePermissions(['manage_inventory']), async (c) => {
+  const id = c.req.param('id');
+  await c.env.DB.prepare('DELETE FROM categories WHERE id = ?').bind(id).run();
+  return c.json({ success: true });
+});
+
 export default products;

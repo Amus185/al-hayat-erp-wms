@@ -38,7 +38,7 @@ export function AuditPage() {
       if (selectedEntity) {
         params.entityType = selectedEntity;
       }
-      const data = await apiGet<AuditLog[]>('/audit-logs', params);
+      const data = await apiGet<AuditLog[]>('/audit', params);
       setLogs(data || []);
     } catch (err: any) {
       addToast('error', err?.message || 'Failed to retrieve governance logs');

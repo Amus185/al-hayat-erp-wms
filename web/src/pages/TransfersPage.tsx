@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Truck, Plus, CheckCircle, ArrowRight, User, Calendar } from 'lucide-react';
-import { apiGet, apiPatch } from '../api/client';
+import { apiGet, apiPost } from '../api/client';
 import { DataTable, type Column } from '../components/DataTable';
 import { Tabs } from '../components/Tabs';
 import { Modal } from '../components/Modal';
@@ -79,7 +79,7 @@ export function TransfersPage() {
   const handleApprove = async (id: string) => {
     try {
       setActionLoading(true);
-      await apiPatch(`/transfers/${id}/approve`);
+      await apiPost(`/transfers/${id}/approve`, {});
       addToast('success', 'Transfer approved successfully');
       setSelectedTransfer(null);
       loadData();
@@ -93,7 +93,7 @@ export function TransfersPage() {
   const handleDispatch = async (id: string) => {
     try {
       setActionLoading(true);
-      await apiPatch(`/transfers/${id}/dispatch`);
+      await apiPost(`/transfers/${id}/dispatch`, {});
       addToast('success', 'Transfer dispatched successfully');
       setSelectedTransfer(null);
       loadData();
@@ -107,7 +107,7 @@ export function TransfersPage() {
   const handleReceive = async (id: string) => {
     try {
       setActionLoading(true);
-      await apiPatch(`/transfers/${id}/receive`);
+      await apiPost(`/transfers/${id}/receive`, {});
       addToast('success', 'Transfer received and stock updated');
       setSelectedTransfer(null);
       loadData();

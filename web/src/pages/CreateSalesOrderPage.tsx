@@ -47,7 +47,7 @@ export function CreateSalesOrderPage() {
   useEffect(() => {
     async function loadData() {
       try {
-        const custs = await apiGet<Customer[]>('/customers');
+        const custs = await apiGet<Customer[]>('/sales/customers');
         const brs = await apiGet<Branch[]>('/branches');
         const productsList = await apiGet<any[]>('/products');
         
@@ -141,7 +141,7 @@ export function CreateSalesOrderPage() {
     };
 
     try {
-      await apiPost('/sales-orders', payload);
+      await apiPost('/sales/orders', payload);
       addToast('success', 'Sales order created successfully');
       navigate('/sales');
     } catch (err: any) {

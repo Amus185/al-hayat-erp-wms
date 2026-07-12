@@ -48,7 +48,7 @@ export function CreatePOPage() {
   useEffect(() => {
     async function loadData() {
       try {
-        const sups = await apiGet<Supplier[]>('/suppliers');
+        const sups = await apiGet<Supplier[]>('/purchasing/suppliers');
         const whs = await apiGet<Warehouse[]>('/warehouses');
         const products = await apiGet<any[]>('/products');
         
@@ -139,7 +139,7 @@ export function CreatePOPage() {
     };
 
     try {
-      await apiPost('/purchase-orders', payload);
+      await apiPost('/purchasing/orders', payload);
       addToast('success', 'Purchase order created and submitted successfully');
       navigate('/purchasing');
     } catch (err: any) {
