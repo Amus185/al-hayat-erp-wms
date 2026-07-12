@@ -3,17 +3,17 @@
 :root {
   --background: #fdfdfd;
   --foreground: #0a1110;
-  
+
   --primary: #0a1110;
   --primary-foreground: #ffffff;
-  
+
   --accent: #1a8c16;
   --accent-light: #20a81b;
   --accent-foreground: #ffffff;
-  
+
   --muted: #f1f5f9;
   --muted-foreground: #64748b;
-  
+
   --border: #e2e8f0;
 }
 
@@ -23,7 +23,8 @@
   padding: 0;
 }
 
-html, body {
+html,
+body {
   max-width: 100vw;
   overflow-x: hidden;
   font-family: 'Inter', sans-serif;
@@ -32,7 +33,12 @@ html, body {
   -webkit-font-smoothing: antialiased;
 }
 
-h1, h2, h3, h4, h5, h6 {
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
   font-family: 'Outfit', sans-serif;
   font-weight: 600;
 }
@@ -172,7 +178,7 @@ button {
 
 .product-card:hover {
   transform: translateY(-4px);
-  box-shadow: 0 12px 24px -10px rgba(0,0,0,0.1);
+  box-shadow: 0 12px 24px -10px rgba(0, 0, 0, 0.1);
 }
 
 .product-image-container {
@@ -225,7 +231,8 @@ button {
   color: var(--primary-foreground);
 }
 
-.loading-state, .error-state {
+.loading-state,
+.error-state {
   text-align: center;
   padding: 4rem;
   color: var(--muted-foreground);
