@@ -63,24 +63,25 @@ reports.get('/profit', async (c) => {
   const result = await c.env.DB.prepare(`
     SELECT 
       COALESCE(SUM(i.total_amount), 0) as total_revenue,
-      COALESCE(SUM(il.quantity * p.cost_price), 0) as total_cost
+      COALESCE(SUM(il.quantity * p.cost_price), 0) as total_cost,
+      COALESCE(SUM(i.total_amount), 0) - COALESCE(SUM(il.quantity * p.cost_price), 0) as gross_profit
     FROM invoices i
     LEFT JOIN invoice_lines il ON il.invoice_id = i.id
     LEFT JOIN products p ON p.id = il.product_id
   `).first();
-  return c.json(result ?? { total_revenue: 0, total_cost: 0 });
+  return c.json(result ?? { total_revenue: 0, total_cost: 0, gross_profit: 0 });
 });
 
 reports.get('/sales', async (c) => {
   const { results } = await c.env.DB.prepare(`
     SELECT 
-      DATE(created_at) as date,
-      COUNT(id) as total_orders,
+      DATE(created_at) as day,
+      COUNT(id) as invoices,
       SUM(total_amount) as revenue
     FROM sales_orders
     WHERE created_at >= DATE('now', '-30 days')
     GROUP BY DATE(created_at)
-    ORDER BY date ASC
+    ORDER BY day ASC
   `).all();
   return c.json(results);
 });
