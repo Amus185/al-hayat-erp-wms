@@ -193,7 +193,7 @@ export function ProductsPage() {
           >
             View Details
           </button>
-          {hasPermission('products.write') && (
+          {hasPermission('manage_inventory') && (
             <button
               type="button"
               className="btn btn-danger btn-sm"
@@ -218,12 +218,12 @@ export function ProductsPage() {
           <h2>Products, images, and barcode lookup</h2>
         </div>
         <div style={{ display: 'flex', gap: '8px' }}>
-          {hasPermission('products.manage') && (
+          {hasPermission('manage_inventory') && (
             <button type="button" className="btn btn-secondary" onClick={() => setIsCategoryModalOpen(true)}>
               Manage Categories
             </button>
           )}
-          {hasPermission('products.write') && (
+          {hasPermission('manage_inventory') && (
             <button type="button" className="btn btn-primary" onClick={() => setIsCreateOpen(true)}>
               <Plus size={16} style={{ marginRight: '6px', inlineSize: 'auto' }} /> New Product
             </button>
