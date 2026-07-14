@@ -120,6 +120,10 @@ export function ProductsPage() {
       addToast('error', 'Product ID, Barcode, and Name are required');
       return;
     }
+    if (newProduct.costPrice > newProduct.sellingPrice) {
+      addToast('error', 'Cost Price cannot be greater than Selling Price');
+      return;
+    }
 
     const payload: any = {
       sku: newProduct.sku,

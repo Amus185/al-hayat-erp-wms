@@ -21,6 +21,12 @@ products.get('/', async (c) => {
 products.post('/', requirePermissions(['manage_inventory']), async (c) => {
   const body = await c.req.json();
   const id = uuidv4();
+
+  const cost = Number(body.costPrice || 0);
+  const sell = Number(body.sellingPrice || 0);
+  if (cost > sell) {
+    return c.json({ message: 'Cost Price cannot be greater than Selling Price' }, 400);
+  }
   
   await c.env.DB.prepare(`
     INSERT INTO products (id, sku, name, description, category_id, brand_id, cost_price, selling_price, reorder_level, barcode)
