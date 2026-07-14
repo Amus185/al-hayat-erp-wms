@@ -117,6 +117,7 @@ export function CreateSalesOrderPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    const completeNow = (document.getElementById('completeNowFlag') as HTMLInputElement)?.value !== '0';
     if (!customerId) {
       addToast('error', 'Please select a customer');
       return;
@@ -141,8 +142,13 @@ export function CreateSalesOrderPage() {
     };
 
     try {
-      await apiPost('/sales/orders', payload);
-      addToast('success', 'Sales order created successfully');
+      const order = await apiPost<any>('/sales/orders', payload);
+      if (completeNow) {
+        await apiPost(`/sales/orders/${order.id}/complete`, {});
+        addToast('success', '✅ Sale completed! Invoice issued and payment recorded.');
+      } else {
+        addToast('success', 'Sales order saved as draft');
+      }
       navigate('/sales');
     } catch (err: any) {
       addToast('error', err?.message || 'Failed to submit Sales Order');
@@ -348,9 +354,16 @@ export function CreateSalesOrderPage() {
           <button type="button" className="btn btn-secondary" onClick={() => navigate('/sales')}>
             Cancel
           </button>
-          <button type="submit" className="btn btn-primary" disabled={lines.length === 0}>
-            Create Sales Order
+          <button type="submit" className="btn btn-secondary" disabled={lines.length === 0}
+            onClick={() => (document.getElementById('completeNowFlag') as HTMLInputElement).value = '0'}>
+            Save as Draft
           </button>
+          <button type="submit" className="btn btn-primary" disabled={lines.length === 0}
+            onClick={() => (document.getElementById('completeNowFlag') as HTMLInputElement).value = '1'}
+            style={{ background: 'linear-gradient(135deg, #0b8f08, #066006)' }}>
+            ⚡ Create & Complete
+          </button>
+          <input type="hidden" id="completeNowFlag" name="completeNow" defaultValue="1" />
         </div>
       </form>
     </div>

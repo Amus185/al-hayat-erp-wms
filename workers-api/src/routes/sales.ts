@@ -111,7 +111,7 @@ sales.post('/orders/:id/invoice', requirePermissions(['manage_sales']), async (c
   stmts.push(c.env.DB.prepare(`
     INSERT INTO invoice_lines (id, invoice_id, product_id, quantity, unit_price)
     SELECT lower(hex(randomblob(16))), ?, product_id, quantity, unit_price FROM sales_order_lines WHERE sales_order_id = ?
-  `).bind(invoiceId, orderId)); // Used SQLite randomblob for bulk insert IDs
+  `).bind(invoiceId, orderId));
 
   if (branchId) {
     const { results: lines } = await c.env.DB.prepare('SELECT product_id, quantity FROM sales_order_lines WHERE sales_order_id = ?').bind(orderId).all();
@@ -135,4 +135,65 @@ sales.post('/orders/:id/invoice', requirePermissions(['manage_sales']), async (c
   return c.json(results[0], 201);
 });
 
+// Mark an invoice as paid (by sales order ID)
+sales.post('/orders/:id/pay', requirePermissions(['manage_sales']), async (c) => {
+  const orderId = c.req.param('id');
+  await c.env.DB.prepare("UPDATE invoices SET status = 'PAID', paid_at = CURRENT_TIMESTAMP WHERE sales_order_id = ?").bind(orderId).run();
+  await c.env.DB.prepare("UPDATE sales_orders SET status = 'PAID' WHERE id = ?").bind(orderId).run();
+  return c.json({ success: true });
+});
+
+// ONE-CLICK COMPLETE: confirm → invoice → pay — all in one atomic batch
+sales.post('/orders/:id/complete', requirePermissions(['manage_sales']), async (c) => {
+  const orderId = c.req.param('id');
+  const userId = c.get('jwtPayload').sub;
+
+  // Check order exists and is in a completable state
+  const orderRes = await c.env.DB.prepare('SELECT * FROM sales_orders WHERE id = ?').bind(orderId).first();
+  if (!orderRes) return c.json({ message: 'Order not found' }, 404);
+  if (orderRes.status === 'PAID') return c.json({ message: 'Order already completed' }, 400);
+
+  const branchId = orderRes.branch_id;
+  const totalRes = await c.env.DB.prepare('SELECT COALESCE(SUM(quantity * unit_price), 0) AS total FROM sales_order_lines WHERE sales_order_id = ?').bind(orderId).first();
+  const total = totalRes?.total || 0;
+
+  const invoiceId = uuidv4();
+  const stmts: any[] = [];
+
+  // Confirm order
+  stmts.push(c.env.DB.prepare("UPDATE sales_orders SET status = 'PAID' WHERE id = ?").bind(orderId));
+
+  // Create invoice (already paid)
+  stmts.push(c.env.DB.prepare(`
+    INSERT INTO invoices (id, invoice_number, sales_order_id, total_amount, status, paid_at)
+    VALUES (?, ?, ?, ?, 'PAID', CURRENT_TIMESTAMP)
+  `).bind(invoiceId, `INV-${Date.now()}`, orderId, total));
+
+  // Copy order lines to invoice lines
+  stmts.push(c.env.DB.prepare(`
+    INSERT INTO invoice_lines (id, invoice_id, product_id, quantity, unit_price)
+    SELECT lower(hex(randomblob(16))), ?, product_id, quantity, unit_price FROM sales_order_lines WHERE sales_order_id = ?
+  `).bind(invoiceId, orderId));
+
+  // Deduct inventory from branch
+  if (branchId) {
+    const { results: lines } = await c.env.DB.prepare('SELECT product_id, quantity FROM sales_order_lines WHERE sales_order_id = ?').bind(orderId).all();
+    for (const line of lines) {
+      stmts.push(c.env.DB.prepare(`
+        UPDATE inventory_stock SET quantity_on_hand = quantity_on_hand - ?, updated_at = CURRENT_TIMESTAMP
+        WHERE product_id = ? AND branch_id = ?
+      `).bind(line.quantity, line.product_id, branchId));
+
+      stmts.push(c.env.DB.prepare(`
+        INSERT INTO inventory_transactions (id, product_id, transaction_type, quantity, source_owner_type, source_branch_id, reference_type, reference_id, created_by)
+        VALUES (?, ?, 'SALE_ISSUE', ?, 'BRANCH', ?, 'INVOICE', ?, ?)
+      `).bind(uuidv4(), line.product_id, -(line.quantity as number), branchId, invoiceId, userId));
+    }
+  }
+
+  await c.env.DB.batch(stmts);
+  return c.json({ success: true, invoiceId, total });
+});
+
 export default sales;
+

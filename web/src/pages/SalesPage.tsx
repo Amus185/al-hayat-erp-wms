@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ShoppingCart, Plus, UserPlus, Eye, CheckCircle, FileText, DollarSign } from 'lucide-react';
-import { apiGet, apiPost, apiPatch } from '../api/client';
+import { ShoppingCart, Plus, UserPlus, Eye, CheckCircle, DollarSign, Zap } from 'lucide-react';
+import { apiGet, apiPost } from '../api/client';
 import { DataTable, type Column } from '../components/DataTable';
 import { Tabs } from '../components/Tabs';
 import { Modal } from '../components/Modal';
@@ -102,38 +102,26 @@ export function SalesPage() {
     }
   };
 
-  const handleConfirmOrder = async (id: string) => {
+  // ONE-CLICK: confirm + invoice + pay all at once
+  const handleComplete = async (id: string) => {
     try {
       setOrderDetailsLoading(true);
-      await apiPost(`/sales/orders/${id}/confirm`, {});
-      addToast('success', 'Sales order confirmed successfully');
+      await apiPost(`/sales/orders/${id}/complete`, {});
+      addToast('success', '✅ Sale completed! Invoice issued and payment recorded.');
       setSelectedOrder(null);
       loadData();
     } catch (err: any) {
-      addToast('error', err?.message || 'Failed to confirm order');
+      addToast('error', err?.message || 'Failed to complete sale');
     } finally {
       setOrderDetailsLoading(false);
     }
   };
 
-  const handleCreateInvoice = async (id: string) => {
+  // Mark existing invoice as paid (for INVOICED status)
+  const handlePayInvoice = async (orderId: string) => {
     try {
       setOrderDetailsLoading(true);
-      await apiPost(`/sales/orders/${id}/invoice`, {});
-      addToast('success', 'Invoice issued successfully');
-      setSelectedOrder(null);
-      loadData();
-    } catch (err: any) {
-      addToast('error', err?.message || 'Failed to issue invoice');
-    } finally {
-      setOrderDetailsLoading(false);
-    }
-  };
-
-  const handlePayInvoice = async (invoiceId: string) => {
-    try {
-      setOrderDetailsLoading(true);
-      await apiPost(`/sales/orders/${invoiceId}/pay`, {});
+      await apiPost(`/sales/orders/${orderId}/pay`, {});
       addToast('success', 'Payment recorded successfully');
       setSelectedOrder(null);
       loadData();
@@ -331,31 +319,34 @@ export function SalesPage() {
               )}
             </div>
 
-            {/* Action Buttons */}
+            {/* Action Buttons — simplified to max 1 action */}
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', borderTop: '1px solid #edf1ed', paddingTop: '16px' }}>
               <button type="button" className="btn btn-secondary" onClick={() => setSelectedOrder(null)}>
                 Close
               </button>
 
-              {/* Status DRAFT -> Confirm */}
-              {selectedOrder.status === 'DRAFT' && (
-                <button type="button" className="btn btn-primary" onClick={() => handleConfirmOrder(selectedOrder.id)}>
-                  <CheckCircle size={14} style={{ marginRight: '4px', inlineSize: 'auto' }} /> Confirm Order
+              {/* DRAFT or CONFIRMED → Complete Sale in one click */}
+              {(selectedOrder.status === 'DRAFT' || selectedOrder.status === 'CONFIRMED') && (
+                <button type="button" className="btn btn-primary" disabled={orderDetailsLoading}
+                  onClick={() => handleComplete(selectedOrder.id)}
+                  style={{ background: 'linear-gradient(135deg, #0b8f08, #066006)' }}>
+                  <Zap size={14} style={{ marginRight: '4px', inlineSize: 'auto' }} />
+                  Complete Sale
                 </button>
               )}
 
-              {/* Status CONFIRMED -> Invoice */}
-              {selectedOrder.status === 'CONFIRMED' && (
-                <button type="button" className="btn btn-primary" onClick={() => handleCreateInvoice(selectedOrder.id)}>
-                  <FileText size={14} style={{ marginRight: '4px', inlineSize: 'auto' }} /> Issue Invoice
+              {/* INVOICED → just mark paid */}
+              {selectedOrder.status === 'INVOICED' && (
+                <button type="button" className="btn btn-primary" disabled={orderDetailsLoading}
+                  onClick={() => handlePayInvoice(selectedOrder.id)}>
+                  <DollarSign size={14} style={{ marginRight: '4px', inlineSize: 'auto' }} /> Mark as Paid
                 </button>
               )}
 
-              {/* Status INVOICED -> Pay Invoice (using invoice details) */}
-              {selectedOrder.status === 'INVOICED' && selectedOrder.invoice_id && (
-                <button type="button" className="btn btn-primary" onClick={() => handlePayInvoice(selectedOrder.invoice_id)}>
-                  <DollarSign size={14} style={{ marginRight: '4px', inlineSize: 'auto' }} /> Post Payment
-                </button>
+              {selectedOrder.status === 'PAID' && (
+                <span style={{ color: '#0b8f08', fontWeight: '600', fontSize: '14px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <CheckCircle size={16} /> Paid & Closed
+                </span>
               )}
             </div>
           </div>
