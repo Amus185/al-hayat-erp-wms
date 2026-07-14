@@ -58,4 +58,23 @@ products.delete('/categories/:id', requirePermissions(['manage_inventory']), asy
   return c.json({ success: true });
 });
 
+products.get('/:id', async (c) => {
+  const id = c.req.param('id');
+  const product = await c.env.DB.prepare(`
+    SELECT p.*, c.name as category_name, b.name as brand_name
+    FROM products p
+    LEFT JOIN categories c ON p.category_id = c.id
+    LEFT JOIN brands b ON p.brand_id = b.id
+    WHERE p.id = ?
+  `).bind(id).first();
+  if (!product) return c.json({ message: 'Product not found' }, 404);
+  return c.json(product);
+});
+
+products.delete('/:id', requirePermissions(['manage_inventory']), async (c) => {
+  const id = c.req.param('id');
+  await c.env.DB.prepare('DELETE FROM products WHERE id = ?').bind(id).run();
+  return c.json({ success: true });
+});
+
 export default products;
