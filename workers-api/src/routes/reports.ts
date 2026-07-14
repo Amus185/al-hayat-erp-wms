@@ -60,15 +60,15 @@ reports.get('/branches', async (c) => {
 });
 
 reports.get('/profit', async (c) => {
-  const { results } = await c.env.DB.prepare(`
+  const result = await c.env.DB.prepare(`
     SELECT 
-      SUM(i.total_amount) as total_revenue,
-      SUM(il.quantity * p.cost_price) as total_cost
+      COALESCE(SUM(i.total_amount), 0) as total_revenue,
+      COALESCE(SUM(il.quantity * p.cost_price), 0) as total_cost
     FROM invoices i
-    JOIN invoice_lines il ON il.invoice_id = i.id
-    JOIN products p ON p.id = il.product_id
-  `).all();
-  return c.json(results[0]);
+    LEFT JOIN invoice_lines il ON il.invoice_id = i.id
+    LEFT JOIN products p ON p.id = il.product_id
+  `).first();
+  return c.json(result ?? { total_revenue: 0, total_cost: 0 });
 });
 
 reports.get('/sales', async (c) => {
