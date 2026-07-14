@@ -8,7 +8,9 @@ reports.use('/*', authMiddleware, requirePermissions(['view_reports']));
 
 reports.get('/inventory-value', async (c) => {
   const { results } = await c.env.DB.prepare(`
-    SELECT SUM(s.quantity_on_hand * p.cost_price) as inventory_value
+    SELECT 
+      COALESCE(SUM(s.quantity_on_hand * p.cost_price), 0) as inventory_value,
+      COALESCE(SUM(s.quantity_on_hand), 0) as units_on_hand
     FROM inventory_stock s
     JOIN products p ON p.id = s.product_id
   `).all();
@@ -34,11 +36,12 @@ reports.get('/low-stock', async (c) => {
 reports.get('/sales-summary', async (c) => {
   const { results } = await c.env.DB.prepare(`
     SELECT 
-      DATE(created_at) as date,
-      COUNT(id) as total_orders,
-      (SELECT SUM(total_amount) FROM invoices WHERE sales_order_id = sales_orders.id) as revenue
-    FROM sales_orders
-    GROUP BY DATE(created_at)
+      DATE(so.created_at) as date,
+      COUNT(DISTINCT so.id) as total_orders,
+      COALESCE(SUM(i.total_amount), 0) as revenue
+    FROM sales_orders so
+    LEFT JOIN invoices i ON i.sales_order_id = so.id
+    GROUP BY DATE(so.created_at)
     ORDER BY date DESC
     LIMIT 30
   `).all();
@@ -47,13 +50,14 @@ reports.get('/sales-summary', async (c) => {
 
 reports.get('/branches', async (c) => {
   const { results } = await c.env.DB.prepare(`
-    SELECT b.name as branch_name,
-           COUNT(so.id) as total_orders,
-           SUM(i.total_amount) as revenue
+    SELECT b.code as code, 
+           b.name as name,
+           COUNT(DISTINCT so.id) as orders,
+           COALESCE(SUM(i.total_amount), 0) as revenue
     FROM branches b
     LEFT JOIN sales_orders so ON so.branch_id = b.id
     LEFT JOIN invoices i ON i.sales_order_id = so.id
-    GROUP BY b.id, b.name
+    GROUP BY b.id, b.code, b.name
     ORDER BY revenue DESC
   `).all();
   return c.json(results);
@@ -62,25 +66,30 @@ reports.get('/branches', async (c) => {
 reports.get('/profit', async (c) => {
   const result = await c.env.DB.prepare(`
     SELECT 
-      COALESCE(SUM(i.total_amount), 0) as total_revenue,
-      COALESCE(SUM(il.quantity * p.cost_price), 0) as total_cost,
-      COALESCE(SUM(i.total_amount), 0) - COALESCE(SUM(il.quantity * p.cost_price), 0) as gross_profit
-    FROM invoices i
-    LEFT JOIN invoice_lines il ON il.invoice_id = i.id
-    LEFT JOIN products p ON p.id = il.product_id
+      (SELECT COALESCE(SUM(total_amount), 0) FROM invoices) as total_revenue,
+      (SELECT COALESCE(SUM(il.quantity * p.cost_price), 0) FROM invoice_lines il JOIN products p ON p.id = il.product_id) as total_cost
   `).first();
-  return c.json(result ?? { total_revenue: 0, total_cost: 0, gross_profit: 0 });
+  
+  const revenue = (result?.total_revenue as number) || 0;
+  const cost = (result?.total_cost as number) || 0;
+  
+  return c.json({
+    total_revenue: revenue,
+    total_cost: cost,
+    gross_profit: revenue - cost
+  });
 });
 
 reports.get('/sales', async (c) => {
   const { results } = await c.env.DB.prepare(`
     SELECT 
-      DATE(created_at) as day,
-      COUNT(id) as invoices,
-      SUM(total_amount) as revenue
-    FROM sales_orders
-    WHERE created_at >= DATE('now', '-30 days')
-    GROUP BY DATE(created_at)
+      DATE(so.created_at) as day,
+      COUNT(DISTINCT so.id) as invoices,
+      COALESCE(SUM(i.total_amount), 0) as revenue
+    FROM sales_orders so
+    LEFT JOIN invoices i ON i.sales_order_id = so.id
+    WHERE so.created_at >= DATE('now', '-30 days')
+    GROUP BY DATE(so.created_at)
     ORDER BY day ASC
   `).all();
   return c.json(results);
