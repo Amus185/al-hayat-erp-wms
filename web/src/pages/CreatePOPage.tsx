@@ -316,7 +316,8 @@ export function CreatePOPage() {
                             step="0.01"
                             onChange={(e) => updateLine(l.productId, 'unitCost', Number(e.target.value))}
                             className="form-input"
-                            style={{ width: '100px', minHeight: '32px', textAlign: 'center' }}
+                            style={{ width: '100px', minHeight: '32px', textAlign: 'center', backgroundColor: '#f0f0f0' }}
+                            disabled
                           />
                         </td>
                         <td>
