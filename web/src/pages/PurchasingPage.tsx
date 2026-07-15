@@ -194,8 +194,7 @@ export function PurchasingPage() {
     setPoDetailsLoading(true);
     try {
       // Fetch matching lines for this PO
-      const res = await apiGet<any>(`/purchasing/orders`);
-      const details = res?.find((r: any) => r.id === po.id);
+      const details = await apiGet<any>(`/purchasing/orders/${po.id}`);
       
       // If lines are returned, setup default receiving quantities
       if (details) {

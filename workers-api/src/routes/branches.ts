@@ -13,11 +13,20 @@ branches.get('/', async (c) => {
 
 branches.post('/', requirePermissions(['manage_inventory']), async (c) => {
   const body = await c.req.json();
+
+  if (!body.code || !body.code.trim()) return c.json({ message: 'Branch code is required.' }, 400);
+  if (!body.name || !body.name.trim()) return c.json({ message: 'Branch name is required.' }, 400);
+  if (!body.city || !body.city.trim()) return c.json({ message: 'City is required.' }, 400);
+
+  // Check code uniqueness
+  const existing = await c.env.DB.prepare('SELECT id FROM branches WHERE code = ?').bind(body.code.trim()).first();
+  if (existing) return c.json({ message: 'A branch with this code already exists.' }, 409);
+
   const id = uuidv4();
   await c.env.DB.prepare(`
     INSERT INTO branches (id, code, name, city, address, phone)
     VALUES (?, ?, ?, ?, ?, ?)
-  `).bind(id, body.code, body.name, body.city, body.address || null, body.phone || null).run();
+  `).bind(id, body.code.trim(), body.name.trim(), body.city.trim(), body.address || null, body.phone || null).run();
   const { results } = await c.env.DB.prepare('SELECT * FROM branches WHERE id = ?').bind(id).all();
   return c.json(results[0], 201);
 });

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ShoppingCart, Plus, UserPlus, Eye, CheckCircle, DollarSign, Zap } from 'lucide-react';
+import { ShoppingCart, Plus, UserPlus, Eye, CheckCircle, DollarSign, Zap, Printer } from 'lucide-react';
 import { apiGet, apiPost } from '../api/client';
 import { DataTable, type Column } from '../components/DataTable';
 import { Tabs } from '../components/Tabs';
@@ -129,6 +129,59 @@ export function SalesPage() {
       addToast('error', err?.message || 'Failed to post payment');
     } finally {
       setOrderDetailsLoading(false);
+    }
+  };
+
+  const handlePrintInvoice = async (orderId: string) => {
+    try {
+      const orderData = await apiGet<any>(`/sales/orders/${orderId}`);
+      if (!orderData.invoice_id) {
+        addToast('error', 'No invoice found for this order. Invoice the order first.');
+        return;
+      }
+      const data = await apiGet<any>(`/sales/invoices/${orderData.invoice_id}/print`);
+      const w = window.open('', '_blank');
+      if (!w) { addToast('error', 'Pop-up blocked. Please allow pop-ups.'); return; }
+      w.document.write(`<!DOCTYPE html><html><head><title>Invoice ${data.invoice.invoice_number}</title>
+        <style>
+          * { margin: 0; padding: 0; box-sizing: border-box; }
+          body { font-family: 'Segoe UI', sans-serif; padding: 40px; color: #1a1a1a; max-width: 800px; margin: 0 auto; }
+          .header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 3px solid #066006; padding-bottom: 20px; margin-bottom: 24px; }
+          .header h1 { color: #066006; font-size: 28px; }
+          .header .inv-num { font-size: 14px; color: #555; }
+          .meta { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 24px; }
+          .meta-box { padding: 16px; background: #f7f9f7; border-radius: 8px; }
+          .meta-box h3 { font-size: 11px; text-transform: uppercase; color: #888; margin-bottom: 8px; letter-spacing: 1px; }
+          .meta-box p { font-size: 14px; margin: 2px 0; }
+          table { width: 100%; border-collapse: collapse; margin-bottom: 24px; }
+          th { background: #066006; color: white; padding: 10px 14px; text-align: left; font-size: 12px; text-transform: uppercase; }
+          td { padding: 10px 14px; border-bottom: 1px solid #e5e5e5; font-size: 13px; }
+          tr:nth-child(even) { background: #fafafa; }
+          .total-row { display: flex; justify-content: flex-end; font-size: 18px; font-weight: 700; padding: 12px 0; border-top: 2px solid #066006; }
+          .total-row span { color: #066006; }
+          .footer { text-align: center; padding: 20px 0; font-size: 11px; color: #888; border-top: 1px solid #eee; margin-top: 40px; }
+          .status { display: inline-block; padding: 4px 12px; border-radius: 4px; font-size: 12px; font-weight: 700; }
+          .status.paid { background: #d4edda; color: #155724; }
+          .status.unpaid { background: #fff3cd; color: #856404; }
+          @media print { body { padding: 20px; } button { display: none !important; } }
+        </style></head><body>
+        <button onclick="window.print()" style="position:fixed;top:20px;right:20px;padding:10px 20px;background:#066006;color:white;border:none;border-radius:6px;cursor:pointer;font-weight:600;">Print</button>
+        <div class="header">
+          <div><h1>INVOICE</h1><p class="inv-num">${data.invoice.invoice_number}</p></div>
+          <div style="text-align:right"><p style="font-weight:700">${data.branch.name}</p><p style="font-size:13px;color:#555">${data.branch.city || ''}${data.branch.address ? ', ' + data.branch.address : ''}</p>${data.branch.phone ? '<p style="font-size:12px;color:#555">Tel: ' + data.branch.phone + '</p>' : ''}</div>
+        </div>
+        <div class="meta">
+          <div class="meta-box"><h3>Bill To</h3><p style="font-weight:700">${data.customer.name}</p>${data.customer.phone ? '<p>' + data.customer.phone + '</p>' : ''}${data.customer.email ? '<p>' + data.customer.email + '</p>' : ''}${data.customer.address ? '<p>' + data.customer.address + '</p>' : ''}</div>
+          <div class="meta-box"><h3>Invoice Details</h3><p><strong>Order:</strong> ${data.invoice.order_number}</p><p><strong>Issued:</strong> ${data.invoice.issued_at ? new Date(data.invoice.issued_at).toLocaleDateString() : 'N/A'}</p><p><strong>Status:</strong> <span class="status ${data.invoice.status === 'PAID' ? 'paid' : 'unpaid'}">${data.invoice.status}</span></p>${data.invoice.paid_at ? '<p><strong>Paid:</strong> ' + new Date(data.invoice.paid_at).toLocaleDateString() + '</p>' : ''}</div>
+        </div>
+        <table><thead><tr><th>Product</th><th>SKU</th><th>Qty</th><th>Unit Price</th><th style="text-align:right">Subtotal</th></tr></thead>
+        <tbody>${data.lines.map((l: any) => '<tr><td>' + l.product_name + '</td><td>' + l.product_sku + '</td><td>' + l.quantity + '</td><td>$' + Number(l.unit_price).toFixed(2) + '</td><td style="text-align:right;font-weight:600">$' + Number(l.subtotal).toFixed(2) + '</td></tr>').join('')}</tbody></table>
+        <div class="total-row">Total: <span style="margin-left:12px">$${Number(data.invoice.total_amount).toFixed(2)}</span></div>
+        <div class="footer"><p>Thank you for your business!</p><p>Generated on ${new Date().toLocaleString()}</p></div>
+      </body></html>`);
+      w.document.close();
+    } catch (err: any) {
+      addToast('error', err?.message || 'Failed to load invoice for printing');
     }
   };
 
@@ -344,9 +397,22 @@ export function SalesPage() {
               )}
 
               {selectedOrder.status === 'PAID' && (
-                <span style={{ color: '#0b8f08', fontWeight: '600', fontSize: '14px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <CheckCircle size={16} /> Paid & Closed
-                </span>
+                <>
+                  <button type="button" className="btn btn-secondary" onClick={() => handlePrintInvoice(selectedOrder.id)}
+                    style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    <Printer size={14} /> Print Invoice
+                  </button>
+                  <span style={{ color: '#0b8f08', fontWeight: '600', fontSize: '14px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <CheckCircle size={16} /> Paid & Closed
+                  </span>
+                </>
+              )}
+
+              {selectedOrder.status === 'INVOICED' && (
+                <button type="button" className="btn btn-secondary" onClick={() => handlePrintInvoice(selectedOrder.id)}
+                  style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  <Printer size={14} /> Print Invoice
+                </button>
               )}
             </div>
           </div>

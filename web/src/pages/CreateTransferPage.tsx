@@ -41,6 +41,9 @@ export function CreateTransferPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<ProductLine[]>([]);
 
+  // Transfer Details
+  const [transferDate, setTransferDate] = useState('');
+
   // Selected lines
   const [lines, setLines] = useState<{ productId: string; sku: string; name: string; quantity: number }[]>([]);
 
@@ -133,6 +136,7 @@ export function CreateTransferPage() {
       destinationOwnerType: destType,
       destinationWarehouseId: destType === 'WAREHOUSE' ? destId : undefined,
       destinationBranchId: destType === 'BRANCH' ? destId : undefined,
+      transferDate: transferDate || undefined,
       lines: lines.map((l) => ({
         productId: l.productId,
         quantityRequested: l.quantity,
@@ -242,6 +246,23 @@ export function CreateTransferPage() {
                 </select>
               </FormField>
             </div>
+          </div>
+        </div>
+
+        {/* Schedule Panel */}
+        <div className="panel" style={{ padding: '20px' }}>
+          <h3 style={{ margin: '0 0 14px', color: '#066006' }}>Schedule</h3>
+          <div style={{ maxWidth: '300px' }}>
+            <InputField
+              label="Transfer Date"
+              id="transferDate"
+              type="date"
+              value={transferDate}
+              onChange={setTransferDate}
+            />
+            <p style={{ margin: '6px 0 0', fontSize: '12px', color: '#667066' }}>
+              Transfers scheduled for a future date will remain pending until the date arrives.
+            </p>
           </div>
         </div>
 

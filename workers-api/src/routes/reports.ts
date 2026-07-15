@@ -66,13 +66,13 @@ reports.get('/branches', async (c) => {
 reports.get('/profit', async (c) => {
   const result = await c.env.DB.prepare(`
     SELECT 
-      (SELECT COALESCE(SUM(total_amount), 0) FROM invoices) as total_revenue,
-      (SELECT COALESCE(SUM(il.quantity * p.cost_price), 0) FROM invoice_lines il JOIN products p ON p.id = il.product_id) as total_cost
+      (SELECT COALESCE(SUM(total_amount), 0) FROM invoices WHERE status = 'PAID') as total_revenue,
+      (SELECT COALESCE(SUM(il.quantity * p.cost_price), 0) FROM invoice_lines il JOIN products p ON p.id = il.product_id JOIN invoices i ON i.id = il.invoice_id WHERE i.status = 'PAID') as total_cost
   `).first();
-  
+
   const revenue = (result?.total_revenue as number) || 0;
   const cost = (result?.total_cost as number) || 0;
-  
+
   return c.json({
     total_revenue: revenue,
     total_cost: cost,

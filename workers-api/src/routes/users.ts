@@ -36,13 +36,23 @@ users.get('/:id/roles', async (c) => {
 // CREATE user
 users.post('/', async (c) => {
   const body = await c.req.json();
+
+  // Input validation
+  if (!body.email || !body.email.trim()) return c.json({ message: 'Email is required.' }, 400);
+  if (!body.password || body.password.length < 6) return c.json({ message: 'Password must be at least 6 characters.' }, 400);
+  if (!body.fullName || !body.fullName.trim()) return c.json({ message: 'Full name is required.' }, 400);
+
+  // Email uniqueness check
+  const existing = await c.env.DB.prepare('SELECT id FROM users WHERE email = ?').bind(body.email.trim()).first();
+  if (existing) return c.json({ message: 'A user with this email already exists.' }, 409);
+
   const id = uuidv4();
   const passwordHash = bcrypt.hashSync(body.password, 12);
   
   await c.env.DB.prepare(`
     INSERT INTO users (id, email, password_hash, full_name, phone, branch_id, warehouse_id)
     VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).bind(id, body.email, passwordHash, body.fullName, body.phone || null, body.branchId || null, body.warehouseId || null).run();
+  `).bind(id, body.email.trim(), passwordHash, body.fullName.trim(), body.phone || null, body.branchId || null, body.warehouseId || null).run();
 
   if (body.roleIds && body.roleIds.length > 0) {
     const stmts = body.roleIds.map((rId: string) => 
@@ -108,12 +118,28 @@ users.post('/:id/change-password', async (c) => {
   return c.json({ success: true });
 });
 
-// DELETE user
+// DELETE user (safe — checks for active references)
 users.delete('/:id', async (c) => {
   const id = c.req.param('id');
-  await c.env.DB.prepare('DELETE FROM user_roles WHERE user_id = ?').bind(id).run();
-  await c.env.DB.prepare('DELETE FROM refresh_tokens WHERE user_id = ?').bind(id).run();
-  await c.env.DB.prepare('DELETE FROM users WHERE id = ?').bind(id).run();
+  const user = await c.env.DB.prepare('SELECT id FROM users WHERE id = ?').bind(id).first();
+  if (!user) return c.json({ message: 'User not found.' }, 404);
+
+  // Check for active orders/transfers created by this user
+  const activeOrders = await c.env.DB.prepare(
+    "SELECT id FROM sales_orders WHERE created_by = ? AND status NOT IN ('PAID', 'CANCELLED') LIMIT 1"
+  ).bind(id).first();
+  if (activeOrders) return c.json({ message: 'Cannot delete: user has active sales orders. Deactivate instead.' }, 400);
+
+  const activeTransfers = await c.env.DB.prepare(
+    "SELECT id FROM transfers WHERE requested_by = ? AND status NOT IN ('COMPLETED', 'CANCELLED') LIMIT 1"
+  ).bind(id).first();
+  if (activeTransfers) return c.json({ message: 'Cannot delete: user has active transfers. Deactivate instead.' }, 400);
+
+  await c.env.DB.batch([
+    c.env.DB.prepare('DELETE FROM user_roles WHERE user_id = ?').bind(id),
+    c.env.DB.prepare('DELETE FROM refresh_tokens WHERE user_id = ?').bind(id),
+    c.env.DB.prepare('DELETE FROM users WHERE id = ?').bind(id),
+  ]);
   return c.json({ success: true });
 });
 

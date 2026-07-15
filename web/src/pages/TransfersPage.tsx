@@ -40,6 +40,7 @@ export function TransfersPage() {
   const [branches, setBranches] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('ALL');
+  const [searchQuery, setSearchQuery] = useState('');
 
   // Detail Modal
   const [selectedTransfer, setSelectedTransfer] = useState<Transfer | null>(null);
@@ -119,6 +120,14 @@ export function TransfersPage() {
   };
 
   const filteredTransfers = transfers.filter((t) => {
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase();
+      const src = getOwnerName(t.source_owner_type, t.source_warehouse_id, t.source_branch_id).toLowerCase();
+      const dst = getOwnerName(t.destination_owner_type, t.destination_warehouse_id, t.destination_branch_id).toLowerCase();
+      if (!t.transfer_number.toLowerCase().includes(q) && !src.includes(q) && !dst.includes(q)) {
+        return false;
+      }
+    }
     if (activeTab === 'ALL') return true;
     if (activeTab === 'PENDING') return t.status === 'PENDING_APPROVAL';
     return t.status === activeTab;
@@ -178,8 +187,19 @@ export function TransfersPage() {
         </button>
       </section>
 
-      <section style={{ marginBottom: '14px' }}>
-        <Tabs tabs={tabItems} activeTab={activeTab} onTabChange={setActiveTab} />
+      <section style={{ marginBottom: '14px', display: 'flex', gap: '14px', alignItems: 'center' }}>
+        <div style={{ flex: 1, maxWidth: '400px' }}>
+          <input
+            type="text"
+            className="form-input"
+            placeholder="Search transfers by ID, origin, or destination..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+          />
+        </div>
+        <div style={{ flex: 1 }}>
+          <Tabs tabs={tabItems} activeTab={activeTab} onTabChange={setActiveTab} />
+        </div>
       </section>
 
       <section className="panel">
@@ -278,31 +298,7 @@ export function TransfersPage() {
                   onClick={() => handleApprove(selectedTransfer.id)}
                   disabled={actionLoading}
                 >
-                  {actionLoading ? 'Approving...' : 'Approve Transfer'}
-                </button>
-              )}
-
-              {/* Status APPROVED -> Dispatch */}
-              {selectedTransfer.status === 'APPROVED' && hasPermission('transfers.dispatch') && (
-                <button
-                  type="button"
-                  className="btn btn-primary"
-                  onClick={() => handleDispatch(selectedTransfer.id)}
-                  disabled={actionLoading}
-                >
-                  {actionLoading ? 'Dispatching...' : 'Dispatch Shipment'}
-                </button>
-              )}
-
-              {/* Status DISPATCHED -> Receive */}
-              {selectedTransfer.status === 'DISPATCHED' && hasPermission('transfers.receive') && (
-                <button
-                  type="button"
-                  className="btn btn-primary"
-                  onClick={() => handleReceive(selectedTransfer.id)}
-                  disabled={actionLoading}
-                >
-                  {actionLoading ? 'Receiving...' : 'Confirm Receipt'}
+                  {actionLoading ? 'Processing...' : 'Approve & Execute Transfer'}
                 </button>
               )}
             </div>

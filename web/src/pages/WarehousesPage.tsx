@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Boxes, MapPin, Plus, List } from 'lucide-react';
+import { Boxes, MapPin, Plus, List, Package, PackagePlus } from 'lucide-react';
 import { apiGet, apiPost } from '../api/client';
 import { Modal } from '../components/Modal';
 import { InputField, FormField } from '../components/FormField';
@@ -50,6 +50,19 @@ export function WarehousesPage() {
     barcode: '',
   });
 
+  // Search
+  const [searchQuery, setSearchQuery] = useState('');
+
+  // Inventory View
+  const [isInventoryOpen, setIsInventoryOpen] = useState(false);
+  const [inventory, setInventory] = useState<any[]>([]);
+  const [inventoryLoading, setInventoryLoading] = useState(false);
+
+  // Add Product Quantity
+  const [isAddStockOpen, setIsAddStockOpen] = useState(false);
+  const [products, setProducts] = useState<any[]>([]);
+  const [addStockForm, setAddStockForm] = useState({ productId: '', quantity: 1, locationId: '', notes: '' });
+
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [newWh, setNewWh] = useState({ code: '', name: '', city: '', address: '' });
 
@@ -67,6 +80,7 @@ export function WarehousesPage() {
 
   useEffect(() => {
     loadWarehouses();
+    apiGet<any[]>('/products').then(res => setProducts(res || [])).catch(console.error);
   }, []);
 
   const handleCreate = async (e: React.FormEvent) => {
@@ -95,6 +109,23 @@ export function WarehousesPage() {
     }
   };
 
+  const handleViewInventory = async (wh: Warehouse) => {
+    setSelectedWarehouse(wh);
+    setIsInventoryOpen(true);
+    setInventoryLoading(true);
+    try {
+      const data = await apiGet<any[]>(`/warehouses/${wh.id}/inventory`);
+      setInventory(data || []);
+      // Preload locations for the adjust stock modal if needed
+      const locData = await apiGet<WarehouseLocation[]>(`/warehouses/${wh.id}/locations`);
+      setLocations(locData || []);
+    } catch (err: any) {
+      addToast('error', err?.message || 'Failed to load inventory');
+    } finally {
+      setInventoryLoading(false);
+    }
+  };
+
   const handleAddLocationSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedWarehouse) return;
@@ -119,6 +150,28 @@ export function WarehousesPage() {
     }
   };
 
+  const handleAddStockSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedWarehouse) return;
+    try {
+      await apiPost('/inventory/adjust', {
+         productId: addStockForm.productId,
+         direction: 'INCREASE',
+         quantity: addStockForm.quantity,
+         ownerType: 'WAREHOUSE',
+         warehouseId: selectedWarehouse.id,
+         warehouseLocationId: addStockForm.locationId || undefined,
+         notes: addStockForm.notes || 'Manual stock addition'
+      });
+      addToast('success', 'Product quantity added successfully');
+      setIsAddStockOpen(false);
+      setAddStockForm({ productId: '', quantity: 1, locationId: '', notes: '' });
+      handleViewInventory(selectedWarehouse);
+    } catch (err: any) {
+      addToast('error', err?.message || 'Failed to add stock');
+    }
+  };
+
   if (loading) {
     return <PageSkeleton />;
   }
@@ -130,6 +183,17 @@ export function WarehousesPage() {
     { key: 'bin', label: 'Bin' },
     { key: 'barcode', label: 'Location Barcode', render: (row) => row.barcode || 'N/A' },
   ];
+
+  const inventoryColumns: Column<any>[] = [
+    { key: 'sku', label: 'Product ID' },
+    { key: 'name', label: 'Product Name' },
+    { key: 'quantity_on_hand', label: 'Available Qty', render: (row) => <strong style={{color: '#066006'}}>{row.quantity_on_hand}</strong> },
+  ];
+
+  const filteredWarehouses = warehouses.filter(w => 
+    w.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
+    (w.city && w.city.toLowerCase().includes(searchQuery.toLowerCase()))
+  );
 
   return (
     <div className="module-page">
@@ -146,6 +210,16 @@ export function WarehousesPage() {
             + New Warehouse
           </button>
         </div>
+      </section>
+
+      <section style={{ marginBottom: '14px', maxWidth: '400px' }}>
+        <input
+          type="text"
+          className="form-input"
+          placeholder="Search warehouses by name or city..."
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+        />
       </section>
 
       <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title="Create Warehouse">
@@ -175,7 +249,7 @@ export function WarehousesPage() {
         gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))',
         gap: '16px'
       }}>
-        {warehouses.map((wh) => (
+        {filteredWarehouses.map((wh) => (
           <div key={wh.id} className="panel" style={{
             display: 'flex',
             flexDirection: 'column',
@@ -207,14 +281,24 @@ export function WarehousesPage() {
               <span style={{ fontSize: '13px', color: '#394339' }}>
                 Bin Locations: <strong>{wh.location_count ?? 0}</strong>
               </span>
-              <button
-                type="button"
-                className="btn btn-secondary btn-sm"
-                onClick={() => handleViewLocations(wh)}
-                style={{ display: 'flex', alignItems: 'center', gap: '4px' }}
-              >
-                <List size={14} /> View Locations
-              </button>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => handleViewLocations(wh)}
+                  style={{ display: 'flex', alignItems: 'center', gap: '4px' }}
+                >
+                  <List size={14} /> Locations
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  onClick={() => handleViewInventory(wh)}
+                  style={{ display: 'flex', alignItems: 'center', gap: '4px' }}
+                >
+                  <Package size={14} /> Inventory
+                </button>
+              </div>
             </div>
           </div>
         ))}
@@ -321,6 +405,105 @@ export function WarehousesPage() {
             </button>
             <button type="submit" className="btn btn-primary">
               Create Location
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* View Inventory Modal */}
+      <Modal
+        isOpen={isInventoryOpen}
+        onClose={() => setIsInventoryOpen(false)}
+        title={selectedWarehouse ? `Inventory in ${selectedWarehouse.name}` : 'Inventory'}
+        width="lg"
+      >
+        {selectedWarehouse && (
+          <div>
+            <div style={{
+              display: 'flex',
+              justifyContent: 'flex-end',
+              marginBottom: '16px',
+            }}>
+              {hasPermission('inventory.adjust') && (
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  onClick={() => setIsAddStockOpen(true)}
+                  style={{ display: 'flex', alignItems: 'center', gap: '4px' }}
+                >
+                  <PackagePlus size={14} /> Add Product Quantity
+                </button>
+              )}
+            </div>
+
+            <DataTable
+              columns={inventoryColumns}
+              data={inventory}
+              keyExtractor={(row) => row.id}
+              loading={inventoryLoading}
+              emptyMessage="No products found in this warehouse"
+            />
+          </div>
+        )}
+      </Modal>
+
+      {/* Add Product Quantity Modal */}
+      <Modal
+        isOpen={isAddStockOpen}
+        onClose={() => setIsAddStockOpen(false)}
+        title={`Add Product Quantity to ${selectedWarehouse?.name}`}
+        width="sm"
+      >
+        <form onSubmit={handleAddStockSubmit}>
+          <div style={{ display: 'grid', gap: '14px' }}>
+            <FormField label="Product">
+              <select
+                className="form-select"
+                value={addStockForm.productId}
+                onChange={(e) => setAddStockForm(prev => ({ ...prev, productId: e.target.value }))}
+                required
+              >
+                <option value="">Select a product...</option>
+                {products.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name} ({p.sku})
+                  </option>
+                ))}
+              </select>
+            </FormField>
+
+            <InputField
+              label="Quantity to Add"
+              id="addQty"
+              type="number"
+              min={1}
+              value={addStockForm.quantity}
+              onChange={(val) => setAddStockForm(prev => ({ ...prev, quantity: Number(val) }))}
+              required
+            />
+
+            <FormField label="Bin Location (Optional)">
+              <select
+                className="form-select"
+                value={addStockForm.locationId}
+                onChange={(e) => setAddStockForm(prev => ({ ...prev, locationId: e.target.value }))}
+              >
+                <option value="">Select Location...</option>
+                {locations.map((loc) => (
+                  <option key={loc.id} value={loc.id}>
+                    {loc.aisle}-{loc.rack}-{loc.shelf}-{loc.bin}
+                  </option>
+                ))}
+              </select>
+            </FormField>
+          </div>
+          
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '20px' }}>
+            <button type="button" className="btn btn-secondary" onClick={() => setIsAddStockOpen(false)}>
+              Cancel
+            </button>
+            <button type="submit" className="btn btn-primary">
+              Add Quantity
             </button>
           </div>
         </form>

@@ -8,7 +8,7 @@ inventory.use('/*', authMiddleware);
 
 inventory.get('/stock', async (c) => {
   const { results } = await c.env.DB.prepare(`
-    SELECT p.name, p.sku, p.barcode, s.owner_type, s.quantity_on_hand, s.quantity_reserved,
+    SELECT s.id, p.name, p.sku, p.barcode, s.product_id, s.owner_type, s.quantity_on_hand, s.quantity_reserved,
            w.name AS warehouse, b.name AS branch, l.aisle, l.rack, l.shelf, l.bin
     FROM inventory_stock s
     JOIN products p ON p.id = s.product_id
@@ -24,14 +24,16 @@ inventory.get('/stock', async (c) => {
 inventory.get('/transactions', async (c) => {
   const { results } = await c.env.DB.prepare(`
     SELECT t.*, p.name, p.sku, p.barcode,
-           w.name AS destination_warehouse,
-           b.name AS destination_branch,
+           sw.name AS source_warehouse, sb.name AS source_branch,
+           dw.name AS destination_warehouse, db.name AS destination_branch,
            l.aisle, l.rack, l.shelf, l.bin,
            u.full_name AS user_name
     FROM inventory_transactions t
     JOIN products p ON p.id = t.product_id
-    LEFT JOIN warehouses w ON w.id = t.destination_warehouse_id
-    LEFT JOIN branches b ON b.id = t.destination_branch_id
+    LEFT JOIN warehouses sw ON sw.id = t.source_warehouse_id
+    LEFT JOIN branches sb ON sb.id = t.source_branch_id
+    LEFT JOIN warehouses dw ON dw.id = t.destination_warehouse_id
+    LEFT JOIN branches db ON db.id = t.destination_branch_id
     LEFT JOIN warehouse_locations l ON l.id = t.destination_location_id
     LEFT JOIN users u ON u.id = t.created_by
     ORDER BY t.created_at DESC
@@ -43,13 +45,36 @@ inventory.get('/transactions', async (c) => {
 inventory.post('/adjust', requirePermissions(['manage_inventory']), async (c) => {
   const body = await c.req.json();
   const userId = c.get('jwtPayload').sub;
+
+  // Input validation
+  if (!body.productId) return c.json({ message: 'Product is required.' }, 400);
+  if (!body.quantity || !Number.isInteger(body.quantity) || body.quantity <= 0) {
+    return c.json({ message: 'Quantity must be a positive integer.' }, 400);
+  }
+  if (!body.direction || !['INCREASE', 'DECREASE'].includes(body.direction)) {
+    return c.json({ message: 'Direction must be INCREASE or DECREASE.' }, 400);
+  }
+
+  const product = await c.env.DB.prepare('SELECT id, name FROM products WHERE id = ?').bind(body.productId).first();
+  if (!product) return c.json({ message: 'Product does not exist.' }, 400);
+
+  const ownerType = body.warehouseId ? 'WAREHOUSE' : 'BRANCH';
+  if (ownerType === 'WAREHOUSE' && !body.warehouseId) return c.json({ message: 'Warehouse is required.' }, 400);
+  if (ownerType === 'BRANCH' && !body.branchId) return c.json({ message: 'Branch is required.' }, 400);
+
+  // Verify location exists
+  if (body.warehouseId) {
+    const wh = await c.env.DB.prepare('SELECT id FROM warehouses WHERE id = ?').bind(body.warehouseId).first();
+    if (!wh) return c.json({ message: 'Warehouse does not exist.' }, 400);
+  }
+  if (body.branchId) {
+    const br = await c.env.DB.prepare('SELECT id FROM branches WHERE id = ?').bind(body.branchId).first();
+    if (!br) return c.json({ message: 'Branch does not exist.' }, 400);
+  }
+
   const delta = body.direction === 'INCREASE' ? body.quantity : -body.quantity;
   const transactionType = delta > 0 ? 'ADJUSTMENT_POSITIVE' : 'ADJUSTMENT_NEGATIVE';
-  const ownerType = body.warehouseId ? 'WAREHOUSE' : 'BRANCH';
 
-  // SQLite D1 doesn't support traditional transactions across multiple query calls easily without batching,
-  // but we can execute them sequentially. For real robustness, we would use D1 batch api.
-  
   const existingStock = await c.env.DB.prepare(`
     SELECT id, quantity_on_hand FROM inventory_stock
     WHERE product_id = ? AND owner_type = ? 
@@ -63,6 +88,16 @@ inventory.post('/adjust', requirePermissions(['manage_inventory']), async (c) =>
     body.warehouseLocationId || null, body.warehouseLocationId || null
   ).first();
 
+  // Prevent negative inventory on DECREASE
+  if (body.direction === 'DECREASE') {
+    const currentQty = (existingStock?.quantity_on_hand as number) || 0;
+    if (currentQty < body.quantity) {
+      return c.json({ 
+        message: `Insufficient stock. Current quantity: ${currentQty}, requested decrease: ${body.quantity}.` 
+      }, 400);
+    }
+  }
+
   const stmts = [];
 
   if (existingStock) {
@@ -71,6 +106,9 @@ inventory.post('/adjust', requirePermissions(['manage_inventory']), async (c) =>
       WHERE id = ?
     `).bind(delta, existingStock.id));
   } else {
+    if (delta < 0) {
+      return c.json({ message: 'Cannot decrease stock that does not exist.' }, 400);
+    }
     stmts.push(c.env.DB.prepare(`
       INSERT INTO inventory_stock (id, product_id, owner_type, warehouse_id, branch_id, warehouse_location_id, quantity_on_hand)
       VALUES (?, ?, ?, ?, ?, ?, ?)

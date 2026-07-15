@@ -4,8 +4,8 @@ import { authMiddleware } from '../middleware/auth';
 
 const files = new Hono<{ Bindings: Env; Variables: { jwtPayload: any } }>();
 
-// Auth required for uploads and listing
-files.use('/', authMiddleware);
+// Auth required for all file operations
+files.use('/*', authMiddleware);
 
 files.get('/', async (c) => {
   const { results } = await c.env.DB.prepare('SELECT * FROM files ORDER BY created_at DESC LIMIT 100').all();
