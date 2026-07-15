@@ -3,6 +3,7 @@ import { Users, UserPlus, Shield, Landmark, Warehouse, Pencil, Trash2, KeyRound 
 import { apiGet, apiPost, apiDelete } from '../api/client';
 import { DataTable, type Column } from '../components/DataTable';
 import { Modal } from '../components/Modal';
+import { ConfirmModal } from '../components/ConfirmModal';
 import { FormField, InputField } from '../components/FormField';
 import { StatusBadge } from '../components/StatusBadge';
 import { PageSkeleton } from '../components/LoadingSpinner';
@@ -60,6 +61,13 @@ export function UsersPage() {
     warehouseId: '',
     isActive: true,
     roleIds: [] as string[],
+  });
+
+  const [confirmState, setConfirmState] = useState<{ isOpen: boolean; title: string; message: string; onConfirm: () => void; }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    onConfirm: () => {},
   });
   const [editRolesLoading, setEditRolesLoading] = useState(false);
 
@@ -182,14 +190,20 @@ export function UsersPage() {
 
   // ── Delete ───────────────────────────────────────────────
   const handleDelete = async (user: UserRecord) => {
-    if (!window.confirm(`Delete user "${user.full_name}"? This cannot be undone.`)) return;
-    try {
-      await apiDelete(`/users/${user.id}`);
-      addToast('success', 'User deleted');
-      loadData();
-    } catch (err: any) {
-      addToast('error', err?.message || 'Failed to delete user');
-    }
+    setConfirmState({
+      isOpen: true,
+      title: 'Delete User',
+      message: `Delete user "${user.full_name}"? This cannot be undone.`,
+      onConfirm: async () => {
+        try {
+          await apiDelete(`/users/${user.id}`);
+          addToast('success', 'User deleted');
+          loadData();
+        } catch (err: any) {
+          addToast('error', err?.message || 'Failed to delete user');
+        }
+      }
+    });
   };
 
   // ── Change Password ──────────────────────────────────────
@@ -422,6 +436,15 @@ export function UsersPage() {
           </div>
         </form>
       </Modal>
+
+      <ConfirmModal
+        isOpen={confirmState.isOpen}
+        title={confirmState.title}
+        message={confirmState.message}
+        isDestructive={true}
+        onConfirm={confirmState.onConfirm}
+        onCancel={() => setConfirmState(prev => ({ ...prev, isOpen: false }))}
+      />
     </div>
   );
 }
