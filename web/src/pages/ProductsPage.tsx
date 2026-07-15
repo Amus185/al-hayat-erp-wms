@@ -5,6 +5,7 @@ import { apiGet, apiPost, apiDelete } from '../api/client';
 import { DataTable, type Column } from '../components/DataTable';
 import { SearchInput } from '../components/SearchInput';
 import { Modal } from '../components/Modal';
+import { ConfirmModal } from '../components/ConfirmModal';
 import { FormField, InputField } from '../components/FormField';
 import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -62,6 +63,13 @@ export function ProductsPage() {
     reorderLevel: 5,
   });
 
+  const [confirmState, setConfirmState] = useState<{ isOpen: boolean; title: string; message: string; onConfirm: () => void; }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    onConfirm: () => {},
+  });
+
   const fetchFilters = async () => {
     try {
       const [cats, brs] = await Promise.all([
@@ -105,14 +113,20 @@ export function ProductsPage() {
   };
 
   const handleDeleteCategory = async (id: string) => {
-    if (!window.confirm('Are you sure you want to delete this category?')) return;
-    try {
-      await apiDelete(`/products/categories/${id}`);
-      addToast('success', 'Category deleted successfully');
-      fetchFilters();
-    } catch (err: any) {
-      addToast('error', err?.message || 'Failed to delete category');
-    }
+    setConfirmState({
+      isOpen: true,
+      title: 'Delete Category',
+      message: 'Are you sure you want to delete this category?',
+      onConfirm: async () => {
+        try {
+          await apiDelete(`/products/categories/${id}`);
+          addToast('success', 'Category deleted successfully');
+          fetchFilters();
+        } catch (err: any) {
+          addToast('error', err?.message || 'Failed to delete category');
+        }
+      }
+    });
   };
 
   const handleCreateProduct = async (e: React.FormEvent) => {
@@ -161,14 +175,20 @@ export function ProductsPage() {
 
   const handleDelete = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!window.confirm('Are you sure you want to delete this product?')) return;
-    try {
-      await apiDelete(`/products/${id}`);
-      addToast('success', 'Product deleted successfully');
-      loadData();
-    } catch (err: any) {
-      addToast('error', err?.message || 'Failed to delete product');
-    }
+    setConfirmState({
+      isOpen: true,
+      title: 'Delete Product',
+      message: 'Are you sure you want to delete this product?',
+      onConfirm: async () => {
+        try {
+          await apiDelete(`/products/${id}`);
+          addToast('success', 'Product deleted successfully');
+          loadData();
+        } catch (err: any) {
+          addToast('error', err?.message || 'Failed to delete product');
+        }
+      }
+    });
   };
 
 
@@ -397,6 +417,15 @@ export function ProductsPage() {
           </div>
         </form>
       </Modal>
+
+      <ConfirmModal
+        isOpen={confirmState.isOpen}
+        title={confirmState.title}
+        message={confirmState.message}
+        isDestructive={true}
+        onConfirm={confirmState.onConfirm}
+        onCancel={() => setConfirmState(prev => ({ ...prev, isOpen: false }))}
+      />
     </div>
   );
 }

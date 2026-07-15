@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { Boxes, MapPin, Plus, List, Package, PackagePlus } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Boxes, MapPin, Plus, List, Package, PackagePlus, Eye } from 'lucide-react';
 import { apiGet, apiPost } from '../api/client';
 import { Modal } from '../components/Modal';
 import { InputField, FormField } from '../components/FormField';
@@ -31,6 +32,7 @@ interface WarehouseLocation {
 export function WarehousesPage() {
   const { addToast } = useToast();
   const { hasPermission } = useAuth();
+  const navigate = useNavigate();
   
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
   const [loading, setLoading] = useState(true);
@@ -285,6 +287,14 @@ export function WarehousesPage() {
                 <button
                   type="button"
                   className="btn btn-secondary btn-sm"
+                  onClick={() => navigate(`/warehouses/${wh.id}`)}
+                  style={{ display: 'flex', alignItems: 'center', gap: '4px' }}
+                >
+                  <Eye size={14} /> Details
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
                   onClick={() => handleViewLocations(wh)}
                   style={{ display: 'flex', alignItems: 'center', gap: '4px' }}
                 >
@@ -326,7 +336,7 @@ export function WarehousesPage() {
                   {selectedWarehouse.city} — {selectedWarehouse.address || 'No Address'}
                 </p>
               </div>
-              {hasPermission('inventory.adjust') && (
+              {hasPermission('manage_inventory') && (
                 <button
                   type="button"
                   className="btn btn-primary btn-sm"
@@ -424,7 +434,7 @@ export function WarehousesPage() {
               justifyContent: 'flex-end',
               marginBottom: '16px',
             }}>
-              {hasPermission('inventory.adjust') && (
+              {hasPermission('manage_inventory') && (
                 <button
                   type="button"
                   className="btn btn-primary btn-sm"

@@ -482,7 +482,7 @@ export function PurchasingPage() {
                   Close
                 </button>
 
-                {selectedPO.status === 'SUBMITTED' && hasPermission('purchasing.approve') && (
+                {selectedPO.status === 'SUBMITTED' && hasPermission('manage_purchasing') && (
                   <button type="button" className="btn btn-primary" onClick={() => handleApprovePO(selectedPO.id)}>
                     Approve PO
                   </button>

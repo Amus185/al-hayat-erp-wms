@@ -291,7 +291,7 @@ export function TransfersPage() {
               </button>
 
               {/* Status PENDING_APPROVAL -> Approve (if user has permissions) */}
-              {selectedTransfer.status === 'PENDING_APPROVAL' && hasPermission('transfers.approve') && (
+              {selectedTransfer.status === 'PENDING_APPROVAL' && hasPermission('manage_transfers') && (
                 <button
                   type="button"
                   className="btn btn-primary"
