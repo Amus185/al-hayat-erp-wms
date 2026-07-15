@@ -60,4 +60,51 @@ warehouses.get('/:id/inventory', async (c) => {
   return c.json(results);
 });
 
+warehouses.get('/:id/summary', async (c) => {
+  const id = c.req.param('id');
+
+  const stockSummary = await c.env.DB.prepare(`
+    SELECT 
+      COUNT(DISTINCT i.product_id) as total_products,
+      COALESCE(SUM(i.quantity_on_hand), 0) as total_units,
+      COALESCE(SUM(i.quantity_on_hand * p.cost_price), 0) as inventory_value
+    FROM inventory_stock i
+    JOIN products p ON p.id = i.product_id
+    WHERE i.warehouse_id = ? AND i.owner_type = 'WAREHOUSE'
+  `).bind(id).first();
+
+  const locationCount = await c.env.DB.prepare(
+    'SELECT COUNT(*) as count FROM warehouse_locations WHERE warehouse_id = ?'
+  ).bind(id).first();
+
+  const receiptsCount = await c.env.DB.prepare(
+    'SELECT COUNT(*) as count FROM goods_receipts WHERE warehouse_id = ?'
+  ).bind(id).first();
+
+  const transfersIn = await c.env.DB.prepare(
+    "SELECT COUNT(*) as count FROM transfers WHERE destination_warehouse_id = ? AND status = 'COMPLETED'"
+  ).bind(id).first();
+
+  const transfersOut = await c.env.DB.prepare(
+    "SELECT COUNT(*) as count FROM transfers WHERE source_warehouse_id = ? AND status = 'COMPLETED'"
+  ).bind(id).first();
+
+  return c.json({
+    total_products: stockSummary?.total_products || 0,
+    total_units: stockSummary?.total_units || 0,
+    inventory_value: stockSummary?.inventory_value || 0,
+    location_count: locationCount?.count || 0,
+    receipts_count: receiptsCount?.count || 0,
+    transfers_in: transfersIn?.count || 0,
+    transfers_out: transfersOut?.count || 0,
+  });
+});
+
+warehouses.get('/:id', async (c) => {
+  const id = c.req.param('id');
+  const wh = await c.env.DB.prepare('SELECT * FROM warehouses WHERE id = ?').bind(id).first();
+  if (!wh) return c.json({ message: 'Warehouse not found' }, 404);
+  return c.json(wh);
+});
+
 export default warehouses;

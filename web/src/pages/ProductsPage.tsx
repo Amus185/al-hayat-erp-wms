@@ -59,6 +59,7 @@ export function ProductsPage() {
     brandId: '',
     costPrice: 0,
     sellingPrice: 0,
+    reorderLevel: 5,
   });
 
   const fetchFilters = async () => {
@@ -132,6 +133,7 @@ export function ProductsPage() {
       description: newProduct.description,
       costPrice: newProduct.costPrice,
       sellingPrice: newProduct.sellingPrice,
+      reorderLevel: newProduct.reorderLevel,
     };
     if (newProduct.categoryId) payload.categoryId = newProduct.categoryId;
     if (newProduct.brandId) payload.brandId = newProduct.brandId;
@@ -149,6 +151,7 @@ export function ProductsPage() {
         brandId: '',
         costPrice: 0,
         sellingPrice: 0,
+        reorderLevel: 5,
       });
       loadData();
     } catch (err: any) {
@@ -357,7 +360,7 @@ export function ProductsPage() {
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '14px', marginTop: '10px' }}>
             <InputField
-              label="Cost Price ($)"
+              label="Cost Price ($) *"
               id="costPrice"
               type="number"
               value={newProduct.costPrice}
@@ -365,11 +368,19 @@ export function ProductsPage() {
               required
             />
             <InputField
-              label="Selling Price ($)"
+              label="Selling Price ($) *"
               id="sellingPrice"
               type="number"
               value={newProduct.sellingPrice}
               onChange={(val) => setNewProduct((prev) => ({ ...prev, sellingPrice: Number(val) }))}
+              required
+            />
+            <InputField
+              label="Reorder Level *"
+              id="reorderLevel"
+              type="number"
+              value={newProduct.reorderLevel}
+              onChange={(val) => setNewProduct((prev) => ({ ...prev, reorderLevel: Number(val) }))}
               required
             />
           </div>

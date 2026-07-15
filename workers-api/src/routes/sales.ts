@@ -107,8 +107,11 @@ sales.post('/orders', requirePermissions(['manage_sales']), async (c) => {
     }
     seenProducts.add(line.productId);
 
-    const product = await c.env.DB.prepare('SELECT id FROM products WHERE id = ?').bind(line.productId).first();
+    const product = await c.env.DB.prepare('SELECT id, selling_price FROM products WHERE id = ?').bind(line.productId).first();
     if (!product) return c.json({ message: `Line ${i + 1}: product does not exist.` }, 400);
+
+    // Override client's unitPrice with the actual selling price from DB to prevent price manipulation
+    line.unitPrice = product.selling_price;
   }
 
   const id = uuidv4();

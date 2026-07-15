@@ -8,6 +8,7 @@ import { DashboardPage } from './pages/DashboardPage';
 import { ProductsPage } from './pages/ProductsPage';
 import { ProductDetailsPage } from './pages/ProductDetailsPage';
 import { WarehousesPage } from './pages/WarehousesPage';
+import { WarehouseDetailsPage } from './pages/WarehouseDetailsPage';
 import { InventoryPage } from './pages/InventoryPage';
 import { BranchesPage } from './pages/BranchesPage';
 import { BranchDetailsPage } from './pages/BranchDetailsPage';
@@ -72,6 +73,7 @@ export function App() {
             
             {/* Warehouses configuration */}
             <Route path="/warehouses" element={<WarehousesPage />} />
+            <Route path="/warehouses/:id" element={<WarehouseDetailsPage />} />
             
             {/* Stock ledger */}
             <Route path="/inventory" element={<InventoryPage />} />
