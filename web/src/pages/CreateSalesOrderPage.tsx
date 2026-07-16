@@ -4,6 +4,7 @@ import { ShoppingCart, ArrowLeft, Plus, Trash2 } from 'lucide-react';
 import { apiGet, apiPost } from '../api/client';
 import { FormField, InputField, TextareaField } from '../components/FormField';
 import { SearchInput } from '../components/SearchInput';
+import { SearchableSelect } from '../components/SearchableSelect';
 import { useToast } from '../contexts/ToastContext';
 
 interface Customer {
@@ -187,35 +188,21 @@ export function CreateSalesOrderPage() {
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
             <FormField label="Customer *">
-              <select
-                className="form-select"
+              <SearchableSelect
                 value={customerId}
-                onChange={(e) => setCustomerId(e.target.value)}
-                required
-              >
-                <option value="">Select Customer...</option>
-                {customers.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
+                onChange={(val) => setCustomerId(val)}
+                options={customers.map(c => ({ value: c.id, label: c.name }))}
+                placeholder="Select Customer..."
+              />
             </FormField>
 
             <FormField label="Originating Branch *">
-              <select
-                className="form-select"
+              <SearchableSelect
                 value={branchId}
-                onChange={(e) => setBranchId(e.target.value)}
-                required
-              >
-                <option value="">Select Branch...</option>
-                {branches.map((b) => (
-                  <option key={b.id} value={b.id}>
-                    {b.name}
-                  </option>
-                ))}
-              </select>
+                onChange={(val) => setBranchId(val)}
+                options={branches.map(b => ({ value: b.id, label: b.name }))}
+                placeholder="Select Branch..."
+              />
             </FormField>
           </div>
 

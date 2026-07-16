@@ -4,6 +4,7 @@ import { Truck, ArrowLeft, Plus, Trash2, Search } from 'lucide-react';
 import { apiGet, apiPost } from '../api/client';
 import { FormField, InputField } from '../components/FormField';
 import { SearchInput } from '../components/SearchInput';
+import { SearchableSelect } from '../components/SearchableSelect';
 import { useToast } from '../contexts/ToastContext';
 
 interface Warehouse {
@@ -198,17 +199,14 @@ export function CreateTransferPage() {
 
             <div style={{ marginTop: '10px' }}>
               <FormField label={sourceType === 'WAREHOUSE' ? 'Select Warehouse' : 'Select Branch'}>
-                <select
-                  className="form-select"
+              <SearchableSelect
                   value={sourceId}
-                  onChange={(e) => setSourceId(e.target.value)}
-                  required
-                >
-                  <option value="">Select Origin...</option>
-                  {sourceType === 'WAREHOUSE'
-                    ? warehouses.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)
-                    : branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
-                </select>
+                  onChange={(val) => setSourceId(val)}
+                  options={sourceType === 'WAREHOUSE' 
+                    ? warehouses.map(w => ({ value: w.id, label: w.name }))
+                    : branches.map(b => ({ value: b.id, label: b.name }))}
+                  placeholder="Select Origin..."
+                />
               </FormField>
             </div>
           </div>
@@ -233,17 +231,14 @@ export function CreateTransferPage() {
 
             <div style={{ marginTop: '10px' }}>
               <FormField label={destType === 'WAREHOUSE' ? 'Select Warehouse' : 'Select Branch'}>
-                <select
-                  className="form-select"
+              <SearchableSelect
                   value={destId}
-                  onChange={(e) => setDestId(e.target.value)}
-                  required
-                >
-                  <option value="">Select Destination...</option>
-                  {destType === 'WAREHOUSE'
-                    ? warehouses.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)
-                    : branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
-                </select>
+                  onChange={(val) => setDestId(val)}
+                  options={destType === 'WAREHOUSE' 
+                    ? warehouses.map(w => ({ value: w.id, label: w.name }))
+                    : branches.map(b => ({ value: b.id, label: b.name }))}
+                  placeholder="Select Destination..."
+                />
               </FormField>
             </div>
           </div>

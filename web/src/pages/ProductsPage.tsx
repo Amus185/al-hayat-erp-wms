@@ -7,6 +7,7 @@ import { SearchInput } from '../components/SearchInput';
 import { Modal } from '../components/Modal';
 import { ConfirmModal } from '../components/ConfirmModal';
 import { FormField, InputField } from '../components/FormField';
+import { SearchableSelect } from '../components/SearchableSelect';
 import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -283,19 +284,14 @@ export function ProductsPage() {
           <SearchInput value={search} onChange={setSearch} placeholder="Search by Product ID, Name or Description..." />
         </div>
         <div>
-          <select
-            value={selectedCategory}
-            onChange={(e) => setSelectedCategory(e.target.value)}
-            className="form-select"
-            style={{ minHeight: '38px', borderRadius: '8px', border: '1px solid #d9e2d9', padding: '0 10px' }}
-          >
-            <option value="">All Categories</option>
-            {categories.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
-          </select>
+          <div style={{ width: '200px' }}>
+            <SearchableSelect
+              value={selectedCategory}
+              onChange={(val) => setSelectedCategory(val)}
+              options={categories.map(c => ({ value: c.id, label: c.name }))}
+              placeholder="All Categories"
+            />
+          </div>
         </div>
       </section>
 
@@ -349,32 +345,20 @@ export function ProductsPage() {
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px', marginTop: '10px' }}>
             <FormField label="Category">
-              <select
-                className="form-select"
+              <SearchableSelect
                 value={newProduct.categoryId}
-                onChange={(e) => setNewProduct((prev) => ({ ...prev, categoryId: e.target.value }))}
-              >
-                <option value="">Select Category</option>
-                {categories.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
+                onChange={(val) => setNewProduct((prev) => ({ ...prev, categoryId: val }))}
+                options={categories.map(c => ({ value: c.id, label: c.name }))}
+                placeholder="Select Category"
+              />
             </FormField>
             <FormField label="Brand">
-              <select
-                className="form-select"
+              <SearchableSelect
                 value={newProduct.brandId}
-                onChange={(e) => setNewProduct((prev) => ({ ...prev, brandId: e.target.value }))}
-              >
-                <option value="">Select Brand</option>
-                {brands.map((b) => (
-                  <option key={b.id} value={b.id}>
-                    {b.name}
-                  </option>
-                ))}
-              </select>
+                onChange={(val) => setNewProduct((prev) => ({ ...prev, brandId: val }))}
+                options={brands.map(b => ({ value: b.id, label: b.name }))}
+                placeholder="Select Brand"
+              />
             </FormField>
           </div>
 

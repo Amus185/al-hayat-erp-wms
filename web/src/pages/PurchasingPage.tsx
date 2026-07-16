@@ -6,6 +6,7 @@ import { DataTable, type Column } from '../components/DataTable';
 import { Tabs } from '../components/Tabs';
 import { Modal } from '../components/Modal';
 import { InputField, TextareaField } from '../components/FormField';
+import { SearchableSelect } from '../components/SearchableSelect';
 import { StatusBadge } from '../components/StatusBadge';
 import { LoadingSpinner } from '../components/LoadingSpinner';
 import { useToast } from '../contexts/ToastContext';
@@ -412,15 +413,12 @@ export function PurchasingPage() {
                     />
                     <div className="form-field">
                       <label className="form-field__label">Target Location</label>
-                      <select
-                        className="form-select"
+                      <SearchableSelect
                         value={selectedWHId}
-                        onChange={(e) => setSelectedWHId(e.target.value)}
-                        required
-                      >
-                        <option value="">Choose Warehouse...</option>
-                        {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
-                      </select>
+                        onChange={(val) => setSelectedWHId(val)}
+                        options={warehouses.map(w => ({ value: w.id, label: w.name }))}
+                        placeholder="Choose Warehouse..."
+                      />
                     </div>
                   </div>
 
@@ -449,17 +447,12 @@ export function PurchasingPage() {
                             />
                           </td>
                           <td>
-                            <select
-                              className="form-select"
-                              style={{ minHeight: '32px' }}
+                            <SearchableSelect
                               value={receiptLocations[l.product_id] || ''}
-                              onChange={(e) => setReceiptLocations(prev => ({ ...prev, [l.product_id]: e.target.value }))}
-                            >
-                              <option value="">Default/System</option>
-                              {locationsList.map(loc => (
-                                <option key={loc.id} value={loc.id}>{loc.aisle}-{loc.rack}-{loc.shelf}-{loc.bin}</option>
-                              ))}
-                            </select>
+                              onChange={(val) => setReceiptLocations(prev => ({ ...prev, [l.product_id]: val }))}
+                              options={locationsList.map(loc => ({ value: loc.id, label: `${loc.aisle}-${loc.rack}-${loc.shelf}-${loc.bin}` }))}
+                              placeholder="Default/System"
+                            />
                           </td>
                         </tr>
                       ))}

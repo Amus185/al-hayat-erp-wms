@@ -8,6 +8,7 @@ import { DataTable, type Column } from '../components/DataTable';
 import { PageSkeleton } from '../components/LoadingSpinner';
 import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
+import { SearchableSelect } from '../components/SearchableSelect';
 
 interface Warehouse {
   id: string;
@@ -467,19 +468,12 @@ export function WarehousesPage() {
         <form onSubmit={handleAddStockSubmit}>
           <div style={{ display: 'grid', gap: '14px' }}>
             <FormField label="Product">
-              <select
-                className="form-select"
+              <SearchableSelect
                 value={addStockForm.productId}
-                onChange={(e) => setAddStockForm(prev => ({ ...prev, productId: e.target.value }))}
-                required
-              >
-                <option value="">Select a product...</option>
-                {products.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name} ({p.sku})
-                  </option>
-                ))}
-              </select>
+                onChange={(val) => setAddStockForm(prev => ({ ...prev, productId: val }))}
+                options={products.map(p => ({ value: p.id, label: `${p.name} (${p.sku})` }))}
+                placeholder="Select a product..."
+              />
             </FormField>
 
             <InputField
@@ -493,18 +487,12 @@ export function WarehousesPage() {
             />
 
             <FormField label="Bin Location (Optional)">
-              <select
-                className="form-select"
+              <SearchableSelect
                 value={addStockForm.locationId}
-                onChange={(e) => setAddStockForm(prev => ({ ...prev, locationId: e.target.value }))}
-              >
-                <option value="">Select Location...</option>
-                {locations.map((loc) => (
-                  <option key={loc.id} value={loc.id}>
-                    {loc.aisle}-{loc.rack}-{loc.shelf}-{loc.bin}
-                  </option>
-                ))}
-              </select>
+                onChange={(val) => setAddStockForm(prev => ({ ...prev, locationId: val }))}
+                options={locations.map(loc => ({ value: loc.id, label: `${loc.aisle}-${loc.rack}-${loc.shelf}-${loc.bin}` }))}
+                placeholder="Select Location..."
+              />
             </FormField>
           </div>
           
