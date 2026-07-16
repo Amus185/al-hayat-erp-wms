@@ -40,7 +40,7 @@ reports.get('/sales-summary', async (c) => {
       COUNT(DISTINCT so.id) as total_orders,
       COALESCE(SUM(i.total_amount), 0) as revenue
     FROM sales_orders so
-    LEFT JOIN invoices i ON i.sales_order_id = so.id
+    LEFT JOIN invoices i ON i.sales_order_id = so.id AND i.status = 'PAID'
     GROUP BY DATE(so.created_at)
     ORDER BY date DESC
     LIMIT 30
@@ -56,7 +56,7 @@ reports.get('/branches', async (c) => {
            COALESCE(SUM(i.total_amount), 0) as revenue
     FROM branches b
     LEFT JOIN sales_orders so ON so.branch_id = b.id
-    LEFT JOIN invoices i ON i.sales_order_id = so.id
+    LEFT JOIN invoices i ON i.sales_order_id = so.id AND i.status = 'PAID'
     GROUP BY b.id, b.code, b.name
     ORDER BY revenue DESC
   `).all();
@@ -87,7 +87,7 @@ reports.get('/sales', async (c) => {
       COUNT(DISTINCT so.id) as invoices,
       COALESCE(SUM(i.total_amount), 0) as revenue
     FROM sales_orders so
-    LEFT JOIN invoices i ON i.sales_order_id = so.id
+    LEFT JOIN invoices i ON i.sales_order_id = so.id AND i.status = 'PAID'
     WHERE so.created_at >= DATE('now', '-30 days')
     GROUP BY DATE(so.created_at)
     ORDER BY day ASC

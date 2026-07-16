@@ -186,7 +186,7 @@ export function InventoryPage() {
       setIsAdjustOpen(false);
       setAdjustForm({
         productId: '',
-        direction: 'increase',
+        direction: 'INCREASE',
         quantity: 1,
         ownerType: 'WAREHOUSE',
         warehouseId: '',

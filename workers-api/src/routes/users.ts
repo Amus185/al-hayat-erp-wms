@@ -70,6 +70,12 @@ users.patch('/:id', async (c) => {
   const id = c.req.param('id');
   const body = await c.req.json();
 
+  // Check email uniqueness if changing email
+  if (body.email) {
+    const existing = await c.env.DB.prepare('SELECT id FROM users WHERE email = ? AND id != ?').bind(body.email.trim(), id).first();
+    if (existing) return c.json({ message: 'A user with this email already exists.' }, 409);
+  }
+
   await c.env.DB.prepare(`
     UPDATE users SET
       full_name = COALESCE(?, full_name),

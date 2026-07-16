@@ -176,10 +176,24 @@ purchasing.post('/receipts', requirePermissions(['manage_purchasing']), async (c
     }
     // Verify product is actually on this PO
     const poLine = await c.env.DB.prepare(
-      'SELECT id FROM purchase_order_lines WHERE purchase_order_id = ? AND product_id = ?'
+      'SELECT id, quantity FROM purchase_order_lines WHERE purchase_order_id = ? AND product_id = ?'
     ).bind(body.purchaseOrderId, line.productId).first();
     if (!poLine) {
       return c.json({ message: `Line ${i + 1}: product is not on this purchase order.` }, 400);
+    }
+
+    // Check for over-receiving
+    const alreadyReceived = await c.env.DB.prepare(`
+      SELECT COALESCE(SUM(grl.quantity_received), 0) as total
+      FROM goods_receipt_lines grl
+      JOIN goods_receipts gr ON gr.id = grl.goods_receipt_id
+      WHERE gr.purchase_order_id = ? AND grl.product_id = ?
+    `).bind(body.purchaseOrderId, line.productId).first();
+    const totalAfter = ((alreadyReceived?.total as number) || 0) + line.quantityReceived;
+    if (totalAfter > (poLine.quantity as number)) {
+      return c.json({ 
+        message: `Line ${i + 1}: receiving ${line.quantityReceived} would total ${totalAfter}, but PO only ordered ${poLine.quantity}.` 
+      }, 400);
     }
   }
 

@@ -285,33 +285,51 @@ sales.post('/orders/:id/invoice', requirePermissions(['manage_sales']), async (c
 });
 
 // ──────────────────────────────────────────────────────────────────────
-// PAY ORDER — INVOICED → PAID (duplicate payment guard)
+// PAY ORDER — INVOICED → PAID (CAS-protected duplicate payment guard)
 // ──────────────────────────────────────────────────────────────────────
 sales.post('/orders/:id/pay', requirePermissions(['manage_sales']), async (c) => {
   const orderId = c.req.param('id');
 
-  // Check order state
-  const order = await c.env.DB.prepare('SELECT status FROM sales_orders WHERE id = ?').bind(orderId).first();
-  if (!order) return c.json({ message: 'Order not found.' }, 404);
-  if (order.status === 'PAID') return c.json({ message: 'This order is already paid.' }, 409);
-  if (order.status !== 'INVOICED') {
-    return c.json({ message: `Cannot pay: order is currently '${order.status}'. Only INVOICED orders can be paid.` }, 400);
+  // CAS: atomically claim the order from INVOICED → PAYING
+  const cas = await c.env.DB.prepare(
+    "UPDATE sales_orders SET status = 'PAYING' WHERE id = ? AND status = 'INVOICED'"
+  ).bind(orderId).run();
+
+  if (!cas.meta.changes || cas.meta.changes === 0) {
+    const existing = await c.env.DB.prepare('SELECT status FROM sales_orders WHERE id = ?').bind(orderId).first();
+    if (!existing) return c.json({ message: 'Order not found.' }, 404);
+    if (existing.status === 'PAID') return c.json({ message: 'This order is already paid.' }, 409);
+    if (existing.status === 'PAYING') return c.json({ message: 'Payment is already being processed by another request.' }, 409);
+    return c.json({ message: `Cannot pay: order is currently '${existing.status}'. Only INVOICED orders can be paid.` }, 400);
   }
 
-  // Check invoice exists and is unpaid
-  const invoice = await c.env.DB.prepare(
-    'SELECT id, status FROM invoices WHERE sales_order_id = ?'
-  ).bind(orderId).first();
-  if (!invoice) return c.json({ message: 'No invoice found for this order.' }, 400);
-  if (invoice.status === 'PAID') return c.json({ message: 'Invoice is already paid.' }, 409);
+  try {
+    // Check invoice exists and is unpaid
+    const invoice = await c.env.DB.prepare(
+      'SELECT id, status FROM invoices WHERE sales_order_id = ?'
+    ).bind(orderId).first();
+    if (!invoice) {
+      await c.env.DB.prepare("UPDATE sales_orders SET status = 'INVOICED' WHERE id = ?").bind(orderId).run();
+      return c.json({ message: 'No invoice found for this order.' }, 400);
+    }
+    if (invoice.status === 'PAID') {
+      await c.env.DB.prepare("UPDATE sales_orders SET status = 'PAID' WHERE id = ?").bind(orderId).run();
+      return c.json({ message: 'Invoice is already paid.' }, 409);
+    }
 
-  // Atomic payment
-  await c.env.DB.batch([
-    c.env.DB.prepare("UPDATE invoices SET status = 'PAID', paid_at = CURRENT_TIMESTAMP WHERE id = ?").bind(invoice.id),
-    c.env.DB.prepare("UPDATE sales_orders SET status = 'PAID' WHERE id = ?").bind(orderId),
-  ]);
+    // Atomic payment
+    await c.env.DB.batch([
+      c.env.DB.prepare("UPDATE invoices SET status = 'PAID', paid_at = CURRENT_TIMESTAMP WHERE id = ?").bind(invoice.id),
+      c.env.DB.prepare("UPDATE sales_orders SET status = 'PAID' WHERE id = ?").bind(orderId),
+    ]);
 
-  return c.json({ success: true });
+    return c.json({ success: true });
+  } catch (err: any) {
+    try {
+      await c.env.DB.prepare("UPDATE sales_orders SET status = 'INVOICED' WHERE id = ?").bind(orderId).run();
+    } catch (_) {}
+    return c.json({ message: 'Payment processing failed. Order rolled back to INVOICED.', error: err?.message }, 500);
+  }
 });
 
 // ──────────────────────────────────────────────────────────────────────

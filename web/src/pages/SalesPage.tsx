@@ -253,12 +253,16 @@ export function SalesPage() {
           <h2>Customers, orders, invoices, and payments</h2>
         </div>
         <div style={{ display: 'flex', gap: '10px' }}>
-          <button type="button" className="btn btn-secondary" onClick={() => setIsCustomerOpen(true)}>
-            <UserPlus size={16} style={{ marginRight: '6px', inlineSize: 'auto' }} /> Register Customer
-          </button>
-          <button type="button" className="btn btn-primary" onClick={() => navigate('/sales/new')}>
-            <Plus size={16} style={{ marginRight: '6px', inlineSize: 'auto' }} /> New Order
-          </button>
+          {hasPermission('manage_sales') && (
+            <button type="button" className="btn btn-secondary" onClick={() => setIsCustomerOpen(true)}>
+              <UserPlus size={16} style={{ marginRight: '6px', inlineSize: 'auto' }} /> Register Customer
+            </button>
+          )}
+          {hasPermission('manage_sales') && (
+            <button type="button" className="btn btn-primary" onClick={() => navigate('/sales/new')}>
+              <Plus size={16} style={{ marginRight: '6px', inlineSize: 'auto' }} /> New Order
+            </button>
+          )}
         </div>
       </section>
 
@@ -379,7 +383,7 @@ export function SalesPage() {
               </button>
 
               {/* DRAFT or CONFIRMED → Complete Sale in one click */}
-              {(selectedOrder.status === 'DRAFT' || selectedOrder.status === 'CONFIRMED') && (
+              {(selectedOrder.status === 'DRAFT' || selectedOrder.status === 'CONFIRMED') && hasPermission('manage_sales') && (
                 <button type="button" className="btn btn-primary" disabled={orderDetailsLoading}
                   onClick={() => handleComplete(selectedOrder.id)}
                   style={{ background: 'linear-gradient(135deg, #0b8f08, #066006)' }}>
@@ -389,7 +393,7 @@ export function SalesPage() {
               )}
 
               {/* INVOICED → just mark paid */}
-              {selectedOrder.status === 'INVOICED' && (
+              {selectedOrder.status === 'INVOICED' && hasPermission('manage_sales') && (
                 <button type="button" className="btn btn-primary" disabled={orderDetailsLoading}
                   onClick={() => handlePayInvoice(selectedOrder.id)}>
                   <DollarSign size={14} style={{ marginRight: '4px', inlineSize: 'auto' }} /> Mark as Paid
