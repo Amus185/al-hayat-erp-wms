@@ -176,8 +176,24 @@ transfers.post('/:id/approve', requirePermissions(['manage_transfers']), async (
       today.setHours(0, 0, 0, 0);
       transferDate.setHours(0, 0, 0, 0);
       if (transferDate > today) {
-        await c.env.DB.prepare("UPDATE transfers SET status = 'PENDING_APPROVAL' WHERE id = ?").bind(id).run();
-        return c.json({ message: `Cannot approve: transfer is scheduled for ${(transfer.transfer_date as string).slice(0, 10)}, which is in the future.` }, 400);
+        const payload = c.get('jwtPayload') as any;
+        const role = payload?.role || '';
+        
+        // Allow System Administrator and Manager to bypass the schedule
+        if (role !== 'System Administrator' && role !== 'Manager') {
+          await c.env.DB.prepare("UPDATE transfers SET status = 'PENDING_APPROVAL' WHERE id = ?").bind(id).run();
+          return c.json({ message: `Cannot approve: transfer is scheduled for ${(transfer.transfer_date as string).slice(0, 10)}, which is in the future.` }, 400);
+        } else {
+          // Authorized early execution. Log this via audit log or note.
+          await logAudit(
+            c,
+            'EARLY_EXECUTION',
+            'transfers',
+            id,
+            null,
+            { note: `Transfer scheduled for ${(transfer.transfer_date as string).slice(0, 10)} executed early by ${role}.` }
+          );
+        }
       }
     }
 

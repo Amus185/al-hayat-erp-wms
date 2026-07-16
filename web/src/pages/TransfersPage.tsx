@@ -28,6 +28,7 @@ interface Transfer {
   dispatched_at: string | null;
   received_by: string | null;
   received_at: string | null;
+  transfer_date: string | null;
 }
 
 export function TransfersPage() {
@@ -292,14 +293,21 @@ export function TransfersPage() {
 
               {/* Status PENDING_APPROVAL -> Approve (if user has permissions) */}
               {selectedTransfer.status === 'PENDING_APPROVAL' && hasPermission('manage_transfers') && (
-                <button
-                  type="button"
-                  className="btn btn-primary"
-                  onClick={() => handleApprove(selectedTransfer.id)}
-                  disabled={actionLoading}
-                >
-                  {actionLoading ? 'Processing...' : 'Approve & Execute Transfer'}
-                </button>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '8px' }}>
+                  {selectedTransfer.transfer_date && new Date(selectedTransfer.transfer_date) > new Date() && (
+                    <div style={{ background: '#fef3c7', color: '#b45309', padding: '8px 12px', borderRadius: '6px', fontSize: '12px', fontWeight: '500', maxWidth: '350px', textAlign: 'right' }}>
+                      ⚠️ This transfer is scheduled for {new Date(selectedTransfer.transfer_date).toLocaleDateString()}, but as an authorized user, you may execute it early.
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    onClick={() => handleApprove(selectedTransfer.id)}
+                    disabled={actionLoading}
+                  >
+                    {actionLoading ? 'Processing...' : 'Approve & Execute Transfer'}
+                  </button>
+                </div>
               )}
             </div>
           </div>
