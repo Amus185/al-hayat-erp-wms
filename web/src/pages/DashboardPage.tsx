@@ -85,14 +85,14 @@ export function DashboardPage() {
 
   const lowStockColumns: Column<any>[] = [
     { key: 'sku', label: 'Product ID' },
-    { key: 'name', label: 'Product Name' },
+    { key: 'product_name', label: 'Product Name' },
     { key: 'reorder_level', label: 'Reorder Level' },
     {
-      key: 'available_quantity',
+      key: 'quantity_on_hand',
       label: 'Available',
       render: (row) => (
-        <span style={{ fontWeight: '600', color: row.available_quantity <= 0 ? '#b91c1c' : '#b45309' }}>
-          {row.available_quantity}
+        <span style={{ fontWeight: '600', color: row.quantity_on_hand <= 0 ? '#b91c1c' : '#b45309' }}>
+          {row.quantity_on_hand}
         </span>
       ),
     },
@@ -100,7 +100,7 @@ export function DashboardPage() {
       key: 'status',
       label: 'Risk Level',
       render: (row) => {
-        const qty = Number(row.available_quantity);
+        const qty = Number(row.quantity_on_hand);
         const level = qty <= 0 ? 'Critical' : 'Low';
         const tone = qty <= 0 ? 'red' : 'yellow';
         return <StatusBadge label={level} tone={tone} />;

@@ -177,10 +177,10 @@ transfers.post('/:id/approve', requirePermissions(['manage_transfers']), async (
       transferDate.setHours(0, 0, 0, 0);
       if (transferDate > today) {
         const payload = c.get('jwtPayload') as any;
-        const role = payload?.role || '';
+        const permissions = payload?.permissions || [];
         
-        // Allow System Administrator and Manager to bypass the schedule
-        if (role !== 'System Administrator' && role !== 'Manager') {
+        // Allow users with manage_users permission (System Admin / Manager) to bypass
+        if (!permissions.includes('manage_users')) {
           await c.env.DB.prepare("UPDATE transfers SET status = 'PENDING_APPROVAL' WHERE id = ?").bind(id).run();
           return c.json({ message: `Cannot approve: transfer is scheduled for ${(transfer.transfer_date as string).slice(0, 10)}, which is in the future.` }, 400);
         } else {
@@ -191,7 +191,7 @@ transfers.post('/:id/approve', requirePermissions(['manage_transfers']), async (
             'transfers',
             id,
             null,
-            { note: `Transfer scheduled for ${(transfer.transfer_date as string).slice(0, 10)} executed early by ${role}.` }
+            { note: `Transfer scheduled for ${(transfer.transfer_date as string).slice(0, 10)} executed early by user ${payload?.name}.` }
           );
         }
       }
