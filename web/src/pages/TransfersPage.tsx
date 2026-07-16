@@ -280,6 +280,7 @@ export function TransfersPage() {
               paddingTop: '16px',
               display: 'flex',
               justifyContent: 'flex-end',
+              alignItems: 'flex-end',
               gap: '10px'
             }}>
               <button
