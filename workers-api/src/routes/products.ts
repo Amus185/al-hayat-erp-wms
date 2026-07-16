@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { Env, uuidv4 } from '../db';
 import { authMiddleware, requirePermissions } from '../middleware/auth';
+import { logAudit } from '../services/audit';
 
 const products = new Hono<{ Bindings: Env }>();
 
@@ -61,6 +62,7 @@ products.post('/', requirePermissions(['manage_inventory']), async (c) => {
   ).run();
   
   const { results } = await c.env.DB.prepare('SELECT * FROM products WHERE id = ?').bind(id).all();
+  await logAudit(c, 'PRODUCT_CREATE', 'products', id, null, body);
   return c.json(results[0], 201);
 });
 
@@ -79,6 +81,7 @@ products.post('/categories', requirePermissions(['manage_inventory']), async (c)
   const id = uuidv4();
   await c.env.DB.prepare('INSERT INTO categories (id, name, parent_id) VALUES (?, ?, ?)').bind(id, body.name.trim(), body.parentId || null).run();
   const { results } = await c.env.DB.prepare('SELECT * FROM categories WHERE id = ?').bind(id).all();
+  await logAudit(c, 'CATEGORY_CREATE', 'categories', id, null, body);
   return c.json(results[0], 201);
 });
 
@@ -93,7 +96,11 @@ products.delete('/categories/:id', requirePermissions(['manage_inventory']), asy
   const refs = await c.env.DB.prepare('SELECT id FROM products WHERE category_id = ? LIMIT 1').bind(id).first();
   if (refs) return c.json({ message: 'Cannot delete: products are assigned to this category.' }, 400);
 
+  const cat = await c.env.DB.prepare('SELECT * FROM categories WHERE id = ?').bind(id).first();
+  if (!cat) return c.json({ message: 'Category not found' }, 404);
+
   await c.env.DB.prepare('DELETE FROM categories WHERE id = ?').bind(id).run();
+  await logAudit(c, 'CATEGORY_DELETE', 'categories', id, cat, null);
   return c.json({ success: true });
 });
 
@@ -123,7 +130,11 @@ products.delete('/:id', requirePermissions(['manage_inventory']), async (c) => {
   const inStock = await c.env.DB.prepare('SELECT id FROM inventory_stock WHERE product_id = ? AND quantity_on_hand > 0 LIMIT 1').bind(id).first();
   if (inStock) return c.json({ message: 'Cannot delete: product has active inventory stock.' }, 400);
 
+  const prod = await c.env.DB.prepare('SELECT * FROM products WHERE id = ?').bind(id).first();
+  if (!prod) return c.json({ message: 'Product not found' }, 404);
+
   await c.env.DB.prepare('DELETE FROM products WHERE id = ?').bind(id).run();
+  await logAudit(c, 'PRODUCT_DELETE', 'products', id, prod, null);
   return c.json({ success: true });
 });
 

@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { Env, uuidv4 } from '../db';
 import { authMiddleware, requirePermissions } from '../middleware/auth';
+import { logAudit, createAuditLogStmt } from '../services/audit';
 
 const transfers = new Hono<{ Bindings: Env; Variables: { jwtPayload: any } }>();
 
@@ -117,6 +118,7 @@ transfers.post('/', requirePermissions(['manage_transfers']), async (c) => {
     `).bind(uuidv4(), id, line.productId, line.quantityRequested));
   }
 
+  stmts.push(createAuditLogStmt(c, 'TRANSFER_CREATE', 'transfers', id, null, { transferNumber, sourceOwnerType: body.sourceOwnerType, destinationOwnerType: body.destinationOwnerType, lines: body.lines }));
   await c.env.DB.batch(stmts);
   const { results } = await c.env.DB.prepare('SELECT * FROM transfers WHERE id = ?').bind(id).all();
   return c.json(results[0], 201);
@@ -350,6 +352,7 @@ transfers.post('/:id/approve', requirePermissions(['manage_transfers']), async (
     `).bind(userId, userId, userId, id));
 
     // ── Step 5: Execute the batch atomically ──
+    stmts.push(createAuditLogStmt(c, 'TRANSFER_APPROVE_COMPLETE', 'transfers', id, { status: 'PENDING_APPROVAL' }, { status: 'COMPLETED' }));
     await c.env.DB.batch(stmts);
 
     // ── Step 6: Return the completed transfer ──

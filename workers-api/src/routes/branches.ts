@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { Env, uuidv4 } from '../db';
 import { authMiddleware, requirePermissions } from '../middleware/auth';
+import { logAudit } from '../services/audit';
 
 const branches = new Hono<{ Bindings: Env }>();
 
@@ -28,6 +29,7 @@ branches.post('/', requirePermissions(['manage_inventory']), async (c) => {
     VALUES (?, ?, ?, ?, ?, ?)
   `).bind(id, body.code.trim(), body.name.trim(), body.city.trim(), body.address || null, body.phone || null).run();
   const { results } = await c.env.DB.prepare('SELECT * FROM branches WHERE id = ?').bind(id).all();
+  await logAudit(c, 'BRANCH_CREATE', 'branches', id, null, body);
   return c.json(results[0], 201);
 });
 

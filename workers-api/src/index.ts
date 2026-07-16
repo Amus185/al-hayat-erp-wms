@@ -26,6 +26,14 @@ app.use('*', cors({
   credentials: true,
 }));
 
+app.get('/', (c) => c.json({
+  service: 'Al Hayat ERP & WMS Backend API',
+  version: '1.0.0',
+  status: 'active',
+  environment: 'production',
+  healthCheck: '/api/v1/health',
+}));
+
 app.get('/api/v1/health', (c) => c.json({ status: 'ok', timestamp: new Date().toISOString() }));
 
 app.route('/api/v1/auth', auth);

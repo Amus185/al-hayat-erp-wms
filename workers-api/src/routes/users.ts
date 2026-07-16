@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { Env, uuidv4 } from '../db';
 import * as bcrypt from 'bcryptjs';
 import { authMiddleware, requirePermissions } from '../middleware/auth';
+import { logAudit, createAuditLogStmt } from '../services/audit';
 
 const users = new Hono<{ Bindings: Env }>();
 
@@ -62,6 +63,7 @@ users.post('/', async (c) => {
   }
 
   const { results } = await c.env.DB.prepare('SELECT id, email, full_name FROM users WHERE id = ?').bind(id).all();
+  await logAudit(c, 'USER_CREATE', 'users', id, null, { email: body.email.trim(), fullName: body.fullName.trim(), roleIds: body.roleIds || [] });
   return c.json(results[0], 201);
 });
 
@@ -75,6 +77,10 @@ users.patch('/:id', async (c) => {
     const existing = await c.env.DB.prepare('SELECT id FROM users WHERE email = ? AND id != ?').bind(body.email.trim(), id).first();
     if (existing) return c.json({ message: 'A user with this email already exists.' }, 409);
   }
+
+  const oldUser = await c.env.DB.prepare(
+    'SELECT id, email, full_name, phone, branch_id, warehouse_id, is_active FROM users WHERE id = ?'
+  ).bind(id).first();
 
   await c.env.DB.prepare(`
     UPDATE users SET
@@ -109,6 +115,7 @@ users.patch('/:id', async (c) => {
   const user = await c.env.DB.prepare(
     'SELECT id, email, full_name, phone, branch_id, warehouse_id, is_active FROM users WHERE id = ?'
   ).bind(id).first();
+  await logAudit(c, 'USER_UPDATE', 'users', id, oldUser, body);
   return c.json(user);
 });
 
@@ -121,6 +128,7 @@ users.post('/:id/change-password', async (c) => {
   }
   const passwordHash = bcrypt.hashSync(newPassword, 12);
   await c.env.DB.prepare('UPDATE users SET password_hash = ? WHERE id = ?').bind(passwordHash, id).run();
+  await logAudit(c, 'USER_CHANGE_PASSWORD', 'users', id, null, { changed: true });
   return c.json({ success: true });
 });
 
@@ -145,6 +153,7 @@ users.delete('/:id', async (c) => {
     c.env.DB.prepare('DELETE FROM user_roles WHERE user_id = ?').bind(id),
     c.env.DB.prepare('DELETE FROM refresh_tokens WHERE user_id = ?').bind(id),
     c.env.DB.prepare('DELETE FROM users WHERE id = ?').bind(id),
+    createAuditLogStmt(c, 'USER_DELETE', 'users', id, user, null)
   ]);
   return c.json({ success: true });
 });

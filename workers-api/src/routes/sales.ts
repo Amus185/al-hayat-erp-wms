@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { Env, uuidv4 } from '../db';
 import { authMiddleware, requirePermissions } from '../middleware/auth';
+import { logAudit, createAuditLogStmt } from '../services/audit';
 
 const sales = new Hono<{ Bindings: Env; Variables: { jwtPayload: any } }>();
 
@@ -129,6 +130,7 @@ sales.post('/orders', requirePermissions(['manage_sales']), async (c) => {
     `).bind(uuidv4(), id, line.productId, line.quantity, line.unitPrice));
   }
 
+  stmts.push(createAuditLogStmt(c, 'SALES_ORDER_CREATE', 'sales_orders', id, null, { orderNumber, branchId: body.branchId, customerId: body.customerId, lines: body.lines }));
   await c.env.DB.batch(stmts);
   const { results } = await c.env.DB.prepare('SELECT * FROM sales_orders WHERE id = ?').bind(id).all();
   return c.json(results[0], 201);
@@ -151,6 +153,7 @@ sales.post('/orders/:id/confirm', requirePermissions(['manage_sales']), async (c
     return c.json({ message: `Cannot confirm: order is currently '${existing.status}'. Only DRAFT orders can be confirmed.` }, 400);
   }
 
+  await logAudit(c, 'SALES_ORDER_CONFIRM', 'sales_orders', id, { status: 'DRAFT' }, { status: 'CONFIRMED' });
   const { results } = await c.env.DB.prepare('SELECT * FROM sales_orders WHERE id = ?').bind(id).all();
   return c.json(results[0]);
 });
@@ -268,6 +271,7 @@ sales.post('/orders/:id/invoice', requirePermissions(['manage_sales']), async (c
 
     // Flip order to INVOICED
     stmts.push(c.env.DB.prepare("UPDATE sales_orders SET status = 'INVOICED' WHERE id = ?").bind(orderId));
+    stmts.push(createAuditLogStmt(c, 'SALES_ORDER_INVOICE', 'sales_orders', orderId, { status: 'CONFIRMED' }, { status: 'INVOICED', invoiceId, total }));
 
     await c.env.DB.batch(stmts);
 
@@ -321,6 +325,7 @@ sales.post('/orders/:id/pay', requirePermissions(['manage_sales']), async (c) =>
     await c.env.DB.batch([
       c.env.DB.prepare("UPDATE invoices SET status = 'PAID', paid_at = CURRENT_TIMESTAMP WHERE id = ?").bind(invoice.id),
       c.env.DB.prepare("UPDATE sales_orders SET status = 'PAID' WHERE id = ?").bind(orderId),
+      createAuditLogStmt(c, 'SALES_ORDER_PAY', 'sales_orders', orderId, { status: 'INVOICED' }, { status: 'PAID', invoiceId: invoice.id })
     ]);
 
     return c.json({ success: true });
@@ -354,6 +359,7 @@ sales.post('/orders/:id/complete', requirePermissions(['manage_sales']), async (
     await c.env.DB.batch([
       c.env.DB.prepare("UPDATE invoices SET status = 'PAID', paid_at = CURRENT_TIMESTAMP WHERE id = ?").bind(invoice.id),
       c.env.DB.prepare("UPDATE sales_orders SET status = 'PAID' WHERE id = ?").bind(orderId),
+      createAuditLogStmt(c, 'SALES_ORDER_COMPLETE', 'sales_orders', orderId, { status: 'INVOICED' }, { status: 'PAID', invoiceId: invoice.id })
     ]);
     return c.json({ success: true, invoiceId: invoice.id });
   }
@@ -447,6 +453,7 @@ sales.post('/orders/:id/complete', requirePermissions(['manage_sales']), async (
 
     // Finalize order as PAID
     stmts.push(c.env.DB.prepare("UPDATE sales_orders SET status = 'PAID' WHERE id = ?").bind(orderId));
+    stmts.push(createAuditLogStmt(c, 'SALES_ORDER_COMPLETE', 'sales_orders', orderId, { status: validSource }, { status: 'PAID', invoiceId, total }));
 
     await c.env.DB.batch(stmts);
     return c.json({ success: true, invoiceId, total });

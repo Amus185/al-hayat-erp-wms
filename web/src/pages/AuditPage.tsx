@@ -38,6 +38,9 @@ export function AuditPage() {
       if (selectedEntity) {
         params.entityType = selectedEntity;
       }
+      if (searchText && searchText.trim() !== '') {
+        params.search = searchText.trim();
+      }
       const data = await apiGet<AuditLog[]>('/audit', params);
       setLogs(data || []);
     } catch (err: any) {
@@ -48,10 +51,13 @@ export function AuditPage() {
   };
 
   useEffect(() => {
-    fetchLogs();
-  }, [selectedEntity]);
+    const timer = setTimeout(() => {
+      fetchLogs();
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [selectedEntity, searchText]);
 
-  // Client-side text filter
+  // Client-side text filter fallback
   const filteredLogs = logs.filter((log) => {
     const text = searchText.toLowerCase();
     if (!text) return true;
@@ -167,21 +173,40 @@ export function AuditPage() {
               </p>
             </div>
 
-            <div>
-              <h4 style={{ margin: '0 0 6px', color: '#066006' }}>Audit Context Changes (JSON)</h4>
-              <pre style={{
-                margin: '0',
-                padding: '12px',
-                background: '#1a1a1a',
-                color: '#22c55e',
-                borderRadius: '8px',
-                fontSize: '12px',
-                fontFamily: 'monospace',
-                overflowX: 'auto',
-                maxHeight: '260px'
-              }}>
-                {JSON.stringify(selectedLog.new_value || selectedLog.old_value || { message: "No payload modifications stored" }, null, 2)}
-              </pre>
+            <div style={{ display: 'grid', gap: '12px' }}>
+              {selectedLog.old_value && (
+                <div>
+                  <h4 style={{ margin: '0 0 6px', color: '#991b1b' }}>Previous State (Old Values)</h4>
+                  <pre style={{
+                    margin: '0', padding: '10px', background: '#1a1a1a', color: '#f87171',
+                    borderRadius: '8px', fontSize: '12px', fontFamily: 'monospace', overflowX: 'auto', maxHeight: '180px'
+                  }}>
+                    {typeof selectedLog.old_value === 'object' ? JSON.stringify(selectedLog.old_value, null, 2) : String(selectedLog.old_value)}
+                  </pre>
+                </div>
+              )}
+              {selectedLog.new_value && (
+                <div>
+                  <h4 style={{ margin: '0 0 6px', color: '#066006' }}>New State (Changes / New Values)</h4>
+                  <pre style={{
+                    margin: '0', padding: '10px', background: '#1a1a1a', color: '#22c55e',
+                    borderRadius: '8px', fontSize: '12px', fontFamily: 'monospace', overflowX: 'auto', maxHeight: '180px'
+                  }}>
+                    {typeof selectedLog.new_value === 'object' ? JSON.stringify(selectedLog.new_value, null, 2) : String(selectedLog.new_value)}
+                  </pre>
+                </div>
+              )}
+              {!selectedLog.old_value && !selectedLog.new_value && (
+                <div>
+                  <h4 style={{ margin: '0 0 6px', color: '#666' }}>Audit Context Changes</h4>
+                  <pre style={{
+                    margin: '0', padding: '10px', background: '#1a1a1a', color: '#aaa',
+                    borderRadius: '8px', fontSize: '12px', fontFamily: 'monospace', overflowX: 'auto'
+                  }}>
+                    No payload modifications recorded for this action.
+                  </pre>
+                </div>
+              )}
             </div>
 
             <div style={{ display: 'flex', justifyContent: 'flex-end', borderTop: '1px solid #edf1ed', paddingTop: '12px' }}>

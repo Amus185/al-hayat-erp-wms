@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { Env, uuidv4 } from '../db';
 import { authMiddleware, requirePermissions } from '../middleware/auth';
+import { logAudit, createAuditLogStmt } from '../services/audit';
 
 const purchasing = new Hono<{ Bindings: Env; Variables: { jwtPayload: any } }>();
 
@@ -25,6 +26,7 @@ purchasing.post('/suppliers', requirePermissions(['manage_purchasing']), async (
     VALUES (?, ?, ?, ?, ?, ?)
   `).bind(id, body.name.trim(), body.contactName || null, body.phone || null, body.email || null, body.address || null).run();
   const { results } = await c.env.DB.prepare('SELECT * FROM suppliers WHERE id = ?').bind(id).all();
+  await logAudit(c, 'SUPPLIER_CREATE', 'suppliers', id, null, body);
   return c.json(results[0], 201);
 });
 
@@ -117,6 +119,7 @@ purchasing.post('/orders', requirePermissions(['manage_purchasing']), async (c) 
     `).bind(uuidv4(), id, line.productId, line.quantity, line.unitCost));
   }
 
+  stmts.push(createAuditLogStmt(c, 'PURCHASE_ORDER_CREATE', 'purchase_orders', id, null, { poNumber, supplierId: body.supplierId, lines: body.lines }));
   await c.env.DB.batch(stmts);
   const { results } = await c.env.DB.prepare('SELECT * FROM purchase_orders WHERE id = ?').bind(id).all();
   return c.json(results[0], 201);
@@ -139,6 +142,7 @@ purchasing.post('/orders/:id/approve', requirePermissions(['manage_purchasing'])
     return c.json({ message: `Cannot approve: PO is currently '${existing.status}'. Only SUBMITTED POs can be approved.` }, 400);
   }
 
+  await logAudit(c, 'PURCHASE_ORDER_APPROVE', 'purchase_orders', id, { status: 'SUBMITTED' }, { status: 'APPROVED' });
   const { results } = await c.env.DB.prepare('SELECT * FROM purchase_orders WHERE id = ?').bind(id).all();
   return c.json(results[0]);
 });
@@ -270,6 +274,7 @@ purchasing.post('/receipts', requirePermissions(['manage_purchasing']), async (c
 
   const newStatus = fullyReceived ? 'RECEIVED' : 'PARTIALLY_RECEIVED';
   stmts.push(c.env.DB.prepare("UPDATE purchase_orders SET status = ? WHERE id = ?").bind(newStatus, body.purchaseOrderId));
+  stmts.push(createAuditLogStmt(c, 'GOODS_RECEIPT_CREATE', 'goods_receipts', receiptId, null, { receiptNumber, purchaseOrderId: body.purchaseOrderId, warehouseId: body.warehouseId, lines: body.lines, newPoStatus: newStatus }));
 
   await c.env.DB.batch(stmts);
   const { results } = await c.env.DB.prepare('SELECT * FROM goods_receipts WHERE id = ?').bind(receiptId).all();

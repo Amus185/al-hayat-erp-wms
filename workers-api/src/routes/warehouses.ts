@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { Env, uuidv4 } from '../db';
 import { authMiddleware, requirePermissions } from '../middleware/auth';
+import { logAudit } from '../services/audit';
 
 const warehouses = new Hono<{ Bindings: Env }>();
 
@@ -27,6 +28,7 @@ warehouses.post('/', requirePermissions(['manage_inventory']), async (c) => {
     VALUES (?, ?, ?, ?, ?, ?)
   `).bind(id, body.code.trim(), body.name.trim(), body.city.trim(), body.address || null, body.phone || null).run();
   const { results } = await c.env.DB.prepare('SELECT * FROM warehouses WHERE id = ?').bind(id).all();
+  await logAudit(c, 'WAREHOUSE_CREATE', 'warehouses', id, null, body);
   return c.json(results[0], 201);
 });
 
@@ -60,6 +62,7 @@ warehouses.post('/:id/locations', requirePermissions(['manage_inventory']), asyn
     VALUES (?, ?, ?, ?, ?, ?, ?)
   `).bind(id, warehouseId, body.aisle.trim(), body.rack.trim(), body.shelf.trim(), body.bin.trim(), body.barcode.trim()).run();
   const { results } = await c.env.DB.prepare('SELECT * FROM warehouse_locations WHERE id = ?').bind(id).all();
+  await logAudit(c, 'WAREHOUSE_LOCATION_CREATE', 'warehouses', warehouseId, null, { locationId: id, ...body });
   return c.json(results[0], 201);
 });
 

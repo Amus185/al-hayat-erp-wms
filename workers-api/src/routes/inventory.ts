@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { Env, uuidv4 } from '../db';
 import { authMiddleware, requirePermissions } from '../middleware/auth';
+import { createAuditLogStmt } from '../services/audit';
 
 const inventory = new Hono<{ Bindings: Env; Variables: { jwtPayload: any } }>();
 
@@ -122,6 +123,7 @@ inventory.post('/adjust', requirePermissions(['manage_inventory']), async (c) =>
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).bind(txId, body.productId, transactionType, delta, ownerType, body.warehouseId || null, body.branchId || null, body.warehouseLocationId || null, body.notes || null, userId));
 
+  stmts.push(createAuditLogStmt(c, 'INVENTORY_ADJUST', 'inventory_stock', txId, null, { productId: body.productId, quantity: body.quantity, direction: body.direction, ownerType, warehouseId: body.warehouseId, branchId: body.branchId, notes: body.notes }));
   await c.env.DB.batch(stmts);
 
   const { results } = await c.env.DB.prepare('SELECT * FROM inventory_transactions WHERE id = ?').bind(txId).all();
