@@ -39,11 +39,26 @@ warehouses.get('/:id/locations', async (c) => {
 warehouses.post('/:id/locations', requirePermissions(['manage_inventory']), async (c) => {
   const warehouseId = c.req.param('id');
   const body = await c.req.json();
+
+  if (!body.aisle || !body.aisle.trim()) return c.json({ message: 'Aisle is required.' }, 400);
+  if (!body.rack || !body.rack.trim()) return c.json({ message: 'Rack is required.' }, 400);
+  if (!body.shelf || !body.shelf.trim()) return c.json({ message: 'Shelf is required.' }, 400);
+  if (!body.bin || !body.bin.trim()) return c.json({ message: 'Bin is required.' }, 400);
+  if (!body.barcode || !body.barcode.trim()) return c.json({ message: 'Barcode is required.' }, 400);
+
+  // Verify warehouse exists
+  const wh = await c.env.DB.prepare('SELECT id FROM warehouses WHERE id = ?').bind(warehouseId).first();
+  if (!wh) return c.json({ message: 'Warehouse not found.' }, 404);
+
+  // Check barcode uniqueness
+  const existingBarcode = await c.env.DB.prepare('SELECT id FROM warehouse_locations WHERE barcode = ?').bind(body.barcode.trim()).first();
+  if (existingBarcode) return c.json({ message: 'A location with this barcode already exists.' }, 409);
+
   const id = uuidv4();
   await c.env.DB.prepare(`
     INSERT INTO warehouse_locations (id, warehouse_id, aisle, rack, shelf, bin, barcode)
     VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).bind(id, warehouseId, body.aisle, body.rack, body.shelf, body.bin, body.barcode).run();
+  `).bind(id, warehouseId, body.aisle.trim(), body.rack.trim(), body.shelf.trim(), body.bin.trim(), body.barcode.trim()).run();
   const { results } = await c.env.DB.prepare('SELECT * FROM warehouse_locations WHERE id = ?').bind(id).all();
   return c.json(results[0], 201);
 });
