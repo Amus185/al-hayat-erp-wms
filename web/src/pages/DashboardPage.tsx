@@ -86,6 +86,11 @@ export function DashboardPage() {
   const lowStockColumns: Column<any>[] = [
     { key: 'sku', label: 'Product ID' },
     { key: 'product_name', label: 'Product Name' },
+    {
+      key: 'location',
+      label: 'Location',
+      render: (row) => row.owner_type === 'WAREHOUSE' ? `${row.warehouse_name} (WH)` : `${row.branch_name} (Branch)`
+    },
     { key: 'reorder_level', label: 'Reorder Level' },
     {
       key: 'quantity_on_hand',
