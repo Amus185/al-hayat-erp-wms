@@ -44,31 +44,33 @@ export function LoginPage() {
           font-family: 'Inter', sans-serif;
           min-height: 100vh;
           display: flex;
-          background: #09120a;
+          background: url('/login-bg.jpg') center/cover no-repeat;
           position: relative;
           overflow: hidden;
         }
 
-        /* Sophisticated subtle background */
+        /* Sophisticated subtle backdrop filter over floating clouds background */
         .login-bg-pattern {
           position: absolute;
           inset: 0;
-          background-image:
-            radial-gradient(circle at 15% 50%, rgba(26, 140, 22, 0.08), transparent 25%),
-            radial-gradient(circle at 85% 30%, rgba(26, 140, 22, 0.06), transparent 25%);
+          background: linear-gradient(135deg, rgba(15, 23, 42, 0.25) 0%, rgba(15, 23, 42, 0.45) 100%),
+                      radial-gradient(circle at center, transparent 30%, rgba(0, 0, 0, 0.4) 100%);
+          backdrop-filter: blur(2px);
           z-index: 1;
         }
 
-        /* Card */
+        /* Card - Premium Glassmorphism touch */
         .login-card {
           position: relative;
           z-index: 10;
           margin: auto;
           width: 100%;
           max-width: 420px;
-          background: #ffffff;
-          border-radius: 16px;
-          box-shadow: 0 24px 48px -12px rgba(0,0,0,0.4);
+          background: rgba(255, 255, 255, 0.94);
+          backdrop-filter: blur(16px);
+          border: 1px solid rgba(255, 255, 255, 0.6);
+          border-radius: 20px;
+          box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(255, 255, 255, 0.5) inset;
           padding: 48px 40px;
           animation: fadeUp 0.5s cubic-bezier(0.16, 1, 0.3, 1);
         }
