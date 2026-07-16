@@ -58,14 +58,24 @@ export function ReportsPage() {
   // Low Stock Table Columns
   const lowStockColumns: Column<any>[] = [
     { key: 'sku', label: 'Product ID' },
-    { key: 'name', label: 'Product' },
+    {
+      key: 'product_name',
+      label: 'Product',
+      render: (row) => row.product_name || row.name || '—',
+    },
+    {
+      key: 'location',
+      label: 'Location',
+      render: (row) => row.warehouse_name ? `Warehouse: ${row.warehouse_name}` : row.branch_name ? `Branch: ${row.branch_name}` : row.owner_type || '—',
+    },
     { key: 'reorder_level', label: 'Reorder Threshold' },
     {
-      key: 'available_quantity',
+      key: 'quantity_on_hand',
       label: 'Quantity Available',
-      render: (row) => (
-        <span style={{ fontWeight: '700', color: '#991b1b' }}>{row.available_quantity}</span>
-      ),
+      render: (row) => {
+        const qty = row.quantity_on_hand ?? row.available_quantity ?? 0;
+        return <span style={{ fontWeight: '700', color: '#991b1b' }}>{qty}</span>;
+      },
     },
   ];
 
@@ -175,8 +185,7 @@ export function ReportsPage() {
               <div style={{ background: '#f7f9f7', padding: '16px', borderRadius: '8px', border: '1px solid #e1e8e1' }}>
                 <h4 style={{ margin: '0 0 10px', color: '#066006' }}>Fulfillment and Appraisal Rules</h4>
                 <p style={{ margin: '0', fontSize: '13px', color: '#667066', lineHeight: '1.5' }}>
-                  All inventory values are generated directly using average cost algorithms on live transactions ledger data.
-                  Unposted cycles counts are excluded from this balance.
+                  Inventory values are calculated using current quantities on hand multiplied by each product's recorded cost price. The balance includes stock held across warehouses and branches based on live inventory records.
                 </p>
               </div>
             </div>

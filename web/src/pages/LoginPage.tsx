@@ -44,18 +44,16 @@ export function LoginPage() {
           font-family: 'Inter', sans-serif;
           min-height: 100vh;
           display: flex;
-          background: url('/login-bg.jpg') center/cover no-repeat;
+          background: url('/login-bg-hd.png?v=8k_v1') center/cover no-repeat;
           position: relative;
           overflow: hidden;
         }
 
-        /* Sophisticated subtle backdrop filter over floating clouds background */
+        /* Clean transparent overlay without blur so background stays razor sharp and crystal clear */
         .login-bg-pattern {
           position: absolute;
           inset: 0;
-          background: linear-gradient(135deg, rgba(15, 23, 42, 0.25) 0%, rgba(15, 23, 42, 0.45) 100%),
-                      radial-gradient(circle at center, transparent 30%, rgba(0, 0, 0, 0.4) 100%);
-          backdrop-filter: blur(2px);
+          background: rgba(0, 0, 0, 0.15);
           z-index: 1;
         }
 
