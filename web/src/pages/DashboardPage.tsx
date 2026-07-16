@@ -36,17 +36,19 @@ export function DashboardPage() {
         const totalValue = invValueData?.inventory_value ? Number(invValueData.inventory_value) : 0;
         const availableUnits = invValueData?.units_on_hand ? Number(invValueData.units_on_hand) : 0;
         const activeTransfers = transfersData ? transfersData.filter(t => t.status !== 'RECEIVED' && t.status !== 'CANCELLED').length : 0;
-        const scansToday = transactions ? transactions.filter(t => {
+        
+        const transactionsList = transactions?.data ? transactions.data : (Array.isArray(transactions) ? transactions : []);
+        const scansToday = transactionsList.filter((t: any) => {
           const date = new Date(t.created_at);
           const today = new Date();
           return date.toDateString() === today.toDateString();
-        }).length : 0;
+        }).length;
 
         setMetrics({
           totalValue,
           availableUnits,
           activeTransfers,
-          scansToday: scansToday || (transactions ? transactions.slice(0, 10).length : 0) // fallback to total transactions if none today for demonstration
+          scansToday: scansToday || transactionsList.slice(0, 10).length // fallback to total transactions if none today for demonstration
         });
 
         setLowStock(lowStockData || []);
@@ -61,8 +63,8 @@ export function DashboardPage() {
           const count = transfersData.filter(t => t.status === 'PENDING_APPROVAL').length;
           generatedAlerts.push(`${count} transfer request(s) require manager approval.`);
         }
-        if (transactions && transactions.length > 0) {
-          const lastTx = transactions[0];
+        if (transactionsList.length > 0) {
+          const lastTx = transactionsList[0];
           generatedAlerts.push(`Recent stock adjustment: ${lastTx.notes || lastTx.transaction_type} for ${lastTx.name || lastTx.sku}.`);
         } else {
           generatedAlerts.push('All warehouse scanners connected and reporting healthy.');
