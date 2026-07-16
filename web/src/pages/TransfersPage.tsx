@@ -29,6 +29,7 @@ interface Transfer {
   received_by: string | null;
   received_at: string | null;
   transfer_date: string | null;
+  lines?: any[];
 }
 
 export function TransfersPage() {
@@ -45,6 +46,8 @@ export function TransfersPage() {
 
   // Detail Modal
   const [selectedTransfer, setSelectedTransfer] = useState<Transfer | null>(null);
+  const [selectedTransferDetails, setSelectedTransferDetails] = useState<Transfer | null>(null);
+  const [detailsLoading, setDetailsLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
 
   const loadData = async () => {
@@ -67,6 +70,20 @@ export function TransfersPage() {
   useEffect(() => {
     loadData();
   }, []);
+
+  const handleRowClick = async (row: Transfer) => {
+    setSelectedTransfer(row);
+    setSelectedTransferDetails(null);
+    setDetailsLoading(true);
+    try {
+      const data = await apiGet<Transfer>(`/transfers/${row.id}`);
+      setSelectedTransferDetails(data);
+    } catch (err) {
+      addToast('error', 'Failed to load transfer details');
+    } finally {
+      setDetailsLoading(false);
+    }
+  };
 
   const getOwnerName = (ownerType: string, whId: string | null, brId: string | null) => {
     if (ownerType === 'WAREHOUSE') {
@@ -209,7 +226,7 @@ export function TransfersPage() {
           data={filteredTransfers}
           keyExtractor={(row) => row.id}
           loading={loading}
-          onRowClick={(row) => setSelectedTransfer(row)}
+          onRowClick={handleRowClick}
           emptyMessage="No stock transfers found"
         />
       </section>
@@ -273,6 +290,44 @@ export function TransfersPage() {
               </div>
             </div>
 
+            {/* Transfer Readiness block */}
+            {selectedTransfer.status === 'PENDING_APPROVAL' && (
+              <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: '8px', padding: '16px' }}>
+                <h4 style={{ margin: '0 0 12px 0', fontSize: '13px', color: '#374151' }}>Transfer Readiness</h4>
+                {detailsLoading ? (
+                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center', fontSize: '12px', color: '#6b7280' }}>
+                    <LoadingSpinner size={16} /> Verifying stock levels...
+                  </div>
+                ) : selectedTransferDetails && selectedTransferDetails.lines ? (
+                  (() => {
+                    const insufficientLines = selectedTransferDetails.lines.filter(l => l.quantity_requested > l.available_stock);
+                    const isReady = insufficientLines.length === 0;
+                    if (isReady) {
+                      return (
+                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center', color: '#059669', fontSize: '12px', fontWeight: '500' }}>
+                          <CheckCircle size={16} /> All items have sufficient stock available.
+                        </div>
+                      );
+                    }
+                    return (
+                      <div style={{ background: '#fef2f2', border: '1px solid #f87171', borderRadius: '6px', padding: '12px' }}>
+                        <div style={{ color: '#b91c1c', fontSize: '12px', fontWeight: '600', marginBottom: '8px' }}>
+                          Insufficient stock to fulfill this transfer. The following items are short:
+                        </div>
+                        <ul style={{ margin: 0, paddingLeft: '20px', color: '#991b1b', fontSize: '12px' }}>
+                          {insufficientLines.map(line => (
+                            <li key={line.id}>
+                              <strong>{line.product_name}</strong> (Req: {line.quantity_requested}, Avail: {line.available_stock})
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    );
+                  })()
+                ) : null}
+              </div>
+            )}
+
             {/* Workflow Action Panel */}
             <div style={{
               marginTop: '10px',
@@ -304,7 +359,7 @@ export function TransfersPage() {
                     type="button"
                     className="btn btn-primary"
                     onClick={() => handleApprove(selectedTransfer.id)}
-                    disabled={actionLoading}
+                    disabled={actionLoading || detailsLoading || (selectedTransferDetails?.lines?.some((l: any) => l.quantity_requested > l.available_stock))}
                   >
                     {actionLoading ? 'Processing...' : 'Approve & Execute Transfer'}
                   </button>

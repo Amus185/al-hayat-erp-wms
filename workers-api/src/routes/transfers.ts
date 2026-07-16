@@ -19,11 +19,21 @@ transfers.get('/:id', async (c) => {
   const transfer = transfers[0];
   
   const { results: lines } = await c.env.DB.prepare(`
-    SELECT tl.*, p.name as product_name, p.sku as product_sku 
+    SELECT tl.*, p.name as product_name, p.sku as product_sku,
+           COALESCE(s.quantity_on_hand, 0) as available_stock
     FROM transfer_lines tl
     JOIN products p ON p.id = tl.product_id
+    LEFT JOIN inventory_stock s ON s.product_id = tl.product_id
+      AND s.owner_type = ?
+      AND (s.warehouse_id = ? OR (s.warehouse_id IS NULL AND ? IS NULL))
+      AND (s.branch_id = ? OR (s.branch_id IS NULL AND ? IS NULL))
     WHERE tl.transfer_id = ?
-  `).bind(id).all();
+  `).bind(
+    transfer.source_owner_type,
+    transfer.source_warehouse_id || null, transfer.source_warehouse_id || null,
+    transfer.source_branch_id || null, transfer.source_branch_id || null,
+    id
+  ).all();
   
   return c.json({ ...transfer, lines });
 });
