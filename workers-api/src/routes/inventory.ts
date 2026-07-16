@@ -8,27 +8,96 @@ const inventory = new Hono<{ Bindings: Env; Variables: { jwtPayload: any } }>();
 inventory.use('/*', authMiddleware);
 
 inventory.get('/stock', async (c) => {
-  const { results } = await c.env.DB.prepare(`
-    SELECT s.id, p.name, p.sku, p.barcode, s.product_id, s.owner_type, s.quantity_on_hand, s.quantity_reserved,
-           w.name AS warehouse, b.name AS branch, l.aisle, l.rack, l.shelf, l.bin
+  const url = new URL(c.req.url);
+  const search = url.searchParams.get('search');
+  const location_id = url.searchParams.get('location_id');
+  const category_id = url.searchParams.get('category_id');
+  const status = url.searchParams.get('status');
+  const sort_by = url.searchParams.get('sort_by') || 'p.name';
+  const sort_dir = url.searchParams.get('sort_dir') === 'DESC' ? 'DESC' : 'ASC';
+  const page = parseInt(url.searchParams.get('page') || '1', 10);
+  const limit = parseInt(url.searchParams.get('limit') || '50', 10);
+  const exportCsv = url.searchParams.get('export') === 'csv';
+
+  let query = `
     FROM inventory_stock s
     JOIN products p ON p.id = s.product_id
     LEFT JOIN warehouses w ON w.id = s.warehouse_id
     LEFT JOIN branches b ON b.id = s.branch_id
     LEFT JOIN warehouse_locations l ON l.id = s.warehouse_location_id
-    ORDER BY p.name
-    LIMIT 100
-  `).all();
-  return c.json(results);
+    WHERE 1=1
+  `;
+  const params: any[] = [];
+
+  if (search) {
+    query += ` AND (p.name LIKE ? OR p.sku LIKE ? OR p.barcode LIKE ?)`;
+    params.push(`%${search}%`, `%${search}%`, `%${search}%`);
+  }
+  if (location_id) {
+    query += ` AND (s.warehouse_id = ? OR s.branch_id = ?)`;
+    params.push(location_id, location_id);
+  }
+  if (category_id) {
+    query += ` AND p.category_id = ?`;
+    params.push(category_id);
+  }
+  if (status === 'IN_STOCK') {
+    query += ` AND s.quantity_on_hand > 0`;
+  } else if (status === 'LOW_STOCK') {
+    query += ` AND s.quantity_on_hand > 0 AND s.quantity_on_hand <= p.reorder_level`;
+  } else if (status === 'OUT_OF_STOCK') {
+    query += ` AND s.quantity_on_hand <= 0`;
+  }
+
+  const validSortColumns = ['p.name', 'p.sku', 's.quantity_on_hand', 's.quantity_reserved'];
+  const safeSortBy = validSortColumns.includes(sort_by) ? sort_by : 'p.name';
+
+  const selectCols = `
+    SELECT s.id, p.name, p.sku, p.barcode, s.product_id, s.owner_type, s.quantity_on_hand, s.quantity_reserved,
+           w.name AS warehouse, b.name AS branch, l.aisle, l.rack, l.shelf, l.bin
+  `;
+
+  if (exportCsv) {
+    const { results } = await c.env.DB.prepare(`${selectCols} ${query} ORDER BY ${safeSortBy} ${sort_dir}`).bind(...params).all();
+    let csv = 'Product Name,SKU,Barcode,Location,Quantity On Hand,Quantity Reserved\n';
+    results.forEach((r: any) => {
+      const loc = r.owner_type === 'WAREHOUSE' ? r.warehouse : r.branch;
+      csv += `"${r.name}","${r.sku || ''}","${r.barcode || ''}","${loc || ''}",${r.quantity_on_hand},${r.quantity_reserved}\n`;
+    });
+    return c.text(csv, 200, {
+      'Content-Type': 'text/csv',
+      'Content-Disposition': 'attachment; filename="inventory_stock.csv"'
+    });
+  }
+
+  const countQuery = `SELECT COUNT(*) as total ${query}`;
+  const totalRes = await c.env.DB.prepare(countQuery).bind(...params).first();
+  const total = (totalRes?.total as number) || 0;
+
+  const offset = (page - 1) * limit;
+  query += ` ORDER BY ${safeSortBy} ${sort_dir} LIMIT ? OFFSET ?`;
+  params.push(limit, offset);
+
+  const { results } = await c.env.DB.prepare(`${selectCols} ${query}`).bind(...params).all();
+
+  return c.json({ data: results, total, page, totalPages: Math.ceil(total / limit) });
 });
 
 inventory.get('/transactions', async (c) => {
-  const { results } = await c.env.DB.prepare(`
-    SELECT t.*, p.name, p.sku, p.barcode,
-           sw.name AS source_warehouse, sb.name AS source_branch,
-           dw.name AS destination_warehouse, db.name AS destination_branch,
-           l.aisle, l.rack, l.shelf, l.bin,
-           u.full_name AS user_name
+  const url = new URL(c.req.url);
+  const start_date = url.searchParams.get('start_date');
+  const end_date = url.searchParams.get('end_date');
+  const user_id = url.searchParams.get('user_id');
+  const action = url.searchParams.get('action');
+  const product_id = url.searchParams.get('product_id');
+  const location_id = url.searchParams.get('location_id');
+  const sort_by = url.searchParams.get('sort_by') || 't.created_at';
+  const sort_dir = url.searchParams.get('sort_dir') === 'ASC' ? 'ASC' : 'DESC';
+  const page = parseInt(url.searchParams.get('page') || '1', 10);
+  const limit = parseInt(url.searchParams.get('limit') || '50', 10);
+  const exportCsv = url.searchParams.get('export') === 'csv';
+
+  let query = `
     FROM inventory_transactions t
     JOIN products p ON p.id = t.product_id
     LEFT JOIN warehouses sw ON sw.id = t.source_warehouse_id
@@ -37,10 +106,58 @@ inventory.get('/transactions', async (c) => {
     LEFT JOIN branches db ON db.id = t.destination_branch_id
     LEFT JOIN warehouse_locations l ON l.id = t.destination_location_id
     LEFT JOIN users u ON u.id = t.created_by
-    ORDER BY t.created_at DESC
-    LIMIT 200
-  `).all();
-  return c.json(results);
+    WHERE 1=1
+  `;
+  const params: any[] = [];
+
+  if (start_date) { query += ` AND t.created_at >= ?`; params.push(start_date); }
+  if (end_date) { query += ` AND t.created_at <= ?`; params.push(end_date + ' 23:59:59'); }
+  if (user_id) { query += ` AND t.created_by = ?`; params.push(user_id); }
+  if (action) { query += ` AND t.transaction_type = ?`; params.push(action); }
+  if (product_id) { query += ` AND t.product_id = ?`; params.push(product_id); }
+  if (location_id) {
+    query += ` AND (t.source_warehouse_id = ? OR t.source_branch_id = ? OR t.destination_warehouse_id = ? OR t.destination_branch_id = ?)`;
+    params.push(location_id, location_id, location_id, location_id);
+  }
+
+  const validSortColumns = ['t.created_at', 'p.name', 't.quantity'];
+  const safeSortBy = validSortColumns.includes(sort_by) ? sort_by : 't.created_at';
+
+  const selectCols = `
+    SELECT t.*, p.name, p.sku, p.barcode,
+           sw.name AS source_warehouse, sb.name AS source_branch,
+           dw.name AS destination_warehouse, db.name AS destination_branch,
+           l.aisle, l.rack, l.shelf, l.bin,
+           u.full_name AS user_name
+  `;
+
+  if (exportCsv) {
+    const { results } = await c.env.DB.prepare(`${selectCols} ${query} ORDER BY ${safeSortBy} ${sort_dir}`).bind(...params).all();
+    let csv = 'Date,Transaction Type,Product,Quantity,Source,Destination,User,Notes\n';
+    results.forEach((r: any) => {
+      const src = r.source_warehouse || r.source_branch || '';
+      const dest = r.destination_warehouse || r.destination_branch || '';
+      const date = new Date(r.created_at).toLocaleString();
+      const notes = (r.notes || '').replace(/"/g, '""');
+      csv += `"${date}","${r.transaction_type}","${r.name}","${r.quantity}","${src}","${dest}","${r.user_name || ''}","${notes}"\n`;
+    });
+    return c.text(csv, 200, {
+      'Content-Type': 'text/csv',
+      'Content-Disposition': 'attachment; filename="inventory_transactions.csv"'
+    });
+  }
+
+  const countQuery = `SELECT COUNT(*) as total ${query}`;
+  const totalRes = await c.env.DB.prepare(countQuery).bind(...params).first();
+  const total = (totalRes?.total as number) || 0;
+
+  const offset = (page - 1) * limit;
+  query += ` ORDER BY ${safeSortBy} ${sort_dir} LIMIT ? OFFSET ?`;
+  params.push(limit, offset);
+
+  const { results } = await c.env.DB.prepare(`${selectCols} ${query}`).bind(...params).all();
+
+  return c.json({ data: results, total, page, totalPages: Math.ceil(total / limit) });
 });
 
 inventory.post('/adjust', requirePermissions(['manage_inventory']), async (c) => {
