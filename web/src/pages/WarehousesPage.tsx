@@ -83,7 +83,7 @@ export function WarehousesPage() {
 
   useEffect(() => {
     loadWarehouses();
-    apiGet<any[]>('/products').then(res => setProducts(res || [])).catch(console.error);
+    apiGet<any>('/products?limit=1000').then(res => setProducts(res?.data || [])).catch(console.error);
   }, []);
 
   const handleCreate = async (e: React.FormEvent) => {

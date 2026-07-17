@@ -51,14 +51,15 @@ export function CreatePOPage() {
       try {
         const sups = await apiGet<Supplier[]>('/purchasing/suppliers');
         const whs = await apiGet<Warehouse[]>('/warehouses');
-        const products = await apiGet<any[]>('/products');
+        const productsResponse = await apiGet<any>('/products?limit=1000');
+        const products = productsResponse?.data || [];
         
         setSuppliers(sups || []);
         setWarehouses(whs || []);
 
         // Build product search list
         const flatList: ProductSearchItem[] = [];
-        products?.forEach((p) => {
+        products.forEach((p: any) => {
           flatList.push({
             id: p.id,
             sku: p.sku,

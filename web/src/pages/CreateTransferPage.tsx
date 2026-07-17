@@ -53,13 +53,14 @@ export function CreateTransferPage() {
       try {
         const whs = await apiGet<Warehouse[]>('/warehouses');
         const brs = await apiGet<Branch[]>('/branches');
-        const productsList = await apiGet<any[]>('/products');
+        const productsResponse = await apiGet<any>('/products?limit=1000');
+        const productsList = productsResponse?.data || [];
         
         setWarehouses(whs || []);
         setBranches(brs || []);
 
         const flatList: ProductLine[] = [];
-        productsList?.forEach((p) => {
+        productsList.forEach((p: any) => {
           flatList.push({
             id: p.id,
             sku: p.sku,

@@ -114,13 +114,15 @@ export function InventoryPage() {
           apiGet<any[]>('/users').catch(() => []),
           apiGet<any[]>('/warehouses').catch(() => []),
           apiGet<any[]>('/branches').catch(() => []),
-          apiGet<any[]>('/products').catch(() => [])
+          apiGet<any>('/products?limit=1000').catch(() => null)
         ]);
         setCategories(cats || []);
         setUsers(usrs || []);
         setWarehouses(whs || []);
         setBranches(brs || []);
-        setProductsList(prods?.map((p: any) => ({ value: p.id, label: `${p.name} (${p.sku})` })) || []);
+        
+        const prodsArray = prods?.data || (Array.isArray(prods) ? prods : []);
+        setProductsList(prodsArray.map((p: any) => ({ value: p.id, label: `${p.name} (${p.sku})` })));
       } catch (err) {
         console.error('Init failed', err);
       }
