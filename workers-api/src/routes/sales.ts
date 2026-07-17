@@ -33,16 +33,67 @@ sales.post('/customers', requirePermissions(['manage_sales']), async (c) => {
 // ORDERS — LIST & GET
 // ──────────────────────────────────────────────────────────────────────
 sales.get('/orders', async (c) => {
-  const { results } = await c.env.DB.prepare(`
-    SELECT so.*, c.name AS customer_name, b.name AS branch_name, i.id AS invoice_id
+  const url = new URL(c.req.url);
+  const search = url.searchParams.get('search');
+  const start_date = url.searchParams.get('start_date');
+  const end_date = url.searchParams.get('end_date');
+  const customer_id = url.searchParams.get('customer_id');
+  const branch_id = url.searchParams.get('branch_id');
+  const status = url.searchParams.get('status');
+  const sort_by = url.searchParams.get('sort_by') || 'so.created_at';
+  const sort_dir = url.searchParams.get('sort_dir') === 'ASC' ? 'ASC' : 'DESC';
+  const page = parseInt(url.searchParams.get('page') || '1', 10);
+  const limit = parseInt(url.searchParams.get('limit') || '50', 10);
+  const exportCsv = url.searchParams.get('export') === 'csv';
+
+  let query = `
     FROM sales_orders so
     LEFT JOIN customers c ON c.id = so.customer_id
     JOIN branches b ON b.id = so.branch_id
     LEFT JOIN invoices i ON i.sales_order_id = so.id
-    ORDER BY so.created_at DESC
-    LIMIT 100
-  `).all();
-  return c.json(results);
+    WHERE 1=1
+  `;
+  const params: any[] = [];
+
+  if (search) {
+    query += ` AND (so.order_number LIKE ? OR c.name LIKE ?)`;
+    params.push(`%${search}%`, `%${search}%`);
+  }
+  if (start_date) { query += ` AND so.created_at >= ?`; params.push(start_date); }
+  if (end_date) { query += ` AND so.created_at <= ?`; params.push(end_date + ' 23:59:59'); }
+  if (customer_id) { query += ` AND so.customer_id = ?`; params.push(customer_id); }
+  if (branch_id) { query += ` AND so.branch_id = ?`; params.push(branch_id); }
+  if (status && status !== 'ALL') { query += ` AND so.status = ?`; params.push(status); }
+
+  const validSortColumns = ['so.created_at', 'so.order_number', 'c.name', 'so.status'];
+  const safeSortBy = validSortColumns.includes(sort_by) ? sort_by : 'so.created_at';
+
+  const selectCols = `SELECT so.*, c.name AS customer_name, b.name AS branch_name, i.id AS invoice_id`;
+
+  if (exportCsv) {
+    const { results } = await c.env.DB.prepare(`${selectCols} ${query} ORDER BY ${safeSortBy} ${sort_dir}`).bind(...params).all();
+    let csv = 'Date,Order Number,Customer,Branch,Status\n';
+    results.forEach((r: any) => {
+      const date = new Date(r.created_at).toLocaleString();
+      csv += `"${date}","${r.order_number}","${r.customer_name || ''}","${r.branch_name || ''}","${r.status}"\n`;
+    });
+    return c.text(csv, 200, {
+      'Content-Type': 'text/csv',
+      'Content-Disposition': 'attachment; filename="sales_orders.csv"'
+    });
+  }
+
+  const countQuery = `SELECT COUNT(*) as total ${query}`;
+  const totalRes = await c.env.DB.prepare(countQuery).bind(...params).first();
+  const total = (totalRes?.total as number) || 0;
+
+  const offset = (page - 1) * limit;
+  query += ` ORDER BY ${safeSortBy} ${sort_dir} LIMIT ? OFFSET ?`;
+  params.push(limit, offset);
+
+  const { results } = await c.env.DB.prepare(`${selectCols} ${query}`).bind(...params).all();
+
+  return c.json({ data: results, total, page, totalPages: Math.ceil(total / limit) });
 });
 
 sales.get('/orders/:id', async (c) => {

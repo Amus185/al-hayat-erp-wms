@@ -230,8 +230,19 @@ export function AuditPage() {
 
   const [logs, setLogs] = useState<AuditLog[]>([]);
   const [loading, setLoading] = useState(true);
+  
+  // Filters & Pagination
   const [selectedEntity, setSelectedEntity] = useState('');
   const [searchText, setSearchText] = useState('');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
+  const [userId, setUserId] = useState('');
+  const [actionFilter, setActionFilter] = useState('');
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
+  const [sortBy, setSortBy] = useState('a.created_at');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   
   const [viewMode, setViewMode] = useState<'list' | 'timeline'>('list');
   const [selectedLog, setSelectedLog] = useState<AuditLog | null>(null);
@@ -239,15 +250,23 @@ export function AuditPage() {
   const fetchLogs = async () => {
     try {
       setLoading(true);
-      const params: any = {};
-      if (selectedEntity) {
-        params.entityType = selectedEntity;
-      }
-      if (searchText && searchText.trim() !== '') {
-        params.search = searchText.trim();
-      }
-      const data = await apiGet<AuditLog[]>('/audit', params);
-      setLogs(data || []);
+      const params = new URLSearchParams({
+        page: String(page),
+        limit: '50',
+        sort_by: sortBy,
+        sort_dir: sortDir.toUpperCase(),
+      });
+      if (selectedEntity) params.append('entity_type', selectedEntity);
+      if (searchText && searchText.trim() !== '') params.append('search', searchText.trim());
+      if (startDate) params.append('start_date', startDate);
+      if (endDate) params.append('end_date', endDate);
+      if (userId) params.append('user_id', userId);
+      if (actionFilter) params.append('action', actionFilter);
+
+      const res = await apiGet<any>(`/audit?${params.toString()}`);
+      setLogs(res.data || []);
+      setTotal(res.total || 0);
+      setTotalPages(res.totalPages || 1);
     } catch (err: any) {
       addToast('error', err?.message || 'Failed to retrieve governance logs');
     } finally {
@@ -256,11 +275,24 @@ export function AuditPage() {
   };
 
   useEffect(() => {
-    const timer = setTimeout(() => {
-      fetchLogs();
-    }, 300);
+    const timer = setTimeout(fetchLogs, 300);
     return () => clearTimeout(timer);
-  }, [selectedEntity, searchText]);
+  }, [page, sortBy, sortDir, selectedEntity, searchText, startDate, endDate, userId, actionFilter]);
+
+  const handleExport = () => {
+    const params = new URLSearchParams();
+    if (selectedEntity) params.append('entity_type', selectedEntity);
+    if (searchText && searchText.trim() !== '') params.append('search', searchText.trim());
+    if (startDate) params.append('start_date', startDate);
+    if (endDate) params.append('end_date', endDate);
+    if (userId) params.append('user_id', userId);
+    if (actionFilter) params.append('action', actionFilter);
+    params.append('sort_by', sortBy);
+    params.append('sort_dir', sortDir.toUpperCase());
+    params.append('export', 'csv');
+    const apiUrl = import.meta.env.VITE_API_URL || '';
+    window.location.href = `${apiUrl}/audit?${params.toString()}`;
+  };
 
   // Client-side text filter fallback
   const filteredLogs = logs.filter((log) => {
@@ -279,16 +311,18 @@ export function AuditPage() {
     {
       key: 'created_at',
       label: 'Timestamp',
+      sortable: true,
       render: (row) => new Date(row.created_at).toLocaleString(),
     },
-    { key: 'actor_name', label: 'Actor', render: (row) => row.actor_name || 'System / Batch Job' },
+    { key: 'actor_name', label: 'Actor', sortable: true, render: (row) => row.actor_name || 'System / Batch Job' },
     {
       key: 'action',
       label: 'Action',
+      sortable: true,
       render: (row) => <span style={{ fontFamily: 'monospace', fontWeight: '700', fontSize: '13px' }}>{row.action}</span>,
     },
-    { key: 'entity_type', label: 'Entity Type', render: (row) => <span style={{ textTransform: 'capitalize' }}>{row.entity_type}</span> },
-    { key: 'entity_id', label: 'Entity Reference ID', render: (row) => row.entity_id ? <CopyableId id={row.entity_id} /> : '—' },
+    { key: 'entity_type', label: 'Entity Type', sortable: true, render: (row) => <span style={{ textTransform: 'capitalize' }}>{row.entity_type}</span> },
+    { key: 'entity_id', label: 'Entity Reference ID', sortable: true, render: (row) => row.entity_id ? <CopyableId id={row.entity_id} /> : '—' },
     {
       key: 'details',
       label: 'Details',
@@ -373,16 +407,46 @@ export function AuditPage() {
             <option value="warehouses">Warehouses</option>
           </select>
         </div>
+        <div style={{ width: '140px' }}>
+          <input type="date" className="form-input" style={{ minHeight: '38px' }} value={startDate} onChange={e => setStartDate(e.target.value)} />
+        </div>
+        <div style={{ width: '140px' }}>
+          <input type="date" className="form-input" style={{ minHeight: '38px' }} value={endDate} onChange={e => setEndDate(e.target.value)} />
+        </div>
+        <button type="button" className="btn btn-secondary" style={{ minHeight: '38px' }} onClick={() => { setSearchText(''); setStartDate(''); setEndDate(''); setSelectedEntity(''); setPage(1); }}>
+          Clear
+        </button>
+        <button type="button" className="btn btn-secondary" style={{ minHeight: '38px' }} onClick={handleExport}>
+          CSV
+        </button>
       </section>
 
       {viewMode === 'list' ? (
         <section className="panel" style={{ padding: 0, overflow: 'hidden' }}>
           <DataTable
             columns={columns}
-            data={filteredLogs}
+            data={logs}
             keyExtractor={(row) => row.id}
             loading={loading}
             emptyMessage="No security/audit logs match the current criteria"
+            sortBy={sortBy === 'a.created_at' ? 'created_at' : sortBy === 'a.action' ? 'action' : sortBy === 'a.entity_type' ? 'entity_type' : sortBy === 'u.name' ? 'actor_name' : 'entity_id'}
+            sortOrder={sortDir}
+            onSort={(key: string) => {
+              let dbKey = key;
+              if (key === 'created_at') dbKey = 'a.created_at';
+              if (key === 'action') dbKey = 'a.action';
+              if (key === 'entity_type') dbKey = 'a.entity_type';
+              if (key === 'actor_name') dbKey = 'u.name';
+              if (key === 'entity_id') dbKey = 'a.entity_id';
+              
+              if (sortBy === dbKey) {
+                setSortDir(sortDir === 'asc' ? 'desc' : 'asc');
+              } else {
+                setSortBy(dbKey);
+                setSortDir('asc');
+              }
+            }}
+            pagination={{ page, total, limit: 50, totalPages, onPageChange: setPage }}
           />
         </section>
       ) : (

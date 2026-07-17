@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ShoppingCart, Plus, UserPlus, Eye, CheckCircle, DollarSign, Zap, Printer } from 'lucide-react';
+import { ShoppingCart, Plus, UserPlus, Eye, CheckCircle, DollarSign, Zap, Printer, Search, Download, X } from 'lucide-react';
 import { apiGet, apiPost } from '../api/client';
 import { DataTable, type Column } from '../components/DataTable';
 import { Tabs } from '../components/Tabs';
 import { Modal } from '../components/Modal';
 import { InputField, TextareaField } from '../components/FormField';
+import { SearchableSelect } from '../components/SearchableSelect';
 import { StatusBadge } from '../components/StatusBadge';
 import { LoadingSpinner } from '../components/LoadingSpinner';
 import { useToast } from '../contexts/ToastContext';
@@ -38,8 +39,21 @@ export function SalesPage() {
 
   const [orders, setOrders] = useState<SalesOrder[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
+  const [branches, setBranches] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('ALL');
+
+  // Filters & Pagination
+  const [search, setSearch] = useState('');
+  const [branchId, setBranchId] = useState('');
+  const [customerId, setCustomerId] = useState('');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
+  const [sortBy, setSortBy] = useState('so.created_at');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
 
   // Customer Modal
   const [isCustomerOpen, setIsCustomerOpen] = useState(false);
@@ -54,26 +68,42 @@ export function SalesPage() {
   const [selectedOrder, setSelectedOrder] = useState<any | null>(null);
   const [orderDetailsLoading, setOrderDetailsLoading] = useState(false);
 
+  useEffect(() => {
+    async function init() {
+      try {
+        const [custs, brs] = await Promise.all([
+          apiGet<Customer[]>('/sales/customers').catch(() => []),
+          apiGet<any[]>('/branches').catch(() => [])
+        ]);
+        setCustomers(custs || []);
+        setBranches(brs || []);
+      } catch (err) {
+        console.error('Failed to init sales data', err);
+      }
+    }
+    init();
+  }, []);
+
   const loadData = async () => {
     try {
       setLoading(true);
-      const salesOrders = await apiGet<SalesOrder[]>('/sales/orders');
-      const custs = await apiGet<Customer[]>('/sales/customers');
-      const branches = await apiGet<any[]>('/branches');
+      const params = new URLSearchParams({
+        page: String(page),
+        limit: '50',
+        sort_by: sortBy,
+        sort_dir: sortDir.toUpperCase(),
+      });
+      if (search) params.append('search', search);
+      if (startDate) params.append('start_date', startDate);
+      if (endDate) params.append('end_date', endDate);
+      if (customerId) params.append('customer_id', customerId);
+      if (branchId) params.append('branch_id', branchId);
+      if (activeTab && activeTab !== 'ALL') params.append('status', activeTab);
 
-      setCustomers(custs || []);
-
-      const populatedOrders = salesOrders?.map((so) => {
-        const c = custs?.find((cust) => cust.id === so.customer_id);
-        const b = branches?.find((br) => br.id === so.branch_id);
-        return {
-          ...so,
-          customer_name: c ? c.name : 'Unknown Customer',
-          branch_name: b ? b.name : 'Unknown Branch',
-        };
-      }) || [];
-
-      setOrders(populatedOrders);
+      const res = await apiGet<any>(`/sales/orders?${params.toString()}`);
+      setOrders(res.data || []);
+      setTotal(res.total || 0);
+      setTotalPages(res.totalPages || 1);
     } catch (err: any) {
       addToast('error', err?.message || 'Failed to load sales orders data');
     } finally {
@@ -82,8 +112,24 @@ export function SalesPage() {
   };
 
   useEffect(() => {
-    loadData();
-  }, []);
+    const timeout = setTimeout(loadData, 300);
+    return () => clearTimeout(timeout);
+  }, [page, sortBy, sortDir, search, startDate, endDate, customerId, branchId, activeTab]);
+
+  const handleExport = () => {
+    const params = new URLSearchParams();
+    if (search) params.append('search', search);
+    if (startDate) params.append('start_date', startDate);
+    if (endDate) params.append('end_date', endDate);
+    if (customerId) params.append('customer_id', customerId);
+    if (branchId) params.append('branch_id', branchId);
+    if (activeTab && activeTab !== 'ALL') params.append('status', activeTab);
+    params.append('sort_by', sortBy);
+    params.append('sort_dir', sortDir.toUpperCase());
+    params.append('export', 'csv');
+    const apiUrl = import.meta.env.VITE_API_URL || '';
+    window.location.href = `${apiUrl}/sales/orders?${params.toString()}`;
+  };
 
   const handleCustomerSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -93,16 +139,16 @@ export function SalesPage() {
     }
     try {
       await apiPost('/sales/customers', customerForm);
-      addToast('success', 'Customer registered successfully. They are now available when creating a New Order.');
+      addToast('success', 'Customer registered successfully.');
       setIsCustomerOpen(false);
       setCustomerForm({ name: '', email: '', phone: '', address: '' });
-      loadData();
+      const custs = await apiGet<Customer[]>('/sales/customers');
+      setCustomers(custs || []);
     } catch (err: any) {
       addToast('error', err?.message || 'Failed to register customer');
     }
   };
 
-  // ONE-CLICK: confirm + invoice + pay all at once
   const handleComplete = async (id: string) => {
     try {
       setOrderDetailsLoading(true);
@@ -117,7 +163,6 @@ export function SalesPage() {
     }
   };
 
-  // Mark existing invoice as paid (for INVOICED status)
   const handlePayInvoice = async (orderId: string) => {
     try {
       setOrderDetailsLoading(true);
@@ -197,31 +242,43 @@ export function SalesPage() {
     }
   };
 
-  const filteredOrders = orders.filter((so) => {
-    if (activeTab === 'ALL') return true;
-    return so.status === activeTab;
-  });
-
   const tabItems = [
-    { key: 'ALL', label: 'All Orders', count: orders.length },
-    { key: 'DRAFT', label: 'Drafts', count: orders.filter((o) => o.status === 'DRAFT').length },
-    { key: 'CONFIRMED', label: 'Confirmed', count: orders.filter((o) => o.status === 'CONFIRMED').length },
-    { key: 'INVOICED', label: 'Invoiced', count: orders.filter((o) => o.status === 'INVOICED').length },
-    { key: 'PAID', label: 'Paid', count: orders.filter((o) => o.status === 'PAID').length },
+    { key: 'ALL', label: 'All Orders' },
+    { key: 'DRAFT', label: 'Drafts' },
+    { key: 'CONFIRMED', label: 'Confirmed' },
+    { key: 'INVOICED', label: 'Invoiced' },
+    { key: 'PAID', label: 'Paid' },
   ];
 
+  const handleSort = (key: string) => {
+    let dbKey = key;
+    if (key === 'order_number') dbKey = 'so.order_number';
+    if (key === 'customer_name') dbKey = 'c.name';
+    if (key === 'created_at') dbKey = 'so.created_at';
+    if (key === 'status') dbKey = 'so.status';
+    
+    if (sortBy === dbKey) {
+      setSortDir(sortDir === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortBy(dbKey);
+      setSortDir('asc');
+    }
+  };
+
   const columns: Column<SalesOrder>[] = [
-    { key: 'order_number', label: 'Order ID' },
-    { key: 'customer_name', label: 'Customer' },
+    { key: 'order_number', label: 'Order ID', sortable: true },
+    { key: 'customer_name', label: 'Customer', sortable: true },
     { key: 'branch_name', label: 'Sales Branch' },
     {
       key: 'created_at',
       label: 'Date',
+      sortable: true,
       render: (row) => new Date(row.created_at).toLocaleDateString(),
     },
     {
       key: 'status',
       label: 'Status',
+      sortable: true,
       render: (row) => {
         let tone: 'green' | 'yellow' | 'red' | 'neutral' | 'blue' = 'neutral';
         if (row.status === 'CONFIRMED') tone = 'yellow';
@@ -235,7 +292,7 @@ export function SalesPage() {
       key: 'actions',
       label: 'Actions',
       render: (row) => (
-        <button type="button" className="btn btn-secondary btn-sm" onClick={() => viewOrderDetails(row)}>
+        <button type="button" className="btn btn-secondary btn-sm" onClick={(e) => { e.stopPropagation(); viewOrderDetails(row); }}>
           <Eye size={14} style={{ marginRight: '4px', inlineSize: 'auto' }} /> Details
         </button>
       ),
@@ -248,7 +305,7 @@ export function SalesPage() {
         <div className="module-header__icon">
           <ShoppingCart size={24} />
         </div>
-        <div>
+        <div className="module-header__info">
           <p>Revenue</p>
           <h2>Customers, orders, invoices, and payments</h2>
         </div>
@@ -267,17 +324,59 @@ export function SalesPage() {
       </section>
 
       <section style={{ marginBottom: '14px' }}>
-        <Tabs tabs={tabItems} activeTab={activeTab} onTabChange={setActiveTab} />
+        <Tabs tabs={tabItems} activeTab={activeTab} onTabChange={(t: string) => { setActiveTab(t); setPage(1); }} />
       </section>
 
-      <section className="panel">
+      <section className="panel" style={{ marginBottom: '14px', display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'flex-end', padding: '16px' }}>
+        <div style={{ flex: '1 1 200px' }}>
+          <label style={{ fontSize: '11px', fontWeight: 600, color: '#6b7280', textTransform: 'uppercase', marginBottom: '6px', display: 'block' }}>Search</label>
+          <div style={{ position: 'relative' }}>
+            <Search size={16} style={{ position: 'absolute', left: '10px', top: '9px', color: '#9ca3af' }} />
+            <input type="text" className="form-input" style={{ paddingLeft: '34px' }} placeholder="Order ID or Customer Name" value={search} onChange={e => setSearch(e.target.value)} />
+          </div>
+        </div>
+        <div style={{ width: '140px' }}>
+          <label style={{ fontSize: '11px', fontWeight: 600, color: '#6b7280', textTransform: 'uppercase', marginBottom: '6px', display: 'block' }}>Start Date</label>
+          <input type="date" className="form-input" value={startDate} onChange={e => setStartDate(e.target.value)} />
+        </div>
+        <div style={{ width: '140px' }}>
+          <label style={{ fontSize: '11px', fontWeight: 600, color: '#6b7280', textTransform: 'uppercase', marginBottom: '6px', display: 'block' }}>End Date</label>
+          <input type="date" className="form-input" value={endDate} onChange={e => setEndDate(e.target.value)} />
+        </div>
+        <div style={{ width: '180px' }}>
+          <label style={{ fontSize: '11px', fontWeight: 600, color: '#6b7280', textTransform: 'uppercase', marginBottom: '6px', display: 'block' }}>Customer</label>
+          <select className="form-select" value={customerId} onChange={e => setCustomerId(e.target.value)}>
+            <option value="">All Customers</option>
+            {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+        </div>
+        <div style={{ width: '180px' }}>
+          <label style={{ fontSize: '11px', fontWeight: 600, color: '#6b7280', textTransform: 'uppercase', marginBottom: '6px', display: 'block' }}>Branch</label>
+          <select className="form-select" value={branchId} onChange={e => setBranchId(e.target.value)}>
+            <option value="">All Branches</option>
+            {branches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+          </select>
+        </div>
+        <button type="button" className="btn btn-secondary" onClick={() => { setSearch(''); setStartDate(''); setEndDate(''); setCustomerId(''); setBranchId(''); setPage(1); }}>
+          <X size={16} />
+        </button>
+        <button type="button" className="btn btn-secondary" onClick={handleExport}>
+          <Download size={16} style={{ marginRight: '6px', inlineSize: 'auto' }} /> CSV
+        </button>
+      </section>
+
+      <section className="panel" style={{ padding: 0 }}>
         <DataTable
           columns={columns}
-          data={filteredOrders}
+          data={orders}
           keyExtractor={(row) => row.id}
           loading={loading}
           onRowClick={(row) => viewOrderDetails(row)}
-          emptyMessage="No sales orders found"
+          emptyMessage="No sales orders found matching your filters"
+          sortBy={sortBy === 'so.created_at' ? 'created_at' : sortBy === 'so.order_number' ? 'order_number' : sortBy === 'c.name' ? 'customer_name' : 'status'}
+          sortOrder={sortDir}
+          onSort={handleSort}
+          pagination={{ page, total, limit: 50, totalPages, onPageChange: setPage }}
         />
       </section>
 
@@ -285,41 +384,15 @@ export function SalesPage() {
       <Modal isOpen={isCustomerOpen} onClose={() => setIsCustomerOpen(false)} title="Register Customer Account" width="sm">
         <form onSubmit={handleCustomerSubmit}>
           <div style={{ display: 'grid', gap: '14px' }}>
-            <InputField
-              label="Customer Full Name"
-              id="custName"
-              value={customerForm.name}
-              onChange={(val) => setCustomerForm((prev) => ({ ...prev, name: val }))}
-              required
-            />
-            <InputField
-              label="Email Address"
-              id="custEmail"
-              type="email"
-              value={customerForm.email}
-              onChange={(val) => setCustomerForm((prev) => ({ ...prev, email: val }))}
-            />
-            <InputField
-              label="Mobile Number"
-              id="custPhone"
-              value={customerForm.phone}
-              onChange={(val) => setCustomerForm((prev) => ({ ...prev, phone: val }))}
-            />
-            <TextareaField
-              label="Billing Address"
-              id="custAddress"
-              value={customerForm.address}
-              onChange={(val) => setCustomerForm((prev) => ({ ...prev, address: val }))}
-            />
+            <InputField label="Customer Full Name" id="custName" value={customerForm.name} onChange={(val) => setCustomerForm((prev) => ({ ...prev, name: val }))} required />
+            <InputField label="Email Address" id="custEmail" type="email" value={customerForm.email} onChange={(val) => setCustomerForm((prev) => ({ ...prev, email: val }))} />
+            <InputField label="Mobile Number" id="custPhone" value={customerForm.phone} onChange={(val) => setCustomerForm((prev) => ({ ...prev, phone: val }))} />
+            <TextareaField label="Billing Address" id="custAddress" value={customerForm.address} onChange={(val) => setCustomerForm((prev) => ({ ...prev, address: val }))} />
           </div>
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '20px' }}>
-            <button type="button" className="btn btn-secondary" onClick={() => setIsCustomerOpen(false)}>
-              Cancel
-            </button>
-            <button type="submit" className="btn btn-primary">
-              Register
-            </button>
+            <button type="button" className="btn btn-secondary" onClick={() => setIsCustomerOpen(false)}>Cancel</button>
+            <button type="submit" className="btn btn-primary">Register</button>
           </div>
         </form>
       </Modal>
@@ -333,7 +406,6 @@ export function SalesPage() {
       >
         {selectedOrder && (
           <div style={{ display: 'grid', gap: '18px' }}>
-            {/* Metadata Summary */}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px', fontSize: '13px', background: '#f7f9f7', padding: '12px', borderRadius: '8px' }}>
               <div>
                 <span style={{ color: '#667066' }}>Customer Name:</span>
@@ -347,7 +419,6 @@ export function SalesPage() {
               </div>
             </div>
 
-            {/* Sales Order Lines */}
             <div>
               <h4 style={{ margin: '0 0 8px', color: '#066006' }}>Invoice Lines</h4>
               {orderDetailsLoading ? (
@@ -356,19 +427,19 @@ export function SalesPage() {
                 <table>
                   <thead>
                     <tr>
-                      <th>Product</th>
-                      <th>Quantity</th>
-                      <th>Unit Price</th>
-                      <th>Subtotal</th>
+                      <th style={{ textAlign: 'left', padding: '8px' }}>Product</th>
+                      <th style={{ textAlign: 'left', padding: '8px' }}>Quantity</th>
+                      <th style={{ textAlign: 'left', padding: '8px' }}>Unit Price</th>
+                      <th style={{ textAlign: 'left', padding: '8px' }}>Subtotal</th>
                     </tr>
                   </thead>
                   <tbody>
                     {selectedOrder.lines?.map((line: any) => (
                       <tr key={line.id}>
-                        <td><strong>{line.product_name}</strong><br /><span style={{ color: '#667066', fontSize: '12px' }}>{line.product_sku}</span></td>
-                        <td>{line.quantity}</td>
-                        <td>${Number(line.unit_price).toLocaleString()}</td>
-                        <td><strong>${(line.quantity * line.unit_price).toLocaleString()}</strong></td>
+                        <td style={{ padding: '8px' }}><strong>{line.product_name}</strong><br /><span style={{ color: '#667066', fontSize: '12px' }}>{line.product_sku}</span></td>
+                        <td style={{ padding: '8px' }}>{line.quantity}</td>
+                        <td style={{ padding: '8px' }}>${Number(line.unit_price).toLocaleString()}</td>
+                        <td style={{ padding: '8px' }}><strong>${(line.quantity * line.unit_price).toLocaleString()}</strong></td>
                       </tr>
                     ))}
                   </tbody>
@@ -376,34 +447,24 @@ export function SalesPage() {
               )}
             </div>
 
-            {/* Action Buttons — simplified to max 1 action */}
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', borderTop: '1px solid #edf1ed', paddingTop: '16px' }}>
-              <button type="button" className="btn btn-secondary" onClick={() => setSelectedOrder(null)}>
-                Close
-              </button>
+              <button type="button" className="btn btn-secondary" onClick={() => setSelectedOrder(null)}>Close</button>
 
-              {/* DRAFT or CONFIRMED → Complete Sale in one click */}
               {(selectedOrder.status === 'DRAFT' || selectedOrder.status === 'CONFIRMED') && hasPermission('manage_sales') && (
-                <button type="button" className="btn btn-primary" disabled={orderDetailsLoading}
-                  onClick={() => handleComplete(selectedOrder.id)}
-                  style={{ background: 'linear-gradient(135deg, #0b8f08, #066006)' }}>
-                  <Zap size={14} style={{ marginRight: '4px', inlineSize: 'auto' }} />
-                  Complete Sale
+                <button type="button" className="btn btn-primary" disabled={orderDetailsLoading} onClick={() => handleComplete(selectedOrder.id)} style={{ background: 'linear-gradient(135deg, #0b8f08, #066006)' }}>
+                  <Zap size={14} style={{ marginRight: '4px', inlineSize: 'auto' }} /> Complete Sale
                 </button>
               )}
 
-              {/* INVOICED → just mark paid */}
               {selectedOrder.status === 'INVOICED' && hasPermission('manage_sales') && (
-                <button type="button" className="btn btn-primary" disabled={orderDetailsLoading}
-                  onClick={() => handlePayInvoice(selectedOrder.id)}>
+                <button type="button" className="btn btn-primary" disabled={orderDetailsLoading} onClick={() => handlePayInvoice(selectedOrder.id)}>
                   <DollarSign size={14} style={{ marginRight: '4px', inlineSize: 'auto' }} /> Mark as Paid
                 </button>
               )}
 
               {selectedOrder.status === 'PAID' && (
                 <>
-                  <button type="button" className="btn btn-secondary" onClick={() => handlePrintInvoice(selectedOrder.id)}
-                    style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  <button type="button" className="btn btn-secondary" onClick={() => handlePrintInvoice(selectedOrder.id)} style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                     <Printer size={14} /> Print Invoice
                   </button>
                   <span style={{ color: '#0b8f08', fontWeight: '600', fontSize: '14px', display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -413,8 +474,7 @@ export function SalesPage() {
               )}
 
               {selectedOrder.status === 'INVOICED' && (
-                <button type="button" className="btn btn-secondary" onClick={() => handlePrintInvoice(selectedOrder.id)}
-                  style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                <button type="button" className="btn btn-secondary" onClick={() => handlePrintInvoice(selectedOrder.id)} style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                   <Printer size={14} /> Print Invoice
                 </button>
               )}

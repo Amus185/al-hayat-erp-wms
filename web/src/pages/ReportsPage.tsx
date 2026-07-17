@@ -66,7 +66,7 @@ export function ReportsPage() {
     {
       key: 'location',
       label: 'Location',
-      render: (row) => row.warehouse_name ? `Warehouse: ${row.warehouse_name}` : row.branch_name ? `Branch: ${row.branch_name}` : row.owner_type || '—',
+      render: (row) => row.warehouse_name ? `${row.warehouse_name} (WH)` : row.branch_name ? `${row.branch_name} (Branch)` : row.owner_type || '—',
     },
     { key: 'reorder_level', label: 'Reorder Threshold' },
     {
@@ -75,6 +75,19 @@ export function ReportsPage() {
       render: (row) => {
         const qty = row.quantity_on_hand ?? row.available_quantity ?? 0;
         return <span style={{ fontWeight: '700', color: '#991b1b' }}>{qty}</span>;
+      },
+    },
+    {
+      key: 'risk',
+      label: 'Risk',
+      render: (row) => {
+        const qty = row.quantity_on_hand ?? row.available_quantity ?? 0;
+        const isCritical = qty <= 0;
+        return (
+          <span style={{ fontWeight: '500', display: 'flex', alignItems: 'center', gap: '6px' }}>
+            {isCritical ? '🔴 Critical' : '🟡 Low'}
+          </span>
+        );
       },
     },
   ];

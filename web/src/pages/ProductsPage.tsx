@@ -44,8 +44,16 @@ export function ProductsPage() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [brands, setBrands] = useState<Brand[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // Filters & Pagination
   const [search, setSearch] = useState('');
-  const [selectedCategory, setSelectedCategory] = useState('');
+  const [categoryId, setCategoryId] = useState('');
+  const [brandId, setBrandId] = useState('');
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
+  const [sortBy, setSortBy] = useState('p.name');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
 
   // Modals state
   const [isCreateOpen, setIsCreateOpen] = useState(false);
@@ -87,8 +95,20 @@ export function ProductsPage() {
   const loadData = async () => {
     try {
       setLoading(true);
-      const prs = await apiGet<Product[]>('/products', { q: search });
-      setProducts(prs || []);
+      const params = new URLSearchParams({
+        page: String(page),
+        limit: '50',
+        sort_by: sortBy,
+        sort_dir: sortDir.toUpperCase(),
+      });
+      if (search) params.append('search', search);
+      if (categoryId) params.append('category_id', categoryId);
+      if (brandId) params.append('brand_id', brandId);
+
+      const res = await apiGet<any>(`/products?${params.toString()}`);
+      setProducts(res.data || []);
+      setTotal(res.total || 0);
+      setTotalPages(res.totalPages || 1);
     } catch (err: any) {
       addToast('error', err?.message || 'Failed to fetch products');
     } finally {
@@ -97,9 +117,25 @@ export function ProductsPage() {
   };
 
   useEffect(() => {
-    loadData();
     fetchFilters();
-  }, [search]);
+  }, []);
+
+  useEffect(() => {
+    const timeout = setTimeout(loadData, 300);
+    return () => clearTimeout(timeout);
+  }, [page, sortBy, sortDir, search, categoryId, brandId]);
+
+  const handleExport = () => {
+    const params = new URLSearchParams();
+    if (search) params.append('search', search);
+    if (categoryId) params.append('category_id', categoryId);
+    if (brandId) params.append('brand_id', brandId);
+    params.append('sort_by', sortBy);
+    params.append('sort_dir', sortDir.toUpperCase());
+    params.append('export', 'csv');
+    const apiUrl = import.meta.env.VITE_API_URL || '';
+    window.location.href = `${apiUrl}/products?${params.toString()}`;
+  };
 
   const handleCreateCategory = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -194,18 +230,13 @@ export function ProductsPage() {
 
 
 
-  const filteredProducts = products.filter((p) => {
-    if (!selectedCategory) return true;
-    return p.category_id === selectedCategory;
-  });
-
   const columns: Column<Product>[] = [
     { key: 'sku', label: 'Product ID', sortable: true },
     { key: 'name', label: 'Name', sortable: true },
-    { key: 'category', label: 'Category', render: (row) => row.category || 'N/A' },
-    { key: 'brand', label: 'Brand', render: (row) => row.brand || 'N/A' },
-    { key: 'cost_price', label: 'Cost Price', render: (row) => `$${Number(row.cost_price).toLocaleString()}` },
-    { key: 'selling_price', label: 'Selling Price', render: (row) => `$${Number(row.selling_price).toLocaleString()}` },
+    { key: 'category', label: 'Category', sortable: true, render: (row) => row.category || 'N/A' },
+    { key: 'brand', label: 'Brand', sortable: true, render: (row) => row.brand || 'N/A' },
+    { key: 'cost_price', label: 'Cost Price', sortable: true, render: (row) => `$${Number(row.cost_price).toLocaleString()}` },
+    { key: 'selling_price', label: 'Selling Price', sortable: true, render: (row) => `$${Number(row.selling_price).toLocaleString()}` },
     {
       key: 'actions',
       label: 'Actions',
@@ -279,30 +310,63 @@ export function ProductsPage() {
         </div>
       </Modal>
 
-      <section className="panel" style={{ display: 'flex', gap: '14px', alignItems: 'center', flexWrap: 'wrap' }}>
-        <div style={{ flex: '1', minWidth: '240px' }}>
-          <SearchInput value={search} onChange={setSearch} placeholder="Search by Product ID, Name or Description..." />
-        </div>
-        <div>
-          <div style={{ width: '200px' }}>
-            <SearchableSelect
-              value={selectedCategory}
-              onChange={(val) => setSelectedCategory(val)}
-              options={categories.map(c => ({ value: c.id, label: c.name }))}
-              placeholder="All Categories"
-            />
+      <section className="panel" style={{ marginBottom: '14px', display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'flex-end', padding: '16px' }}>
+        <div style={{ flex: '1 1 200px' }}>
+          <label style={{ fontSize: '11px', fontWeight: 600, color: '#6b7280', textTransform: 'uppercase', marginBottom: '6px', display: 'block' }}>Search</label>
+          <div style={{ position: 'relative' }}>
+            <span style={{ position: 'absolute', left: '10px', top: '9px', color: '#9ca3af' }}>🔍</span>
+            <input type="text" className="form-input" style={{ paddingLeft: '34px' }} placeholder="Product ID, Name or Barcode" value={search} onChange={e => setSearch(e.target.value)} />
           </div>
         </div>
+        <div style={{ width: '180px' }}>
+          <label style={{ fontSize: '11px', fontWeight: 600, color: '#6b7280', textTransform: 'uppercase', marginBottom: '6px', display: 'block' }}>Category</label>
+          <select className="form-select" value={categoryId} onChange={e => setCategoryId(e.target.value)}>
+            <option value="">All Categories</option>
+            {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+        </div>
+        <div style={{ width: '180px' }}>
+          <label style={{ fontSize: '11px', fontWeight: 600, color: '#6b7280', textTransform: 'uppercase', marginBottom: '6px', display: 'block' }}>Brand</label>
+          <select className="form-select" value={brandId} onChange={e => setBrandId(e.target.value)}>
+            <option value="">All Brands</option>
+            {brands.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+          </select>
+        </div>
+        <button type="button" className="btn btn-secondary" onClick={() => { setSearch(''); setCategoryId(''); setBrandId(''); setPage(1); }}>
+          Clear
+        </button>
+        <button type="button" className="btn btn-secondary" onClick={handleExport}>
+          <List size={16} style={{ marginRight: '6px', inlineSize: 'auto' }} /> CSV
+        </button>
       </section>
 
-      <section className="panel">
+      <section className="panel" style={{ padding: 0 }}>
         <DataTable
           columns={columns}
-          data={filteredProducts}
+          data={products}
           keyExtractor={(row) => row.id}
           loading={loading}
           onRowClick={(row) => navigate(`/products/${row.id}`)}
-          emptyMessage="No products match the criteria"
+          emptyMessage="No products found matching your filters"
+          sortBy={sortBy === 'p.name' ? 'name' : sortBy === 'p.sku' ? 'sku' : sortBy === 'c.name' ? 'category' : sortBy === 'b.name' ? 'brand' : sortBy === 'p.cost_price' ? 'cost_price' : 'selling_price'}
+          sortOrder={sortDir}
+          onSort={(key: string) => {
+            let dbKey = key;
+            if (key === 'sku') dbKey = 'p.sku';
+            if (key === 'name') dbKey = 'p.name';
+            if (key === 'category') dbKey = 'c.name';
+            if (key === 'brand') dbKey = 'b.name';
+            if (key === 'cost_price') dbKey = 'p.cost_price';
+            if (key === 'selling_price') dbKey = 'p.selling_price';
+            
+            if (sortBy === dbKey) {
+              setSortDir(sortDir === 'asc' ? 'desc' : 'asc');
+            } else {
+              setSortBy(dbKey);
+              setSortDir('asc');
+            }
+          }}
+          pagination={{ page, total, limit: 50, totalPages, onPageChange: setPage }}
         />
       </section>
 

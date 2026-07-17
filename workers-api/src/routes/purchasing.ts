@@ -34,14 +34,65 @@ purchasing.post('/suppliers', requirePermissions(['manage_purchasing']), async (
 // PURCHASE ORDERS — LIST & GET
 // ──────────────────────────────────────────────────────────────────────
 purchasing.get('/orders', async (c) => {
-  const { results } = await c.env.DB.prepare(`
-    SELECT po.*, s.name AS supplier_name
+  const url = new URL(c.req.url);
+  const search = url.searchParams.get('search');
+  const start_date = url.searchParams.get('start_date');
+  const end_date = url.searchParams.get('end_date');
+  const supplier_id = url.searchParams.get('supplier_id');
+  const delivery_location = url.searchParams.get('delivery_location');
+  const status = url.searchParams.get('status');
+  const sort_by = url.searchParams.get('sort_by') || 'po.created_at';
+  const sort_dir = url.searchParams.get('sort_dir') === 'ASC' ? 'ASC' : 'DESC';
+  const page = parseInt(url.searchParams.get('page') || '1', 10);
+  const limit = parseInt(url.searchParams.get('limit') || '50', 10);
+  const exportCsv = url.searchParams.get('export') === 'csv';
+
+  let query = `
     FROM purchase_orders po
     JOIN suppliers s ON s.id = po.supplier_id
-    ORDER BY po.created_at DESC
-    LIMIT 100
-  `).all();
-  return c.json(results);
+    WHERE 1=1
+  `;
+  const params: any[] = [];
+
+  if (search) {
+    query += ` AND (po.po_number LIKE ? OR s.name LIKE ?)`;
+    params.push(`%${search}%`, `%${search}%`);
+  }
+  if (start_date) { query += ` AND po.created_at >= ?`; params.push(start_date); }
+  if (end_date) { query += ` AND po.created_at <= ?`; params.push(end_date + ' 23:59:59'); }
+  if (supplier_id) { query += ` AND po.supplier_id = ?`; params.push(supplier_id); }
+  if (delivery_location) { query += ` AND po.delivery_location = ?`; params.push(delivery_location); }
+  if (status && status !== 'ALL') { query += ` AND po.status = ?`; params.push(status); }
+
+  const validSortColumns = ['po.created_at', 'po.po_number', 's.name', 'po.status'];
+  const safeSortBy = validSortColumns.includes(sort_by) ? sort_by : 'po.created_at';
+
+  const selectCols = `SELECT po.*, s.name AS supplier_name`;
+
+  if (exportCsv) {
+    const { results } = await c.env.DB.prepare(`${selectCols} ${query} ORDER BY ${safeSortBy} ${sort_dir}`).bind(...params).all();
+    let csv = 'Date,PO Number,Supplier,Delivery Location,Total Amount,Status\n';
+    results.forEach((r: any) => {
+      const date = new Date(r.created_at).toLocaleString();
+      csv += `"${date}","${r.po_number}","${r.supplier_name || ''}","${r.delivery_location || ''}","${r.total_amount || 0}","${r.status}"\n`;
+    });
+    return c.text(csv, 200, {
+      'Content-Type': 'text/csv',
+      'Content-Disposition': 'attachment; filename="purchase_orders.csv"'
+    });
+  }
+
+  const countQuery = `SELECT COUNT(*) as total ${query}`;
+  const totalRes = await c.env.DB.prepare(countQuery).bind(...params).first();
+  const total = (totalRes?.total as number) || 0;
+
+  const offset = (page - 1) * limit;
+  query += ` ORDER BY ${safeSortBy} ${sort_dir} LIMIT ? OFFSET ?`;
+  params.push(limit, offset);
+
+  const { results } = await c.env.DB.prepare(`${selectCols} ${query}`).bind(...params).all();
+
+  return c.json({ data: results, total, page, totalPages: Math.ceil(total / limit) });
 });
 
 purchasing.get('/orders/:id', async (c) => {
