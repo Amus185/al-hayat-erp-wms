@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Truck, Plus, CheckCircle, ArrowRight, User, Calendar } from 'lucide-react';
-import { apiGet, apiPost } from '../api/client';
+import { apiGet, apiPost, apiDownload } from '../api/client';
 import { DataTable, type Column } from '../components/DataTable';
 import { Tabs } from '../components/Tabs';
 import { Modal } from '../components/Modal';
@@ -107,7 +107,7 @@ export function TransfersPage() {
     return () => clearTimeout(timeout);
   }, [page, sortBy, sortDir, searchQuery, startDate, endDate, sourceId, destinationId, activeTab]);
 
-  const handleExport = () => {
+  const handleExport = async () => {
     const params = new URLSearchParams();
     if (searchQuery) params.append('search', searchQuery);
     if (startDate) params.append('start_date', startDate);
@@ -120,8 +120,11 @@ export function TransfersPage() {
     params.append('sort_by', sortBy);
     params.append('sort_dir', sortDir.toUpperCase());
     params.append('export', 'csv');
-    const apiUrl = import.meta.env.VITE_API_URL || '';
-    window.location.href = `${apiUrl}/transfers?${params.toString()}`;
+    try {
+      await apiDownload(`/transfers?${params.toString()}`, 'transfers.csv');
+    } catch (err: any) {
+      addToast('error', err?.message || 'Failed to export CSV');
+    }
   };
 
   const handleRowClick = async (row: Transfer) => {

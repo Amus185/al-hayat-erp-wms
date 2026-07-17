@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { ClipboardCheck, Plus, Download, Search, Filter, X } from 'lucide-react';
-import { apiGet, apiPost } from '../api/client';
+import { apiGet, apiPost, apiDownload } from '../api/client';
 import { DataTable, type Column } from '../components/DataTable';
 import { Modal } from '../components/Modal';
 import { FormField, InputField } from '../components/FormField';
@@ -198,7 +198,7 @@ export function InventoryPage() {
     }
   }, [activeTab, txnPage, txnSortBy, txnSortDir, txnStartDate, txnEndDate, txnUser, txnAction, txnProduct, txnLocation]);
 
-  const handleExportStock = () => {
+  const handleExportStock = async () => {
     const params = new URLSearchParams();
     if (stockSearch) params.append('search', stockSearch);
     if (stockLocation) params.append('location_id', stockLocation);
@@ -207,12 +207,14 @@ export function InventoryPage() {
     params.append('sort_by', stockSortBy);
     params.append('sort_dir', stockSortDir.toUpperCase());
     params.append('export', 'csv');
-    // We can assume the API is mounted at /api/v1 (or fallback to import.meta.env)
-    const apiUrl = import.meta.env.VITE_API_URL || '';
-    window.location.href = `${apiUrl}/inventory/stock?${params.toString()}`;
+    try {
+      await apiDownload(`/inventory/stock?${params.toString()}`, 'inventory_stock.csv');
+    } catch (err: any) {
+      addToast('error', err?.message || 'Failed to export CSV');
+    }
   };
 
-  const handleExportTransactions = () => {
+  const handleExportTransactions = async () => {
     const params = new URLSearchParams();
     if (txnStartDate) params.append('start_date', txnStartDate);
     if (txnEndDate) params.append('end_date', txnEndDate);
@@ -223,8 +225,11 @@ export function InventoryPage() {
     params.append('sort_by', txnSortBy);
     params.append('sort_dir', txnSortDir.toUpperCase());
     params.append('export', 'csv');
-    const apiUrl = import.meta.env.VITE_API_URL || '';
-    window.location.href = `${apiUrl}/inventory/transactions?${params.toString()}`;
+    try {
+      await apiDownload(`/inventory/transactions?${params.toString()}`, 'inventory_transactions.csv');
+    } catch (err: any) {
+      addToast('error', err?.message || 'Failed to export CSV');
+    }
   };
 
   useEffect(() => {

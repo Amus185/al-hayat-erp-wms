@@ -131,3 +131,43 @@ export async function apiPublicPost<T>(
   }
   return parsed as T;
 }
+
+// Authenticated file download (for CSV export etc.)
+export async function apiDownload(
+  path: string,
+  filename: string = 'export.csv'
+): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    method: 'GET',
+    headers: buildHeaders(),
+  });
+
+  if (response.status === 401) {
+    localStorage.removeItem('access_token');
+    localStorage.removeItem('refresh_token');
+    localStorage.removeItem('auth_user');
+    if (!window.location.pathname.includes('/login')) {
+      window.location.href = '/login';
+    }
+    throw new ApiError(401, 'Unauthorized', null);
+  }
+
+  if (!response.ok) {
+    let body: Record<string, unknown> | null = null;
+    const ct = response.headers.get('content-type');
+    if (ct?.includes('application/json')) {
+      body = await response.json();
+    }
+    throw new ApiError(response.status, response.statusText, body);
+  }
+
+  const blob = await response.blob();
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.URL.revokeObjectURL(url);
+}

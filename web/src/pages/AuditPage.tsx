@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { FileClock, Search, ShieldCheck, Copy, CheckCircle2, List, Activity, ChevronDown, ChevronUp } from 'lucide-react';
-import { apiGet } from '../api/client';
+import { apiGet, apiDownload } from '../api/client';
 import { DataTable, type Column } from '../components/DataTable';
 import { SearchInput } from '../components/SearchInput';
 import { Modal } from '../components/Modal';
@@ -279,7 +279,7 @@ export function AuditPage() {
     return () => clearTimeout(timer);
   }, [page, sortBy, sortDir, selectedEntity, searchText, startDate, endDate, userId, actionFilter]);
 
-  const handleExport = () => {
+  const handleExport = async () => {
     const params = new URLSearchParams();
     if (selectedEntity) params.append('entity_type', selectedEntity);
     if (searchText && searchText.trim() !== '') params.append('search', searchText.trim());
@@ -290,8 +290,14 @@ export function AuditPage() {
     params.append('sort_by', sortBy);
     params.append('sort_dir', sortDir.toUpperCase());
     params.append('export', 'csv');
-    const apiUrl = import.meta.env.VITE_API_URL || '';
-    window.location.href = `${apiUrl}/audit?${params.toString()}`;
+    try {
+      await apiDownload(`/audit?${params.toString()}`, 'audit_logs.csv');
+    } catch (err: any) {
+      console.error('Failed to export CSV', err);
+      // Wait, AuditPage doesn't have useToast imported. We can just use console.error, 
+      // or we can import useToast. I'll just use an alert for now if there is no addToast.
+      alert('Failed to export CSV: ' + (err?.message || 'Unknown error'));
+    }
   };
 
   // Client-side text filter fallback

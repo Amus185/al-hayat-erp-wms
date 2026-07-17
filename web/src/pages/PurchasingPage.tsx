@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { PackagePlus, Plus, UserPlus, Eye, CheckCircle, Truck, FileText } from 'lucide-react';
-import { apiGet, apiPost } from '../api/client';
+import { apiGet, apiPost, apiDownload } from '../api/client';
 import { DataTable, type Column } from '../components/DataTable';
 import { Tabs } from '../components/Tabs';
 import { Modal } from '../components/Modal';
@@ -117,7 +117,7 @@ export function PurchasingPage() {
     return () => clearTimeout(timeout);
   }, [page, sortBy, sortDir, search, startDate, endDate, supplierId, activeTab]);
 
-  const handleExport = () => {
+  const handleExport = async () => {
     const params = new URLSearchParams();
     if (search) params.append('search', search);
     if (startDate) params.append('start_date', startDate);
@@ -127,8 +127,11 @@ export function PurchasingPage() {
     params.append('sort_by', sortBy);
     params.append('sort_dir', sortDir.toUpperCase());
     params.append('export', 'csv');
-    const apiUrl = import.meta.env.VITE_API_URL || '';
-    window.location.href = `${apiUrl}/purchasing/orders?${params.toString()}`;
+    try {
+      await apiDownload(`/purchasing/orders?${params.toString()}`, 'purchase_orders.csv');
+    } catch (err: any) {
+      addToast('error', err?.message || 'Failed to export CSV');
+    }
   };
 
   // Fetch warehouse list when goods receipt is triggered

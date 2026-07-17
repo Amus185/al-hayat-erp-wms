@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { PackageSearch, Plus, Trash2, List, Settings } from 'lucide-react';
-import { apiGet, apiPost, apiDelete } from '../api/client';
+import { apiGet, apiPost, apiDelete, apiDownload } from '../api/client';
 import { DataTable, type Column } from '../components/DataTable';
 import { SearchInput } from '../components/SearchInput';
 import { Modal } from '../components/Modal';
@@ -125,7 +125,7 @@ export function ProductsPage() {
     return () => clearTimeout(timeout);
   }, [page, sortBy, sortDir, search, categoryId, brandId]);
 
-  const handleExport = () => {
+  const handleExport = async () => {
     const params = new URLSearchParams();
     if (search) params.append('search', search);
     if (categoryId) params.append('category_id', categoryId);
@@ -133,8 +133,11 @@ export function ProductsPage() {
     params.append('sort_by', sortBy);
     params.append('sort_dir', sortDir.toUpperCase());
     params.append('export', 'csv');
-    const apiUrl = import.meta.env.VITE_API_URL || '';
-    window.location.href = `${apiUrl}/products?${params.toString()}`;
+    try {
+      await apiDownload(`/products?${params.toString()}`, 'products.csv');
+    } catch (err: any) {
+      addToast('error', err?.message || 'Failed to export CSV');
+    }
   };
 
   const handleCreateCategory = async (e: React.FormEvent) => {
