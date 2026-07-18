@@ -82,9 +82,9 @@ export function CreateSalesOrderPage() {
     }
     const filtered = products.filter(
       (v) =>
-        v.sku.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        v.barcode.includes(searchQuery) ||
-        v.name.toLowerCase().includes(searchQuery.toLowerCase())
+        (v.sku || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+        (v.barcode || '').includes(searchQuery) ||
+        (v.name || '').toLowerCase().includes(searchQuery.toLowerCase())
     );
     setSearchResults(filtered.slice(0, 5));
   }, [searchQuery, products]);

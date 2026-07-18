@@ -69,7 +69,9 @@ warehouses.post('/:id/locations', requirePermissions(['manage_inventory']), asyn
 warehouses.get('/:id/inventory', async (c) => {
   const id = c.req.param('id');
   const { results } = await c.env.DB.prepare(`
-    SELECT i.*, p.name, p.sku, p.barcode
+    SELECT i.id, i.product_id, i.owner_type, i.warehouse_id, i.branch_id,
+           i.warehouse_location_id, i.quantity_on_hand, i.quantity_reserved, i.updated_at,
+           p.name, p.sku, p.barcode
     FROM inventory_stock i
     JOIN products p ON p.id = i.product_id
     WHERE i.warehouse_id = ? AND i.owner_type = 'WAREHOUSE'

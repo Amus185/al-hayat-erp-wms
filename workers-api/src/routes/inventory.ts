@@ -124,7 +124,11 @@ inventory.get('/transactions', async (c) => {
   const safeSortBy = validSortColumns.includes(sort_by) ? sort_by : 't.created_at';
 
   const selectCols = `
-    SELECT t.*, p.name, p.sku, p.barcode,
+    SELECT t.id, t.product_id, t.transaction_type, t.quantity,
+           t.source_owner_type, t.source_warehouse_id, t.source_branch_id, t.source_location_id,
+           t.destination_owner_type, t.destination_warehouse_id, t.destination_branch_id, t.destination_location_id,
+           t.reference_type, t.reference_id, t.notes, t.created_by, t.created_at,
+           p.name, p.sku, p.barcode,
            sw.name AS source_warehouse, sb.name AS source_branch,
            dw.name AS destination_warehouse, db.name AS destination_branch,
            l.aisle, l.rack, l.shelf, l.bin,

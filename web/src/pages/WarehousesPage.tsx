@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Boxes, MapPin, Plus, List, Package, PackagePlus, Eye } from 'lucide-react';
+import { Boxes, MapPin, Plus, PackagePlus, Eye } from 'lucide-react';
 import { apiGet, apiPost } from '../api/client';
 import { Modal } from '../components/Modal';
 import { InputField, FormField } from '../components/FormField';
@@ -292,22 +292,6 @@ export function WarehousesPage() {
                   style={{ display: 'flex', alignItems: 'center', gap: '4px' }}
                 >
                   <Eye size={14} /> Details
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-secondary btn-sm"
-                  onClick={() => handleViewLocations(wh)}
-                  style={{ display: 'flex', alignItems: 'center', gap: '4px' }}
-                >
-                  <List size={14} /> Locations
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-primary btn-sm"
-                  onClick={() => handleViewInventory(wh)}
-                  style={{ display: 'flex', alignItems: 'center', gap: '4px' }}
-                >
-                  <Package size={14} /> Inventory
                 </button>
               </div>
             </div>
