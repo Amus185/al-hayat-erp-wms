@@ -42,6 +42,7 @@ export function ProductsPage() {
   const [products, setProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [brands, setBrands] = useState<Brand[]>([]);
+  const [warehouses, setWarehouses] = useState<{ id: string; name: string }[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('');
@@ -64,6 +65,9 @@ export function ProductsPage() {
     sellingPrice: 0,
     reorderLevel: 5,
   });
+
+  // Initial stock to assign immediately on product creation
+  const [initialStock, setInitialStock] = useState({ warehouseId: '', quantity: 0 });
 
   const [confirmState, setConfirmState] = useState<{ isOpen: boolean; title: string; message: string; onConfirm: () => void; }>({
     isOpen: false,
@@ -100,6 +104,7 @@ export function ProductsPage() {
   useEffect(() => {
     loadData();
     fetchFilters();
+    apiGet<{ id: string; name: string }[]>('/warehouses').then(res => setWarehouses(res || [])).catch(console.error);
   }, [search]);
 
   const handleCreateCategory = async (e: React.FormEvent) => {
@@ -155,7 +160,22 @@ export function ProductsPage() {
     if (newProduct.brandId) payload.brandId = newProduct.brandId;
 
     try {
-      await apiPost('/products', payload);
+      const created: any = await apiPost('/products', payload);
+      // Auto-create inventory if initial stock was provided
+      if (initialStock.warehouseId && initialStock.quantity > 0) {
+        try {
+          await apiPost('/inventory/adjust', {
+            productId: created.id,
+            direction: 'INCREASE',
+            quantity: initialStock.quantity,
+            ownerType: 'WAREHOUSE',
+            warehouseId: initialStock.warehouseId,
+            notes: 'Initial stock on product creation',
+          });
+        } catch (stockErr) {
+          addToast('error', 'Product created but failed to add initial stock — add it manually in Inventory.');
+        }
+      }
       addToast('success', 'Product created successfully');
       setIsCreateOpen(false);
       setNewProduct({
@@ -169,6 +189,7 @@ export function ProductsPage() {
         sellingPrice: 0,
         reorderLevel: 5,
       });
+      setInitialStock({ warehouseId: '', quantity: 0 });
       loadData();
     } catch (err: any) {
       addToast('error', err?.message || 'Failed to create product');
@@ -382,7 +403,7 @@ export function ProductsPage() {
             </FormField>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '14px', marginTop: '10px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px', marginTop: '10px' }}>
             <InputField
               label="Cost Price ($) *"
               id="costPrice"
@@ -399,17 +420,35 @@ export function ProductsPage() {
               onChange={(val) => setNewProduct((prev) => ({ ...prev, sellingPrice: Number(val) }))}
               required
             />
-            <InputField
-              label="Reorder Level *"
-              id="reorderLevel"
-              type="number"
-              value={newProduct.reorderLevel}
-              onChange={(val) => setNewProduct((prev) => ({ ...prev, reorderLevel: Number(val) }))}
-              required
-            />
           </div>
 
-
+          {/* Initial Stock Section */}
+          <div style={{ marginTop: '16px', padding: '14px', background: '#f4fbf4', borderRadius: '8px', border: '1px solid #d1e8d1' }}>
+            <p style={{ margin: '0 0 10px', fontWeight: 600, color: '#066006', fontSize: '14px' }}>📦 Initial Stock (Optional)</p>
+            <p style={{ margin: '0 0 12px', fontSize: '12px', color: '#667066' }}>Assign stock immediately so this product appears in Inventory right away.</p>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
+              <FormField label="Warehouse">
+                <select
+                  className="form-select"
+                  value={initialStock.warehouseId}
+                  onChange={(e) => setInitialStock(prev => ({ ...prev, warehouseId: e.target.value }))}
+                >
+                  <option value="">Skip — add stock later</option>
+                  {warehouses.map((w) => (
+                    <option key={w.id} value={w.id}>{w.name}</option>
+                  ))}
+                </select>
+              </FormField>
+              <InputField
+                label="Opening Quantity"
+                id="initQty"
+                type="number"
+                min={0}
+                value={initialStock.quantity}
+                onChange={(val) => setInitialStock(prev => ({ ...prev, quantity: Number(val) }))}
+              />
+            </div>
+          </div>
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '20px' }}>
             <button type="button" className="btn btn-secondary" onClick={() => setIsCreateOpen(false)}>
