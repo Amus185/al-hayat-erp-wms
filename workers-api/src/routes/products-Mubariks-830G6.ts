@@ -8,15 +8,59 @@ const products = new Hono<{ Bindings: Env }>();
 products.use('/*', authMiddleware);
 
 products.get('/', async (c) => {
-  const { results } = await c.env.DB.prepare(`
-    SELECT p.*, c.name as category_name, b.name as brand_name
+  const url = new URL(c.req.url);
+  const search = url.searchParams.get('search');
+  const category_id = url.searchParams.get('category_id');
+  const brand_id = url.searchParams.get('brand_id');
+  const sort_by = url.searchParams.get('sort_by') || 'p.name';
+  const sort_dir = url.searchParams.get('sort_dir') === 'DESC' ? 'DESC' : 'ASC';
+  const page = parseInt(url.searchParams.get('page') || '1', 10);
+  const limit = parseInt(url.searchParams.get('limit') || '50', 10);
+  const exportCsv = url.searchParams.get('export') === 'csv';
+
+  let query = `
     FROM products p
     LEFT JOIN categories c ON p.category_id = c.id
     LEFT JOIN brands b ON p.brand_id = b.id
-    ORDER BY p.name ASC
-    LIMIT 100
-  `).all();
-  return c.json(results);
+    WHERE 1=1
+  `;
+  const params: any[] = [];
+
+  if (search) {
+    query += ` AND (p.name LIKE ? OR p.sku LIKE ? OR p.barcode LIKE ?)`;
+    params.push(`%${search}%`, `%${search}%`, `%${search}%`);
+  }
+  if (category_id) { query += ` AND p.category_id = ?`; params.push(category_id); }
+  if (brand_id) { query += ` AND p.brand_id = ?`; params.push(brand_id); }
+
+  const validSortColumns = ['p.name', 'p.sku', 'c.name', 'b.name', 'p.cost_price', 'p.selling_price'];
+  const safeSortBy = validSortColumns.includes(sort_by) ? sort_by : 'p.name';
+
+  const selectCols = `SELECT p.*, c.name as category_name, b.name as brand_name`;
+
+  if (exportCsv) {
+    const { results } = await c.env.DB.prepare(`${selectCols} ${query} ORDER BY ${safeSortBy} ${sort_dir}`).bind(...params).all();
+    let csv = 'Product ID,Name,Barcode,Category,Brand,Cost Price,Selling Price\n';
+    results.forEach((r: any) => {
+      csv += `"${r.sku}","${r.name}","${r.barcode || ''}","${r.category_name || ''}","${r.brand_name || ''}","${r.cost_price}","${r.selling_price}"\n`;
+    });
+    return c.text(csv, 200, {
+      'Content-Type': 'text/csv',
+      'Content-Disposition': 'attachment; filename="products.csv"'
+    });
+  }
+
+  const countQuery = `SELECT COUNT(*) as total ${query}`;
+  const totalRes = await c.env.DB.prepare(countQuery).bind(...params).first();
+  const total = (totalRes?.total as number) || 0;
+
+  const offset = (page - 1) * limit;
+  query += ` ORDER BY ${safeSortBy} ${sort_dir} LIMIT ? OFFSET ?`;
+  params.push(limit, offset);
+
+  const { results } = await c.env.DB.prepare(`${selectCols} ${query}`).bind(...params).all();
+
+  return c.json({ data: results, total, page, totalPages: Math.ceil(total / limit) });
 });
 
 products.post('/', requirePermissions(['manage_inventory']), async (c) => {
@@ -115,6 +159,38 @@ products.get('/:id', async (c) => {
   `).bind(id).first();
   if (!product) return c.json({ message: 'Product not found' }, 404);
   return c.json(product);
+});
+
+products.patch('/:id', requirePermissions(['manage_inventory']), async (c) => {
+  const id = c.req.param('id');
+  const body = await c.req.json();
+  
+  const existing = await c.env.DB.prepare('SELECT * FROM products WHERE id = ?').bind(id).first();
+  if (!existing) return c.json({ message: 'Product not found' }, 404);
+
+  const updates: any = {};
+  if (body.name !== undefined) updates.name = body.name.trim();
+  if (body.sku !== undefined) updates.sku = body.sku.trim();
+  if (body.barcode !== undefined) updates.barcode = body.barcode.trim();
+  if (body.description !== undefined) updates.description = body.description.trim();
+  if (body.categoryId !== undefined) updates.category_id = body.categoryId;
+  if (body.brandId !== undefined) updates.brand_id = body.brandId;
+  if (body.costPrice !== undefined) updates.cost_price = Number(body.costPrice);
+  if (body.sellingPrice !== undefined) updates.selling_price = Number(body.sellingPrice);
+  if (body.reorderLevel !== undefined) updates.reorder_level = Number(body.reorderLevel);
+
+  if (Object.keys(updates).length === 0) return c.json(existing);
+
+  const setClauses = Object.keys(updates).map(k => `${k} = ?`).join(', ');
+  const values = Object.values(updates);
+  
+  await c.env.DB.prepare(`UPDATE products SET ${setClauses} WHERE id = ?`)
+    .bind(...values, id)
+    .run();
+    
+  const updated = await c.env.DB.prepare('SELECT * FROM products WHERE id = ?').bind(id).first();
+  await logAudit(c, 'PRODUCT_UPDATE', 'products', id, existing, updated);
+  return c.json(updated);
 });
 
 products.delete('/:id', requirePermissions(['manage_inventory']), async (c) => {

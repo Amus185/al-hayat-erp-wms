@@ -32,6 +32,56 @@ warehouses.post('/', requirePermissions(['manage_inventory']), async (c) => {
   return c.json(results[0], 201);
 });
 
+warehouses.patch('/:id', requirePermissions(['manage_inventory']), async (c) => {
+  const id = c.req.param('id');
+  const body = await c.req.json();
+  
+  const existing = await c.env.DB.prepare('SELECT * FROM warehouses WHERE id = ?').bind(id).first();
+  if (!existing) return c.json({ message: 'Warehouse not found' }, 404);
+
+  const updates: any = {};
+  if (body.code !== undefined) updates.code = body.code.trim();
+  if (body.name !== undefined) updates.name = body.name.trim();
+  if (body.city !== undefined) updates.city = body.city.trim();
+  if (body.address !== undefined) updates.address = body.address.trim() || null;
+  if (body.phone !== undefined) updates.phone = body.phone.trim() || null;
+
+  if (Object.keys(updates).length === 0) return c.json(existing);
+
+  if (updates.code && updates.code !== existing.code) {
+    const codeCheck = await c.env.DB.prepare('SELECT id FROM warehouses WHERE code = ? AND id != ?').bind(updates.code, id).first();
+    if (codeCheck) return c.json({ message: 'A warehouse with this code already exists.' }, 409);
+  }
+
+  const setClauses = Object.keys(updates).map(k => `${k} = ?`).join(', ');
+  const values = Object.values(updates);
+  
+  await c.env.DB.prepare(`UPDATE warehouses SET ${setClauses} WHERE id = ?`)
+    .bind(...values, id)
+    .run();
+    
+  const updated = await c.env.DB.prepare('SELECT * FROM warehouses WHERE id = ?').bind(id).first();
+  await logAudit(c, 'WAREHOUSE_UPDATE', 'warehouses', id, existing, updated);
+  return c.json(updated);
+});
+
+warehouses.delete('/:id', requirePermissions(['manage_inventory']), async (c) => {
+  const id = c.req.param('id');
+
+  // Check for dependencies (stock)
+  const stock = await c.env.DB.prepare('SELECT id FROM inventory_stock WHERE warehouse_id = ? LIMIT 1').bind(id).first();
+  if (stock) return c.json({ message: 'Cannot delete: warehouse has active stock records.' }, 400);
+
+  const existing = await c.env.DB.prepare('SELECT * FROM warehouses WHERE id = ?').bind(id).first();
+  if (!existing) return c.json({ message: 'Warehouse not found' }, 404);
+
+  await c.env.DB.prepare('DELETE FROM warehouse_locations WHERE warehouse_id = ?').bind(id).run();
+  await c.env.DB.prepare('DELETE FROM warehouses WHERE id = ?').bind(id).run();
+  
+  await logAudit(c, 'WAREHOUSE_DELETE', 'warehouses', id, existing, null);
+  return c.json({ success: true });
+});
+
 warehouses.get('/:id/locations', async (c) => {
   const id = c.req.param('id');
   const { results } = await c.env.DB.prepare('SELECT * FROM warehouse_locations WHERE warehouse_id = ? ORDER BY aisle, rack, shelf, bin').bind(id).all();
@@ -69,7 +119,9 @@ warehouses.post('/:id/locations', requirePermissions(['manage_inventory']), asyn
 warehouses.get('/:id/inventory', async (c) => {
   const id = c.req.param('id');
   const { results } = await c.env.DB.prepare(`
-    SELECT i.*, p.name, p.sku, p.barcode
+    SELECT i.id, i.product_id, i.owner_type, i.warehouse_id, i.branch_id,
+           i.warehouse_location_id, i.quantity_on_hand, i.quantity_reserved, i.updated_at,
+           p.name, p.sku, p.barcode
     FROM inventory_stock i
     JOIN products p ON p.id = i.product_id
     WHERE i.warehouse_id = ? AND i.owner_type = 'WAREHOUSE'

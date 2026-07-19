@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { PackageSearch, Plus, Trash2, List, Settings } from 'lucide-react';
-import { apiGet, apiPost, apiDelete } from '../api/client';
+import { apiGet, apiPost, apiPatch, apiDelete, apiDownload } from '../api/client';
 import { DataTable, type Column } from '../components/DataTable';
 import { SearchInput } from '../components/SearchInput';
 import { Modal } from '../components/Modal';
@@ -50,6 +50,8 @@ export function ProductsPage() {
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState('');
+  const [isEditOpen, setIsEditOpen] = useState(false);
+  const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   
   const [newProduct, setNewProduct] = useState({
     sku: '',
@@ -210,16 +212,19 @@ export function ProductsPage() {
       label: 'Actions',
       render: (row) => (
         <div style={{ display: 'flex', gap: '8px' }}>
-          <button
-            type="button"
-            className="btn btn-secondary btn-sm"
-            onClick={(e) => {
-              e.stopPropagation();
-              navigate(`/products/${row.id}`);
-            }}
-          >
-            View Details
-          </button>
+          {hasPermission('manage_inventory') && (
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={(e) => {
+                e.stopPropagation();
+                setEditingProduct(row);
+                setIsEditOpen(true);
+              }}
+            >
+              Edit
+            </button>
+          )}
           {hasPermission('manage_inventory') && (
             <button
               type="button"
@@ -305,7 +310,6 @@ export function ProductsPage() {
           data={filteredProducts}
           keyExtractor={(row) => row.id}
           loading={loading}
-          onRowClick={(row) => navigate(`/products/${row.id}`)}
           emptyMessage="No products match the criteria"
         />
       </section>

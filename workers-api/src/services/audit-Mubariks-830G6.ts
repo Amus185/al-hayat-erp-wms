@@ -1,5 +1,30 @@
 import { uuidv4 } from '../db';
 
+function isDeepEqual(a: any, b: any): boolean {
+  if (a === b) return true;
+  if (a && b && typeof a === 'object' && typeof b === 'object') {
+    if (Array.isArray(a)) {
+      if (!Array.isArray(b) || a.length !== b.length) return false;
+      for (let i = 0; i < a.length; i++) {
+        if (!isDeepEqual(a[i], b[i])) return false;
+      }
+      return true;
+    } else {
+      if (Array.isArray(b)) return false;
+      const keysA = Object.keys(a);
+      const keysB = Object.keys(b);
+      if (keysA.length !== keysB.length) return false;
+      for (const key of keysA) {
+        if (key === 'updated_at' || key === 'created_at') continue; // ignore timestamp diffs
+        if (!keysB.includes(key)) return false;
+        if (!isDeepEqual(a[key], b[key])) return false;
+      }
+      return true;
+    }
+  }
+  return false;
+}
+
 export function createAuditLogStmt(
   c: any,
   action: string,
@@ -8,6 +33,11 @@ export function createAuditLogStmt(
   oldValue?: any,
   newValue?: any
 ) {
+  // Prevent duplicate/empty audits
+  if (oldValue !== undefined && newValue !== undefined && isDeepEqual(oldValue, newValue)) {
+    return null;
+  }
+
   const id = uuidv4();
   let actorUserId = null;
   try {
@@ -49,7 +79,9 @@ export async function logAudit(
 ) {
   try {
     const stmt = createAuditLogStmt(c, action, entityType, entityId, oldValue, newValue);
-    await stmt.run();
+    if (stmt) {
+      await stmt.run();
+    }
   } catch (err) {
     console.error('Failed to write audit log:', err);
   }

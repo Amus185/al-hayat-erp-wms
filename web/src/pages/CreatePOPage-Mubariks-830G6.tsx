@@ -4,6 +4,7 @@ import { PackagePlus, ArrowLeft, Plus, Trash2 } from 'lucide-react';
 import { apiGet, apiPost } from '../api/client';
 import { FormField, InputField, TextareaField } from '../components/FormField';
 import { SearchInput } from '../components/SearchInput';
+import { SearchableSelect } from '../components/SearchableSelect';
 import { useToast } from '../contexts/ToastContext';
 
 interface Supplier {
@@ -50,14 +51,15 @@ export function CreatePOPage() {
       try {
         const sups = await apiGet<Supplier[]>('/purchasing/suppliers');
         const whs = await apiGet<Warehouse[]>('/warehouses');
-        const products = await apiGet<any[]>('/products');
+        const productsResponse = await apiGet<any>('/products?limit=1000');
+        const products = productsResponse?.data || [];
         
         setSuppliers(sups || []);
         setWarehouses(whs || []);
 
         // Build product search list
         const flatList: ProductSearchItem[] = [];
-        products?.forEach((p) => {
+        products.forEach((p: any) => {
           flatList.push({
             id: p.id,
             sku: p.sku,
@@ -179,35 +181,21 @@ export function CreatePOPage() {
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
             <FormField label="Supplier *">
-              <select
-                className="form-select"
+              <SearchableSelect
                 value={supplierId}
-                onChange={(e) => setSupplierId(e.target.value)}
-                required
-              >
-                <option value="">Select Supplier...</option>
-                {suppliers.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name}
-                  </option>
-                ))}
-              </select>
+                onChange={(val) => setSupplierId(val)}
+                options={suppliers.map(s => ({ value: s.id, label: s.name }))}
+                placeholder="Select Supplier..."
+              />
             </FormField>
 
             <FormField label="Receiving Warehouse *">
-              <select
-                className="form-select"
+              <SearchableSelect
                 value={warehouseId}
-                onChange={(e) => setWarehouseId(e.target.value)}
-                required
-              >
-                <option value="">Select Warehouse...</option>
-                {warehouses.map((w) => (
-                  <option key={w.id} value={w.id}>
-                    {w.name}
-                  </option>
-                ))}
-              </select>
+                onChange={(val) => setWarehouseId(val)}
+                options={warehouses.map(w => ({ value: w.id, label: w.name }))}
+                placeholder="Select Warehouse..."
+              />
             </FormField>
           </div>
 

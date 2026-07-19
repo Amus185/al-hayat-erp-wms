@@ -8,8 +8,79 @@ const transfers = new Hono<{ Bindings: Env; Variables: { jwtPayload: any } }>();
 transfers.use('/*', authMiddleware);
 
 transfers.get('/', async (c) => {
-  const { results } = await c.env.DB.prepare('SELECT * FROM transfers ORDER BY requested_at DESC LIMIT 100').all();
-  return c.json(results);
+  const url = new URL(c.req.url);
+  const search = url.searchParams.get('search');
+  const start_date = url.searchParams.get('start_date');
+  const end_date = url.searchParams.get('end_date');
+  const status = url.searchParams.get('status');
+  const source = url.searchParams.get('source');
+  const destination = url.searchParams.get('destination');
+  const sort_by = url.searchParams.get('sort_by') || 't.requested_at';
+  const sort_dir = url.searchParams.get('sort_dir') === 'ASC' ? 'ASC' : 'DESC';
+  const page = parseInt(url.searchParams.get('page') || '1', 10);
+  const limit = parseInt(url.searchParams.get('limit') || '50', 10);
+  const exportCsv = url.searchParams.get('export') === 'csv';
+
+  let query = `
+    FROM transfers t
+    LEFT JOIN warehouses sw ON sw.id = t.source_warehouse_id
+    LEFT JOIN branches sb ON sb.id = t.source_branch_id
+    LEFT JOIN warehouses dw ON dw.id = t.destination_warehouse_id
+    LEFT JOIN branches db ON db.id = t.destination_branch_id
+    WHERE 1=1
+  `;
+  const params: any[] = [];
+
+  if (search) {
+    query += ` AND (t.transfer_number LIKE ?)`;
+    params.push(`%${search}%`);
+  }
+  if (start_date) { query += ` AND t.requested_at >= ?`; params.push(start_date); }
+  if (end_date) { query += ` AND t.requested_at <= ?`; params.push(end_date + ' 23:59:59'); }
+  if (status && status !== 'ALL') { query += ` AND t.status = ?`; params.push(status); }
+  if (source) {
+    query += ` AND (t.source_warehouse_id = ? OR t.source_branch_id = ?)`;
+    params.push(source, source);
+  }
+  if (destination) {
+    query += ` AND (t.destination_warehouse_id = ? OR t.destination_branch_id = ?)`;
+    params.push(destination, destination);
+  }
+
+  const validSortColumns = ['t.requested_at', 't.transfer_number', 't.status'];
+  const safeSortBy = validSortColumns.includes(sort_by) ? sort_by : 't.requested_at';
+
+  const selectCols = `
+    SELECT t.*, 
+           COALESCE(sw.name, sb.name) as source_name,
+           COALESCE(dw.name, db.name) as destination_name,
+           (SELECT COUNT(*) FROM transfer_lines WHERE transfer_id = t.id) as line_count
+  `;
+
+  if (exportCsv) {
+    const { results } = await c.env.DB.prepare(`${selectCols} ${query} ORDER BY ${safeSortBy} ${sort_dir}`).bind(...params).all();
+    let csv = 'Date,Transfer Number,Source,Destination,Status,Lines\n';
+    results.forEach((r: any) => {
+      const date = new Date(r.requested_at).toLocaleString();
+      csv += `"${date}","${r.transfer_number}","${r.source_name || ''}","${r.destination_name || ''}","${r.status}","${r.line_count}"\n`;
+    });
+    return c.text(csv, 200, {
+      'Content-Type': 'text/csv',
+      'Content-Disposition': 'attachment; filename="transfers.csv"'
+    });
+  }
+
+  const countQuery = `SELECT COUNT(*) as total ${query}`;
+  const totalRes = await c.env.DB.prepare(countQuery).bind(...params).first();
+  const total = (totalRes?.total as number) || 0;
+
+  const offset = (page - 1) * limit;
+  query += ` ORDER BY ${safeSortBy} ${sort_dir} LIMIT ? OFFSET ?`;
+  params.push(limit, offset);
+
+  const { results } = await c.env.DB.prepare(`${selectCols} ${query}`).bind(...params).all();
+
+  return c.json({ data: results, total, page, totalPages: Math.ceil(total / limit) });
 });
 
 transfers.get('/:id', async (c) => {
@@ -19,11 +90,21 @@ transfers.get('/:id', async (c) => {
   const transfer = transfers[0];
   
   const { results: lines } = await c.env.DB.prepare(`
-    SELECT tl.*, p.name as product_name, p.sku as product_sku 
+    SELECT tl.*, p.name as product_name, p.sku as product_sku,
+           COALESCE(s.quantity_on_hand, 0) as available_stock
     FROM transfer_lines tl
     JOIN products p ON p.id = tl.product_id
+    LEFT JOIN inventory_stock s ON s.product_id = tl.product_id
+      AND s.owner_type = ?
+      AND (s.warehouse_id = ? OR (s.warehouse_id IS NULL AND ? IS NULL))
+      AND (s.branch_id = ? OR (s.branch_id IS NULL AND ? IS NULL))
     WHERE tl.transfer_id = ?
-  `).bind(id).all();
+  `).bind(
+    transfer.source_owner_type,
+    transfer.source_warehouse_id || null, transfer.source_warehouse_id || null,
+    transfer.source_branch_id || null, transfer.source_branch_id || null,
+    id
+  ).all();
   
   return c.json({ ...transfer, lines });
 });
@@ -176,8 +257,24 @@ transfers.post('/:id/approve', requirePermissions(['manage_transfers']), async (
       today.setHours(0, 0, 0, 0);
       transferDate.setHours(0, 0, 0, 0);
       if (transferDate > today) {
-        await c.env.DB.prepare("UPDATE transfers SET status = 'PENDING_APPROVAL' WHERE id = ?").bind(id).run();
-        return c.json({ message: `Cannot approve: transfer is scheduled for ${(transfer.transfer_date as string).slice(0, 10)}, which is in the future.` }, 400);
+        const payload = c.get('jwtPayload') as any;
+        const permissions = payload?.permissions || [];
+        
+        // Allow users with manage_users permission (System Admin / Manager) to bypass
+        if (!permissions.includes('manage_users')) {
+          await c.env.DB.prepare("UPDATE transfers SET status = 'PENDING_APPROVAL' WHERE id = ?").bind(id).run();
+          return c.json({ message: `Cannot approve: transfer is scheduled for ${(transfer.transfer_date as string).slice(0, 10)}, which is in the future.` }, 400);
+        } else {
+          // Authorized early execution. Log this via audit log or note.
+          await logAudit(
+            c,
+            'EARLY_EXECUTION',
+            'transfers',
+            id,
+            null,
+            { note: `Transfer scheduled for ${(transfer.transfer_date as string).slice(0, 10)} executed early by user ${payload?.name}.` }
+          );
+        }
       }
     }
 
