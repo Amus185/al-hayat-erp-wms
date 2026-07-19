@@ -12,8 +12,9 @@ import {
   Truck,
   Users,
   LogOut,
+  Menu,
 } from 'lucide-react';
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 
 const navItems = [
@@ -37,6 +38,7 @@ type AppShellProps = {
 export function AppShell({ children }: AppShellProps) {
   const { user, logout, hasPermission } = useAuth();
   const navigate = useNavigate();
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
   const handleLogout = () => {
     logout();
@@ -45,7 +47,15 @@ export function AppShell({ children }: AppShellProps) {
 
   return (
     <div className="app-shell">
-      <aside className="sidebar">
+      {/* Mobile Backdrop */}
+      {isSidebarOpen && (
+        <div 
+          className="sidebar-backdrop" 
+          onClick={() => setIsSidebarOpen(false)}
+        />
+      )}
+
+      <aside className={`sidebar ${isSidebarOpen ? 'open' : ''}`}>
         <div className="brand">
           <div className="brand__logo">
             <img src="/logo.png" alt="Al Hayat Logo" />
@@ -70,6 +80,7 @@ export function AppShell({ children }: AppShellProps) {
                   to={item.path}
                   key={item.label}
                   className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}
+                  onClick={() => setIsSidebarOpen(false)}
                 >
                   <Icon size={18} />
                   <span>{item.label}</span>
@@ -93,9 +104,18 @@ export function AppShell({ children }: AppShellProps) {
       
       <main className="main">
         <header className="topbar">
-          <div>
-            <p>Operations Dashboard</p>
-            <h1>Inventory, purchasing, transfers, and sales</h1>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <button 
+              className="mobile-menu-btn" 
+              onClick={() => setIsSidebarOpen(true)}
+              aria-label="Open menu"
+            >
+              <Menu size={24} />
+            </button>
+            <div>
+              <p>Operations Dashboard</p>
+              <h1>Inventory, purchasing, transfers, and sales</h1>
+            </div>
           </div>
           <div className="topbar__actions">
             <button type="button" title="Notifications">
