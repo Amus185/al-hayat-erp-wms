@@ -1,33 +1,22 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Boxes, MapPin, Plus, PackagePlus, Eye } from 'lucide-react';
-import { apiGet, apiPost } from '../api/client';
-import { Modal } from '../components/Modal';
+import { Boxes, MapPin, Eye, Trash2, Edit2 } from 'lucide-react';
+import { apiGet, apiPost, apiPatch, apiDelete } from '../api/client';
+import { Modal, ConfirmModal } from '../components/Modal';
 import { InputField, FormField } from '../components/FormField';
-import { DataTable, type Column } from '../components/DataTable';
 import { PageSkeleton } from '../components/LoadingSpinner';
 import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
-import { SearchableSelect } from '../components/SearchableSelect';
 
 interface Warehouse {
   id: string;
   name: string;
   city: string;
+  code: string;
   address: string | null;
   phone: string | null;
   is_active: boolean;
   location_count?: number;
-}
-
-interface WarehouseLocation {
-  id: string;
-  warehouse_id: string;
-  aisle: string;
-  rack: string;
-  shelf: string;
-  bin: string;
-  barcode: string | null;
 }
 
 export function WarehousesPage() {
@@ -38,36 +27,22 @@ export function WarehousesPage() {
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Selected warehouse for locations view
-  const [selectedWarehouse, setSelectedWarehouse] = useState<Warehouse | null>(null);
-  const [locations, setLocations] = useState<WarehouseLocation[]>([]);
-  const [locationsLoading, setLocationsLoading] = useState(false);
-
-  // Form for adding a location
-  const [isAddLocationOpen, setIsAddLocationOpen] = useState(false);
-  const [newLoc, setNewLoc] = useState({
-    aisle: '',
-    rack: '',
-    shelf: '',
-    bin: '',
-    barcode: '',
-  });
-
   // Search
   const [searchQuery, setSearchQuery] = useState('');
 
-  // Inventory View
-  const [isInventoryOpen, setIsInventoryOpen] = useState(false);
-  const [inventory, setInventory] = useState<any[]>([]);
-  const [inventoryLoading, setInventoryLoading] = useState(false);
-
-  // Add Product Quantity
-  const [isAddStockOpen, setIsAddStockOpen] = useState(false);
-  const [products, setProducts] = useState<any[]>([]);
-  const [addStockForm, setAddStockForm] = useState({ productId: '', quantity: 1, locationId: '', notes: '' });
-
+  // Modals state
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [newWh, setNewWh] = useState({ code: '', name: '', city: '', address: '' });
+
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [editingWh, setEditingWh] = useState<Warehouse | null>(null);
+
+  const [confirmState, setConfirmState] = useState<{ isOpen: boolean; title: string; message: string; onConfirm: () => void; }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    onConfirm: () => {},
+  });
 
   const loadWarehouses = async () => {
     try {
@@ -83,7 +58,6 @@ export function WarehousesPage() {
 
   useEffect(() => {
     loadWarehouses();
-    apiGet<any>('/products?limit=1000').then(res => setProducts(res?.data || [])).catch(console.error);
   }, []);
 
   const handleCreate = async (e: React.FormEvent) => {
@@ -99,99 +73,46 @@ export function WarehousesPage() {
     }
   };
 
-  const handleViewLocations = async (wh: Warehouse) => {
-    setSelectedWarehouse(wh);
-    setLocationsLoading(true);
-    try {
-      const data = await apiGet<WarehouseLocation[]>(`/warehouses/${wh.id}/locations`);
-      setLocations(data || []);
-    } catch (err: any) {
-      addToast('error', err?.message || 'Failed to load warehouse locations');
-    } finally {
-      setLocationsLoading(false);
-    }
-  };
-
-  const handleViewInventory = async (wh: Warehouse) => {
-    setSelectedWarehouse(wh);
-    setIsInventoryOpen(true);
-    setInventoryLoading(true);
-    try {
-      const data = await apiGet<any[]>(`/warehouses/${wh.id}/inventory`);
-      setInventory(data || []);
-      // Preload locations for the adjust stock modal if needed
-      const locData = await apiGet<WarehouseLocation[]>(`/warehouses/${wh.id}/locations`);
-      setLocations(locData || []);
-    } catch (err: any) {
-      addToast('error', err?.message || 'Failed to load inventory');
-    } finally {
-      setInventoryLoading(false);
-    }
-  };
-
-  const handleAddLocationSubmit = async (e: React.FormEvent) => {
+  const handleEdit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedWarehouse) return;
-    if (!newLoc.aisle || !newLoc.rack || !newLoc.shelf || !newLoc.bin) {
-      addToast('error', 'All fields are required');
-      return;
-    }
-
+    if (!editingWh) return;
     try {
-      await apiPost(`/warehouses/${selectedWarehouse.id}/locations`, newLoc);
-      addToast('success', 'Location created successfully');
-      setNewLoc({ aisle: '', rack: '', shelf: '', bin: '', barcode: '' });
-      setIsAddLocationOpen(false);
-      
-      // Reload locations
-      handleViewLocations(selectedWarehouse);
-      
-      // Reload warehouse counts
+      await apiPatch(`/warehouses/${editingWh.id}`, {
+        code: editingWh.code,
+        name: editingWh.name,
+        city: editingWh.city,
+        address: editingWh.address,
+      });
+      addToast('success', 'Warehouse updated successfully');
+      setIsEditModalOpen(false);
+      setEditingWh(null);
       loadWarehouses();
     } catch (err: any) {
-      addToast('error', err?.message || 'Failed to create location');
+      addToast('error', err?.message || 'Failed to update warehouse');
     }
   };
 
-  const handleAddStockSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!selectedWarehouse) return;
-    try {
-      await apiPost('/inventory/adjust', {
-         productId: addStockForm.productId,
-         direction: 'INCREASE',
-         quantity: addStockForm.quantity,
-         ownerType: 'WAREHOUSE',
-         warehouseId: selectedWarehouse.id,
-         warehouseLocationId: addStockForm.locationId || undefined,
-         notes: addStockForm.notes || 'Manual stock addition'
-      });
-      addToast('success', 'Product quantity added successfully');
-      setIsAddStockOpen(false);
-      setAddStockForm({ productId: '', quantity: 1, locationId: '', notes: '' });
-      handleViewInventory(selectedWarehouse);
-    } catch (err: any) {
-      addToast('error', err?.message || 'Failed to add stock');
-    }
+  const handleDelete = async (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setConfirmState({
+      isOpen: true,
+      title: 'Delete Warehouse',
+      message: 'Are you sure you want to delete this warehouse? This action cannot be undone and will fail if the warehouse has active inventory.',
+      onConfirm: async () => {
+        try {
+          await apiDelete(`/warehouses/${id}`);
+          addToast('success', 'Warehouse deleted successfully');
+          loadWarehouses();
+        } catch (err: any) {
+          addToast('error', err?.message || 'Failed to delete warehouse');
+        }
+      }
+    });
   };
 
   if (loading) {
     return <PageSkeleton />;
   }
-
-  const locationColumns: Column<WarehouseLocation>[] = [
-    { key: 'aisle', label: 'Aisle' },
-    { key: 'rack', label: 'Rack' },
-    { key: 'shelf', label: 'Shelf' },
-    { key: 'bin', label: 'Bin' },
-    { key: 'barcode', label: 'Location Barcode', render: (row) => row.barcode || 'N/A' },
-  ];
-
-  const inventoryColumns: Column<any>[] = [
-    { key: 'sku', label: 'Product ID' },
-    { key: 'name', label: 'Product Name' },
-    { key: 'quantity_on_hand', label: 'Available Qty', render: (row) => <strong style={{color: '#066006'}}>{row.quantity_on_hand}</strong> },
-  ];
 
   const filteredWarehouses = warehouses.filter(w => 
     w.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
@@ -209,9 +130,11 @@ export function WarehousesPage() {
           <h2>Warehouses, aisles, racks, shelves, and bins</h2>
         </div>
         <div>
-          <button type="button" className="btn btn-primary" onClick={() => setIsModalOpen(true)}>
-            + New Warehouse
-          </button>
+          {hasPermission('manage_inventory') && (
+            <button type="button" className="btn btn-primary" onClick={() => setIsModalOpen(true)}>
+              + New Warehouse
+            </button>
+          )}
         </div>
       </section>
 
@@ -225,6 +148,7 @@ export function WarehousesPage() {
         />
       </section>
 
+      {/* Create Modal */}
       <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title="Create Warehouse">
         <form onSubmit={handleCreate} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
           <FormField label="Code">
@@ -237,7 +161,7 @@ export function WarehousesPage() {
             <input type="text" className="form-input" required value={newWh.city} onChange={e => setNewWh({...newWh, city: e.target.value})} />
           </FormField>
           <FormField label="Address">
-            <input type="text" className="form-input" value={newWh.address} onChange={e => setNewWh({...newWh, address: e.target.value})} />
+            <input type="text" className="form-input" value={newWh.address || ''} onChange={e => setNewWh({...newWh, address: e.target.value})} />
           </FormField>
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
             <button type="button" className="btn btn-secondary" onClick={() => setIsModalOpen(false)}>Cancel</button>
@@ -245,6 +169,30 @@ export function WarehousesPage() {
           </div>
         </form>
       </Modal>
+
+      {/* Edit Modal */}
+      {isEditModalOpen && editingWh && (
+        <Modal isOpen={isEditModalOpen} onClose={() => { setIsEditModalOpen(false); setEditingWh(null); }} title="Edit Warehouse">
+          <form onSubmit={handleEdit} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            <FormField label="Code">
+              <input type="text" className="form-input" required value={editingWh.code || ''} onChange={e => setEditingWh({...editingWh, code: e.target.value})} />
+            </FormField>
+            <FormField label="Name">
+              <input type="text" className="form-input" required value={editingWh.name} onChange={e => setEditingWh({...editingWh, name: e.target.value})} />
+            </FormField>
+            <FormField label="City">
+              <input type="text" className="form-input" required value={editingWh.city} onChange={e => setEditingWh({...editingWh, city: e.target.value})} />
+            </FormField>
+            <FormField label="Address">
+              <input type="text" className="form-input" value={editingWh.address || ''} onChange={e => setEditingWh({...editingWh, address: e.target.value})} />
+            </FormField>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+              <button type="button" className="btn btn-secondary" onClick={() => { setIsEditModalOpen(false); setEditingWh(null); }}>Cancel</button>
+              <button type="submit" className="btn btn-primary">Save Changes</button>
+            </div>
+          </form>
+        </Modal>
+      )}
 
       {/* Grid of Warehouses */}
       <section style={{
@@ -266,7 +214,7 @@ export function WarehousesPage() {
                 <h3 style={{ margin: '0', fontSize: '18px', color: '#066006' }}>{wh.name}</h3>
               </div>
               <p style={{ margin: '0 0 6px', color: '#667066', fontSize: '13px' }}>
-                City: <strong>{wh.city}</strong>
+                City: <strong>{wh.city}</strong> | Code: <strong>{wh.code}</strong>
               </p>
               <p style={{ margin: '0 0 12px', color: '#667066', fontSize: '13px' }}>
                 Address: {wh.address || 'N/A'}
@@ -293,203 +241,39 @@ export function WarehousesPage() {
                 >
                   <Eye size={14} /> Details
                 </button>
+                {hasPermission('manage_inventory') && (
+                  <>
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      onClick={() => { setEditingWh(wh); setIsEditModalOpen(true); }}
+                      style={{ display: 'flex', alignItems: 'center', gap: '4px' }}
+                    >
+                      <Edit2 size={14} /> Edit
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-danger btn-sm"
+                      onClick={(e) => handleDelete(wh.id, e)}
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </>
+                )}
               </div>
             </div>
           </div>
         ))}
       </section>
 
-      {/* View Locations Modal */}
-      <Modal
-        isOpen={!!selectedWarehouse}
-        onClose={() => setSelectedWarehouse(null)}
-        title={selectedWarehouse ? `Bin Locations: ${selectedWarehouse.name}` : 'Locations'}
-        width="lg"
-      >
-        {selectedWarehouse && (
-          <div>
-            <div style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center',
-              marginBottom: '16px',
-              borderBottom: '1px solid #edf1ed',
-              paddingBottom: '12px'
-            }}>
-              <div>
-                <p style={{ margin: '0', color: '#667066', fontSize: '13px' }}>
-                  {selectedWarehouse.city} — {selectedWarehouse.address || 'No Address'}
-                </p>
-              </div>
-              {hasPermission('manage_inventory') && (
-                <button
-                  type="button"
-                  className="btn btn-primary btn-sm"
-                  onClick={() => setIsAddLocationOpen(true)}
-                  style={{ display: 'flex', alignItems: 'center', gap: '4px' }}
-                >
-                  <Plus size={14} /> Add Bin Location
-                </button>
-              )}
-            </div>
-
-            <DataTable
-              columns={locationColumns}
-              data={locations}
-              keyExtractor={(row) => row.id}
-              loading={locationsLoading}
-              emptyMessage="No bin locations configured for this warehouse"
-            />
-          </div>
-        )}
-      </Modal>
-
-      {/* Add Location Sub-Modal */}
-      <Modal
-        isOpen={isAddLocationOpen}
-        onClose={() => setIsAddLocationOpen(false)}
-        title="Add Warehouse Bin Location"
-        width="sm"
-      >
-        <form onSubmit={handleAddLocationSubmit}>
-          <div style={{ display: 'grid', gap: '14px' }}>
-            <InputField
-              label="Aisle"
-              id="aisle"
-              placeholder="e.g. A-02"
-              value={newLoc.aisle}
-              onChange={(val) => setNewLoc(prev => ({ ...prev, aisle: val }))}
-              required
-            />
-            <InputField
-              label="Rack"
-              id="rack"
-              placeholder="e.g. R4"
-              value={newLoc.rack}
-              onChange={(val) => setNewLoc(prev => ({ ...prev, rack: val }))}
-              required
-            />
-            <InputField
-              label="Shelf"
-              id="shelf"
-              placeholder="e.g. S1"
-              value={newLoc.shelf}
-              onChange={(val) => setNewLoc(prev => ({ ...prev, shelf: val }))}
-              required
-            />
-            <InputField
-              label="Bin"
-              id="bin"
-              placeholder="e.g. B8"
-              value={newLoc.bin}
-              onChange={(val) => setNewLoc(prev => ({ ...prev, bin: val }))}
-              required
-            />
-            <InputField
-              label="Barcode (Optional)"
-              id="locBarcode"
-              placeholder="e.g. LOC-00123"
-              value={newLoc.barcode}
-              onChange={(val) => setNewLoc(prev => ({ ...prev, barcode: val }))}
-            />
-          </div>
-          
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '20px' }}>
-            <button type="button" className="btn btn-secondary" onClick={() => setIsAddLocationOpen(false)}>
-              Cancel
-            </button>
-            <button type="submit" className="btn btn-primary">
-              Create Location
-            </button>
-          </div>
-        </form>
-      </Modal>
-
-      {/* View Inventory Modal */}
-      <Modal
-        isOpen={isInventoryOpen}
-        onClose={() => setIsInventoryOpen(false)}
-        title={selectedWarehouse ? `Inventory in ${selectedWarehouse.name}` : 'Inventory'}
-        width="lg"
-      >
-        {selectedWarehouse && (
-          <div>
-            <div style={{
-              display: 'flex',
-              justifyContent: 'flex-end',
-              marginBottom: '16px',
-            }}>
-              {hasPermission('manage_inventory') && (
-                <button
-                  type="button"
-                  className="btn btn-primary btn-sm"
-                  onClick={() => setIsAddStockOpen(true)}
-                  style={{ display: 'flex', alignItems: 'center', gap: '4px' }}
-                >
-                  <PackagePlus size={14} /> Add Product Quantity
-                </button>
-              )}
-            </div>
-
-            <DataTable
-              columns={inventoryColumns}
-              data={inventory}
-              keyExtractor={(row) => row.id}
-              loading={inventoryLoading}
-              emptyMessage="No products found in this warehouse"
-            />
-          </div>
-        )}
-      </Modal>
-
-      {/* Add Product Quantity Modal */}
-      <Modal
-        isOpen={isAddStockOpen}
-        onClose={() => setIsAddStockOpen(false)}
-        title={`Add Product Quantity to ${selectedWarehouse?.name}`}
-        width="sm"
-      >
-        <form onSubmit={handleAddStockSubmit}>
-          <div style={{ display: 'grid', gap: '14px' }}>
-            <FormField label="Product">
-              <SearchableSelect
-                value={addStockForm.productId}
-                onChange={(val) => setAddStockForm(prev => ({ ...prev, productId: val }))}
-                options={products.map(p => ({ value: p.id, label: `${p.name} (${p.sku})` }))}
-                placeholder="Select a product..."
-              />
-            </FormField>
-
-            <InputField
-              label="Quantity to Add"
-              id="addQty"
-              type="number"
-              min={1}
-              value={addStockForm.quantity}
-              onChange={(val) => setAddStockForm(prev => ({ ...prev, quantity: Number(val) }))}
-              required
-            />
-
-            <FormField label="Bin Location (Optional)">
-              <SearchableSelect
-                value={addStockForm.locationId}
-                onChange={(val) => setAddStockForm(prev => ({ ...prev, locationId: val }))}
-                options={locations.map(loc => ({ value: loc.id, label: `${loc.aisle}-${loc.rack}-${loc.shelf}-${loc.bin}` }))}
-                placeholder="Select Location..."
-              />
-            </FormField>
-          </div>
-          
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '20px' }}>
-            <button type="button" className="btn btn-secondary" onClick={() => setIsAddStockOpen(false)}>
-              Cancel
-            </button>
-            <button type="submit" className="btn btn-primary">
-              Add Quantity
-            </button>
-          </div>
-        </form>
-      </Modal>
+      <ConfirmModal
+        isOpen={confirmState.isOpen}
+        title={confirmState.title}
+        message={confirmState.message}
+        isDestructive={true}
+        onConfirm={confirmState.onConfirm}
+        onCancel={() => setConfirmState(prev => ({ ...prev, isOpen: false }))}
+      />
     </div>
   );
 }

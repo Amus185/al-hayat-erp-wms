@@ -35,34 +35,38 @@ export function DashboardPage() {
         // Parse metrics
         const totalValue = invValueData?.inventory_value ? Number(invValueData.inventory_value) : 0;
         const availableUnits = invValueData?.units_on_hand ? Number(invValueData.units_on_hand) : 0;
-        const activeTransfers = transfersData ? transfersData.filter(t => t.status !== 'RECEIVED' && t.status !== 'CANCELLED').length : 0;
-        const scansToday = transactions ? transactions.filter(t => {
+        
+        const transfersList = transfersData?.data ? transfersData.data : (Array.isArray(transfersData) ? transfersData : []);
+        const activeTransfers = transfersList.filter((t: any) => t.status !== 'RECEIVED' && t.status !== 'CANCELLED').length;
+        
+        const transactionsList = transactions?.data ? transactions.data : (Array.isArray(transactions) ? transactions : []);
+        const scansToday = transactionsList.filter((t: any) => {
           const date = new Date(t.created_at);
           const today = new Date();
           return date.toDateString() === today.toDateString();
-        }).length : 0;
+        }).length;
 
         setMetrics({
           totalValue,
           availableUnits,
           activeTransfers,
-          scansToday: scansToday || (transactions ? transactions.slice(0, 10).length : 0) // fallback to total transactions if none today for demonstration
+          scansToday: scansToday || transactionsList.slice(0, 10).length // fallback to total transactions if none today for demonstration
         });
 
         setLowStock(lowStockData || []);
-        setActiveTransfersList(transfersData ? transfersData.slice(0, 5) : []);
+        setActiveTransfersList(transfersList.slice(0, 5));
 
         // Build some operation alerts dynamically
         const generatedAlerts: string[] = [];
         if (lowStockData && lowStockData.length > 0) {
           generatedAlerts.push(`${lowStockData.length} items have fallen below reorder thresholds.`);
         }
-        if (transfersData && transfersData.some(t => t.status === 'PENDING_APPROVAL')) {
-          const count = transfersData.filter(t => t.status === 'PENDING_APPROVAL').length;
+        if (transfersList.some((t: any) => t.status === 'PENDING_APPROVAL')) {
+          const count = transfersList.filter((t: any) => t.status === 'PENDING_APPROVAL').length;
           generatedAlerts.push(`${count} transfer request(s) require manager approval.`);
         }
-        if (transactions && transactions.length > 0) {
-          const lastTx = transactions[0];
+        if (transactionsList.length > 0) {
+          const lastTx = transactionsList[0];
           generatedAlerts.push(`Recent stock adjustment: ${lastTx.notes || lastTx.transaction_type} for ${lastTx.name || lastTx.sku}.`);
         } else {
           generatedAlerts.push('All warehouse scanners connected and reporting healthy.');
@@ -85,25 +89,33 @@ export function DashboardPage() {
 
   const lowStockColumns: Column<any>[] = [
     { key: 'sku', label: 'Product ID' },
-    { key: 'name', label: 'Product Name' },
+    { key: 'product_name', label: 'Product Name' },
+    {
+      key: 'location',
+      label: 'Location',
+      render: (row) => row.owner_type === 'WAREHOUSE' ? `${row.warehouse_name} (WH)` : `${row.branch_name} (Branch)`
+    },
     { key: 'reorder_level', label: 'Reorder Level' },
     {
-      key: 'available_quantity',
+      key: 'quantity_on_hand',
       label: 'Available',
       render: (row) => (
-        <span style={{ fontWeight: '600', color: row.available_quantity <= 0 ? '#b91c1c' : '#b45309' }}>
-          {row.available_quantity}
+        <span style={{ fontWeight: '600', color: row.quantity_on_hand <= 0 ? '#b91c1c' : '#b45309' }}>
+          {row.quantity_on_hand}
         </span>
       ),
     },
     {
       key: 'status',
-      label: 'Risk Level',
+      label: 'Risk',
       render: (row) => {
-        const qty = Number(row.available_quantity);
-        const level = qty <= 0 ? 'Critical' : 'Low';
-        const tone = qty <= 0 ? 'red' : 'yellow';
-        return <StatusBadge label={level} tone={tone} />;
+        const qty = Number(row.quantity_on_hand);
+        const isCritical = qty <= 0;
+        return (
+          <span style={{ fontWeight: '500', display: 'flex', alignItems: 'center', gap: '6px' }}>
+            {isCritical ? '🔴 Critical' : '🟡 Low'}
+          </span>
+        );
       },
     },
   ];

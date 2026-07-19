@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Truck, Plus, CheckCircle, ArrowRight, User, Calendar } from 'lucide-react';
-import { apiGet, apiPost, apiDownload } from '../api/client';
+import { apiGet, apiPost } from '../api/client';
 import { DataTable, type Column } from '../components/DataTable';
 import { Tabs } from '../components/Tabs';
 import { Modal } from '../components/Modal';
@@ -28,8 +28,6 @@ interface Transfer {
   dispatched_at: string | null;
   received_by: string | null;
   received_at: string | null;
-  transfer_date: string | null;
-  lines?: any[];
 }
 
 export function TransfersPage() {
@@ -44,57 +42,20 @@ export function TransfersPage() {
   const [activeTab, setActiveTab] = useState('ALL');
   const [searchQuery, setSearchQuery] = useState('');
 
-  // Filters & Pagination
-  const [sourceId, setSourceId] = useState('');
-  const [destinationId, setDestinationId] = useState('');
-  const [startDate, setStartDate] = useState('');
-  const [endDate, setEndDate] = useState('');
-  const [page, setPage] = useState(1);
-  const [total, setTotal] = useState(0);
-  const [totalPages, setTotalPages] = useState(1);
-  const [sortBy, setSortBy] = useState('t.requested_at');
-  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
-
   // Detail Modal
   const [selectedTransfer, setSelectedTransfer] = useState<Transfer | null>(null);
-  const [selectedTransferDetails, setSelectedTransferDetails] = useState<Transfer | null>(null);
-  const [detailsLoading, setDetailsLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
-
-  useEffect(() => {
-    async function init() {
-      try {
-        const whs = await apiGet<any[]>('/warehouses');
-        const brs = await apiGet<any[]>('/branches');
-        setWarehouses(whs || []);
-        setBranches(brs || []);
-      } catch (err) {}
-    }
-    init();
-  }, []);
 
   const loadData = async () => {
     try {
       setLoading(true);
-      const params = new URLSearchParams({
-        page: String(page),
-        limit: '50',
-        sort_by: sortBy,
-        sort_dir: sortDir.toUpperCase(),
-      });
-      if (searchQuery) params.append('search', searchQuery);
-      if (startDate) params.append('start_date', startDate);
-      if (endDate) params.append('end_date', endDate);
-      if (sourceId) params.append('source', sourceId);
-      if (destinationId) params.append('destination', destinationId);
-      let apiStatus = activeTab;
-      if (activeTab === 'PENDING') apiStatus = 'PENDING_APPROVAL';
-      if (activeTab && activeTab !== 'ALL') params.append('status', apiStatus);
+      const data = await apiGet<Transfer[]>('/transfers');
+      setTransfers(data || []);
 
-      const res = await apiGet<any>(`/transfers?${params.toString()}`);
-      setTransfers(res.data || []);
-      setTotal(res.total || 0);
-      setTotalPages(res.totalPages || 1);
+      const whs = await apiGet<any[]>('/warehouses');
+      const brs = await apiGet<any[]>('/branches');
+      setWarehouses(whs || []);
+      setBranches(brs || []);
     } catch (err: any) {
       addToast('error', err?.message || 'Failed to fetch transfers');
     } finally {
@@ -103,43 +64,8 @@ export function TransfersPage() {
   };
 
   useEffect(() => {
-    const timeout = setTimeout(loadData, 300);
-    return () => clearTimeout(timeout);
-  }, [page, sortBy, sortDir, searchQuery, startDate, endDate, sourceId, destinationId, activeTab]);
-
-  const handleExport = async () => {
-    const params = new URLSearchParams();
-    if (searchQuery) params.append('search', searchQuery);
-    if (startDate) params.append('start_date', startDate);
-    if (endDate) params.append('end_date', endDate);
-    if (sourceId) params.append('source', sourceId);
-    if (destinationId) params.append('destination', destinationId);
-    let apiStatus = activeTab;
-    if (activeTab === 'PENDING') apiStatus = 'PENDING_APPROVAL';
-    if (activeTab && activeTab !== 'ALL') params.append('status', apiStatus);
-    params.append('sort_by', sortBy);
-    params.append('sort_dir', sortDir.toUpperCase());
-    params.append('export', 'csv');
-    try {
-      await apiDownload(`/transfers?${params.toString()}`, 'transfers.csv');
-    } catch (err: any) {
-      addToast('error', err?.message || 'Failed to export CSV');
-    }
-  };
-
-  const handleRowClick = async (row: Transfer) => {
-    setSelectedTransfer(row);
-    setSelectedTransferDetails(null);
-    setDetailsLoading(true);
-    try {
-      const data = await apiGet<Transfer>(`/transfers/${row.id}`);
-      setSelectedTransferDetails(data);
-    } catch (err) {
-      addToast('error', 'Failed to load transfer details');
-    } finally {
-      setDetailsLoading(false);
-    }
-  };
+    loadData();
+  }, []);
 
   const getOwnerName = (ownerType: string, whId: string | null, brId: string | null) => {
     if (ownerType === 'WAREHOUSE') {
@@ -193,16 +119,30 @@ export function TransfersPage() {
     }
   };
 
+  const filteredTransfers = transfers.filter((t) => {
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase();
+      const src = getOwnerName(t.source_owner_type, t.source_warehouse_id, t.source_branch_id).toLowerCase();
+      const dst = getOwnerName(t.destination_owner_type, t.destination_warehouse_id, t.destination_branch_id).toLowerCase();
+      if (!t.transfer_number.toLowerCase().includes(q) && !src.includes(q) && !dst.includes(q)) {
+        return false;
+      }
+    }
+    if (activeTab === 'ALL') return true;
+    if (activeTab === 'PENDING') return t.status === 'PENDING_APPROVAL';
+    return t.status === activeTab;
+  });
+
   const tabItems = [
-    { key: 'ALL', label: 'All Transfers' },
-    { key: 'PENDING', label: 'Pending Approval' },
-    { key: 'APPROVED', label: 'Approved' },
-    { key: 'DISPATCHED', label: 'Dispatched' },
-    { key: 'RECEIVED', label: 'Received' },
+    { key: 'ALL', label: 'All Transfers', count: transfers.length },
+    { key: 'PENDING', label: 'Pending Approval', count: transfers.filter(t => t.status === 'PENDING_APPROVAL').length },
+    { key: 'APPROVED', label: 'Approved', count: transfers.filter(t => t.status === 'APPROVED').length },
+    { key: 'DISPATCHED', label: 'Dispatched', count: transfers.filter(t => t.status === 'DISPATCHED').length },
+    { key: 'RECEIVED', label: 'Received', count: transfers.filter(t => t.status === 'RECEIVED').length },
   ];
 
   const columns: Column<Transfer>[] = [
-    { key: 'transfer_number', label: 'Transfer ID', sortable: true },
+    { key: 'transfer_number', label: 'Transfer ID' },
     {
       key: 'source',
       label: 'Source',
@@ -216,13 +156,11 @@ export function TransfersPage() {
     {
       key: 'requested_at',
       label: 'Requested On',
-      sortable: true,
       render: (row) => new Date(row.requested_at).toLocaleDateString(),
     },
     {
       key: 'status',
       label: 'Status',
-      sortable: true,
       render: (row) => {
         let tone: 'green' | 'yellow' | 'red' | 'neutral' | 'blue' = 'neutral';
         if (row.status === 'APPROVED') tone = 'green';
@@ -249,58 +187,29 @@ export function TransfersPage() {
         </button>
       </section>
 
-      <section style={{ marginBottom: '14px' }}>
-        <Tabs tabs={tabItems} activeTab={activeTab} onTabChange={(t: string) => { setActiveTab(t); setPage(1); }} />
+      <section style={{ marginBottom: '14px', display: 'flex', gap: '14px', alignItems: 'center' }}>
+        <div style={{ flex: 1, maxWidth: '400px' }}>
+          <input
+            type="text"
+            className="form-input"
+            placeholder="Search transfers by ID, origin, or destination..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+          />
+        </div>
+        <div style={{ flex: 1 }}>
+          <Tabs tabs={tabItems} activeTab={activeTab} onTabChange={setActiveTab} />
+        </div>
       </section>
 
-      <section className="panel" style={{ marginBottom: '14px', display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'flex-end', padding: '16px' }}>
-        <div style={{ flex: '1 1 200px' }}>
-          <label style={{ fontSize: '11px', fontWeight: 600, color: '#6b7280', textTransform: 'uppercase', marginBottom: '6px', display: 'block' }}>Search</label>
-          <div style={{ position: 'relative' }}>
-            <span style={{ position: 'absolute', left: '10px', top: '9px', color: '#9ca3af' }}>🔍</span>
-            <input type="text" className="form-input" style={{ paddingLeft: '34px' }} placeholder="Transfer Number" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} />
-          </div>
-        </div>
-        <div style={{ width: '140px' }}>
-          <label style={{ fontSize: '11px', fontWeight: 600, color: '#6b7280', textTransform: 'uppercase', marginBottom: '6px', display: 'block' }}>Start Date</label>
-          <input type="date" className="form-input" value={startDate} onChange={e => setStartDate(e.target.value)} />
-        </div>
-        <div style={{ width: '140px' }}>
-          <label style={{ fontSize: '11px', fontWeight: 600, color: '#6b7280', textTransform: 'uppercase', marginBottom: '6px', display: 'block' }}>End Date</label>
-          <input type="date" className="form-input" value={endDate} onChange={e => setEndDate(e.target.value)} />
-        </div>
-        <button type="button" className="btn btn-secondary" onClick={() => { setSearchQuery(''); setStartDate(''); setEndDate(''); setSourceId(''); setDestinationId(''); setPage(1); }}>
-          Clear
-        </button>
-        <button type="button" className="btn btn-secondary" onClick={handleExport}>
-          CSV
-        </button>
-      </section>
-
-      <section className="panel" style={{ padding: 0 }}>
+      <section className="panel">
         <DataTable
           columns={columns}
-          data={transfers}
+          data={filteredTransfers}
           keyExtractor={(row) => row.id}
           loading={loading}
-          onRowClick={(row) => handleRowClick(row)}
-          emptyMessage="No transfers found matching your filters"
-          sortBy={sortBy === 't.requested_at' ? 'requested_at' : sortBy === 't.transfer_number' ? 'transfer_number' : 'status'}
-          sortOrder={sortDir}
-          onSort={(key: string) => {
-            let dbKey = key;
-            if (key === 'transfer_number') dbKey = 't.transfer_number';
-            if (key === 'requested_at') dbKey = 't.requested_at';
-            if (key === 'status') dbKey = 't.status';
-            
-            if (sortBy === dbKey) {
-              setSortDir(sortDir === 'asc' ? 'desc' : 'asc');
-            } else {
-              setSortBy(dbKey);
-              setSortDir('asc');
-            }
-          }}
-          pagination={{ page, total, limit: 50, totalPages, onPageChange: setPage }}
+          onRowClick={(row) => setSelectedTransfer(row)}
+          emptyMessage="No stock transfers found"
         />
       </section>
 
@@ -363,44 +272,6 @@ export function TransfersPage() {
               </div>
             </div>
 
-            {/* Transfer Readiness block */}
-            {selectedTransfer.status === 'PENDING_APPROVAL' && (
-              <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: '8px', padding: '16px' }}>
-                <h4 style={{ margin: '0 0 12px 0', fontSize: '13px', color: '#374151' }}>Transfer Readiness</h4>
-                {detailsLoading ? (
-                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center', fontSize: '12px', color: '#6b7280' }}>
-                    <LoadingSpinner size={16} /> Verifying stock levels...
-                  </div>
-                ) : selectedTransferDetails && selectedTransferDetails.lines ? (
-                  (() => {
-                    const insufficientLines = selectedTransferDetails.lines.filter(l => l.quantity_requested > l.available_stock);
-                    const isReady = insufficientLines.length === 0;
-                    if (isReady) {
-                      return (
-                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center', color: '#059669', fontSize: '12px', fontWeight: '500' }}>
-                          <CheckCircle size={16} /> All items have sufficient stock available.
-                        </div>
-                      );
-                    }
-                    return (
-                      <div style={{ background: '#fef2f2', border: '1px solid #f87171', borderRadius: '6px', padding: '12px' }}>
-                        <div style={{ color: '#b91c1c', fontSize: '12px', fontWeight: '600', marginBottom: '8px' }}>
-                          Insufficient stock to fulfill this transfer. The following items are short:
-                        </div>
-                        <ul style={{ margin: 0, paddingLeft: '20px', color: '#991b1b', fontSize: '12px' }}>
-                          {insufficientLines.map(line => (
-                            <li key={line.id}>
-                              <strong>{line.product_name}</strong> (Req: {line.quantity_requested}, Avail: {line.available_stock})
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    );
-                  })()
-                ) : null}
-              </div>
-            )}
-
             {/* Workflow Action Panel */}
             <div style={{
               marginTop: '10px',
@@ -408,7 +279,6 @@ export function TransfersPage() {
               paddingTop: '16px',
               display: 'flex',
               justifyContent: 'flex-end',
-              alignItems: 'flex-end',
               gap: '10px'
             }}>
               <button
@@ -422,43 +292,14 @@ export function TransfersPage() {
 
               {/* Status PENDING_APPROVAL -> Approve (if user has permissions) */}
               {selectedTransfer.status === 'PENDING_APPROVAL' && hasPermission('manage_transfers') && (
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '8px' }}>
-                  {(() => {
-                    let isFutureDate = false;
-                    if (selectedTransfer.transfer_date) {
-                      const tDate = new Date(selectedTransfer.transfer_date);
-                      tDate.setHours(0, 0, 0, 0);
-                      const today = new Date();
-                      today.setHours(0, 0, 0, 0);
-                      isFutureDate = tDate > today;
-                    }
-                    const canOverride = hasPermission('manage_users');
-                    const isBlockedByDate = isFutureDate && !canOverride;
-
-                    return (
-                      <>
-                        {isFutureDate && canOverride && (
-                          <div style={{ background: '#fef3c7', color: '#b45309', padding: '8px 12px', borderRadius: '6px', fontSize: '12px', fontWeight: '500', maxWidth: '350px', textAlign: 'right' }}>
-                            ⚠️ This transfer is scheduled for {new Date(selectedTransfer.transfer_date as string).toLocaleDateString()}, but as an authorized user, you may execute it early.
-                          </div>
-                        )}
-                        {isBlockedByDate && (
-                          <div style={{ background: '#fef2f2', color: '#b91c1c', padding: '8px 12px', borderRadius: '6px', fontSize: '12px', fontWeight: '500', maxWidth: '350px', textAlign: 'right' }}>
-                            Cannot approve: transfer is scheduled for {new Date(selectedTransfer.transfer_date as string).toLocaleDateString()}, which is in the future.
-                          </div>
-                        )}
-                        <button
-                          type="button"
-                          className="btn btn-primary"
-                          onClick={() => handleApprove(selectedTransfer.id)}
-                          disabled={actionLoading || detailsLoading || isBlockedByDate || (selectedTransferDetails?.lines?.some((l: any) => l.quantity_requested > l.available_stock))}
-                        >
-                          {actionLoading ? 'Processing...' : 'Approve & Execute Transfer'}
-                        </button>
-                      </>
-                    );
-                  })()}
-                </div>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={() => handleApprove(selectedTransfer.id)}
+                  disabled={actionLoading}
+                >
+                  {actionLoading ? 'Processing...' : 'Approve & Execute Transfer'}
+                </button>
               )}
             </div>
           </div>

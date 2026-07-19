@@ -4,6 +4,7 @@ import { ShoppingCart, ArrowLeft, Plus, Trash2 } from 'lucide-react';
 import { apiGet, apiPost } from '../api/client';
 import { FormField, InputField, TextareaField } from '../components/FormField';
 import { SearchInput } from '../components/SearchInput';
+import { SearchableSelect } from '../components/SearchableSelect';
 import { useToast } from '../contexts/ToastContext';
 
 interface Customer {
@@ -49,13 +50,14 @@ export function CreateSalesOrderPage() {
       try {
         const custs = await apiGet<Customer[]>('/sales/customers');
         const brs = await apiGet<Branch[]>('/branches');
-        const productsList = await apiGet<any[]>('/products');
+        const productsResponse = await apiGet<any>('/products?limit=1000');
+        const productsList = productsResponse?.data || [];
         
         setCustomers(custs || []);
         setBranches(brs || []);
 
         const flatList: ProductLine[] = [];
-        productsList?.forEach((p) => {
+        productsList.forEach((p: any) => {
           flatList.push({
             id: p.id,
             sku: p.sku,
@@ -80,9 +82,9 @@ export function CreateSalesOrderPage() {
     }
     const filtered = products.filter(
       (v) =>
-        v.sku.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        v.barcode.includes(searchQuery) ||
-        v.name.toLowerCase().includes(searchQuery.toLowerCase())
+        (v.sku || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+        (v.barcode || '').includes(searchQuery) ||
+        (v.name || '').toLowerCase().includes(searchQuery.toLowerCase())
     );
     setSearchResults(filtered.slice(0, 5));
   }, [searchQuery, products]);
@@ -187,35 +189,21 @@ export function CreateSalesOrderPage() {
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
             <FormField label="Customer *">
-              <select
-                className="form-select"
+              <SearchableSelect
                 value={customerId}
-                onChange={(e) => setCustomerId(e.target.value)}
-                required
-              >
-                <option value="">Select Customer...</option>
-                {customers.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
+                onChange={(val) => setCustomerId(val)}
+                options={customers.map(c => ({ value: c.id, label: c.name }))}
+                placeholder="Select Customer..."
+              />
             </FormField>
 
             <FormField label="Originating Branch *">
-              <select
-                className="form-select"
+              <SearchableSelect
                 value={branchId}
-                onChange={(e) => setBranchId(e.target.value)}
-                required
-              >
-                <option value="">Select Branch...</option>
-                {branches.map((b) => (
-                  <option key={b.id} value={b.id}>
-                    {b.name}
-                  </option>
-                ))}
-              </select>
+                onChange={(val) => setBranchId(val)}
+                options={branches.map(b => ({ value: b.id, label: b.name }))}
+                placeholder="Select Branch..."
+              />
             </FormField>
           </div>
 

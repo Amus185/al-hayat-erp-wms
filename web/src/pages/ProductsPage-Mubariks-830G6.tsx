@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { PackageSearch, Plus, Trash2, List, Settings } from 'lucide-react';
-import { apiGet, apiPost, apiDelete } from '../api/client';
+import { apiGet, apiPost, apiPatch, apiDelete, apiDownload } from '../api/client';
 import { DataTable, type Column } from '../components/DataTable';
 import { SearchInput } from '../components/SearchInput';
 import { Modal } from '../components/Modal';
 import { ConfirmModal } from '../components/ConfirmModal';
 import { FormField, InputField } from '../components/FormField';
+import { SearchableSelect } from '../components/SearchableSelect';
 import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -43,13 +44,23 @@ export function ProductsPage() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [brands, setBrands] = useState<Brand[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // Filters & Pagination
   const [search, setSearch] = useState('');
-  const [selectedCategory, setSelectedCategory] = useState('');
+  const [categoryId, setCategoryId] = useState('');
+  const [brandId, setBrandId] = useState('');
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
+  const [sortBy, setSortBy] = useState('p.name');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
 
   // Modals state
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState('');
+  const [isEditOpen, setIsEditOpen] = useState(false);
+  const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   
   const [newProduct, setNewProduct] = useState({
     sku: '',
@@ -86,8 +97,20 @@ export function ProductsPage() {
   const loadData = async () => {
     try {
       setLoading(true);
-      const prs = await apiGet<Product[]>('/products', { q: search });
-      setProducts(prs || []);
+      const params = new URLSearchParams({
+        page: String(page),
+        limit: '50',
+        sort_by: sortBy,
+        sort_dir: sortDir.toUpperCase(),
+      });
+      if (search) params.append('search', search);
+      if (categoryId) params.append('category_id', categoryId);
+      if (brandId) params.append('brand_id', brandId);
+
+      const res = await apiGet<any>(`/products?${params.toString()}`);
+      setProducts(res.data || []);
+      setTotal(res.total || 0);
+      setTotalPages(res.totalPages || 1);
     } catch (err: any) {
       addToast('error', err?.message || 'Failed to fetch products');
     } finally {
@@ -96,9 +119,28 @@ export function ProductsPage() {
   };
 
   useEffect(() => {
-    loadData();
     fetchFilters();
-  }, [search]);
+  }, []);
+
+  useEffect(() => {
+    const timeout = setTimeout(loadData, 300);
+    return () => clearTimeout(timeout);
+  }, [page, sortBy, sortDir, search, categoryId, brandId]);
+
+  const handleExport = async () => {
+    const params = new URLSearchParams();
+    if (search) params.append('search', search);
+    if (categoryId) params.append('category_id', categoryId);
+    if (brandId) params.append('brand_id', brandId);
+    params.append('sort_by', sortBy);
+    params.append('sort_dir', sortDir.toUpperCase());
+    params.append('export', 'csv');
+    try {
+      await apiDownload(`/products?${params.toString()}`, 'products.csv');
+    } catch (err: any) {
+      addToast('error', err?.message || 'Failed to export CSV');
+    }
+  };
 
   const handleCreateCategory = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -173,6 +215,42 @@ export function ProductsPage() {
     }
   };
 
+  const handleEditProduct = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingProduct) return;
+    
+    if (!editingProduct.sku || !editingProduct.name || !editingProduct.barcode) {
+      addToast('error', 'Product ID, Barcode, and Name are required');
+      return;
+    }
+    if (editingProduct.cost_price > editingProduct.selling_price) {
+      addToast('error', 'Cost Price cannot be greater than Selling Price');
+      return;
+    }
+
+    const payload: any = {
+      sku: editingProduct.sku,
+      barcode: editingProduct.barcode,
+      name: editingProduct.name,
+      description: editingProduct.description,
+      costPrice: editingProduct.cost_price,
+      sellingPrice: editingProduct.selling_price,
+      reorderLevel: editingProduct.reorder_level,
+    };
+    if (editingProduct.category_id) payload.categoryId = editingProduct.category_id;
+    if (editingProduct.brand_id) payload.brandId = editingProduct.brand_id;
+
+    try {
+      await apiPatch(`/products/${editingProduct.id}`, payload);
+      addToast('success', 'Product updated successfully');
+      setIsEditOpen(false);
+      setEditingProduct(null);
+      loadData();
+    } catch (err: any) {
+      addToast('error', err?.message || 'Failed to update product');
+    }
+  };
+
   const handleDelete = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
     setConfirmState({
@@ -191,35 +269,31 @@ export function ProductsPage() {
     });
   };
 
-
-
-  const filteredProducts = products.filter((p) => {
-    if (!selectedCategory) return true;
-    return p.category_id === selectedCategory;
-  });
-
   const columns: Column<Product>[] = [
     { key: 'sku', label: 'Product ID', sortable: true },
     { key: 'name', label: 'Name', sortable: true },
-    { key: 'category', label: 'Category', render: (row) => row.category || 'N/A' },
-    { key: 'brand', label: 'Brand', render: (row) => row.brand || 'N/A' },
-    { key: 'cost_price', label: 'Cost Price', render: (row) => `$${Number(row.cost_price).toLocaleString()}` },
-    { key: 'selling_price', label: 'Selling Price', render: (row) => `$${Number(row.selling_price).toLocaleString()}` },
+    { key: 'category', label: 'Category', sortable: true, render: (row) => row.category || 'N/A' },
+    { key: 'brand', label: 'Brand', sortable: true, render: (row) => row.brand || 'N/A' },
+    { key: 'cost_price', label: 'Cost Price', sortable: true, render: (row) => `$${Number(row.cost_price).toLocaleString()}` },
+    { key: 'selling_price', label: 'Selling Price', sortable: true, render: (row) => `$${Number(row.selling_price).toLocaleString()}` },
     {
       key: 'actions',
       label: 'Actions',
       render: (row) => (
         <div style={{ display: 'flex', gap: '8px' }}>
-          <button
-            type="button"
-            className="btn btn-secondary btn-sm"
-            onClick={(e) => {
-              e.stopPropagation();
-              navigate(`/products/${row.id}`);
-            }}
-          >
-            View Details
-          </button>
+          {hasPermission('manage_inventory') && (
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={(e) => {
+                e.stopPropagation();
+                setEditingProduct(row);
+                setIsEditOpen(true);
+              }}
+            >
+              Edit
+            </button>
+          )}
           {hasPermission('manage_inventory') && (
             <button
               type="button"
@@ -278,37 +352,133 @@ export function ProductsPage() {
         </div>
       </Modal>
 
-      <section className="panel" style={{ display: 'flex', gap: '14px', alignItems: 'center', flexWrap: 'wrap' }}>
-        <div style={{ flex: '1', minWidth: '240px' }}>
-          <SearchInput value={search} onChange={setSearch} placeholder="Search by Product ID, Name or Description..." />
+      <section className="panel" style={{ marginBottom: '14px', display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'flex-end', padding: '16px' }}>
+        <div style={{ flex: '1 1 200px' }}>
+          <label style={{ fontSize: '11px', fontWeight: 600, color: '#6b7280', textTransform: 'uppercase', marginBottom: '6px', display: 'block' }}>Search</label>
+          <div style={{ position: 'relative' }}>
+            <span style={{ position: 'absolute', left: '10px', top: '9px', color: '#9ca3af' }}>🔍</span>
+            <input type="text" className="form-input" style={{ paddingLeft: '34px' }} placeholder="Product ID, Name or Barcode" value={search} onChange={e => setSearch(e.target.value)} />
+          </div>
         </div>
-        <div>
-          <select
-            value={selectedCategory}
-            onChange={(e) => setSelectedCategory(e.target.value)}
-            className="form-select"
-            style={{ minHeight: '38px', borderRadius: '8px', border: '1px solid #d9e2d9', padding: '0 10px' }}
-          >
+        <div style={{ width: '180px' }}>
+          <label style={{ fontSize: '11px', fontWeight: 600, color: '#6b7280', textTransform: 'uppercase', marginBottom: '6px', display: 'block' }}>Category</label>
+          <select className="form-select" value={categoryId} onChange={e => setCategoryId(e.target.value)}>
             <option value="">All Categories</option>
-            {categories.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
+            {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
         </div>
+        <div style={{ width: '180px' }}>
+          <label style={{ fontSize: '11px', fontWeight: 600, color: '#6b7280', textTransform: 'uppercase', marginBottom: '6px', display: 'block' }}>Brand</label>
+          <select className="form-select" value={brandId} onChange={e => setBrandId(e.target.value)}>
+            <option value="">All Brands</option>
+            {brands.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+          </select>
+        </div>
+        <button type="button" className="btn btn-secondary" onClick={() => { setSearch(''); setCategoryId(''); setBrandId(''); setPage(1); }}>
+          Clear
+        </button>
+        <button type="button" className="btn btn-secondary" onClick={handleExport}>
+          <List size={16} style={{ marginRight: '6px', inlineSize: 'auto' }} /> CSV
+        </button>
       </section>
 
-      <section className="panel">
+      <section className="panel" style={{ padding: 0 }}>
         <DataTable
           columns={columns}
-          data={filteredProducts}
+          data={products}
           keyExtractor={(row) => row.id}
           loading={loading}
-          onRowClick={(row) => navigate(`/products/${row.id}`)}
-          emptyMessage="No products match the criteria"
+          emptyMessage="No products found matching your filters"
+          sortBy={sortBy === 'p.name' ? 'name' : sortBy === 'p.sku' ? 'sku' : sortBy === 'c.name' ? 'category' : sortBy === 'b.name' ? 'brand' : sortBy === 'p.cost_price' ? 'cost_price' : 'selling_price'}
+          sortOrder={sortDir}
+          onSort={(key: string) => {
+            let dbKey = key;
+            if (key === 'sku') dbKey = 'p.sku';
+            if (key === 'name') dbKey = 'p.name';
+            if (key === 'category') dbKey = 'c.name';
+            if (key === 'brand') dbKey = 'b.name';
+            if (key === 'cost_price') dbKey = 'p.cost_price';
+            if (key === 'selling_price') dbKey = 'p.selling_price';
+            
+            if (sortBy === dbKey) {
+              setSortDir(sortDir === 'asc' ? 'desc' : 'asc');
+            } else {
+              setSortBy(dbKey);
+              setSortDir('asc');
+            }
+          }}
+          pagination={{ page, total, limit: 50, totalPages, onPageChange: setPage }}
         />
       </section>
+
+      {/* Edit Product Modal */}
+      {isEditOpen && editingProduct && (
+        <Modal title="Edit Product" onClose={() => { setIsEditOpen(false); setEditingProduct(null); }}>
+          <form onSubmit={handleEditProduct}>
+            <div className="form-row">
+              <FormField label="Product ID (SKU)" required>
+                <InputField value={editingProduct.sku} onChange={(val) => setEditingProduct({ ...editingProduct, sku: val })} placeholder="e.g. LAP-001" />
+              </FormField>
+              <FormField label="Barcode" required>
+                <InputField value={editingProduct.barcode || ''} onChange={(val) => setEditingProduct({ ...editingProduct, barcode: val })} placeholder="Scan or enter barcode" />
+              </FormField>
+            </div>
+            <FormField label="Name" required>
+              <InputField value={editingProduct.name} onChange={(val) => setEditingProduct({ ...editingProduct, name: val })} placeholder="e.g. ThinkPad X1 Carbon" />
+            </FormField>
+            <FormField label="Description">
+              <textarea
+                className="form-textarea"
+                rows={3}
+                value={editingProduct.description || ''}
+                onChange={(e) => setEditingProduct({ ...editingProduct, description: e.target.value })}
+                placeholder="Detailed product description..."
+              />
+            </FormField>
+            <div className="form-row" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
+              <FormField label="Category">
+                <select
+                  className="form-select"
+                  value={editingProduct.category_id || ''}
+                  onChange={(e) => setEditingProduct({ ...editingProduct, category_id: e.target.value })}
+                >
+                  <option value="">No Category</option>
+                  {categories.map((c) => (
+                    <option key={c.id} value={c.id}>{c.name}</option>
+                  ))}
+                </select>
+              </FormField>
+              <FormField label="Brand">
+                <select
+                  className="form-select"
+                  value={editingProduct.brand_id || ''}
+                  onChange={(e) => setEditingProduct({ ...editingProduct, brand_id: e.target.value })}
+                >
+                  <option value="">No Brand</option>
+                  {brands.map((b) => (
+                    <option key={b.id} value={b.id}>{b.name}</option>
+                  ))}
+                </select>
+              </FormField>
+            </div>
+            <div className="form-row" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px', marginTop: '10px' }}>
+              <FormField label="Cost Price ($)" required>
+                <InputField type="number" step="0.01" min="0" value={editingProduct.cost_price} onChange={(val) => setEditingProduct({ ...editingProduct, cost_price: parseFloat(val) })} />
+              </FormField>
+              <FormField label="Selling Price ($)" required>
+                <InputField type="number" step="0.01" min="0" value={editingProduct.selling_price} onChange={(val) => setEditingProduct({ ...editingProduct, selling_price: parseFloat(val) })} />
+              </FormField>
+            </div>
+            <FormField label="Reorder Level (Units)" required>
+              <InputField type="number" min="0" value={editingProduct.reorder_level} onChange={(val) => setEditingProduct({ ...editingProduct, reorder_level: parseInt(val, 10) })} />
+            </FormField>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '20px' }}>
+              <button type="button" className="btn btn-secondary" onClick={() => { setIsEditOpen(false); setEditingProduct(null); }}>Cancel</button>
+              <button type="submit" className="btn btn-primary">Save Changes</button>
+            </div>
+          </form>
+        </Modal>
+      )}
 
       {/* Create Modal */}
       <Modal isOpen={isCreateOpen} onClose={() => setIsCreateOpen(false)} title="Create New Product" width="lg">
@@ -349,32 +519,20 @@ export function ProductsPage() {
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px', marginTop: '10px' }}>
             <FormField label="Category">
-              <select
-                className="form-select"
+              <SearchableSelect
                 value={newProduct.categoryId}
-                onChange={(e) => setNewProduct((prev) => ({ ...prev, categoryId: e.target.value }))}
-              >
-                <option value="">Select Category</option>
-                {categories.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
+                onChange={(val) => setNewProduct((prev) => ({ ...prev, categoryId: val }))}
+                options={categories.map(c => ({ value: c.id, label: c.name }))}
+                placeholder="Select Category"
+              />
             </FormField>
             <FormField label="Brand">
-              <select
-                className="form-select"
+              <SearchableSelect
                 value={newProduct.brandId}
-                onChange={(e) => setNewProduct((prev) => ({ ...prev, brandId: e.target.value }))}
-              >
-                <option value="">Select Brand</option>
-                {brands.map((b) => (
-                  <option key={b.id} value={b.id}>
-                    {b.name}
-                  </option>
-                ))}
-              </select>
+                onChange={(val) => setNewProduct((prev) => ({ ...prev, brandId: val }))}
+                options={brands.map(b => ({ value: b.id, label: b.name }))}
+                placeholder="Select Brand"
+              />
             </FormField>
           </div>
 
@@ -417,68 +575,6 @@ export function ProductsPage() {
           </div>
         </form>
       </Modal>
-
-      {/* Edit Product Modal */}
-      {isEditOpen && editingProduct && (
-        <Modal title="Edit Product" onClose={() => { setIsEditOpen(false); setEditingProduct(null); }}>
-          <form onSubmit={handleEditProduct}>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
-              <InputField label="Product ID (SKU) *" id="editSku" value={editingProduct.sku} onChange={(val) => setEditingProduct({ ...editingProduct, sku: val })} required />
-              <InputField label="Barcode *" id="editBarcode" value={editingProduct.barcode || ''} onChange={(val) => setEditingProduct({ ...editingProduct, barcode: val })} required />
-            </div>
-            <div style={{ marginTop: '10px' }}>
-              <InputField label="Name *" id="editName" value={editingProduct.name} onChange={(val) => setEditingProduct({ ...editingProduct, name: val })} required />
-            </div>
-            <div className="form-group" style={{ marginTop: '10px' }}>
-              <label>Description</label>
-              <textarea
-                style={{ width: '100%', padding: '8px', border: '1px solid var(--border-color)', borderRadius: '4px' }}
-                rows={3}
-                value={editingProduct.description || ''}
-                onChange={(e) => setEditingProduct({ ...editingProduct, description: e.target.value })}
-                placeholder="Detailed product description..."
-              />
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px', marginTop: '10px' }}>
-              <div className="form-group">
-                <label>Category</label>
-                <select
-                  style={{ width: '100%', padding: '8px', border: '1px solid var(--border-color)', borderRadius: '4px' }}
-                  value={editingProduct.category_id || ''}
-                  onChange={(e) => setEditingProduct({ ...editingProduct, category_id: e.target.value })}
-                >
-                  <option value="">No Category</option>
-                  {categories.map((c) => (
-                    <option key={c.id} value={c.id}>{c.name}</option>
-                  ))}
-                </select>
-              </div>
-              <div className="form-group">
-                <label>Brand</label>
-                <select
-                  style={{ width: '100%', padding: '8px', border: '1px solid var(--border-color)', borderRadius: '4px' }}
-                  value={editingProduct.brand_id || ''}
-                  onChange={(e) => setEditingProduct({ ...editingProduct, brand_id: e.target.value })}
-                >
-                  <option value="">No Brand</option>
-                  {brands.map((b) => (
-                    <option key={b.id} value={b.id}>{b.name}</option>
-                  ))}
-                </select>
-              </div>
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '14px', marginTop: '10px' }}>
-              <InputField type="number" label="Cost Price ($) *" id="editCost" value={editingProduct.cost_price.toString()} onChange={(val) => setEditingProduct({ ...editingProduct, cost_price: parseFloat(val) })} required />
-              <InputField type="number" label="Selling Price ($) *" id="editSell" value={editingProduct.selling_price.toString()} onChange={(val) => setEditingProduct({ ...editingProduct, selling_price: parseFloat(val) })} required />
-              <InputField type="number" label="Reorder Level *" id="editReorder" value={editingProduct.reorder_level.toString()} onChange={(val) => setEditingProduct({ ...editingProduct, reorder_level: parseInt(val, 10) })} required />
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '20px' }}>
-              <button type="button" className="btn btn-secondary" onClick={() => { setIsEditOpen(false); setEditingProduct(null); }}>Cancel</button>
-              <button type="submit" className="btn btn-primary">Save Changes</button>
-            </div>
-          </form>
-        </Modal>
-      )}
 
       <ConfirmModal
         isOpen={confirmState.isOpen}

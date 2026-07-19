@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { PackagePlus, Plus, UserPlus, Eye, CheckCircle, Truck, FileText } from 'lucide-react';
-import { apiGet, apiPost } from '../api/client';
+import { apiGet, apiPost, apiDownload } from '../api/client';
 import { DataTable, type Column } from '../components/DataTable';
 import { Tabs } from '../components/Tabs';
 import { Modal } from '../components/Modal';
 import { InputField, TextareaField } from '../components/FormField';
+import { SearchableSelect } from '../components/SearchableSelect';
 import { StatusBadge } from '../components/StatusBadge';
 import { LoadingSpinner } from '../components/LoadingSpinner';
 import { useToast } from '../contexts/ToastContext';
@@ -43,6 +44,17 @@ export function PurchasingPage() {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('ALL');
 
+  // Filters & Pagination
+  const [search, setSearch] = useState('');
+  const [supplierId, setSupplierId] = useState('');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
+  const [sortBy, setSortBy] = useState('po.created_at');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
+
   // Supplier modal state
   const [isSupplierOpen, setIsSupplierOpen] = useState(false);
   const [supplierForm, setSupplierForm] = useState({
@@ -60,28 +72,39 @@ export function PurchasingPage() {
   const [isReceiptOpen, setIsReceiptOpen] = useState(false);
   const [warehouses, setWarehouses] = useState<any[]>([]);
   const [selectedWHId, setSelectedWHId] = useState('');
-  const [receiptLines, setReceiptLines] = useState<Record<string, number>>({}); // productId -> quantityReceived
-  const [receiptLocations, setReceiptLocations] = useState<Record<string, string>>({}); // productId -> locationId
+  const [receiptLines, setReceiptLines] = useState<Record<string, number>>({});
+  const [receiptLocations, setReceiptLocations] = useState<Record<string, string>>({});
   const [locationsList, setLocationsList] = useState<any[]>([]);
+
+  useEffect(() => {
+    async function init() {
+      try {
+        const sups = await apiGet<Supplier[]>('/purchasing/suppliers');
+        setSuppliers(sups || []);
+      } catch (err) {}
+    }
+    init();
+  }, []);
 
   const loadData = async () => {
     try {
       setLoading(true);
-      const orders = await apiGet<PurchaseOrder[]>('/purchasing/orders');
-      
-      // Resolve supplier name mappings
-      const sups = await apiGet<Supplier[]>('/purchasing/suppliers');
-      setSuppliers(sups || []);
+      const params = new URLSearchParams({
+        page: String(page),
+        limit: '50',
+        sort_by: sortBy,
+        sort_dir: sortDir.toUpperCase(),
+      });
+      if (search) params.append('search', search);
+      if (startDate) params.append('start_date', startDate);
+      if (endDate) params.append('end_date', endDate);
+      if (supplierId) params.append('supplier_id', supplierId);
+      if (activeTab && activeTab !== 'ALL') params.append('status', activeTab);
 
-      const ordersWithSupplier = orders?.map(po => {
-        const sup = sups?.find(s => s.id === po.supplier_id);
-        return {
-          ...po,
-          supplier_name: sup ? sup.name : 'Unknown Supplier',
-        };
-      }) || [];
-      
-      setPos(ordersWithSupplier);
+      const res = await apiGet<any>(`/purchasing/orders?${params.toString()}`);
+      setPos(res.data || []);
+      setTotal(res.total || 0);
+      setTotalPages(res.totalPages || 1);
     } catch (err: any) {
       addToast('error', err?.message || 'Failed to load purchasing data');
     } finally {
@@ -90,8 +113,26 @@ export function PurchasingPage() {
   };
 
   useEffect(() => {
-    loadData();
-  }, []);
+    const timeout = setTimeout(loadData, 300);
+    return () => clearTimeout(timeout);
+  }, [page, sortBy, sortDir, search, startDate, endDate, supplierId, activeTab]);
+
+  const handleExport = async () => {
+    const params = new URLSearchParams();
+    if (search) params.append('search', search);
+    if (startDate) params.append('start_date', startDate);
+    if (endDate) params.append('end_date', endDate);
+    if (supplierId) params.append('supplier_id', supplierId);
+    if (activeTab && activeTab !== 'ALL') params.append('status', activeTab);
+    params.append('sort_by', sortBy);
+    params.append('sort_dir', sortDir.toUpperCase());
+    params.append('export', 'csv');
+    try {
+      await apiDownload(`/purchasing/orders?${params.toString()}`, 'purchase_orders.csv');
+    } catch (err: any) {
+      addToast('error', err?.message || 'Failed to export CSV');
+    }
+  };
 
   // Fetch warehouse list when goods receipt is triggered
   useEffect(() => {
@@ -284,17 +325,65 @@ export function PurchasingPage() {
       </section>
 
       <section style={{ marginBottom: '14px' }}>
-        <Tabs tabs={tabItems} activeTab={activeTab} onTabChange={setActiveTab} />
+        <Tabs tabs={tabItems} activeTab={activeTab} onTabChange={(t: string) => { setActiveTab(t); setPage(1); }} />
       </section>
 
-      <section className="panel">
+      <section className="panel" style={{ marginBottom: '14px', display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'flex-end', padding: '16px' }}>
+        <div style={{ flex: '1 1 200px' }}>
+          <label style={{ fontSize: '11px', fontWeight: 600, color: '#6b7280', textTransform: 'uppercase', marginBottom: '6px', display: 'block' }}>Search</label>
+          <div style={{ position: 'relative' }}>
+            <span style={{ position: 'absolute', left: '10px', top: '9px', color: '#9ca3af' }}>🔍</span>
+            <input type="text" className="form-input" style={{ paddingLeft: '34px' }} placeholder="PO Number" value={search} onChange={e => setSearch(e.target.value)} />
+          </div>
+        </div>
+        <div style={{ width: '140px' }}>
+          <label style={{ fontSize: '11px', fontWeight: 600, color: '#6b7280', textTransform: 'uppercase', marginBottom: '6px', display: 'block' }}>Start Date</label>
+          <input type="date" className="form-input" value={startDate} onChange={e => setStartDate(e.target.value)} />
+        </div>
+        <div style={{ width: '140px' }}>
+          <label style={{ fontSize: '11px', fontWeight: 600, color: '#6b7280', textTransform: 'uppercase', marginBottom: '6px', display: 'block' }}>End Date</label>
+          <input type="date" className="form-input" value={endDate} onChange={e => setEndDate(e.target.value)} />
+        </div>
+        <div style={{ width: '180px' }}>
+          <label style={{ fontSize: '11px', fontWeight: 600, color: '#6b7280', textTransform: 'uppercase', marginBottom: '6px', display: 'block' }}>Supplier</label>
+          <select className="form-select" value={supplierId} onChange={e => setSupplierId(e.target.value)}>
+            <option value="">All Suppliers</option>
+            {suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+        </div>
+        <button type="button" className="btn btn-secondary" onClick={() => { setSearch(''); setStartDate(''); setEndDate(''); setSupplierId(''); setPage(1); }}>
+          Clear
+        </button>
+        <button type="button" className="btn btn-secondary" onClick={handleExport}>
+          <FileText size={16} style={{ marginRight: '6px', inlineSize: 'auto' }} /> CSV
+        </button>
+      </section>
+
+      <section className="panel" style={{ padding: 0 }}>
         <DataTable
           columns={columns}
-          data={filteredPOs}
+          data={pos}
           keyExtractor={(row) => row.id}
           loading={loading}
           onRowClick={(row) => viewPoDetails(row)}
-          emptyMessage="No purchase orders recorded"
+          emptyMessage="No purchase orders found matching your filters"
+          sortBy={sortBy === 'po.created_at' ? 'created_at' : sortBy === 'po.po_number' ? 'po_number' : sortBy === 's.name' ? 'supplier_name' : 'status'}
+          sortOrder={sortDir}
+          onSort={(key: string) => {
+            let dbKey = key;
+            if (key === 'po_number') dbKey = 'po.po_number';
+            if (key === 'supplier_name') dbKey = 's.name';
+            if (key === 'created_at') dbKey = 'po.created_at';
+            if (key === 'status') dbKey = 'po.status';
+            
+            if (sortBy === dbKey) {
+              setSortDir(sortDir === 'asc' ? 'desc' : 'asc');
+            } else {
+              setSortBy(dbKey);
+              setSortDir('asc');
+            }
+          }}
+          pagination={{ page, total, limit: 50, totalPages, onPageChange: setPage }}
         />
       </section>
 
@@ -412,15 +501,12 @@ export function PurchasingPage() {
                     />
                     <div className="form-field">
                       <label className="form-field__label">Target Location</label>
-                      <select
-                        className="form-select"
+                      <SearchableSelect
                         value={selectedWHId}
-                        onChange={(e) => setSelectedWHId(e.target.value)}
-                        required
-                      >
-                        <option value="">Choose Warehouse...</option>
-                        {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
-                      </select>
+                        onChange={(val) => setSelectedWHId(val)}
+                        options={warehouses.map(w => ({ value: w.id, label: w.name }))}
+                        placeholder="Choose Warehouse..."
+                      />
                     </div>
                   </div>
 
@@ -449,17 +535,12 @@ export function PurchasingPage() {
                             />
                           </td>
                           <td>
-                            <select
-                              className="form-select"
-                              style={{ minHeight: '32px' }}
+                            <SearchableSelect
                               value={receiptLocations[l.product_id] || ''}
-                              onChange={(e) => setReceiptLocations(prev => ({ ...prev, [l.product_id]: e.target.value }))}
-                            >
-                              <option value="">Default/System</option>
-                              {locationsList.map(loc => (
-                                <option key={loc.id} value={loc.id}>{loc.aisle}-{loc.rack}-{loc.shelf}-{loc.bin}</option>
-                              ))}
-                            </select>
+                              onChange={(val) => setReceiptLocations(prev => ({ ...prev, [l.product_id]: val }))}
+                              options={locationsList.map(loc => ({ value: loc.id, label: `${loc.aisle}-${loc.rack}-${loc.shelf}-${loc.bin}` }))}
+                              placeholder="Default/System"
+                            />
                           </td>
                         </tr>
                       ))}

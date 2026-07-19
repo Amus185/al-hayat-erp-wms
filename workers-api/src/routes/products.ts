@@ -161,6 +161,38 @@ products.get('/:id', async (c) => {
   return c.json(product);
 });
 
+products.patch('/:id', requirePermissions(['manage_inventory']), async (c) => {
+  const id = c.req.param('id');
+  const body = await c.req.json();
+  
+  const existing = await c.env.DB.prepare('SELECT * FROM products WHERE id = ?').bind(id).first();
+  if (!existing) return c.json({ message: 'Product not found' }, 404);
+
+  const updates: any = {};
+  if (body.name !== undefined) updates.name = body.name.trim();
+  if (body.sku !== undefined) updates.sku = body.sku.trim();
+  if (body.barcode !== undefined) updates.barcode = body.barcode.trim();
+  if (body.description !== undefined) updates.description = body.description.trim();
+  if (body.categoryId !== undefined) updates.category_id = body.categoryId;
+  if (body.brandId !== undefined) updates.brand_id = body.brandId;
+  if (body.costPrice !== undefined) updates.cost_price = Number(body.costPrice);
+  if (body.sellingPrice !== undefined) updates.selling_price = Number(body.sellingPrice);
+  if (body.reorderLevel !== undefined) updates.reorder_level = Number(body.reorderLevel);
+
+  if (Object.keys(updates).length === 0) return c.json(existing);
+
+  const setClauses = Object.keys(updates).map(k => `${k} = ?`).join(', ');
+  const values = Object.values(updates);
+  
+  await c.env.DB.prepare(`UPDATE products SET ${setClauses} WHERE id = ?`)
+    .bind(...values, id)
+    .run();
+    
+  const updated = await c.env.DB.prepare('SELECT * FROM products WHERE id = ?').bind(id).first();
+  await logAudit(c, 'PRODUCT_UPDATE', 'products', id, existing, updated);
+  return c.json(updated);
+});
+
 products.delete('/:id', requirePermissions(['manage_inventory']), async (c) => {
   const id = c.req.param('id');
 
