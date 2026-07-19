@@ -6,7 +6,6 @@ import { useAuth } from './contexts/AuthContext';
 import { LoginPage } from './pages/LoginPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { ProductsPage } from './pages/ProductsPage';
-import { ProductDetailsPage } from './pages/ProductDetailsPage';
 import { WarehousesPage } from './pages/WarehousesPage';
 import { WarehouseDetailsPage } from './pages/WarehouseDetailsPage';
 import { InventoryPage } from './pages/InventoryPage';
@@ -69,7 +68,6 @@ export function App() {
             
             {/* Products catalog */}
             <Route path="/products" element={<ProductsPage />} />
-            <Route path="/products/:id" element={<ProductDetailsPage />} />
             
             {/* Warehouses configuration */}
             <Route path="/warehouses" element={<WarehousesPage />} />
