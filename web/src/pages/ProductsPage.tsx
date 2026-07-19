@@ -214,7 +214,29 @@ export function ProductsPage() {
     });
   };
 
-
+  const handleEditProduct = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingProduct) return;
+    try {
+      await apiPatch(`/products/${editingProduct.id}`, {
+        sku: editingProduct.sku,
+        barcode: editingProduct.barcode,
+        name: editingProduct.name,
+        description: editingProduct.description,
+        categoryId: editingProduct.category_id || null,
+        brandId: editingProduct.brand_id || null,
+        costPrice: editingProduct.cost_price,
+        sellingPrice: editingProduct.selling_price,
+        reorderLevel: editingProduct.reorder_level,
+      });
+      addToast('success', 'Product updated successfully');
+      setIsEditOpen(false);
+      setEditingProduct(null);
+      loadData();
+    } catch (err: any) {
+      addToast('error', err?.message || 'Failed to update product');
+    }
+  };
 
   const filteredProducts = products.filter((p) => {
     if (!selectedCategory) return true;
@@ -463,7 +485,7 @@ export function ProductsPage() {
 
       {/* Edit Product Modal */}
       {isEditOpen && editingProduct && (
-        <Modal title="Edit Product" onClose={() => { setIsEditOpen(false); setEditingProduct(null); }}>
+        <Modal isOpen={isEditOpen} title="Edit Product" onClose={() => { setIsEditOpen(false); setEditingProduct(null); }}>
           <form onSubmit={handleEditProduct}>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
               <InputField label="Product ID (SKU) *" id="editSku" value={editingProduct.sku} onChange={(val) => setEditingProduct({ ...editingProduct, sku: val })} required />
