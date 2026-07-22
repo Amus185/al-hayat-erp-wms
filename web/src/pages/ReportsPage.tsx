@@ -570,7 +570,7 @@ export function ReportsPage() {
               </div>
 
               {/* KPI Cards */}
-              <div className="metric-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '16px', marginBottom: '24px' }}>
+              <div className="metric-grid" style={{ marginBottom: '24px' }}>
                 <MetricCard
                   label="Top Performing Branch"
                   value={branchPerfData[0]?.name || 'N/A'}
@@ -638,7 +638,7 @@ export function ReportsPage() {
               </div>
 
               {/* KPI Cards */}
-              <div className="metric-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '16px', marginBottom: '24px' }}>
+              <div className="metric-grid" style={{ marginBottom: '24px' }}>
                 <MetricCard
                   label="Total Estimated Cost Value"
                   value={formatCurrency(invValuationData?.summary?.total_cost_value)}
@@ -707,7 +707,7 @@ export function ReportsPage() {
               </div>
 
               {/* KPI Grid */}
-              <div className="metric-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '16px', marginBottom: '24px' }}>
+              <div className="metric-grid" style={{ marginBottom: '24px' }}>
                 <MetricCard
                   label="Total Invoiced Revenue"
                   value={formatCurrency(salesProfitData?.summary?.total_revenue)}
@@ -790,7 +790,7 @@ export function ReportsPage() {
               </div>
 
               {/* KPI Cards */}
-              <div className="metric-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '16px', marginBottom: '24px' }}>
+              <div className="metric-grid" style={{ marginBottom: '24px' }}>
                 <MetricCard
                   label="Total Quotations Issued"
                   value={quoteConvData?.summary?.total_quotes?.toString() || '0'}
@@ -859,7 +859,7 @@ export function ReportsPage() {
               </div>
 
               {/* KPI Cards */}
-              <div className="metric-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '16px', marginBottom: '24px' }}>
+              <div className="metric-grid" style={{ marginBottom: '24px' }}>
                 <MetricCard
                   label="Total PO Spend"
                   value={formatCurrency(supplierPerfData?.summary?.total_spend)}
@@ -926,7 +926,7 @@ export function ReportsPage() {
               </div>
 
               {/* KPI Cards */}
-              <div className="metric-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '16px', marginBottom: '24px' }}>
+              <div className="metric-grid" style={{ marginBottom: '24px' }}>
                 <MetricCard
                   label="Total Invoiced Amount"
                   value={formatCurrency(receivablesData?.summary?.total_invoiced)}
