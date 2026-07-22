@@ -50,4 +50,48 @@ app.route('/api/v1/notifications', notifications);
 app.route('/api/v1/audit', audit);
 app.route('/api/v1/files', files);
 
+// Global Error Handler - Structured JSON Logging for Cloudflare Workers Observability
+app.onError((err, c) => {
+  const errorPayload = {
+    level: 'error',
+    timestamp: new Date().toISOString(),
+    service: 'al-hayat-api',
+    path: c.req.url,
+    method: c.req.method,
+    error: err.message,
+    name: err.name,
+    stack: err.stack,
+    headers: {
+      userAgent: c.req.header('user-agent'),
+      ip: c.req.header('cf-connecting-ip') || c.req.header('x-forwarded-for'),
+    },
+  };
+
+  console.error(JSON.stringify(errorPayload));
+
+  return c.json(
+    {
+      error: err.message || 'Internal Server Error',
+      status: 500,
+    },
+    500
+  );
+});
+
+// 404 Not Found Handler
+app.notFound((c) => {
+  console.warn(
+    JSON.stringify({
+      level: 'warn',
+      timestamp: new Date().toISOString(),
+      service: 'al-hayat-api',
+      event: 'NOT_FOUND',
+      path: c.req.url,
+      method: c.req.method,
+    })
+  );
+  return c.json({ error: 'Route not found', status: 404 }, 404);
+});
+
 export default app;
+
