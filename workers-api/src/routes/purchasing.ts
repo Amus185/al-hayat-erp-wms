@@ -201,16 +201,18 @@ purchasing.post('/receipts', requirePermissions(['manage_purchasing']), async (c
     }
   }
 
-  // Pre-flight: gather existing stock rows (no async inside batch loop)
+  // Pre-flight: gather existing stock rows in parallel via Promise.all
   const stockLookups = new Map<string, string | null>();
-  for (const line of body.lines) {
-    const existingStock = await c.env.DB.prepare(`
-      SELECT id FROM inventory_stock
-      WHERE product_id = ? AND owner_type = 'WAREHOUSE' AND warehouse_id = ? AND branch_id IS NULL
-        AND (warehouse_location_id = ? OR (warehouse_location_id IS NULL AND ? IS NULL))
-    `).bind(line.productId, body.warehouseId, line.warehouseLocationId || null, line.warehouseLocationId || null).first();
-    stockLookups.set(`${line.productId}:${line.warehouseLocationId || ''}`, existingStock?.id as string || null);
-  }
+  await Promise.all(
+    body.lines.map(async (line: any) => {
+      const existingStock = await c.env.DB.prepare(`
+        SELECT id FROM inventory_stock
+        WHERE product_id = ? AND owner_type = 'WAREHOUSE' AND warehouse_id = ? AND branch_id IS NULL
+          AND (warehouse_location_id = ? OR (warehouse_location_id IS NULL AND ? IS NULL))
+      `).bind(line.productId, body.warehouseId, line.warehouseLocationId || null, line.warehouseLocationId || null).first();
+      stockLookups.set(`${line.productId}:${line.warehouseLocationId || ''}`, (existingStock?.id as string) || null);
+    })
+  );
 
   // Build atomic batch
   const receiptId = uuidv4();
@@ -248,26 +250,28 @@ purchasing.post('/receipts', requirePermissions(['manage_purchasing']), async (c
     }
   }
 
-  // Check if all PO lines are now fully received
+  // Check if all PO lines are now fully received using parallel queries
   const { results: poLines } = await c.env.DB.prepare(
     'SELECT pol.product_id, pol.quantity FROM purchase_order_lines pol WHERE pol.purchase_order_id = ?'
   ).bind(body.purchaseOrderId).all();
 
-  let fullyReceived = true;
-  for (const poLine of poLines) {
-    const totalReceived = await c.env.DB.prepare(`
-      SELECT COALESCE(SUM(grl.quantity_received), 0) as total
-      FROM goods_receipt_lines grl
-      JOIN goods_receipts gr ON gr.id = grl.goods_receipt_id
-      WHERE gr.purchase_order_id = ? AND grl.product_id = ?
-    `).bind(body.purchaseOrderId, poLine.product_id).first();
+  const isIncompleteResults = await Promise.all(
+    (poLines || []).map(async (poLine: any) => {
+      const totalReceived = await c.env.DB.prepare(`
+        SELECT COALESCE(SUM(grl.quantity_received), 0) as total
+        FROM goods_receipt_lines grl
+        JOIN goods_receipts gr ON gr.id = grl.goods_receipt_id
+        WHERE gr.purchase_order_id = ? AND grl.product_id = ?
+      `).bind(body.purchaseOrderId, poLine.product_id).first();
 
-    // Include current receipt quantities
-    const currentQty = body.lines.find((l: any) => l.productId === poLine.product_id)?.quantityReceived || 0;
-    const total = ((totalReceived?.total as number) || 0) + currentQty;
+      const currentQty = body.lines.find((l: any) => l.productId === poLine.product_id)?.quantityReceived || 0;
+      const total = ((totalReceived?.total as number) || 0) + currentQty;
 
-    if (total < (poLine.quantity as number)) {
-      fullyReceived = false;
+      return total < (poLine.quantity as number);
+    })
+  );
+
+  const fullyReceived = !isIncompleteResults.includes(true);
       break;
     }
   }

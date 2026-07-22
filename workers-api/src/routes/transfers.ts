@@ -206,46 +206,50 @@ transfers.post('/:id/approve', requirePermissions(['manage_transfers']), async (
     }
     const stockInfoMap = new Map<string, StockInfo>();
 
-    for (const line of lines) {
-      const srcStock = await c.env.DB.prepare(`
-        SELECT id, quantity_on_hand FROM inventory_stock
-        WHERE product_id = ? AND owner_type = ?
-          AND (warehouse_id = ? OR (warehouse_id IS NULL AND ? IS NULL))
-          AND (branch_id = ? OR (branch_id IS NULL AND ? IS NULL))
-      `).bind(
-        line.product_id,
-        transfer.source_owner_type,
-        transfer.source_warehouse_id || null, transfer.source_warehouse_id || null,
-        transfer.source_branch_id || null, transfer.source_branch_id || null
-      ).first();
+    await Promise.all(
+      lines.map(async (line: any) => {
+        const [srcStock, dstStock] = await Promise.all([
+          c.env.DB.prepare(`
+            SELECT id, quantity_on_hand FROM inventory_stock
+            WHERE product_id = ? AND owner_type = ?
+              AND (warehouse_id = ? OR (warehouse_id IS NULL AND ? IS NULL))
+              AND (branch_id = ? OR (branch_id IS NULL AND ? IS NULL))
+          `).bind(
+            line.product_id,
+            transfer.source_owner_type,
+            transfer.source_warehouse_id || null, transfer.source_warehouse_id || null,
+            transfer.source_branch_id || null, transfer.source_branch_id || null
+          ).first(),
 
-      const srcQty = (srcStock?.quantity_on_hand as number) || 0;
-      const reqQty = line.quantity_requested as number;
+          c.env.DB.prepare(`
+            SELECT id FROM inventory_stock
+            WHERE product_id = ? AND owner_type = ?
+              AND (warehouse_id = ? OR (warehouse_id IS NULL AND ? IS NULL))
+              AND (branch_id = ? OR (branch_id IS NULL AND ? IS NULL))
+          `).bind(
+            line.product_id,
+            transfer.destination_owner_type,
+            transfer.destination_warehouse_id || null, transfer.destination_warehouse_id || null,
+            transfer.destination_branch_id || null, transfer.destination_branch_id || null
+          ).first()
+        ]);
 
-      if (srcQty < reqQty) {
-        insufficientLines.push(
-          `Product ${line.product_id}: requested ${reqQty}, available ${srcQty}`
-        );
-      }
+        const srcQty = (srcStock?.quantity_on_hand as number) || 0;
+        const reqQty = line.quantity_requested as number;
 
-      const dstStock = await c.env.DB.prepare(`
-        SELECT id FROM inventory_stock
-        WHERE product_id = ? AND owner_type = ?
-          AND (warehouse_id = ? OR (warehouse_id IS NULL AND ? IS NULL))
-          AND (branch_id = ? OR (branch_id IS NULL AND ? IS NULL))
-      `).bind(
-        line.product_id,
-        transfer.destination_owner_type,
-        transfer.destination_warehouse_id || null, transfer.destination_warehouse_id || null,
-        transfer.destination_branch_id || null, transfer.destination_branch_id || null
-      ).first();
+        if (srcQty < reqQty) {
+          insufficientLines.push(
+            `Product ${line.product_id}: requested ${reqQty}, available ${srcQty}`
+          );
+        }
 
-      stockInfoMap.set(line.id as string, {
-        sourceStockId: (srcStock?.id as string) || null,
-        sourceQtyOnHand: srcQty,
-        destStockId: (dstStock?.id as string) || null,
-      });
-    }
+        stockInfoMap.set(line.id as string, {
+          sourceStockId: (srcStock?.id as string) || null,
+          sourceQtyOnHand: srcQty,
+          destStockId: (dstStock?.id as string) || null,
+        });
+      })
+    );
 
     if (insufficientLines.length > 0) {
       // Roll back the CAS lock

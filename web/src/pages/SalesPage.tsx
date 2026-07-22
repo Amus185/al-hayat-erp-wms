@@ -56,10 +56,11 @@ export function SalesPage() {
 
   const loadData = async () => {
     try {
-      setLoading(true);
-      const salesOrders = await apiGet<SalesOrder[]>('/sales/orders');
-      const custs = await apiGet<Customer[]>('/sales/customers');
-      const branches = await apiGet<any[]>('/branches');
+      const [salesOrders, custs, branches] = await Promise.all([
+        apiGet<SalesOrder[]>('/sales/orders'),
+        apiGet<Customer[]>('/sales/customers'),
+        apiGet<any[]>('/branches'),
+      ]);
 
       setCustomers(custs || []);
 

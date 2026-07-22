@@ -48,12 +48,12 @@ export function TransfersPage() {
 
   const loadData = async () => {
     try {
-      setLoading(true);
-      const data = await apiGet<Transfer[]>('/transfers');
+      const [data, whs, brs] = await Promise.all([
+        apiGet<Transfer[]>('/transfers'),
+        apiGet<any[]>('/warehouses'),
+        apiGet<any[]>('/branches'),
+      ]);
       setTransfers(data || []);
-
-      const whs = await apiGet<any[]>('/warehouses');
-      const brs = await apiGet<any[]>('/branches');
       setWarehouses(whs || []);
       setBranches(brs || []);
     } catch (err: any) {

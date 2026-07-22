@@ -202,30 +202,32 @@ sales.post('/orders/:id/invoice', requirePermissions(['manage_sales']), async (c
       return c.json({ message: 'Order has no line items.' }, 400);
     }
 
-    // Pre-flight stock check
+    // Pre-flight stock check in parallel via Promise.all
     const insufficientLines: string[] = [];
     const stockMap = new Map<string, { stockId: string; qtyOnHand: number }>();
 
-    for (const line of lines) {
-      const stock = await c.env.DB.prepare(`
-        SELECT id, quantity_on_hand FROM inventory_stock
-        WHERE product_id = ? AND owner_type = 'BRANCH' AND branch_id = ?
-      `).bind(line.product_id, branchId).first();
+    await Promise.all(
+      lines.map(async (line: any) => {
+        const stock = await c.env.DB.prepare(`
+          SELECT id, quantity_on_hand FROM inventory_stock
+          WHERE product_id = ? AND owner_type = 'BRANCH' AND branch_id = ?
+        `).bind(line.product_id, branchId).first();
 
-      const available = (stock?.quantity_on_hand as number) || 0;
-      const requested = line.quantity as number;
+        const available = (stock?.quantity_on_hand as number) || 0;
+        const requested = line.quantity as number;
 
-      if (available < requested) {
-        // Get product name for clear error
-        const prod = await c.env.DB.prepare('SELECT name FROM products WHERE id = ?').bind(line.product_id).first();
-        insufficientLines.push(`${prod?.name || line.product_id}: need ${requested}, available ${available}`);
-      }
+        if (available < requested) {
+          // Get product name for clear error
+          const prod = await c.env.DB.prepare('SELECT name FROM products WHERE id = ?').bind(line.product_id).first();
+          insufficientLines.push(`${prod?.name || line.product_id}: need ${requested}, available ${available}`);
+        }
 
-      stockMap.set(line.product_id as string, {
-        stockId: (stock?.id as string) || '',
-        qtyOnHand: available,
-      });
-    }
+        stockMap.set(line.product_id as string, {
+          stockId: (stock?.id as string) || '',
+          qtyOnHand: available,
+        });
+      })
+    );
 
     if (insufficientLines.length > 0) {
       await c.env.DB.prepare("UPDATE sales_orders SET status = 'CONFIRMED' WHERE id = ?").bind(orderId).run();

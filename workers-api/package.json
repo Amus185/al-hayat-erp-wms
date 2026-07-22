@@ -10,13 +10,13 @@
     "db:seed": "wrangler d1 execute al-hayat-db --local --file=./seed.sql"
   },
   "dependencies": {
-    "hono": "^4.5.0",
-    "bcryptjs": "^2.4.3"
+    "bcryptjs": "^2.4.3",
+    "hono": "^4.5.0"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20240701.0",
+    "@cloudflare/workers-types": "^5.20260722.1",
     "@types/bcryptjs": "^2.4.6",
     "typescript": "^5.5.3",
-    "wrangler": "^3.63.1"
+    "wrangler": "^4.113.0"
   }
 }

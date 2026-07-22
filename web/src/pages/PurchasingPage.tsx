@@ -66,11 +66,10 @@ export function PurchasingPage() {
 
   const loadData = async () => {
     try {
-      setLoading(true);
-      const orders = await apiGet<PurchaseOrder[]>('/purchasing/orders');
-      
-      // Resolve supplier name mappings
-      const sups = await apiGet<Supplier[]>('/purchasing/suppliers');
+      const [orders, sups] = await Promise.all([
+        apiGet<PurchaseOrder[]>('/purchasing/orders'),
+        apiGet<Supplier[]>('/purchasing/suppliers'),
+      ]);
       setSuppliers(sups || []);
 
       const ordersWithSupplier = orders?.map(po => {
