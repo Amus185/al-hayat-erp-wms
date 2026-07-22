@@ -24,35 +24,43 @@ export function DashboardPage() {
     async function fetchDashboardData() {
       try {
         setLoading(true);
-        // Fetch ALL dashboard data in parallel
+        // Fetch all dashboard data in parallel — individual failures are tolerated
         const [invValueData, lowStockData, transfersData, transactions] = await Promise.all([
-          apiGet<any>('/reports/inventory-value'),
-          apiGet<any[]>('/reports/low-stock'),
-          apiGet<any[]>('/transfers'),
-          apiGet<any[]>('/inventory/transactions'),
+          apiGet<any>('/reports/inventory-valuation').catch(() => null),
+          apiGet<any[]>('/reports/low-stock').catch(() => []),
+          apiGet<any[]>('/transfers').catch(() => []),
+          apiGet<any[]>('/inventory/transactions').catch(() => []),
         ]);
 
-        // Parse metrics
-        const totalValue = invValueData?.inventory_value ? Number(invValueData.inventory_value) : 0;
-        const availableUnits = invValueData?.units_on_hand ? Number(invValueData.units_on_hand) : 0;
-        const activeTransfers = transfersData ? transfersData.filter(t => t.status !== 'RECEIVED' && t.status !== 'CANCELLED').length : 0;
-        const scansToday = transactions ? transactions.filter(t => {
-          const date = new Date(t.created_at);
-          const today = new Date();
-          return date.toDateString() === today.toDateString();
-        }).length : 0;
+        // Parse metrics — backend returns { summary: { total_cost_value, total_retail_value, total_units } }
+        const totalValue = invValueData?.summary?.total_cost_value
+          ? Number(invValueData.summary.total_cost_value)
+          : 0;
+        const availableUnits = invValueData?.summary?.total_units
+          ? Number(invValueData.summary.total_units)
+          : 0;
+        const activeTransfers = transfersData
+          ? transfersData.filter(t => t.status !== 'RECEIVED' && t.status !== 'CANCELLED').length
+          : 0;
+        const scansToday = transactions
+          ? transactions.filter(t => {
+              const date = new Date(t.created_at);
+              const today = new Date();
+              return date.toDateString() === today.toDateString();
+            }).length
+          : 0;
 
         setMetrics({
           totalValue,
           availableUnits,
           activeTransfers,
-          scansToday: scansToday || (transactions ? transactions.slice(0, 10).length : 0) // fallback to total transactions if none today for demonstration
+          scansToday: scansToday || (transactions ? transactions.slice(0, 10).length : 0),
         });
 
         setLowStock(lowStockData || []);
         setActiveTransfersList(transfersData ? transfersData.slice(0, 5) : []);
 
-        // Build some operation alerts dynamically
+        // Build operation alerts dynamically
         const generatedAlerts: string[] = [];
         if (lowStockData && lowStockData.length > 0) {
           generatedAlerts.push(`${lowStockData.length} items have fallen below reorder thresholds.`);
