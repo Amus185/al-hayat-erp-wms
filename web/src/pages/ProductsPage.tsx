@@ -31,8 +31,8 @@ interface Product {
   selling_price: number;
   reorder_level: number;
   is_active: boolean;
-  category?: string;
-  brand?: string;
+  category_name?: string;
+  brand_name?: string;
 }
 
 export function ProductsPage() {
@@ -287,8 +287,8 @@ export function ProductsPage() {
   const columns: Column<Product>[] = [
     { key: 'sku', label: 'Product ID', sortable: true },
     { key: 'name', label: 'Name', sortable: true },
-    { key: 'category', label: 'Category', render: (row) => row.category || 'N/A' },
-    { key: 'brand', label: 'Brand', render: (row) => row.brand || 'N/A' },
+    { key: 'category_name', label: 'Category', render: (row) => row.category_name || 'N/A' },
+    { key: 'brand_name', label: 'Brand', render: (row) => row.brand_name || 'N/A' },
     { key: 'cost_price', label: 'Cost Price', render: (row) => `$${Number(row.cost_price).toLocaleString()}` },
     { key: 'selling_price', label: 'Selling Price', render: (row) => `$${Number(row.selling_price).toLocaleString()}` },
     {

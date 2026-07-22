@@ -61,6 +61,7 @@ export function InventoryPage() {
   const [locations, setLocations] = useState<any[]>([]);
 
   // Adjustment Modal state
+  const [isAdjustOpen, setIsAdjustOpen] = useState(false);
   const [productQuery, setProductQuery] = useState('');
   const [adjustForm, setAdjustForm] = useState({
     productId: '',
