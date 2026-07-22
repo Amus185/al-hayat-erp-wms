@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { PackageSearch, Plus, Trash2, List, Settings } from 'lucide-react';
+import { PackageSearch, Plus, Trash2, List, Settings, PlusCircle } from 'lucide-react';
 import { apiGet, apiPost, apiPatch, apiDelete, apiDownload } from '../api/client';
 import { DataTable, type Column } from '../components/DataTable';
 import { SearchInput } from '../components/SearchInput';
@@ -44,6 +44,7 @@ export function ProductsPage() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [brands, setBrands] = useState<Brand[]>([]);
   const [warehouses, setWarehouses] = useState<{ id: string; name: string }[]>([]);
+  const [branches, setBranches] = useState<{ id: string; name: string }[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('');
@@ -67,8 +68,32 @@ export function ProductsPage() {
     reorderLevel: 5,
   });
 
-  // Initial stock to assign immediately on product creation
-  const [initialStock, setInitialStock] = useState({ warehouseId: '', quantity: 0 });
+  // Multi-location initial stock lines
+  interface StockLine {
+    id: number;
+    ownerType: 'WAREHOUSE' | 'BRANCH';
+    locationId: string;
+    quantity: number;
+  }
+  const [initialStockLines, setInitialStockLines] = useState<StockLine[]>([]);
+  const nextLineId = { current: 1 };
+
+  const addStockLine = () => {
+    setInitialStockLines(prev => [
+      ...prev,
+      { id: Date.now(), ownerType: 'WAREHOUSE', locationId: '', quantity: 0 }
+    ]);
+  };
+
+  const removeStockLine = (id: number) => {
+    setInitialStockLines(prev => prev.filter(l => l.id !== id));
+  };
+
+  const updateStockLine = (id: number, patch: Partial<StockLine>) => {
+    setInitialStockLines(prev =>
+      prev.map(l => (l.id === id ? { ...l, ...patch } : l))
+    );
+  };
 
   const [confirmState, setConfirmState] = useState<{ isOpen: boolean; title: string; message: string; onConfirm: () => void; }>({
     isOpen: false,
@@ -105,7 +130,13 @@ export function ProductsPage() {
   useEffect(() => {
     loadData();
     fetchFilters();
-    apiGet<{ id: string; name: string }[]>('/warehouses').then(res => setWarehouses(res || [])).catch(console.error);
+    Promise.all([
+      apiGet<{ id: string; name: string }[]>('/warehouses'),
+      apiGet<{ id: string; name: string }[]>('/branches'),
+    ]).then(([whs, brs]) => {
+      setWarehouses(whs || []);
+      setBranches(brs || []);
+    }).catch(console.error);
   }, [search]);
 
   const handleCreateCategory = async (e: React.FormEvent) => {
@@ -162,21 +193,30 @@ export function ProductsPage() {
 
     try {
       const created: any = await apiPost('/products', payload);
-      // Auto-create inventory if initial stock was provided
-      if (initialStock.warehouseId && initialStock.quantity > 0) {
-        try {
-          await apiPost('/inventory/adjust', {
-            productId: created.id,
-            direction: 'INCREASE',
-            quantity: initialStock.quantity,
-            ownerType: 'WAREHOUSE',
-            warehouseId: initialStock.warehouseId,
-            notes: 'Initial stock on product creation',
-          });
-        } catch (stockErr) {
-          addToast('error', 'Product created but failed to add initial stock — add it manually in Inventory.');
+
+      // Distribute initial stock across multiple locations in parallel
+      const validLines = initialStockLines.filter(l => l.locationId && l.quantity > 0);
+      if (validLines.length > 0) {
+        const stockResults = await Promise.allSettled(
+          validLines.map(line =>
+            apiPost('/inventory/adjust', {
+              productId: created.id,
+              direction: 'INCREASE',
+              quantity: line.quantity,
+              ownerType: line.ownerType,
+              ...(line.ownerType === 'WAREHOUSE'
+                ? { warehouseId: line.locationId }
+                : { branchId: line.locationId }),
+              notes: 'Initial stock on product creation',
+            })
+          )
+        );
+        const failed = stockResults.filter(r => r.status === 'rejected').length;
+        if (failed > 0) {
+          addToast('error', `Product created, but ${failed} stock location(s) failed — check Inventory manually.`);
         }
       }
+
       addToast('success', 'Product created successfully');
       setIsCreateOpen(false);
       setNewProduct({
@@ -190,7 +230,7 @@ export function ProductsPage() {
         sellingPrice: 0,
         reorderLevel: 5,
       });
-      setInitialStock({ warehouseId: '', quantity: 0 });
+      setInitialStockLines([]);
       loadData();
     } catch (err: any) {
       addToast('error', err?.message || 'Failed to create product');
@@ -433,28 +473,97 @@ export function ProductsPage() {
             />
           </div>
 
-          {/* Initial Stock Section */}
-          <div style={{ marginTop: '16px', padding: '14px', background: '#f4fbf4', borderRadius: '8px', border: '1px solid #d1e8d1' }}>
-            <p style={{ margin: '0 0 10px', fontWeight: 600, color: '#066006', fontSize: '14px' }}>📦 Initial Stock (Optional)</p>
-            <p style={{ margin: '0 0 12px', fontSize: '12px', color: '#667066' }}>Assign stock immediately so this product appears in Inventory right away.</p>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
-              <FormField label="Warehouse">
-                <SearchableSelect
-                  options={warehouses.map((w) => ({ value: w.id, label: w.name }))}
-                  value={initialStock.warehouseId}
-                  onChange={(val) => setInitialStock((prev) => ({ ...prev, warehouseId: val }))}
-                  placeholder="Skip — add stock later"
-                />
-              </FormField>
-              <InputField
-                label="Opening Quantity"
-                id="initQty"
-                type="number"
-                min={0}
-                value={initialStock.quantity}
-                onChange={(val) => setInitialStock(prev => ({ ...prev, quantity: Number(val) }))}
-              />
+          {/* Initial Stock Section — Multi-location */}
+          <div style={{ marginTop: '16px', padding: '16px', background: '#f4fbf4', borderRadius: '10px', border: '1px solid #d1e8d1' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
+              <div>
+                <p style={{ margin: 0, fontWeight: 700, color: '#066006', fontSize: '14px' }}>📦 Initial Stock Distribution (Optional)</p>
+                <p style={{ margin: '3px 0 0', fontSize: '12px', color: '#667066' }}>Distribute opening stock across multiple warehouses & branches.</p>
+              </div>
+              <button
+                type="button"
+                onClick={addStockLine}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: '6px',
+                  padding: '7px 14px', background: '#066006', color: '#fff',
+                  border: 'none', borderRadius: '8px', cursor: 'pointer',
+                  fontSize: '13px', fontWeight: 600, whiteSpace: 'nowrap',
+                }}
+              >
+                <PlusCircle size={15} /> Add Location
+              </button>
             </div>
+
+            {initialStockLines.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '18px 0', color: '#889388', fontSize: '13px', border: '1px dashed #c8dcc8', borderRadius: '8px' }}>
+                No stock locations added — click <strong>Add Location</strong> to assign opening stock.
+              </div>
+            ) : (
+              <div style={{ display: 'grid', gap: '8px' }}>
+                {/* Header row */}
+                <div style={{ display: 'grid', gridTemplateColumns: '130px 1fr 100px 36px', gap: '8px', padding: '0 4px' }}>
+                  <span style={{ fontSize: '11px', color: '#667066', fontWeight: 600, textTransform: 'uppercase' }}>Owner Type</span>
+                  <span style={{ fontSize: '11px', color: '#667066', fontWeight: 600, textTransform: 'uppercase' }}>Location</span>
+                  <span style={{ fontSize: '11px', color: '#667066', fontWeight: 600, textTransform: 'uppercase' }}>Qty</span>
+                  <span></span>
+                </div>
+
+                {initialStockLines.map(line => (
+                  <div key={line.id} style={{ display: 'grid', gridTemplateColumns: '130px 1fr 100px 36px', gap: '8px', alignItems: 'center', background: '#fff', padding: '8px 10px', borderRadius: '8px', border: '1px solid #d9e8d9' }}>
+                    {/* Owner type toggle */}
+                    <select
+                      className="form-select"
+                      style={{ fontSize: '13px', padding: '6px 8px' }}
+                      value={line.ownerType}
+                      onChange={(e) => updateStockLine(line.id, { ownerType: e.target.value as any, locationId: '' })}
+                    >
+                      <option value="WAREHOUSE">Warehouse</option>
+                      <option value="BRANCH">Branch</option>
+                    </select>
+
+                    {/* Location picker */}
+                    <SearchableSelect
+                      options={
+                        line.ownerType === 'WAREHOUSE'
+                          ? warehouses.map(w => ({ value: w.id, label: w.name }))
+                          : branches.map(b => ({ value: b.id, label: b.name }))
+                      }
+                      value={line.locationId}
+                      onChange={(val) => updateStockLine(line.id, { locationId: val })}
+                      placeholder={line.ownerType === 'WAREHOUSE' ? 'Select Warehouse...' : 'Select Branch...'}
+                    />
+
+                    {/* Quantity */}
+                    <input
+                      type="number"
+                      min={0}
+                      value={line.quantity}
+                      onChange={(e) => updateStockLine(line.id, { quantity: Number(e.target.value) })}
+                      style={{ width: '100%', padding: '6px 8px', border: '1px solid #d9e2d9', borderRadius: '8px', fontSize: '13px' }}
+                    />
+
+                    {/* Remove */}
+                    <button
+                      type="button"
+                      onClick={() => removeStockLine(line.id)}
+                      style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#cc3333', padding: '4px', display: 'flex', alignItems: 'center' }}
+                      title="Remove row"
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  </div>
+                ))}
+
+                {/* Totals footer */}
+                {initialStockLines.length > 0 && (
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', paddingTop: '6px', borderTop: '1px solid #d1e8d1', marginTop: '4px' }}>
+                    <span style={{ fontSize: '13px', color: '#066006', fontWeight: 700 }}>
+                      Total Opening Stock: {initialStockLines.reduce((sum, l) => sum + (l.quantity || 0), 0)} units
+                    </span>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '20px' }}>
