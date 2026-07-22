@@ -4,6 +4,7 @@ import { apiGet, apiPost } from '../api/client';
 import { DataTable, type Column } from '../components/DataTable';
 import { Modal } from '../components/Modal';
 import { FormField, InputField } from '../components/FormField';
+import { SearchInput } from '../components/SearchInput';
 import { Tabs } from '../components/Tabs';
 // Loading is handled inline by DataTable
 import { useToast } from '../contexts/ToastContext';
@@ -59,7 +60,7 @@ export function InventoryPage() {
   const [locations, setLocations] = useState<any[]>([]);
 
   // Adjustment Modal state
-  const [isAdjustOpen, setIsAdjustOpen] = useState(false);
+  const [productQuery, setProductQuery] = useState('');
   const [adjustForm, setAdjustForm] = useState({
     productId: '',
     direction: 'INCREASE' as 'INCREASE' | 'DECREASE',
@@ -319,20 +320,62 @@ export function InventoryPage() {
       <Modal isOpen={isAdjustOpen} onClose={() => setIsAdjustOpen(false)} title="Post Stock Adjustment" width="md">
         <form onSubmit={handleAdjustmentSubmit}>
           <div style={{ display: 'grid', gap: '14px' }}>
-            <FormField label="Select Product">
-              <select
-                className="form-select"
-                value={adjustForm.productId}
-                onChange={(e) => setAdjustForm((prev) => ({ ...prev, productId: e.target.value }))}
-                required
-              >
-                <option value="">Select a product...</option>
-                {productsList.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.label}
-                  </option>
-                ))}
-              </select>
+            <FormField label="Search & Select Product">
+              <div style={{ position: 'relative' }}>
+                <SearchInput
+                  value={productQuery}
+                  onChange={(val) => {
+                    setProductQuery(val);
+                    if (!val) setAdjustForm((prev) => ({ ...prev, productId: '' }));
+                  }}
+                  placeholder="Search by Product Name, SKU or scan Barcode..."
+                />
+                {productQuery && !adjustForm.productId && (
+                  <div
+                    style={{
+                      position: 'absolute',
+                      top: '100%',
+                      left: 0,
+                      right: 0,
+                      background: '#fff',
+                      border: '1px solid #d9e2d9',
+                      borderRadius: '8px',
+                      boxShadow: '0 6px 20px rgba(0,0,0,0.15)',
+                      zIndex: 30,
+                      marginTop: '4px',
+                      maxHeight: '220px',
+                      overflowY: 'auto',
+                    }}
+                  >
+                    {productsList
+                      .filter((p) => p.label.toLowerCase().includes(productQuery.toLowerCase()))
+                      .map((p) => (
+                        <div
+                          key={p.id}
+                          onClick={() => {
+                            setAdjustForm((prev) => ({ ...prev, productId: p.id }));
+                            setProductQuery(p.label);
+                          }}
+                          style={{
+                            padding: '10px 14px',
+                            borderBottom: '1px solid #edf1ed',
+                            cursor: 'pointer',
+                            fontSize: '13px',
+                          }}
+                          onMouseEnter={(e) => (e.currentTarget.style.background = '#e9f6e8')}
+                          onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                        >
+                          <strong>{p.label}</strong>
+                        </div>
+                      ))}
+                    {productsList.filter((p) => p.label.toLowerCase().includes(productQuery.toLowerCase())).length === 0 && (
+                      <div style={{ padding: '12px', color: '#667066', fontSize: '13px', textAlign: 'center' }}>
+                        No matching product found
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
             </FormField>
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
