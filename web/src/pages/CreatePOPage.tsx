@@ -4,6 +4,7 @@ import { PackagePlus, ArrowLeft, Plus, Trash2 } from 'lucide-react';
 import { apiGet, apiPost } from '../api/client';
 import { FormField, InputField, TextareaField } from '../components/FormField';
 import { SearchInput } from '../components/SearchInput';
+import { SearchableSelect } from '../components/SearchableSelect';
 import { useToast } from '../contexts/ToastContext';
 
 interface Supplier {
@@ -179,35 +180,21 @@ export function CreatePOPage() {
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
             <FormField label="Supplier *">
-              <select
-                className="form-select"
+              <SearchableSelect
+                options={suppliers.map((s) => ({ value: s.id, label: s.name }))}
                 value={supplierId}
-                onChange={(e) => setSupplierId(e.target.value)}
-                required
-              >
-                <option value="">Select Supplier...</option>
-                {suppliers.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name}
-                  </option>
-                ))}
-              </select>
+                onChange={setSupplierId}
+                placeholder="Search Supplier..."
+              />
             </FormField>
 
             <FormField label="Receiving Warehouse *">
-              <select
-                className="form-select"
+              <SearchableSelect
+                options={warehouses.map((w) => ({ value: w.id, label: w.name }))}
                 value={warehouseId}
-                onChange={(e) => setWarehouseId(e.target.value)}
-                required
-              >
-                <option value="">Select Warehouse...</option>
-                {warehouses.map((w) => (
-                  <option key={w.id} value={w.id}>
-                    {w.name}
-                  </option>
-                ))}
-              </select>
+                onChange={setWarehouseId}
+                placeholder="Search Warehouse..."
+              />
             </FormField>
           </div>
 

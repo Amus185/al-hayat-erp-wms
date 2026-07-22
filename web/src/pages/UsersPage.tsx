@@ -5,6 +5,7 @@ import { DataTable, type Column } from '../components/DataTable';
 import { Modal } from '../components/Modal';
 import { ConfirmModal } from '../components/ConfirmModal';
 import { FormField, InputField } from '../components/FormField';
+import { SearchableSelect } from '../components/SearchableSelect';
 import { StatusBadge } from '../components/StatusBadge';
 import { PageSkeleton } from '../components/LoadingSpinner';
 import { useToast } from '../contexts/ToastContext';
@@ -341,18 +342,20 @@ export function UsersPage() {
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px', marginTop: '10px' }}>
             <FormField label="Assign to Warehouse">
-              <select className="form-select" value={form.warehouseId}
-                onChange={(e) => setForm(p => ({ ...p, warehouseId: e.target.value, branchId: '' }))}>
-                <option value="">None (HQ/Corporate)</option>
-                {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
-              </select>
+              <SearchableSelect
+                options={warehouses.map(w => ({ value: w.id, label: w.name }))}
+                value={form.warehouseId}
+                onChange={(val) => setForm(p => ({ ...p, warehouseId: val, branchId: '' }))}
+                placeholder="None (HQ/Corporate)"
+              />
             </FormField>
             <FormField label="Assign to Branch">
-              <select className="form-select" value={form.branchId}
-                onChange={(e) => setForm(p => ({ ...p, branchId: e.target.value, warehouseId: '' }))}>
-                <option value="">None (HQ/Corporate)</option>
-                {branches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
-              </select>
+              <SearchableSelect
+                options={branches.map(b => ({ value: b.id, label: b.name }))}
+                value={form.branchId}
+                onChange={(val) => setForm(p => ({ ...p, branchId: val, warehouseId: '' }))}
+                placeholder="None (HQ/Corporate)"
+              />
             </FormField>
           </div>
           <div style={{ marginTop: '20px', borderTop: '1px solid #edf1ed', paddingTop: '14px' }}>
@@ -383,18 +386,20 @@ export function UsersPage() {
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px', marginTop: '10px' }}>
             <FormField label="Assign to Warehouse">
-              <select className="form-select" value={editForm.warehouseId}
-                onChange={(e) => setEditForm(p => ({ ...p, warehouseId: e.target.value, branchId: '' }))}>
-                <option value="">None (HQ/Corporate)</option>
-                {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
-              </select>
+              <SearchableSelect
+                options={warehouses.map(w => ({ value: w.id, label: w.name }))}
+                value={editForm.warehouseId}
+                onChange={(val) => setEditForm(p => ({ ...p, warehouseId: val, branchId: '' }))}
+                placeholder="None (HQ/Corporate)"
+              />
             </FormField>
             <FormField label="Assign to Branch">
-              <select className="form-select" value={editForm.branchId}
-                onChange={(e) => setEditForm(p => ({ ...p, branchId: e.target.value, warehouseId: '' }))}>
-                <option value="">None (HQ/Corporate)</option>
-                {branches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
-              </select>
+              <SearchableSelect
+                options={branches.map(b => ({ value: b.id, label: b.name }))}
+                value={editForm.branchId}
+                onChange={(val) => setEditForm(p => ({ ...p, branchId: val, warehouseId: '' }))}
+                placeholder="None (HQ/Corporate)"
+              />
             </FormField>
           </div>
           <div style={{ marginTop: '10px' }}>

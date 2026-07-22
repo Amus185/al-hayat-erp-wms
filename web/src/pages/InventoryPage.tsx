@@ -5,6 +5,7 @@ import { DataTable, type Column } from '../components/DataTable';
 import { Modal } from '../components/Modal';
 import { FormField, InputField } from '../components/FormField';
 import { SearchInput } from '../components/SearchInput';
+import { SearchableSelect } from '../components/SearchableSelect';
 import { Tabs } from '../components/Tabs';
 // Loading is handled inline by DataTable
 import { useToast } from '../contexts/ToastContext';
@@ -417,51 +418,31 @@ export function InventoryPage() {
             {adjustForm.ownerType === 'WAREHOUSE' ? (
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
                 <FormField label="Select Warehouse">
-                  <select
-                    className="form-select"
+                  <SearchableSelect
+                    options={warehouses.map((w) => ({ value: w.id, label: w.name }))}
                     value={adjustForm.warehouseId}
-                    onChange={(e) => setAdjustForm((prev) => ({ ...prev, warehouseId: e.target.value, warehouseLocationId: '' }))}
-                    required
-                  >
-                    <option value="">Select Warehouse...</option>
-                    {warehouses.map((w) => (
-                      <option key={w.id} value={w.id}>
-                        {w.name}
-                      </option>
-                    ))}
-                  </select>
+                    onChange={(val) => setAdjustForm((prev) => ({ ...prev, warehouseId: val, warehouseLocationId: '' }))}
+                    placeholder="Search Warehouse..."
+                  />
                 </FormField>
 
                 <FormField label="Bin Location (Optional)">
-                  <select
-                    className="form-select"
+                  <SearchableSelect
+                    options={locations.map((loc) => ({ value: loc.id, label: `${loc.aisle}-${loc.rack}-${loc.shelf}-${loc.bin}` }))}
                     value={adjustForm.warehouseLocationId}
-                    onChange={(e) => setAdjustForm((prev) => ({ ...prev, warehouseLocationId: e.target.value }))}
-                  >
-                    <option value="">Select Location...</option>
-                    {locations.map((loc) => (
-                      <option key={loc.id} value={loc.id}>
-                        {loc.aisle}-{loc.rack}-{loc.shelf}-{loc.bin}
-                      </option>
-                    ))}
-                  </select>
+                    onChange={(val) => setAdjustForm((prev) => ({ ...prev, warehouseLocationId: val }))}
+                    placeholder="Search Location..."
+                  />
                 </FormField>
               </div>
             ) : (
               <FormField label="Select Branch">
-                <select
-                  className="form-select"
+                <SearchableSelect
+                  options={branches.map((b) => ({ value: b.id, label: b.name }))}
                   value={adjustForm.branchId}
-                  onChange={(e) => setAdjustForm((prev) => ({ ...prev, branchId: e.target.value }))}
-                  required
-                >
-                  <option value="">Select Branch...</option>
-                  {branches.map((b) => (
-                    <option key={b.id} value={b.id}>
-                      {b.name}
-                    </option>
-                  ))}
-                </select>
+                  onChange={(val) => setAdjustForm((prev) => ({ ...prev, branchId: val }))}
+                  placeholder="Search Branch..."
+                />
               </FormField>
             )}
 

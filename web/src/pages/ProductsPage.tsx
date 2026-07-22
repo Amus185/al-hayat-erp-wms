@@ -7,6 +7,7 @@ import { SearchInput } from '../components/SearchInput';
 import { Modal } from '../components/Modal';
 import { ConfirmModal } from '../components/ConfirmModal';
 import { FormField, InputField } from '../components/FormField';
+import { SearchableSelect } from '../components/SearchableSelect';
 import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -396,32 +397,20 @@ export function ProductsPage() {
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px', marginTop: '10px' }}>
             <FormField label="Category">
-              <select
-                className="form-select"
+              <SearchableSelect
+                options={categories.map((c) => ({ value: c.id, label: c.name }))}
                 value={newProduct.categoryId}
-                onChange={(e) => setNewProduct((prev) => ({ ...prev, categoryId: e.target.value }))}
-              >
-                <option value="">Select Category</option>
-                {categories.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
+                onChange={(val) => setNewProduct((prev) => ({ ...prev, categoryId: val }))}
+                placeholder="Search Category..."
+              />
             </FormField>
             <FormField label="Brand">
-              <select
-                className="form-select"
+              <SearchableSelect
+                options={brands.map((b) => ({ value: b.id, label: b.name }))}
                 value={newProduct.brandId}
-                onChange={(e) => setNewProduct((prev) => ({ ...prev, brandId: e.target.value }))}
-              >
-                <option value="">Select Brand</option>
-                {brands.map((b) => (
-                  <option key={b.id} value={b.id}>
-                    {b.name}
-                  </option>
-                ))}
-              </select>
+                onChange={(val) => setNewProduct((prev) => ({ ...prev, brandId: val }))}
+                placeholder="Search Brand..."
+              />
             </FormField>
           </div>
 
@@ -450,16 +439,12 @@ export function ProductsPage() {
             <p style={{ margin: '0 0 12px', fontSize: '12px', color: '#667066' }}>Assign stock immediately so this product appears in Inventory right away.</p>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
               <FormField label="Warehouse">
-                <select
-                  className="form-select"
+                <SearchableSelect
+                  options={warehouses.map((w) => ({ value: w.id, label: w.name }))}
                   value={initialStock.warehouseId}
-                  onChange={(e) => setInitialStock(prev => ({ ...prev, warehouseId: e.target.value }))}
-                >
-                  <option value="">Skip — add stock later</option>
-                  {warehouses.map((w) => (
-                    <option key={w.id} value={w.id}>{w.name}</option>
-                  ))}
-                </select>
+                  onChange={(val) => setInitialStock((prev) => ({ ...prev, warehouseId: val }))}
+                  placeholder="Skip — add stock later"
+                />
               </FormField>
               <InputField
                 label="Opening Quantity"
