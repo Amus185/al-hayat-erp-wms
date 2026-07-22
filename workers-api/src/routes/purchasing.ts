@@ -272,9 +272,6 @@ purchasing.post('/receipts', requirePermissions(['manage_purchasing']), async (c
   );
 
   const fullyReceived = !isIncompleteResults.includes(true);
-      break;
-    }
-  }
 
   const newStatus = fullyReceived ? 'RECEIVED' : 'PARTIALLY_RECEIVED';
   stmts.push(c.env.DB.prepare("UPDATE purchase_orders SET status = ? WHERE id = ?").bind(newStatus, body.purchaseOrderId));

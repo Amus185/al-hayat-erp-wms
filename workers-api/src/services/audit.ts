@@ -4,7 +4,7 @@ export function createAuditLogStmt(
   c: any,
   action: string,
   entityType: string,
-  entityId: string | null,
+  entityId: string | null | undefined,
   oldValue?: any,
   newValue?: any
 ) {
@@ -36,14 +36,14 @@ export function createAuditLogStmt(
   return c.env.DB.prepare(`
     INSERT INTO audit_logs (id, actor_user_id, action, entity_type, entity_id, old_value, new_value, ip_address, user_agent)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).bind(id, actorUserId, action, entityType, entityId, oldValStr, newValStr, ipAddress, userAgent);
+  `).bind(id, actorUserId, action, entityType, entityId || null, oldValStr, newValStr, ipAddress, userAgent);
 }
 
 export async function logAudit(
   c: any,
   action: string,
   entityType: string,
-  entityId: string | null,
+  entityId: string | null | undefined,
   oldValue?: any,
   newValue?: any
 ) {
