@@ -169,7 +169,9 @@ CREATE TABLE purchase_order_lines (
   purchase_order_id TEXT NOT NULL REFERENCES purchase_orders(id) ON DELETE CASCADE,
   product_id TEXT NOT NULL REFERENCES products(id),
   quantity INTEGER NOT NULL CHECK (quantity > 0),
-  unit_cost REAL NOT NULL CHECK (unit_cost >= 0)
+  unit_cost REAL NOT NULL CHECK (unit_cost >= 0),
+  discount_amount REAL NOT NULL DEFAULT 0,
+  line_total REAL NOT NULL DEFAULT 0
 );
 
 CREATE TABLE goods_receipts (
@@ -254,7 +256,9 @@ CREATE TABLE sales_order_lines (
   sales_order_id TEXT NOT NULL REFERENCES sales_orders(id) ON DELETE CASCADE,
   product_id TEXT NOT NULL REFERENCES products(id),
   quantity INTEGER NOT NULL CHECK (quantity > 0),
-  unit_price REAL NOT NULL CHECK (unit_price >= 0)
+  unit_price REAL NOT NULL CHECK (unit_price >= 0),
+  discount_amount REAL NOT NULL DEFAULT 0,
+  line_total REAL NOT NULL DEFAULT 0
 );
 
 CREATE TABLE invoices (

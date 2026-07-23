@@ -125,9 +125,11 @@ sales.post('/orders', requirePermissions(['manage_sales']), async (c) => {
   `).bind(id, orderNumber, body.customerId || null, body.branchId, userId));
 
   for (const line of body.lines) {
+    const discountAmount = Number(line.discountAmount || 0);
+    const lineTotal = (line.quantity * line.unitPrice) - discountAmount;
     stmts.push(c.env.DB.prepare(`
-      INSERT INTO sales_order_lines (id, sales_order_id, product_id, quantity, unit_price) VALUES (?, ?, ?, ?, ?)
-    `).bind(uuidv4(), id, line.productId, line.quantity, line.unitPrice));
+      INSERT INTO sales_order_lines (id, sales_order_id, product_id, quantity, unit_price, discount_amount, line_total) VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).bind(uuidv4(), id, line.productId, line.quantity, line.unitPrice, discountAmount, lineTotal));
   }
 
   stmts.push(createAuditLogStmt(c, 'SALES_ORDER_CREATE', 'sales_orders', id, null, { orderNumber, branchId: body.branchId, customerId: body.customerId, lines: body.lines }));

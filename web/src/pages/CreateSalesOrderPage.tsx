@@ -43,7 +43,7 @@ export function CreateSalesOrderPage() {
   const [searchResults, setSearchResults] = useState<ProductLine[]>([]);
 
   // Selected lines
-  const [lines, setLines] = useState<{ productId: string; sku: string; name: string; quantity: number; unitPrice: number }[]>([]);
+  const [lines, setLines] = useState<{ productId: string; sku: string; name: string; quantity: number; unitPrice: number; discount: number }[]>([]);
 
   useEffect(() => {
     async function loadData() {
@@ -95,7 +95,7 @@ export function CreateSalesOrderPage() {
     }
     setLines((prev) => [
       ...prev,
-      { productId: v.id, sku: v.sku, name: v.name, quantity: 1, unitPrice: v.sellingPrice || 0 },
+      { productId: v.id, sku: v.sku, name: v.name, quantity: 1, unitPrice: v.sellingPrice || 0, discount: 0 },
     ]);
     setSearchQuery('');
   };
@@ -104,7 +104,7 @@ export function CreateSalesOrderPage() {
     setLines((prev) => prev.filter((_, i) => i !== idx));
   };
 
-  const updateLine = (idx: number, field: 'quantity' | 'unitPrice', val: number) => {
+  const updateLine = (idx: number, field: 'quantity' | 'unitPrice' | 'discount', val: number) => {
     const num = isNaN(val) ? 0 : val;
     setLines((prev) => {
       const copy = [...prev];
@@ -139,6 +139,7 @@ export function CreateSalesOrderPage() {
         productId: l.productId,
         quantity: Number(l.quantity),
         unitPrice: Number(l.unitPrice),
+        discountAmount: Number(l.discount || 0),
       })),
     };
 
@@ -156,7 +157,9 @@ export function CreateSalesOrderPage() {
     }
   };
 
-  const totalOrderAmount = lines.reduce((acc, curr) => acc + (curr.quantity * curr.unitPrice), 0);
+  const subtotalOrder = lines.reduce((acc, curr) => acc + (curr.quantity * curr.unitPrice), 0);
+  const totalDiscount = lines.reduce((acc, curr) => acc + (curr.discount || 0), 0);
+  const grandTotalOrder = subtotalOrder - totalDiscount;
 
   return (
     <div className="module-page">
@@ -275,9 +278,10 @@ export function CreateSalesOrderPage() {
                     <tr>
                       <th>Product ID</th>
                       <th>Product Description</th>
-                      <th>Qty Ordered</th>
+                      <th>Qty</th>
                       <th>Unit Price ($)</th>
-                      <th>Subtotal ($)</th>
+                      <th>Discount ($)</th>
+                      <th>Line Total ($)</th>
                       <th>Action</th>
                     </tr>
                   </thead>
@@ -293,7 +297,7 @@ export function CreateSalesOrderPage() {
                             min={1}
                             onChange={(e) => updateLine(index, 'quantity', Number(e.target.value))}
                             className="form-input"
-                            style={{ width: '80px', minHeight: '32px', textAlign: 'center' }}
+                            style={{ width: '70px', minHeight: '32px', textAlign: 'center' }}
                           />
                         </td>
                         <td>
@@ -309,7 +313,21 @@ export function CreateSalesOrderPage() {
                           />
                         </td>
                         <td>
-                          <strong>{(l.quantity * l.unitPrice).toLocaleString(undefined, { minimumFractionDigits: 2 })}</strong>
+                          <input
+                            type="number"
+                            value={l.discount}
+                            min={0}
+                            step="0.01"
+                            onChange={(e) => updateLine(index, 'discount', Number(e.target.value))}
+                            className="form-input"
+                            style={{ width: '100px', minHeight: '32px', textAlign: 'center' }}
+                            placeholder="0.00"
+                          />
+                        </td>
+                        <td>
+                          <strong style={{ color: l.discount > 0 ? '#066006' : undefined }}>
+                            {((l.quantity * l.unitPrice) - (l.discount || 0)).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                          </strong>
                         </td>
                         <td>
                           <button type="button" className="btn btn-danger btn-sm" onClick={() => removeLine(index)}>
@@ -322,15 +340,20 @@ export function CreateSalesOrderPage() {
                 </table>
 
                 {/* Summary Panel */}
-                <div style={{
-                  display: 'flex',
-                  justifyContent: 'flex-end',
-                  borderTop: '1px solid #edf1ed',
-                  paddingTop: '16px',
-                  marginTop: '16px'
-                }}>
-                  <div style={{ fontSize: '18px', color: '#066006' }}>
-                    Total Order Value: <strong>${totalOrderAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</strong>
+                <div style={{ display: 'flex', justifyContent: 'flex-end', borderTop: '2px solid #edf1ed', paddingTop: '16px', marginTop: '16px' }}>
+                  <div style={{ minWidth: '300px', display: 'grid', gap: '6px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '14px', color: '#444' }}>
+                      <span>Subtotal</span>
+                      <span>${subtotalOrder.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '14px', color: '#b45309' }}>
+                      <span>Total Discount</span>
+                      <span>-${totalDiscount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '17px', fontWeight: 700, color: '#066006', borderTop: '1px solid #d1e8d1', paddingTop: '8px', marginTop: '4px' }}>
+                      <span>Grand Total</span>
+                      <span>${grandTotalOrder.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                    </div>
                   </div>
                 </div>
               </div>

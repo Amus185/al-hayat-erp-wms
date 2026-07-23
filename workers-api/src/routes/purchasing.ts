@@ -114,9 +114,11 @@ purchasing.post('/orders', requirePermissions(['manage_purchasing']), async (c) 
   `).bind(id, poNumber, body.supplierId, body.expectedDate || null, userId));
 
   for (const line of body.lines) {
+    const discountAmount = Number(line.discountAmount || 0);
+    const lineTotal = (line.quantity * line.unitCost) - discountAmount;
     stmts.push(c.env.DB.prepare(`
-      INSERT INTO purchase_order_lines (id, purchase_order_id, product_id, quantity, unit_cost) VALUES (?, ?, ?, ?, ?)
-    `).bind(uuidv4(), id, line.productId, line.quantity, line.unitCost));
+      INSERT INTO purchase_order_lines (id, purchase_order_id, product_id, quantity, unit_cost, discount_amount, line_total) VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).bind(uuidv4(), id, line.productId, line.quantity, line.unitCost, discountAmount, lineTotal));
   }
 
   stmts.push(createAuditLogStmt(c, 'PURCHASE_ORDER_CREATE', 'purchase_orders', id, null, { poNumber, supplierId: body.supplierId, lines: body.lines }));

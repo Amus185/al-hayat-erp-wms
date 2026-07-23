@@ -44,7 +44,7 @@ export function CreatePOPage() {
   const [searchResults, setSearchResults] = useState<ProductSearchItem[]>([]);
 
   // Selected lines
-  const [lines, setLines] = useState<{ productId: string; sku: string; name: string; quantity: number; unitCost: number }[]>([]);
+  const [lines, setLines] = useState<{ productId: string; sku: string; name: string; quantity: number; unitCost: number; discount: number }[]>([]);
 
   useEffect(() => {
     async function loadData() {
@@ -97,7 +97,7 @@ export function CreatePOPage() {
     }
     setLines((prev) => [
       ...prev,
-      { productId: v.id, sku: v.sku, name: v.productName, quantity: 1, unitCost: v.costPrice || 0 },
+      { productId: v.id, sku: v.sku, name: v.productName, quantity: 1, unitCost: v.costPrice || 0, discount: 0 },
     ]);
     setSearchQuery('');
   };
@@ -106,7 +106,7 @@ export function CreatePOPage() {
     setLines((prev) => prev.filter((l) => l.productId !== productId));
   };
 
-  const updateLine = (productId: string, field: 'quantity' | 'unitCost', value: number) => {
+  const updateLine = (productId: string, field: 'quantity' | 'unitCost' | 'discount', value: number) => {
     const num = isNaN(value) ? 0 : value;
     setLines((prev) => prev.map((l) => l.productId === productId ? { 
         ...l, 
@@ -136,6 +136,7 @@ export function CreatePOPage() {
         productId: l.productId,
         quantity: Number(l.quantity),
         unitCost: Number(l.unitCost),
+        discountAmount: Number(l.discount || 0),
       })),
     };
 
@@ -148,7 +149,9 @@ export function CreatePOPage() {
     }
   };
 
-  const totalPOAmount = lines.reduce((acc, curr) => acc + (curr.quantity * curr.unitCost), 0);
+  const subtotalPO = lines.reduce((acc, curr) => acc + (curr.quantity * curr.unitCost), 0);
+  const totalDiscount = lines.reduce((acc, curr) => acc + (curr.discount || 0), 0);
+  const grandTotalPO = subtotalPO - totalDiscount;
 
   return (
     <div className="module-page">
@@ -272,11 +275,12 @@ export function CreatePOPage() {
                 <table>
                   <thead>
                     <tr>
-                      <th>Variant Product ID</th>
+                      <th>Product ID</th>
                       <th>Product Description</th>
-                      <th>Qty Ordered</th>
+                      <th>Qty</th>
                       <th>Unit Cost ($)</th>
-                      <th>Subtotal ($)</th>
+                      <th>Discount ($)</th>
+                      <th>Line Total ($)</th>
                       <th>Action</th>
                     </tr>
                   </thead>
@@ -292,7 +296,7 @@ export function CreatePOPage() {
                             min={1}
                             onChange={(e) => updateLine(l.productId, 'quantity', Number(e.target.value))}
                             className="form-input"
-                            style={{ width: '80px', minHeight: '32px', textAlign: 'center' }}
+                            style={{ width: '70px', minHeight: '32px', textAlign: 'center' }}
                           />
                         </td>
                         <td>
@@ -308,7 +312,21 @@ export function CreatePOPage() {
                           />
                         </td>
                         <td>
-                          <strong>{(l.quantity * l.unitCost).toLocaleString(undefined, { minimumFractionDigits: 2 })}</strong>
+                          <input
+                            type="number"
+                            value={l.discount}
+                            min={0}
+                            step="0.01"
+                            onChange={(e) => updateLine(l.productId, 'discount', Number(e.target.value))}
+                            className="form-input"
+                            style={{ width: '100px', minHeight: '32px', textAlign: 'center' }}
+                            placeholder="0.00"
+                          />
+                        </td>
+                        <td>
+                          <strong style={{ color: l.discount > 0 ? '#066006' : undefined }}>
+                            {((l.quantity * l.unitCost) - (l.discount || 0)).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                          </strong>
                         </td>
                         <td>
                           <button type="button" className="btn btn-secondary" style={{ color: '#ef4444' }} onClick={() => removeLine(l.productId)}>
@@ -321,15 +339,20 @@ export function CreatePOPage() {
                 </table>
 
                 {/* Summary Panel */}
-                <div style={{
-                  display: 'flex',
-                  justifyContent: 'flex-end',
-                  borderTop: '1px solid #edf1ed',
-                  paddingTop: '16px',
-                  marginTop: '16px'
-                }}>
-                  <div style={{ fontSize: '18px', color: '#066006' }}>
-                    Total Estimated Amount: <strong>${totalPOAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</strong>
+                <div style={{ display: 'flex', justifyContent: 'flex-end', borderTop: '2px solid #edf1ed', paddingTop: '16px', marginTop: '16px' }}>
+                  <div style={{ minWidth: '300px', display: 'grid', gap: '6px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '14px', color: '#444' }}>
+                      <span>Subtotal</span>
+                      <span>${subtotalPO.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '14px', color: '#b45309' }}>
+                      <span>Total Discount</span>
+                      <span>-${totalDiscount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '17px', fontWeight: 700, color: '#066006', borderTop: '1px solid #d1e8d1', paddingTop: '8px', marginTop: '4px' }}>
+                      <span>Grand Total</span>
+                      <span>${grandTotalPO.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                    </div>
                   </div>
                 </div>
               </div>
