@@ -8,7 +8,20 @@ const transfers = new Hono<{ Bindings: Env; Variables: { jwtPayload: any } }>();
 transfers.use('/*', authMiddleware);
 
 transfers.get('/', async (c) => {
-  const { results } = await c.env.DB.prepare('SELECT * FROM transfers ORDER BY requested_at DESC LIMIT 100').all();
+  const { results } = await c.env.DB.prepare(`
+    SELECT
+      t.*,
+      COALESCE(sw.name, sb.name, 'Unknown') AS source_name,
+      COALESCE(dw.name, db.name, 'Unknown') AS destination_name,
+      (SELECT COUNT(*) FROM transfer_lines tl WHERE tl.transfer_id = t.id) AS line_count
+    FROM transfers t
+    LEFT JOIN warehouses sw ON sw.id = t.source_warehouse_id
+    LEFT JOIN branches   sb ON sb.id = t.source_branch_id
+    LEFT JOIN warehouses dw ON dw.id = t.destination_warehouse_id
+    LEFT JOIN branches   db ON db.id = t.destination_branch_id
+    ORDER BY t.requested_at DESC
+    LIMIT 100
+  `).all();
   return c.json(results);
 });
 
