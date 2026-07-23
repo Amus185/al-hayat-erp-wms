@@ -82,21 +82,21 @@ a { color: inherit; text-decoration: none; }
   padding: 4px 6px;
 }
 .brand__logo {
-  width: 40px;
-  height: 40px;
-  border-radius: 10px;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
   overflow: hidden;
   flex-shrink: 0;
-  background: var(--primary);
+  background: transparent;
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 2px 8px rgba(11,143,8,0.4);
 }
 .brand__logo img {
   width: 100%;
   height: 100%;
   object-fit: cover;
+  border-radius: 50%;
 }
 .brand__text strong {
   display: block;
