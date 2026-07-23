@@ -72,6 +72,48 @@ purchasing.get('/orders/:id', async (c) => {
   return c.json({ ...po, lines, invoice: invoice || null });
 });
 
+purchasing.get('/orders/:id/print-invoice', async (c) => {
+  const id = c.req.param('id');
+  const po = await c.env.DB.prepare(`
+    SELECT po.*, s.name AS supplier_name, s.contact_name, s.phone AS supplier_phone, s.email AS supplier_email, s.address AS supplier_address,
+           w.name AS warehouse_name, w.address AS warehouse_address
+    FROM purchase_orders po
+    JOIN suppliers s ON s.id = po.supplier_id
+    LEFT JOIN warehouses w ON w.id = po.warehouse_id
+    WHERE po.id = ?
+  `).bind(id).first();
+
+  if (!po) return c.json({ message: 'PO not found' }, 404);
+
+  const { results: lines } = await c.env.DB.prepare(`
+    SELECT pol.*, pol.quantity AS quantity_ordered, p.name as product_name, p.sku as variant_sku
+    FROM purchase_order_lines pol
+    JOIN products p ON p.id = pol.product_id
+    WHERE pol.purchase_order_id = ?
+  `).bind(id).all();
+
+  const invoice = await c.env.DB.prepare(
+    'SELECT * FROM purchase_invoices WHERE purchase_order_id = ?'
+  ).bind(id).first().catch(() => null);
+
+  return c.json({
+    po,
+    lines,
+    invoice,
+    supplier: {
+      name: po.supplier_name,
+      contactName: po.contact_name,
+      phone: po.supplier_phone,
+      email: po.supplier_email,
+      address: po.supplier_address,
+    },
+    warehouse: {
+      name: po.warehouse_name || 'Central Warehouse',
+      address: po.warehouse_address,
+    },
+  });
+});
+
 // ──────────────────────────────────────────────────────────────────────
 // CREATE PO — with full input validation
 // ──────────────────────────────────────────────────────────────────────
