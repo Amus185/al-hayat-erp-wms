@@ -4,6 +4,7 @@ import { PackageSearch, Plus, Trash2, List, Settings, PlusCircle } from 'lucide-
 import { apiGet, apiPost, apiPatch, apiDelete, apiDownload } from '../api/client';
 import { DataTable, type Column } from '../components/DataTable';
 import { SearchInput } from '../components/SearchInput';
+import { FilterBar } from '../components/FilterBar';
 import { Modal } from '../components/Modal';
 import { ConfirmModal } from '../components/ConfirmModal';
 import { FormField, InputField } from '../components/FormField';
@@ -48,6 +49,13 @@ export function ProductsPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('');
+  const [selectedBrand, setSelectedBrand] = useState('');
+  const [selectedStatus, setSelectedStatus] = useState('');
+  const [filterValues, setFilterValues] = useState<Record<string, string>>({ category: '', brand: '', status: '' });
+
+  const handleFilterChange = (key: string, value: string) => {
+    setFilterValues(prev => ({ ...prev, [key]: value }));
+  };
 
   // Modals state
   const [isCreateOpen, setIsCreateOpen] = useState(false);
@@ -118,7 +126,7 @@ export function ProductsPage() {
   const loadData = async () => {
     try {
       setLoading(true);
-      const prs = await apiGet<Product[]>('/products', { q: search });
+      const prs = await apiGet<Product[]>('/products');
       setProducts(prs || []);
     } catch (err: any) {
       addToast('error', err?.message || 'Failed to fetch products');
@@ -137,7 +145,7 @@ export function ProductsPage() {
       setWarehouses(whs || []);
       setBranches(brs || []);
     }).catch(console.error);
-  }, [search]);
+  }, []);
 
   const handleCreateCategory = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -280,8 +288,13 @@ export function ProductsPage() {
   };
 
   const filteredProducts = products.filter((p) => {
-    if (!selectedCategory) return true;
-    return p.category_id === selectedCategory;
+    const q = search.trim().toLowerCase();
+    if (q && !p.name.toLowerCase().includes(q) && !p.sku.toLowerCase().includes(q)) return false;
+    if (filterValues.category && p.category_id !== filterValues.category) return false;
+    if (filterValues.brand && p.brand_id !== filterValues.brand) return false;
+    if (filterValues.status === 'active' && !p.is_active) return false;
+    if (filterValues.status === 'inactive' && p.is_active) return false;
+    return true;
   });
 
   const columns: Column<Product>[] = [
@@ -367,28 +380,34 @@ export function ProductsPage() {
         </div>
       </Modal>
 
-      <section className="panel" style={{ display: 'flex', gap: '14px', alignItems: 'center', flexWrap: 'wrap' }}>
-        <div style={{ flex: '1', minWidth: '240px' }}>
-          <SearchInput value={search} onChange={setSearch} placeholder="Search by Product ID, Name or Description..." />
-        </div>
-        <div>
-          <select
-            value={selectedCategory}
-            onChange={(e) => setSelectedCategory(e.target.value)}
-            className="form-select"
-            style={{ minHeight: '38px', borderRadius: '8px', border: '1px solid #d9e2d9', padding: '0 10px' }}
-          >
-            <option value="">All Categories</option>
-            {categories.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
-          </select>
-        </div>
-      </section>
-
       <section className="panel">
+        <FilterBar
+          searchValue={search}
+          onSearchChange={setSearch}
+          searchPlaceholder="Search by Product ID, Name…"
+          filters={[
+            {
+              key: 'category',
+              label: 'All Categories',
+              options: categories.map((c) => ({ value: c.id, label: c.name })),
+            },
+            {
+              key: 'brand',
+              label: 'All Brands',
+              options: brands.map((b) => ({ value: b.id, label: b.name })),
+            },
+            {
+              key: 'status',
+              label: 'All Statuses',
+              options: [
+                { value: 'active', label: 'Active' },
+                { value: 'inactive', label: 'Inactive' },
+              ],
+            },
+          ]}
+          filterValues={filterValues}
+          onFilterChange={handleFilterChange}
+        />
         <DataTable
           columns={columns}
           data={filteredProducts}

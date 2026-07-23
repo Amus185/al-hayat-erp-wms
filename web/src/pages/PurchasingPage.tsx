@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { PackagePlus, Plus, UserPlus, Eye, CheckCircle, Truck, FileText, Printer } from 'lucide-react';
 import { apiGet, apiPost } from '../api/client';
 import { DataTable, type Column } from '../components/DataTable';
+import { FilterBar } from '../components/FilterBar';
 import { Tabs } from '../components/Tabs';
 import { Modal } from '../components/Modal';
 import { InputField, TextareaField } from '../components/FormField';
@@ -42,6 +43,10 @@ export function PurchasingPage() {
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('ALL');
+
+  // FilterBar
+  const [poSearch, setPoSearch] = useState('');
+  const [poFilters, setPoFilters] = useState<Record<string, string>>({ supplier: '', dateFrom: '', dateTo: '' });
 
   // Supplier modal state
   const [isSupplierOpen, setIsSupplierOpen] = useState(false);
@@ -353,8 +358,13 @@ export function PurchasingPage() {
   };
 
   const filteredPOs = pos.filter((po) => {
-    if (activeTab === 'ALL') return true;
-    return po.status === activeTab;
+    if (activeTab !== 'ALL' && po.status !== activeTab) return false;
+    const q = poSearch.trim().toLowerCase();
+    if (q && !po.po_number.toLowerCase().includes(q) && !String(po.supplier_name || '').toLowerCase().includes(q)) return false;
+    if (poFilters.supplier && po.supplier_id !== poFilters.supplier) return false;
+    if (poFilters.dateFrom && po.created_at < poFilters.dateFrom) return false;
+    if (poFilters.dateTo && po.created_at > poFilters.dateTo + 'T23:59:59') return false;
+    return true;
   });
 
   const tabItems = [
@@ -441,13 +451,27 @@ export function PurchasingPage() {
       </section>
 
       <section className="panel">
+        <FilterBar
+          searchValue={poSearch}
+          onSearchChange={setPoSearch}
+          searchPlaceholder="Search PO number or supplier name…"
+          filters={[
+            {
+              key: 'supplier',
+              label: 'All Suppliers',
+              options: suppliers.map((s) => ({ value: s.id, label: s.name })),
+            },
+          ]}
+          filterValues={poFilters}
+          onFilterChange={(key, val) => setPoFilters(prev => ({ ...prev, [key]: val }))}
+        />
         <DataTable
           columns={columns}
           data={filteredPOs}
           keyExtractor={(row) => row.id}
           loading={loading}
           onRowClick={(row) => viewPoDetails(row)}
-          emptyMessage="No purchase orders recorded"
+          emptyMessage="No purchase orders match your filters"
         />
       </section>
 

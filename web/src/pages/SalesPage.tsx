@@ -8,6 +8,7 @@ import { Modal } from '../components/Modal';
 import { InputField, TextareaField } from '../components/FormField';
 import { StatusBadge } from '../components/StatusBadge';
 import { LoadingSpinner } from '../components/LoadingSpinner';
+import { FilterBar } from '../components/FilterBar';
 import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -40,6 +41,10 @@ export function SalesPage() {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('ALL');
+
+  // FilterBar
+  const [soSearch, setSoSearch] = useState('');
+  const [soFilters, setSoFilters] = useState<Record<string, string>>({ customer: '', branch: '', dateFrom: '', dateTo: '' });
 
   // Customer Modal
   const [isCustomerOpen, setIsCustomerOpen] = useState(false);
@@ -199,8 +204,14 @@ export function SalesPage() {
   };
 
   const filteredOrders = orders.filter((so) => {
-    if (activeTab === 'ALL') return true;
-    return so.status === activeTab;
+    if (activeTab !== 'ALL' && so.status !== activeTab) return false;
+    const q = soSearch.trim().toLowerCase();
+    if (q && !so.order_number.toLowerCase().includes(q) && !String(so.customer_name || '').toLowerCase().includes(q)) return false;
+    if (soFilters.customer && so.customer_id !== soFilters.customer) return false;
+    if (soFilters.branch && so.branch_id !== soFilters.branch) return false;
+    if (soFilters.dateFrom && so.created_at < soFilters.dateFrom) return false;
+    if (soFilters.dateTo && so.created_at > soFilters.dateTo + 'T23:59:59') return false;
+    return true;
   });
 
   const tabItems = [
@@ -272,13 +283,27 @@ export function SalesPage() {
       </section>
 
       <section className="panel">
+        <FilterBar
+          searchValue={soSearch}
+          onSearchChange={setSoSearch}
+          searchPlaceholder="Search by order ID or customer name…"
+          filters={[
+            {
+              key: 'customer',
+              label: 'All Customers',
+              options: customers.map((c) => ({ value: c.id, label: c.name })),
+            },
+          ]}
+          filterValues={soFilters}
+          onFilterChange={(key, val) => setSoFilters(prev => ({ ...prev, [key]: val }))}
+        />
         <DataTable
           columns={columns}
           data={filteredOrders}
           keyExtractor={(row) => row.id}
           loading={loading}
           onRowClick={(row) => viewOrderDetails(row)}
-          emptyMessage="No sales orders found"
+          emptyMessage="No orders match your filters"
         />
       </section>
 

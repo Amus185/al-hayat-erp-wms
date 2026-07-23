@@ -7,6 +7,7 @@ import { Tabs } from '../components/Tabs';
 import { Modal } from '../components/Modal';
 import { StatusBadge } from '../components/StatusBadge';
 import { LoadingSpinner } from '../components/LoadingSpinner';
+import { FilterBar } from '../components/FilterBar';
 import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -120,17 +121,17 @@ export function TransfersPage() {
   };
 
   const filteredTransfers = transfers.filter((t) => {
+    if (activeTab !== 'ALL') {
+      if (activeTab === 'PENDING' && t.status !== 'PENDING_APPROVAL') return false;
+      else if (activeTab !== 'PENDING' && t.status !== activeTab) return false;
+    }
     if (searchQuery) {
       const q = searchQuery.toLowerCase();
       const src = getOwnerName(t.source_owner_type, t.source_warehouse_id, t.source_branch_id).toLowerCase();
       const dst = getOwnerName(t.destination_owner_type, t.destination_warehouse_id, t.destination_branch_id).toLowerCase();
-      if (!t.transfer_number.toLowerCase().includes(q) && !src.includes(q) && !dst.includes(q)) {
-        return false;
-      }
+      if (!t.transfer_number.toLowerCase().includes(q) && !src.includes(q) && !dst.includes(q)) return false;
     }
-    if (activeTab === 'ALL') return true;
-    if (activeTab === 'PENDING') return t.status === 'PENDING_APPROVAL';
-    return t.status === activeTab;
+    return true;
   });
 
   const tabItems = [
@@ -187,19 +188,27 @@ export function TransfersPage() {
         </button>
       </section>
 
-      <section style={{ marginBottom: '14px', display: 'flex', gap: '14px', alignItems: 'center' }}>
-        <div style={{ flex: 1, maxWidth: '400px' }}>
-          <input
-            type="text"
-            className="form-input"
-            placeholder="Search transfers by ID, origin, or destination..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-          />
-        </div>
-        <div style={{ flex: 1 }}>
-          <Tabs tabs={tabItems} activeTab={activeTab} onTabChange={setActiveTab} />
-        </div>
+      <section style={{ marginBottom: '14px' }}>
+        <FilterBar
+          searchValue={searchQuery}
+          onSearchChange={setSearchQuery}
+          searchPlaceholder="Search by Transfer ID, origin or destination…"
+          filters={[
+            {
+              key: 'srcWh',
+              label: 'Source Warehouse',
+              options: warehouses.map((w: any) => ({ value: w.id, label: w.name })),
+            },
+            {
+              key: 'dstBr',
+              label: 'Destination Branch',
+              options: branches.map((b: any) => ({ value: b.id, label: b.name })),
+            },
+          ]}
+          filterValues={{srcWh: '', dstBr: ''}}
+          onFilterChange={() => {}}
+        />
+        <Tabs tabs={tabItems} activeTab={activeTab} onTabChange={setActiveTab} />
       </section>
 
       <section className="panel">
@@ -209,7 +218,7 @@ export function TransfersPage() {
           keyExtractor={(row) => row.id}
           loading={loading}
           onRowClick={(row) => setSelectedTransfer(row)}
-          emptyMessage="No stock transfers found"
+          emptyMessage="No transfers match your filters"
         />
       </section>
 

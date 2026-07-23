@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { ClipboardCheck, Plus, History } from 'lucide-react';
 import { apiGet, apiPost } from '../api/client';
 import { DataTable, type Column } from '../components/DataTable';
+import { FilterBar } from '../components/FilterBar';
 import { Modal } from '../components/Modal';
 import { FormField, InputField } from '../components/FormField';
 import { SearchInput } from '../components/SearchInput';
@@ -59,6 +60,12 @@ export function InventoryPage() {
   const [warehouses, setWarehouses] = useState<any[]>([]);
   const [branches, setBranches] = useState<any[]>([]);
   const [locations, setLocations] = useState<any[]>([]);
+
+  // FilterBar state
+  const [stockSearch, setStockSearch] = useState('');
+  const [stockFilters, setStockFilters] = useState<Record<string, string>>({ locType: '', warehouse: '', branch: '' });
+  const [txSearch, setTxSearch] = useState('');
+  const [txFilters, setTxFilters] = useState<Record<string, string>>({ txType: '' });
 
   // Adjustment Modal state
   const [isAdjustOpen, setIsAdjustOpen] = useState(false);
@@ -272,6 +279,22 @@ export function InventoryPage() {
     },
   ];
 
+  const filteredStocks = stocks.filter((s) => {
+    const q = stockSearch.trim().toLowerCase();
+    if (q && !String(s.name || '').toLowerCase().includes(q) && !String(s.sku || '').toLowerCase().includes(q)) return false;
+    if (stockFilters.locType && s.owner_type !== stockFilters.locType) return false;
+    if (stockFilters.warehouse && s.warehouse_id !== stockFilters.warehouse) return false;
+    if (stockFilters.branch && s.branch_id !== stockFilters.branch) return false;
+    return true;
+  });
+
+  const filteredTransactions = transactions.filter((t) => {
+    const q = txSearch.trim().toLowerCase();
+    if (q && !String(t.name || '').toLowerCase().includes(q) && !String(t.sku || '').toLowerCase().includes(q)) return false;
+    if (txFilters.txType && t.transaction_type !== txFilters.txType) return false;
+    return true;
+  });
+
   const tabItems = [
     { key: 'stock', label: 'Stock Ledger' },
     { key: 'transactions', label: 'Ledger Audit / History' },
@@ -300,21 +323,73 @@ export function InventoryPage() {
 
       <section className="panel">
         {activeTab === 'stock' ? (
-          <DataTable
-            columns={stockColumns}
-            data={stocks}
-            keyExtractor={(row) => row.id}
-            loading={loading}
-            emptyMessage="No stock levels recorded"
-          />
+          <>
+            <FilterBar
+              searchValue={stockSearch}
+              onSearchChange={setStockSearch}
+              searchPlaceholder="Search by product name or SKU…"
+              filters={[
+                {
+                  key: 'locType',
+                  label: 'All Location Types',
+                  options: [
+                    { value: 'WAREHOUSE', label: 'Warehouse' },
+                    { value: 'BRANCH', label: 'Branch' },
+                  ],
+                },
+                {
+                  key: 'warehouse',
+                  label: 'All Warehouses',
+                  options: warehouses.map((w: any) => ({ value: w.id, label: w.name })),
+                },
+                {
+                  key: 'branch',
+                  label: 'All Branches',
+                  options: branches.map((b: any) => ({ value: b.id, label: b.name })),
+                },
+              ]}
+              filterValues={stockFilters}
+              onFilterChange={(key, val) => setStockFilters(prev => ({ ...prev, [key]: val }))}
+            />
+            <DataTable
+              columns={stockColumns}
+              data={filteredStocks}
+              keyExtractor={(row) => row.id}
+              loading={loading}
+              emptyMessage="No stock levels match your filters"
+            />
+          </>
         ) : (
-          <DataTable
-            columns={transactionColumns}
-            data={transactions}
-            keyExtractor={(row) => row.id}
-            loading={loading}
-            emptyMessage="No transactions ledger history"
-          />
+          <>
+            <FilterBar
+              searchValue={txSearch}
+              onSearchChange={setTxSearch}
+              searchPlaceholder="Search by product name or SKU…"
+              filters={[
+                {
+                  key: 'txType',
+                  label: 'All Transaction Types',
+                  options: [
+                    { value: 'PURCHASE_RECEIPT', label: 'Purchase Receipt' },
+                    { value: 'ADJUSTMENT_POSITIVE', label: 'Adjustment (+)' },
+                    { value: 'ADJUSTMENT_NEGATIVE', label: 'Adjustment (-)' },
+                    { value: 'TRANSFER_OUT', label: 'Transfer Out' },
+                    { value: 'TRANSFER_IN', label: 'Transfer In' },
+                    { value: 'SALE', label: 'Sale' },
+                  ],
+                },
+              ]}
+              filterValues={txFilters}
+              onFilterChange={(key, val) => setTxFilters(prev => ({ ...prev, [key]: val }))}
+            />
+            <DataTable
+              columns={transactionColumns}
+              data={filteredTransactions}
+              keyExtractor={(row) => row.id}
+              loading={loading}
+              emptyMessage="No transaction history matches your filters"
+            />
+          </>
         )}
       </section>
 
