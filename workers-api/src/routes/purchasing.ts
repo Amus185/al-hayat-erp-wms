@@ -56,7 +56,7 @@ purchasing.get('/orders/:id', async (c) => {
   if (!po) return c.json({ message: 'PO not found' }, 404);
 
   const { results: lines } = await c.env.DB.prepare(`
-    SELECT pol.*, p.name as product_name, p.sku as variant_sku,
+    SELECT pol.*, pol.quantity AS quantity_ordered, p.name as product_name, p.sku as variant_sku,
       (SELECT COALESCE(SUM(quantity_received), 0) FROM goods_receipt_lines grl 
        JOIN goods_receipts gr ON gr.id = grl.goods_receipt_id 
        WHERE gr.purchase_order_id = ? AND grl.product_id = pol.product_id) as quantity_received
