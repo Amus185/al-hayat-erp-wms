@@ -32,7 +32,7 @@ import { apiGet } from '../api/client';
 import { DataTable, type Column } from '../components/DataTable';
 import { Tabs } from '../components/Tabs';
 import { MetricCard } from '../components/MetricCard';
-import { LoadingSpinner } from '../components/LoadingSpinner';
+import { PageSkeleton } from '../components/LoadingSpinner';
 import { useToast } from '../contexts/ToastContext';
 
 // Theme Colors
@@ -499,7 +499,7 @@ export function ReportsPage() {
 
       {/* Loading Indicator */}
       {loading ? (
-        <LoadingSpinner label="Querying financial ledgers & inventory valuation tables..." />
+        <PageSkeleton />
       ) : (
         <section className="panel" style={{ padding: '24px' }}>
           {/* ========================================================================= */}
