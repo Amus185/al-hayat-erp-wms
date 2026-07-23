@@ -131,6 +131,7 @@ export function CreatePOPage() {
 
     const payload = {
       supplierId,
+      warehouseId,
       expectedDate: expectedDate || undefined,
       lines: lines.map((l) => ({
         productId: l.productId,

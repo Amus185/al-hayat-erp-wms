@@ -158,6 +158,7 @@ CREATE TABLE purchase_orders (
   po_number TEXT UNIQUE NOT NULL,
   supplier_id TEXT NOT NULL REFERENCES suppliers(id),
   status TEXT NOT NULL DEFAULT 'DRAFT',
+  warehouse_id TEXT REFERENCES warehouses(id),
   expected_date TEXT,
   created_by TEXT REFERENCES users(id),
   approved_by TEXT REFERENCES users(id),

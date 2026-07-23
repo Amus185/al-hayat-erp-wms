@@ -142,9 +142,10 @@ export function PurchasingPage() {
   const handleApprovePO = async (poId: string) => {
     try {
       setPoDetailsLoading(true);
-      await apiPost(`/purchasing/orders/${poId}/approve`, {});
-      addToast('success', 'Purchase order approved');
-      setSelectedPO(null);
+      const result = await apiPost<any>(`/purchasing/orders/${poId}/approve`, {});
+      addToast('success', '✅ PO Approved! Inventory updated and Purchase Invoice generated.');
+      // Reload PO details so invoice section appears immediately
+      await viewPoDetails({ id: poId } as any);
       loadData();
     } catch (err: any) {
       addToast('error', err?.message || 'Failed to approve PO');
@@ -475,25 +476,72 @@ export function PurchasingPage() {
                   </button>
                 </div>
               </form>
-            ) : (
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', borderTop: '1px solid #edf1ed', paddingTop: '16px' }}>
-                <button type="button" className="btn btn-secondary" onClick={() => setSelectedPO(null)}>
-                  Close
-                </button>
+            ) : null}
 
-                {selectedPO.status === 'SUBMITTED' && hasPermission('manage_purchasing') && (
-                  <button type="button" className="btn btn-primary" onClick={() => handleApprovePO(selectedPO.id)}>
-                    Approve PO
-                  </button>
-                )}
-
-                {selectedPO.status === 'APPROVED' && (
-                  <button type="button" className="btn btn-primary" onClick={() => setIsReceiptOpen(true)}>
-                    <Truck size={14} style={{ marginRight: '4px', inlineSize: 'auto' }} /> Receive Goods
-                  </button>
-                )}
+            {/* Purchase Invoice Section — shown once the PO is received */}
+            {selectedPO.invoice && (
+              <div style={{ borderTop: '2px solid #d1e8d1', paddingTop: '16px', marginTop: '8px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
+                  <FileText size={18} style={{ color: '#066006' }} />
+                  <h4 style={{ margin: 0, color: '#066006' }}>Purchase Invoice</h4>
+                  <span style={{ marginLeft: 'auto', fontSize: '13px', color: '#667066' }}>{selectedPO.invoice.invoice_number}</span>
+                </div>
+                <div style={{ background: '#f7fef7', border: '1px solid #d1e8d1', borderRadius: '8px', padding: '14px' }}>
+                  <table style={{ width: '100%' }}>
+                    <thead>
+                      <tr>
+                        <th>Product</th>
+                        <th>SKU</th>
+                        <th style={{ textAlign: 'right' }}>Qty</th>
+                        <th style={{ textAlign: 'right' }}>Unit Cost</th>
+                        <th style={{ textAlign: 'right' }}>Discount</th>
+                        <th style={{ textAlign: 'right' }}>Line Total</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {selectedPO.lines?.map((line: any) => (
+                        <tr key={line.id}>
+                          <td><strong>{line.product_name}</strong></td>
+                          <td style={{ color: '#667066', fontSize: '12px' }}>{line.variant_sku}</td>
+                          <td style={{ textAlign: 'right' }}>{line.quantity_ordered}</td>
+                          <td style={{ textAlign: 'right' }}>${Number(line.unit_cost).toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
+                          <td style={{ textAlign: 'right', color: '#b45309' }}>-${Number(line.discount_amount || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
+                          <td style={{ textAlign: 'right', fontWeight: 600 }}>${Number(line.line_total || (line.quantity_ordered * line.unit_cost)).toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '12px', paddingTop: '10px', borderTop: '1px solid #d1e8d1' }}>
+                    <div style={{ minWidth: '240px', display: 'grid', gap: '4px', fontSize: '13px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <span style={{ color: '#667066' }}>Invoice No.</span>
+                        <span>{selectedPO.invoice.invoice_number}</span>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <span style={{ color: '#667066' }}>Issued</span>
+                        <span>{new Date(selectedPO.invoice.issued_at).toLocaleDateString()}</span>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '16px', fontWeight: 700, color: '#066006', borderTop: '1px solid #d1e8d1', paddingTop: '6px', marginTop: '4px' }}>
+                        <span>Grand Total</span>
+                        <span>${Number(selectedPO.invoice.total_amount).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
               </div>
             )}
+
+            {/* Action Buttons */}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', borderTop: '1px solid #edf1ed', paddingTop: '16px' }}>
+              <button type="button" className="btn btn-secondary" onClick={() => setSelectedPO(null)}>
+                Close
+              </button>
+              {selectedPO.status === 'SUBMITTED' && hasPermission('manage_purchasing') && (
+                <button type="button" className="btn btn-primary" onClick={() => handleApprovePO(selectedPO.id)} disabled={poDetailsLoading}>
+                  <CheckCircle size={14} style={{ marginRight: '4px', inlineSize: 'auto' }} /> Approve &amp; Receive
+                </button>
+              )}
+            </div>
           </div>
         )}
       </Modal>

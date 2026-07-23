@@ -65,7 +65,11 @@ purchasing.get('/orders/:id', async (c) => {
     WHERE pol.purchase_order_id = ?
   `).bind(id, id).all();
 
-  return c.json({ ...po, lines });
+  const invoice = await c.env.DB.prepare(
+    'SELECT * FROM purchase_invoices WHERE purchase_order_id = ?'
+  ).bind(id).first().catch(() => null);
+
+  return c.json({ ...po, lines, invoice: invoice || null });
 });
 
 // ──────────────────────────────────────────────────────────────────────
@@ -109,9 +113,9 @@ purchasing.post('/orders', requirePermissions(['manage_purchasing']), async (c) 
 
   const stmts = [];
   stmts.push(c.env.DB.prepare(`
-    INSERT INTO purchase_orders (id, po_number, supplier_id, status, expected_date, created_by)
-    VALUES (?, ?, ?, 'SUBMITTED', ?, ?)
-  `).bind(id, poNumber, body.supplierId, body.expectedDate || null, userId));
+    INSERT INTO purchase_orders (id, po_number, supplier_id, warehouse_id, status, expected_date, created_by)
+    VALUES (?, ?, ?, ?, 'SUBMITTED', ?, ?)
+  `).bind(id, poNumber, body.supplierId, body.warehouseId || null, body.expectedDate || null, userId));
 
   for (const line of body.lines) {
     const discountAmount = Number(line.discountAmount || 0);
@@ -128,25 +132,126 @@ purchasing.post('/orders', requirePermissions(['manage_purchasing']), async (c) 
 });
 
 // ──────────────────────────────────────────────────────────────────────
-// APPROVE PO — SUBMITTED → APPROVED (strict state check)
+// APPROVE PO — SUBMITTED → RECEIVED (auto-receives all lines, updates
+// inventory_stock, and generates a purchase_invoice in one batch)
 // ──────────────────────────────────────────────────────────────────────
 purchasing.post('/orders/:id/approve', requirePermissions(['manage_purchasing']), async (c) => {
   const id = c.req.param('id');
   const userId = c.get('jwtPayload').sub;
+  const body = await c.req.json().catch(() => ({})) as any;
 
-  const cas = await c.env.DB.prepare(
-    "UPDATE purchase_orders SET status = 'APPROVED', approved_by = ? WHERE id = ? AND status = 'SUBMITTED'"
-  ).bind(userId, id).run();
-
-  if (!cas.meta.changes || cas.meta.changes === 0) {
-    const existing = await c.env.DB.prepare('SELECT status FROM purchase_orders WHERE id = ?').bind(id).first();
-    if (!existing) return c.json({ message: 'Purchase order not found.' }, 404);
-    return c.json({ message: `Cannot approve: PO is currently '${existing.status}'. Only SUBMITTED POs can be approved.` }, 400);
+  // Fetch PO and validate
+  const po = await c.env.DB.prepare(`
+    SELECT po.*, s.name AS supplier_name
+    FROM purchase_orders po
+    JOIN suppliers s ON s.id = po.supplier_id
+    WHERE po.id = ?
+  `).bind(id).first();
+  if (!po) return c.json({ message: 'Purchase order not found.' }, 404);
+  if (po.status !== 'SUBMITTED') {
+    return c.json({ message: `Cannot approve: PO is currently '${po.status}'. Only SUBMITTED POs can be approved.` }, 400);
   }
 
-  await logAudit(c, 'PURCHASE_ORDER_APPROVE', 'purchase_orders', id, { status: 'SUBMITTED' }, { status: 'APPROVED' });
-  const { results } = await c.env.DB.prepare('SELECT * FROM purchase_orders WHERE id = ?').bind(id).all();
-  return c.json(results[0]);
+  // Resolve receiving warehouse: body.warehouseId > PO's stored warehouse_id > first warehouse
+  let warehouseId = body.warehouseId || po.warehouse_id;
+  if (!warehouseId) {
+    const firstWH = await c.env.DB.prepare('SELECT id FROM warehouses LIMIT 1').first();
+    warehouseId = firstWH?.id;
+  }
+  if (!warehouseId) return c.json({ message: 'No warehouse available to receive goods.' }, 400);
+
+  // Fetch all PO lines
+  const { results: poLines } = await c.env.DB.prepare(`
+    SELECT pol.*, pol.quantity AS quantity_ordered, p.name AS product_name, p.sku AS variant_sku
+    FROM purchase_order_lines pol
+    JOIN products p ON p.id = pol.product_id
+    WHERE pol.purchase_order_id = ?
+  `).bind(id).all();
+
+  if (!poLines || poLines.length === 0) {
+    return c.json({ message: 'PO has no line items.' }, 400);
+  }
+
+  // Pre-flight: gather existing inventory_stock rows
+  const stockLookups = new Map<string, string | null>();
+  await Promise.all(
+    poLines.map(async (line: any) => {
+      const existing = await c.env.DB.prepare(`
+        SELECT id FROM inventory_stock
+        WHERE product_id = ? AND owner_type = 'WAREHOUSE' AND warehouse_id = ? AND branch_id IS NULL
+      `).bind(line.product_id, warehouseId).first();
+      stockLookups.set(line.product_id, (existing?.id as string) || null);
+    })
+  );
+
+  // Build atomic batch
+  const receiptId = uuidv4();
+  const receiptNumber = `GR-${Date.now()}`;
+  const invoiceId = uuidv4();
+  const invoiceNumber = `PI-${Date.now()}`;
+  const approved_by = userId;
+
+  const stmts: any[] = [];
+
+  // 1. Approve PO → RECEIVED
+  stmts.push(c.env.DB.prepare(
+    "UPDATE purchase_orders SET status = 'RECEIVED', approved_by = ?, warehouse_id = ? WHERE id = ?"
+  ).bind(approved_by, warehouseId, id));
+
+  // 2. Create Goods Receipt header
+  stmts.push(c.env.DB.prepare(`
+    INSERT INTO goods_receipts (id, receipt_number, purchase_order_id, warehouse_id, received_by)
+    VALUES (?, ?, ?, ?, ?)
+  `).bind(receiptId, receiptNumber, id, warehouseId, userId));
+
+  // 3. Per-line: GR line + inventory transaction + UPSERT stock
+  let grandTotal = 0;
+  for (const line of poLines as any[]) {
+    const qty = Number(line.quantity_ordered);
+    const lineTotal = Number(line.line_total) || (qty * Number(line.unit_cost)) - Number(line.discount_amount || 0);
+    grandTotal += lineTotal;
+
+    stmts.push(c.env.DB.prepare(`
+      INSERT INTO goods_receipt_lines (id, goods_receipt_id, product_id, warehouse_location_id, quantity_received)
+      VALUES (?, ?, ?, NULL, ?)
+    `).bind(uuidv4(), receiptId, line.product_id, qty));
+
+    stmts.push(c.env.DB.prepare(`
+      INSERT INTO inventory_transactions (id, product_id, transaction_type, quantity, destination_owner_type, destination_warehouse_id, destination_location_id, reference_type, reference_id, created_by)
+      VALUES (?, ?, 'PURCHASE_RECEIPT', ?, 'WAREHOUSE', ?, NULL, 'GOODS_RECEIPT', ?, ?)
+    `).bind(uuidv4(), line.product_id, qty, warehouseId, receiptId, userId));
+
+    const existingStockId = stockLookups.get(line.product_id);
+    if (existingStockId) {
+      stmts.push(c.env.DB.prepare(
+        'UPDATE inventory_stock SET quantity_on_hand = quantity_on_hand + ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?'
+      ).bind(qty, existingStockId));
+    } else {
+      stmts.push(c.env.DB.prepare(`
+        INSERT INTO inventory_stock (id, product_id, owner_type, warehouse_id, warehouse_location_id, quantity_on_hand)
+        VALUES (?, ?, 'WAREHOUSE', ?, NULL, ?)
+      `).bind(uuidv4(), line.product_id, warehouseId, qty));
+    }
+  }
+
+  // 4. Create Purchase Invoice
+  stmts.push(c.env.DB.prepare(`
+    INSERT INTO purchase_invoices (id, invoice_number, purchase_order_id, total_amount, status)
+    VALUES (?, ?, ?, ?, 'PAID')
+  `).bind(invoiceId, invoiceNumber, id, grandTotal));
+
+  // 5. Audit log
+  stmts.push(createAuditLogStmt(c, 'PURCHASE_ORDER_APPROVE', 'purchase_orders', id,
+    { status: 'SUBMITTED' },
+    { status: 'RECEIVED', warehouseId, receiptNumber, invoiceNumber }
+  ));
+
+  await c.env.DB.batch(stmts);
+
+  // Return full PO details
+  const updated = await c.env.DB.prepare(`SELECT po.*, s.name AS supplier_name FROM purchase_orders po JOIN suppliers s ON s.id = po.supplier_id WHERE po.id = ?`).bind(id).first();
+  const invoice = await c.env.DB.prepare('SELECT * FROM purchase_invoices WHERE purchase_order_id = ?').bind(id).first();
+  return c.json({ ...updated, invoice });
 });
 
 // ──────────────────────────────────────────────────────────────────────
