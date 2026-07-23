@@ -48,11 +48,10 @@ export function AppShell({ children }: AppShellProps) {
       <aside className="sidebar">
         <div className="brand">
           <div className="brand__logo">
-            <img src="/logo.png" alt="Al Hayat Logo" />
+            <img src="/logo.png" alt="AlHayat Furniture Logo" />
           </div>
           <div className="brand__text">
-            <strong>Al Hayat</strong>
-            <span>ERP System</span>
+            <strong>AlHayat Furniture</strong>
           </div>
         </div>
         
