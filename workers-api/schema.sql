@@ -318,3 +318,44 @@ CREATE INDEX idx_inventory_transactions_product_created ON inventory_transaction
 CREATE INDEX idx_products_barcode ON products(barcode);
 CREATE INDEX idx_transfers_status ON transfers(status);
 CREATE INDEX idx_audit_logs_entity ON audit_logs(entity_type, entity_id);
+
+-- ── Added via migration_payments.sql ────────────────────────────────
+-- Run: wrangler d1 execute al-hayat-db --file=./migration_payments.sql
+
+-- invoices: discount_amount column added
+-- ALTER TABLE invoices ADD COLUMN discount_amount REAL NOT NULL DEFAULT 0;
+
+CREATE TABLE IF NOT EXISTS purchase_invoices (
+  id TEXT PRIMARY KEY,
+  invoice_number TEXT UNIQUE NOT NULL,
+  purchase_order_id TEXT NOT NULL REFERENCES purchase_orders(id),
+  total_amount REAL NOT NULL DEFAULT 0,
+  discount_amount REAL NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'UNPAID',
+  notes TEXT,
+  issued_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS invoice_payments (
+  id TEXT PRIMARY KEY,
+  invoice_id TEXT NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
+  amount REAL NOT NULL CHECK (amount > 0),
+  payment_method TEXT NOT NULL DEFAULT 'CASH',
+  payment_date TEXT NOT NULL,
+  notes TEXT,
+  recorded_by TEXT REFERENCES users(id),
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_invoice_payments_invoice ON invoice_payments(invoice_id);
+
+CREATE TABLE IF NOT EXISTS purchase_invoice_payments (
+  id TEXT PRIMARY KEY,
+  purchase_invoice_id TEXT NOT NULL REFERENCES purchase_invoices(id) ON DELETE CASCADE,
+  amount REAL NOT NULL CHECK (amount > 0),
+  payment_method TEXT NOT NULL DEFAULT 'CASH',
+  payment_date TEXT NOT NULL,
+  notes TEXT,
+  recorded_by TEXT REFERENCES users(id),
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_pip_purchase_invoice ON purchase_invoice_payments(purchase_invoice_id);

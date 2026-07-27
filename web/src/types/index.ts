@@ -401,17 +401,26 @@ export interface CreateSalesOrderRequest {
   lines: { productId: string; quantity: number; unitPrice: number }[];
 }
 
+export type PaymentStatus = 'UNPAID' | 'PARTIALLY_PAID' | 'PAID';
+export type PaymentMethod = 'CASH' | 'CARD' | 'BANK_TRANSFER' | 'CHEQUE' | 'WIRE';
+
 export interface Invoice {
   id: string;
   invoice_number: string;
   sales_order_id: string;
   total_amount: number;
-  status: 'UNPAID' | 'PAID' | 'CANCELLED';
-  created_at: string;
+  discount_amount: number;
+  status: 'INVOICED' | 'PAID' | 'CANCELLED';
+  issued_at: string;
   paid_at: string | null;
   // Joined
   customer_name?: string;
   order_number?: string;
+  // Payment summary (computed)
+  net_total?: number;
+  amount_paid?: number;
+  balance?: number;
+  payment_status?: PaymentStatus;
 }
 
 // ── Reports ─────────────────────────────────────────
@@ -501,3 +510,79 @@ export type RealtimeEvent =
   | 'sales.invoice_created'
   | 'notification.new'
   | 'low_stock.alert';
+
+// ── Payments ────────────────────────────────────────
+export interface PaymentSummary {
+  amount_paid: number;
+  net_total: number;
+  balance: number;
+  payment_status: PaymentStatus;
+}
+
+export interface InvoicePayment {
+  id: string;
+  invoice_id: string;
+  amount: number;
+  payment_method: PaymentMethod;
+  payment_date: string;
+  notes: string | null;
+  recorded_by: string | null;
+  recorded_by_name: string | null;
+  created_at: string;
+  running_balance?: number;
+}
+
+export interface RecordPaymentRequest {
+  amount: number;
+  paymentMethod: PaymentMethod;
+  paymentDate: string;
+  notes?: string;
+}
+
+// ── Purchase Invoice ────────────────────────────────
+export interface PurchaseInvoice {
+  id: string;
+  invoice_number: string;
+  purchase_order_id: string;
+  total_amount: number;
+  discount_amount: number;
+  status: 'UNPAID' | 'PARTIALLY_PAID' | 'PAID';
+  issued_at: string;
+  notes: string | null;
+  // Payment summary (computed)
+  amount_paid?: number;
+  net_total?: number;
+  balance?: number;
+  payment_status?: PaymentStatus;
+  payments?: PurchaseInvoicePayment[];
+}
+
+export interface PurchaseInvoicePayment {
+  id: string;
+  purchase_invoice_id: string;
+  amount: number;
+  payment_method: PaymentMethod;
+  payment_date: string;
+  notes: string | null;
+  recorded_by: string | null;
+  recorded_by_name: string | null;
+  created_at: string;
+  running_balance?: number;
+}
+
+// ── Financial Summaries (Dashboard) ─────────────────
+export interface SalesFinancialSummary {
+  total_outstanding_balance: number;
+  count_unpaid: number;
+  total_unpaid_amount: number;
+  count_partially_paid: number;
+  total_partially_paid_balance: number;
+}
+
+export interface PurchasingFinancialSummary {
+  total_outstanding_balance: number;
+  count_unpaid: number;
+  count_partially_paid: number;
+  deposits_total: number;
+  awaiting_payment: number;
+}

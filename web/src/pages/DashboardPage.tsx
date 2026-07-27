@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { AlertTriangle, Boxes, CircleDollarSign, ScanLine, Truck } from 'lucide-react';
+import { AlertTriangle, Boxes, CircleDollarSign, ScanLine, Truck, TrendingDown, PackageSearch } from 'lucide-react';
 import { apiGet } from '../api/client';
 import { MetricCard } from '../components/MetricCard';
 import { DataTable, type Column } from '../components/DataTable';
 import { StatusBadge } from '../components/StatusBadge';
 import { PageSkeleton } from '../components/LoadingSpinner';
+import type { SalesFinancialSummary, PurchasingFinancialSummary } from '../types';
 
 export function DashboardPage() {
   const navigate = useNavigate();
@@ -19,18 +20,24 @@ export function DashboardPage() {
   const [lowStock, setLowStock] = useState<any[]>([]);
   const [activeTransfersList, setActiveTransfersList] = useState<any[]>([]);
   const [alerts, setAlerts] = useState<string[]>([]);
+  const [salesSummary, setSalesSummary] = useState<SalesFinancialSummary | null>(null);
+  const [purchasingSummary, setPurchasingSummary] = useState<PurchasingFinancialSummary | null>(null);
 
   useEffect(() => {
     async function fetchDashboardData() {
       try {
         setLoading(true);
         // Fetch all dashboard data in parallel — individual failures are tolerated
-        const [invValueData, lowStockData, transfersData, transactions] = await Promise.all([
+        const [invValueData, lowStockData, transfersData, transactions, salesSum, purchasingSum] = await Promise.all([
           apiGet<any>('/reports/inventory-valuation').catch(() => null),
           apiGet<any[]>('/reports/low-stock').catch(() => []),
           apiGet<any[]>('/transfers').catch(() => []),
           apiGet<any[]>('/inventory/transactions').catch(() => []),
+          apiGet<SalesFinancialSummary>('/sales/summary').catch(() => null),
+          apiGet<PurchasingFinancialSummary>('/purchasing/summary').catch(() => null),
         ]);
+        setSalesSummary(salesSum);
+        setPurchasingSummary(purchasingSum);
 
         // Parse metrics — backend returns { summary: { total_cost_value, total_retail_value, total_units } }
         const totalValue = invValueData?.summary?.total_cost_value
@@ -133,13 +140,16 @@ export function DashboardPage() {
     },
   ];
 
+  const fmtCcy = (n: number) =>
+    new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(n);
+
   return (
     <div className="dashboard">
-      {/* Metric Cards Grid */}
+      {/* Inventory Metric Cards */}
       <section className="metric-grid">
         <MetricCard
           label="Total inventory value"
-          value={new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(metrics.totalValue)}
+          value={fmtCcy(metrics.totalValue)}
           trend="Live cost appraisal"
           icon={<CircleDollarSign size={22} />}
         />
@@ -162,6 +172,36 @@ export function DashboardPage() {
           icon={<ScanLine size={22} />}
         />
       </section>
+
+      {/* Financial Metric Cards */}
+      {(salesSummary || purchasingSummary) && (
+        <section className="metric-grid">
+          <MetricCard
+            label="Outstanding Customer Balance"
+            value={fmtCcy(salesSummary?.total_outstanding_balance ?? 0)}
+            trend={`${salesSummary?.count_unpaid ?? 0} unpaid · ${salesSummary?.count_partially_paid ?? 0} partial`}
+            icon={<TrendingDown size={22} />}
+          />
+          <MetricCard
+            label="Unpaid Invoices"
+            value={String(salesSummary?.count_unpaid ?? 0)}
+            trend={`Balance: ${fmtCcy(salesSummary?.total_unpaid_amount ?? 0)}`}
+            icon={<CircleDollarSign size={22} />}
+          />
+          <MetricCard
+            label="Supplier Liabilities"
+            value={fmtCcy(purchasingSummary?.total_outstanding_balance ?? 0)}
+            trend={`${purchasingSummary?.count_unpaid ?? 0} unpaid · ${purchasingSummary?.count_partially_paid ?? 0} partial`}
+            icon={<PackageSearch size={22} />}
+          />
+          <MetricCard
+            label="Deposits Paid"
+            value={fmtCcy(purchasingSummary?.deposits_total ?? 0)}
+            trend="Supplier advance payments"
+            icon={<Truck size={22} />}
+          />
+        </section>
+      )}
 
       {/* Main Work Grid */}
       <section className="work-grid">

@@ -8,6 +8,28 @@ const purchasing = new Hono<{ Bindings: Env; Variables: { jwtPayload: any } }>()
 purchasing.use('/*', authMiddleware);
 
 // ──────────────────────────────────────────────────────────────────────
+// SHARED HELPER — compute payment summary for a purchase invoice
+// Returns: { amount_paid, net_total, balance, payment_status }
+// ──────────────────────────────────────────────────────────────────────
+async function getPurchaseInvoicePaymentSummary(
+  db: D1Database,
+  purchaseInvoiceId: string,
+  totalAmount: number,
+  discountAmount: number
+) {
+  const res = await db.prepare(
+    'SELECT COALESCE(SUM(amount), 0) AS amount_paid FROM purchase_invoice_payments WHERE purchase_invoice_id = ?'
+  ).bind(purchaseInvoiceId).first();
+  const amountPaid = Number(res?.amount_paid || 0);
+  const netTotal = Math.max(0, totalAmount - discountAmount);
+  const balance = Math.max(0, netTotal - amountPaid);
+  let payment_status: 'UNPAID' | 'PARTIALLY_PAID' | 'PAID' = 'UNPAID';
+  if (amountPaid >= netTotal && netTotal > 0) payment_status = 'PAID';
+  else if (amountPaid > 0) payment_status = 'PARTIALLY_PAID';
+  return { amount_paid: amountPaid, net_total: netTotal, balance, payment_status };
+}
+
+// ──────────────────────────────────────────────────────────────────────
 // SUPPLIERS
 // ──────────────────────────────────────────────────────────────────────
 purchasing.get('/suppliers', async (c) => {
@@ -34,14 +56,60 @@ purchasing.post('/suppliers', requirePermissions(['manage_purchasing']), async (
 // PURCHASE ORDERS — LIST & GET
 // ──────────────────────────────────────────────────────────────────────
 purchasing.get('/orders', async (c) => {
-  const { results } = await c.env.DB.prepare(`
-    SELECT po.*, s.name AS supplier_name
+  const { search, paymentStatus, dateFrom, dateTo, supplierId } = c.req.query();
+
+  let query = `
+    SELECT po.*, s.name AS supplier_name,
+           pi.id AS purchase_invoice_id, pi.total_amount AS invoice_total,
+           COALESCE(pi.discount_amount, 0) AS invoice_discount,
+           COALESCE((SELECT SUM(pip.amount) FROM purchase_invoice_payments pip WHERE pip.purchase_invoice_id = pi.id), 0) AS amount_paid
     FROM purchase_orders po
     JOIN suppliers s ON s.id = po.supplier_id
-    ORDER BY po.created_at DESC
-    LIMIT 100
-  `).all();
-  return c.json(results);
+    LEFT JOIN purchase_invoices pi ON pi.purchase_order_id = po.id
+    WHERE 1=1
+  `;
+  const params: any[] = [];
+
+  if (search) {
+    query += ` AND (po.po_number LIKE ? OR s.name LIKE ?)`;
+    params.push(`%${search}%`, `%${search}%`);
+  }
+  if (supplierId) {
+    query += ` AND po.supplier_id = ?`;
+    params.push(supplierId);
+  }
+  if (dateFrom) {
+    query += ` AND date(po.created_at) >= date(?)`;
+    params.push(dateFrom);
+  }
+  if (dateTo) {
+    query += ` AND date(po.created_at) <= date(?)`;
+    params.push(dateTo);
+  }
+
+  query += ` ORDER BY po.created_at DESC LIMIT 200`;
+
+  const stmt = c.env.DB.prepare(query);
+  const { results } = params.length > 0 ? await stmt.bind(...params).all() : await stmt.all();
+
+  // Compute payment_status and balance for each row
+  const enriched = (results || []).map((row: any) => {
+    if (!row.purchase_invoice_id) return { ...row, payment_status: null, balance: null };
+    const netTotal = Math.max(0, Number(row.invoice_total || 0) - Number(row.invoice_discount || 0));
+    const paid = Number(row.amount_paid || 0);
+    const balance = Math.max(0, netTotal - paid);
+    let payment_status = 'UNPAID';
+    if (paid >= netTotal && netTotal > 0) payment_status = 'PAID';
+    else if (paid > 0) payment_status = 'PARTIALLY_PAID';
+    return { ...row, net_total: netTotal, balance, payment_status };
+  });
+
+  // Filter by computed payment status if requested
+  if (paymentStatus && paymentStatus !== 'ALL') {
+    return c.json(enriched.filter((r: any) => r.payment_status === paymentStatus));
+  }
+
+  return c.json(enriched);
 });
 
 purchasing.get('/orders/:id', async (c) => {
@@ -69,7 +137,26 @@ purchasing.get('/orders/:id', async (c) => {
     'SELECT * FROM purchase_invoices WHERE purchase_order_id = ?'
   ).bind(id).first().catch(() => null);
 
-  return c.json({ ...po, lines, invoice: invoice || null });
+  // Enrich invoice with payment summary and history if invoice exists
+  let invoiceWithPayments = invoice || null;
+  if (invoice) {
+    const piSummary = await getPurchaseInvoicePaymentSummary(
+      c.env.DB,
+      invoice.id as string,
+      Number(invoice.total_amount),
+      Number((invoice as any).discount_amount || 0)
+    );
+    const { results: payments } = await c.env.DB.prepare(`
+      SELECT pip.*, u.full_name AS recorded_by_name
+      FROM purchase_invoice_payments pip
+      LEFT JOIN users u ON u.id = pip.recorded_by
+      WHERE pip.purchase_invoice_id = ?
+      ORDER BY pip.created_at DESC
+    `).bind(invoice.id).all();
+    invoiceWithPayments = { ...invoice, ...piSummary, payments: payments || [] };
+  }
+
+  return c.json({ ...po, lines, invoice: invoiceWithPayments });
 });
 
 purchasing.get('/orders/:id/print-invoice', async (c) => {
@@ -96,10 +183,21 @@ purchasing.get('/orders/:id/print-invoice', async (c) => {
     'SELECT * FROM purchase_invoices WHERE purchase_order_id = ?'
   ).bind(id).first().catch(() => null);
 
+  let invoiceData = invoice || null;
+  if (invoice) {
+    const piSummary = await getPurchaseInvoicePaymentSummary(
+      c.env.DB,
+      invoice.id as string,
+      Number(invoice.total_amount),
+      Number((invoice as any).discount_amount || 0)
+    );
+    invoiceData = { ...invoice, ...piSummary };
+  }
+
   return c.json({
     po,
     lines,
-    invoice,
+    invoice: invoiceData,
     supplier: {
       name: po.supplier_name,
       contactName: po.contact_name,
@@ -174,8 +272,9 @@ purchasing.post('/orders', requirePermissions(['manage_purchasing']), async (c) 
 });
 
 // ──────────────────────────────────────────────────────────────────────
-// APPROVE PO — SUBMITTED → RECEIVED (auto-receives all lines, updates
-// inventory_stock, and generates a purchase_invoice in one batch)
+// APPROVE PO — SUBMITTED → RECEIVED
+// Creates purchase_invoice with status UNPAID (not PAID) so payments
+// can be tracked from this point forward
 // ──────────────────────────────────────────────────────────────────────
 purchasing.post('/orders/:id/approve', requirePermissions(['manage_purchasing']), async (c) => {
   const id = c.req.param('id');
@@ -248,10 +347,13 @@ purchasing.post('/orders/:id/approve', requirePermissions(['manage_purchasing'])
 
   // 3. Per-line: GR line + inventory transaction + UPSERT stock
   let grandTotal = 0;
+  let totalDiscount = 0;
   for (const line of poLines as any[]) {
     const qty = Number(line.quantity_ordered);
-    const lineTotal = Number(line.line_total) || (qty * Number(line.unit_cost)) - Number(line.discount_amount || 0);
+    const lineDiscount = Number(line.discount_amount || 0);
+    const lineTotal = Number(line.line_total) || (qty * Number(line.unit_cost)) - lineDiscount;
     grandTotal += lineTotal;
+    totalDiscount += lineDiscount;
 
     stmts.push(c.env.DB.prepare(`
       INSERT INTO goods_receipt_lines (id, goods_receipt_id, product_id, warehouse_location_id, quantity_received)
@@ -276,11 +378,11 @@ purchasing.post('/orders/:id/approve', requirePermissions(['manage_purchasing'])
     }
   }
 
-  // 4. Create Purchase Invoice
+  // 4. Create Purchase Invoice — status UNPAID so payments can be tracked
   stmts.push(c.env.DB.prepare(`
-    INSERT INTO purchase_invoices (id, invoice_number, purchase_order_id, total_amount, status)
-    VALUES (?, ?, ?, ?, 'PAID')
-  `).bind(invoiceId, invoiceNumber, id, grandTotal));
+    INSERT INTO purchase_invoices (id, invoice_number, purchase_order_id, total_amount, discount_amount, status)
+    VALUES (?, ?, ?, ?, ?, 'UNPAID')
+  `).bind(invoiceId, invoiceNumber, id, grandTotal, totalDiscount));
 
   // 5. Audit log
   stmts.push(createAuditLogStmt(c, 'PURCHASE_ORDER_APPROVE', 'purchase_orders', id,
@@ -293,7 +395,11 @@ purchasing.post('/orders/:id/approve', requirePermissions(['manage_purchasing'])
   // Return full PO details
   const updated = await c.env.DB.prepare(`SELECT po.*, s.name AS supplier_name FROM purchase_orders po JOIN suppliers s ON s.id = po.supplier_id WHERE po.id = ?`).bind(id).first();
   const invoice = await c.env.DB.prepare('SELECT * FROM purchase_invoices WHERE purchase_order_id = ?').bind(id).first();
-  return c.json({ ...updated, invoice });
+  const piSummary = invoice
+    ? await getPurchaseInvoicePaymentSummary(c.env.DB, invoice.id as string, Number(invoice.total_amount), Number((invoice as any).discount_amount || 0))
+    : null;
+
+  return c.json({ ...updated, invoice: invoice ? { ...invoice, ...piSummary, payments: [] } : null });
 });
 
 // ──────────────────────────────────────────────────────────────────────
@@ -429,6 +535,165 @@ purchasing.post('/receipts', requirePermissions(['manage_purchasing']), async (c
   await c.env.DB.batch(stmts);
   const { results } = await c.env.DB.prepare('SELECT * FROM goods_receipts WHERE id = ?').bind(receiptId).all();
   return c.json(results[0], 201);
+});
+
+// ──────────────────────────────────────────────────────────────────────
+// RECORD PURCHASE INVOICE PAYMENT (supplier deposit / installment)
+// NEW ENDPOINT — POST /purchasing/invoices/:id/payments
+// ──────────────────────────────────────────────────────────────────────
+purchasing.post('/invoices/:id/payments', requirePermissions(['manage_purchasing']), async (c) => {
+  const purchaseInvoiceId = c.req.param('id');
+  const userId = c.get('jwtPayload').sub;
+  const body = await c.req.json();
+
+  const amount = Number(body.amount);
+  if (!amount || amount <= 0) {
+    return c.json({ message: 'Payment amount must be a positive number.' }, 400);
+  }
+
+  const paymentMethod = body.paymentMethod || 'CASH';
+  const validMethods = ['CASH', 'CARD', 'BANK_TRANSFER', 'CHEQUE', 'WIRE'];
+  if (!validMethods.includes(paymentMethod)) {
+    return c.json({ message: `Invalid payment method. Must be one of: ${validMethods.join(', ')}.` }, 400);
+  }
+
+  const paymentDate = body.paymentDate || new Date().toISOString().split('T')[0];
+
+  // Fetch purchase invoice
+  const invoice = await c.env.DB.prepare(
+    'SELECT * FROM purchase_invoices WHERE id = ?'
+  ).bind(purchaseInvoiceId).first();
+  if (!invoice) return c.json({ message: 'Purchase invoice not found.' }, 404);
+
+  // Compute current balance
+  const summary = await getPurchaseInvoicePaymentSummary(
+    c.env.DB, purchaseInvoiceId,
+    Number(invoice.total_amount),
+    Number((invoice as any).discount_amount || 0)
+  );
+
+  if (summary.balance <= 0) {
+    return c.json({ message: 'This invoice is already fully paid.' }, 400);
+  }
+  if (amount > summary.balance + 0.001) {
+    return c.json({
+      message: `Payment of $${amount.toFixed(2)} exceeds remaining balance of $${summary.balance.toFixed(2)}.`,
+      balance: summary.balance,
+    }, 400);
+  }
+
+  const paymentId = uuidv4();
+  const isFullyPaid = Math.abs(amount - summary.balance) < 0.01;
+
+  const stmts: any[] = [
+    c.env.DB.prepare(`
+      INSERT INTO purchase_invoice_payments (id, purchase_invoice_id, amount, payment_method, payment_date, notes, recorded_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).bind(paymentId, purchaseInvoiceId, amount, paymentMethod, paymentDate, body.notes || null, userId),
+  ];
+
+  // Auto-close invoice if fully paid
+  if (isFullyPaid) {
+    stmts.push(c.env.DB.prepare(
+      "UPDATE purchase_invoices SET status = 'PAID' WHERE id = ?"
+    ).bind(purchaseInvoiceId));
+  }
+
+  stmts.push(createAuditLogStmt(c, 'PURCHASE_INVOICE_PAYMENT', 'purchase_invoices', purchaseInvoiceId, null, {
+    amount, paymentMethod, paymentDate, isFullyPaid
+  }));
+
+  await c.env.DB.batch(stmts);
+
+  // Return updated summary
+  const newSummary = await getPurchaseInvoicePaymentSummary(
+    c.env.DB, purchaseInvoiceId,
+    Number(invoice.total_amount),
+    Number((invoice as any).discount_amount || 0)
+  );
+
+  return c.json({ success: true, payment_id: paymentId, invoice_summary: newSummary }, 201);
+});
+
+// ──────────────────────────────────────────────────────────────────────
+// GET PURCHASE INVOICE PAYMENT HISTORY
+// NEW ENDPOINT — GET /purchasing/invoices/:id/payments
+// ──────────────────────────────────────────────────────────────────────
+purchasing.get('/invoices/:id/payments', async (c) => {
+  const purchaseInvoiceId = c.req.param('id');
+
+  const invoice = await c.env.DB.prepare(
+    'SELECT id, total_amount, discount_amount FROM purchase_invoices WHERE id = ?'
+  ).bind(purchaseInvoiceId).first();
+  if (!invoice) return c.json({ message: 'Purchase invoice not found.' }, 404);
+
+  const { results: payments } = await c.env.DB.prepare(`
+    SELECT pip.*, u.full_name AS recorded_by_name
+    FROM purchase_invoice_payments pip
+    LEFT JOIN users u ON u.id = pip.recorded_by
+    WHERE pip.purchase_invoice_id = ?
+    ORDER BY pip.created_at ASC
+  `).bind(purchaseInvoiceId).all();
+
+  const totalAmount = Number(invoice.total_amount);
+  const discountAmount = Number((invoice as any).discount_amount || 0);
+  const netTotal = Math.max(0, totalAmount - discountAmount);
+
+  let runningBalance = netTotal;
+  const paymentsWithBalance = (payments || []).map((p: any) => {
+    runningBalance -= Number(p.amount);
+    return { ...p, running_balance: Math.max(0, runningBalance) };
+  });
+
+  const summary = await getPurchaseInvoicePaymentSummary(c.env.DB, purchaseInvoiceId, totalAmount, discountAmount);
+
+  return c.json({
+    payments: paymentsWithBalance.reverse(), // newest first
+    summary,
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────
+// PURCHASING FINANCIAL SUMMARY — for dashboard
+// NEW ENDPOINT — GET /purchasing/summary
+// ──────────────────────────────────────────────────────────────────────
+purchasing.get('/summary', async (c) => {
+  const { results: invoices } = await c.env.DB.prepare(`
+    SELECT pi.id, pi.total_amount, COALESCE(pi.discount_amount, 0) AS discount_amount, pi.status,
+           COALESCE((SELECT SUM(pip.amount) FROM purchase_invoice_payments pip WHERE pip.purchase_invoice_id = pi.id), 0) AS amount_paid,
+           po.status AS po_status
+    FROM purchase_invoices pi
+    JOIN purchase_orders po ON po.id = pi.purchase_order_id
+  `).all();
+
+  let totalOutstandingBalance = 0;
+  let countUnpaid = 0;
+  let countPartiallyPaid = 0;
+  let depositsTotal = 0;
+  let awaitingPayment = 0;
+
+  for (const inv of (invoices || []) as any[]) {
+    const netTotal = Math.max(0, Number(inv.total_amount) - Number(inv.discount_amount));
+    const paid = Number(inv.amount_paid);
+    const balance = Math.max(0, netTotal - paid);
+    if (balance <= 0) continue;
+    totalOutstandingBalance += balance;
+    if (paid === 0) {
+      countUnpaid++;
+      awaitingPayment += balance;
+    } else {
+      countPartiallyPaid++;
+      depositsTotal += paid;
+    }
+  }
+
+  return c.json({
+    total_outstanding_balance: totalOutstandingBalance,
+    count_unpaid: countUnpaid,
+    count_partially_paid: countPartiallyPaid,
+    deposits_total: depositsTotal,
+    awaiting_payment: awaitingPayment,
+  });
 });
 
 export default purchasing;

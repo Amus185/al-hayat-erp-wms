@@ -8,6 +8,24 @@ const sales = new Hono<{ Bindings: Env; Variables: { jwtPayload: any } }>();
 sales.use('/*', authMiddleware);
 
 // ──────────────────────────────────────────────────────────────────────
+// SHARED HELPER — compute payment summary for an invoice
+// Returns: { amount_paid, balance, payment_status }
+// Never stored — always calculated from invoice_payments rows
+// ──────────────────────────────────────────────────────────────────────
+async function getInvoicePaymentSummary(db: D1Database, invoiceId: string, totalAmount: number, discountAmount: number) {
+  const res = await db.prepare(
+    'SELECT COALESCE(SUM(amount), 0) AS amount_paid FROM invoice_payments WHERE invoice_id = ?'
+  ).bind(invoiceId).first();
+  const amountPaid = Number(res?.amount_paid || 0);
+  const netTotal = Math.max(0, totalAmount - discountAmount);
+  const balance = Math.max(0, netTotal - amountPaid);
+  let payment_status: 'UNPAID' | 'PARTIALLY_PAID' | 'PAID' = 'UNPAID';
+  if (amountPaid >= netTotal && netTotal > 0) payment_status = 'PAID';
+  else if (amountPaid > 0) payment_status = 'PARTIALLY_PAID';
+  return { amount_paid: amountPaid, net_total: netTotal, balance, payment_status };
+}
+
+// ──────────────────────────────────────────────────────────────────────
 // CUSTOMERS
 // ──────────────────────────────────────────────────────────────────────
 sales.get('/customers', async (c) => {
@@ -33,23 +51,68 @@ sales.post('/customers', requirePermissions(['manage_sales']), async (c) => {
 // ORDERS — LIST & GET
 // ──────────────────────────────────────────────────────────────────────
 sales.get('/orders', async (c) => {
-  const { results } = await c.env.DB.prepare(`
-    SELECT so.*, c.name AS customer_name, b.name AS branch_name, i.id AS invoice_id
+  const { search, status, paymentStatus, dateFrom, dateTo } = c.req.query();
+
+  let query = `
+    SELECT so.*, c.name AS customer_name, b.name AS branch_name, i.id AS invoice_id,
+           i.total_amount AS invoice_total, i.discount_amount AS invoice_discount, i.status AS invoice_status,
+           COALESCE((SELECT SUM(ip.amount) FROM invoice_payments ip WHERE ip.invoice_id = i.id), 0) AS amount_paid
     FROM sales_orders so
     LEFT JOIN customers c ON c.id = so.customer_id
     JOIN branches b ON b.id = so.branch_id
     LEFT JOIN invoices i ON i.sales_order_id = so.id
-    ORDER BY so.created_at DESC
-    LIMIT 100
-  `).all();
-  return c.json(results);
+    WHERE 1=1
+  `;
+  const params: any[] = [];
+
+  if (search) {
+    query += ` AND (so.order_number LIKE ? OR c.name LIKE ? OR c.phone LIKE ?)`;
+    params.push(`%${search}%`, `%${search}%`, `%${search}%`);
+  }
+  if (status && status !== 'ALL') {
+    query += ` AND so.status = ?`;
+    params.push(status);
+  }
+  if (dateFrom) {
+    query += ` AND date(so.created_at) >= date(?)`;
+    params.push(dateFrom);
+  }
+  if (dateTo) {
+    query += ` AND date(so.created_at) <= date(?)`;
+    params.push(dateTo);
+  }
+
+  query += ` ORDER BY so.created_at DESC LIMIT 200`;
+
+  const stmt = c.env.DB.prepare(query);
+  const { results } = params.length > 0 ? await stmt.bind(...params).all() : await stmt.all();
+
+  // Compute payment_status and balance for each row that has an invoice
+  const enriched = (results || []).map((row: any) => {
+    if (!row.invoice_id) return { ...row, payment_status: null, balance: null };
+    const netTotal = Math.max(0, Number(row.invoice_total || 0) - Number(row.invoice_discount || 0));
+    const amountPaid = Number(row.amount_paid || 0);
+    const balance = Math.max(0, netTotal - amountPaid);
+    let payment_status = 'UNPAID';
+    if (amountPaid >= netTotal && netTotal > 0) payment_status = 'PAID';
+    else if (amountPaid > 0) payment_status = 'PARTIALLY_PAID';
+    return { ...row, net_total: netTotal, balance, payment_status };
+  });
+
+  // Client-side filter by payment status (computed field — cannot be done in SQL easily)
+  if (paymentStatus && paymentStatus !== 'ALL') {
+    return c.json(enriched.filter((r: any) => r.payment_status === paymentStatus));
+  }
+
+  return c.json(enriched);
 });
 
 sales.get('/orders/:id', async (c) => {
   const id = c.req.param('id');
   const { results: orders } = await c.env.DB.prepare(`
     SELECT so.*, c.name AS customer_name, b.name AS branch_name,
-           i.id AS invoice_id, i.invoice_number, i.total_amount AS invoice_total, i.status AS invoice_status
+           i.id AS invoice_id, i.invoice_number, i.total_amount AS invoice_total,
+           i.discount_amount AS invoice_discount, i.status AS invoice_status, i.issued_at
     FROM sales_orders so
     LEFT JOIN customers c ON c.id = so.customer_id
     JOIN branches b ON b.id = so.branch_id
@@ -58,7 +121,7 @@ sales.get('/orders/:id', async (c) => {
   `).bind(id).all();
   
   if (!orders.length) return c.json({ message: 'Not found' }, 404);
-  const order = orders[0];
+  const order = orders[0] as any;
 
   const { results: lines } = await c.env.DB.prepare(`
     SELECT sol.*, p.name AS product_name, p.sku AS product_sku
@@ -67,7 +130,26 @@ sales.get('/orders/:id', async (c) => {
     WHERE sol.sales_order_id = ?
   `).bind(id).all();
 
-  return c.json({ ...order, lines });
+  // Enrich with payment summary if invoice exists
+  let paymentSummary = null;
+  let payments: any[] = [];
+  if (order.invoice_id) {
+    paymentSummary = await getInvoicePaymentSummary(
+      c.env.DB, order.invoice_id,
+      Number(order.invoice_total || 0),
+      Number(order.invoice_discount || 0)
+    );
+    const { results: pmts } = await c.env.DB.prepare(`
+      SELECT ip.*, u.full_name AS recorded_by_name
+      FROM invoice_payments ip
+      LEFT JOIN users u ON u.id = ip.recorded_by
+      WHERE ip.invoice_id = ?
+      ORDER BY ip.created_at DESC
+    `).bind(order.invoice_id).all();
+    payments = pmts || [];
+  }
+
+  return c.json({ ...order, lines, payment_summary: paymentSummary, payments });
 });
 
 // ──────────────────────────────────────────────────────────────────────
@@ -219,7 +301,6 @@ sales.post('/orders/:id/invoice', requirePermissions(['manage_sales']), async (c
         const requested = line.quantity as number;
 
         if (available < requested) {
-          // Get product name for clear error
           const prod = await c.env.DB.prepare('SELECT name FROM products WHERE id = ?').bind(line.product_id).first();
           insufficientLines.push(`${prod?.name || line.product_id}: need ${requested}, available ${available}`);
         }
@@ -236,21 +317,23 @@ sales.post('/orders/:id/invoice', requirePermissions(['manage_sales']), async (c
       return c.json({ message: 'Insufficient stock for this sale.', details: insufficientLines }, 400);
     }
 
-    // Calculate total
+    // Calculate total and discount from order lines
     const totalRes = await c.env.DB.prepare(
-      'SELECT COALESCE(SUM(quantity * unit_price), 0) AS total FROM sales_order_lines WHERE sales_order_id = ?'
+      'SELECT COALESCE(SUM(quantity * unit_price), 0) AS subtotal, COALESCE(SUM(discount_amount), 0) AS total_discount FROM sales_order_lines WHERE sales_order_id = ?'
     ).bind(orderId).first();
-    const total = totalRes?.total || 0;
+    const subtotal = Number(totalRes?.subtotal || 0);
+    const discountAmount = Number(totalRes?.total_discount || 0);
+    const total = subtotal - discountAmount;
 
     // Build atomic batch
     const invoiceId = uuidv4();
     const stmts: any[] = [];
 
-    // Create invoice
+    // Create invoice — store discount so it's always available on the invoice
     stmts.push(c.env.DB.prepare(`
-      INSERT INTO invoices (id, invoice_number, sales_order_id, total_amount)
-      VALUES (?, ?, ?, ?)
-    `).bind(invoiceId, `INV-${Date.now()}`, orderId, total));
+      INSERT INTO invoices (id, invoice_number, sales_order_id, total_amount, discount_amount)
+      VALUES (?, ?, ?, ?, ?)
+    `).bind(invoiceId, `INV-${Date.now()}`, orderId, total, discountAmount));
 
     // Copy lines to invoice_lines
     stmts.push(c.env.DB.prepare(`
@@ -294,9 +377,11 @@ sales.post('/orders/:id/invoice', requirePermissions(['manage_sales']), async (c
 
 // ──────────────────────────────────────────────────────────────────────
 // PAY ORDER — INVOICED → PAID (CAS-protected duplicate payment guard)
+// PRESERVED: existing endpoint, now also inserts a payment record
 // ──────────────────────────────────────────────────────────────────────
 sales.post('/orders/:id/pay', requirePermissions(['manage_sales']), async (c) => {
   const orderId = c.req.param('id');
+  const userId = c.get('jwtPayload').sub;
 
   // CAS: atomically claim the order from INVOICED → PAYING
   const cas = await c.env.DB.prepare(
@@ -314,7 +399,7 @@ sales.post('/orders/:id/pay', requirePermissions(['manage_sales']), async (c) =>
   try {
     // Check invoice exists and is unpaid
     const invoice = await c.env.DB.prepare(
-      'SELECT id, status FROM invoices WHERE sales_order_id = ?'
+      'SELECT id, status, total_amount, discount_amount FROM invoices WHERE sales_order_id = ?'
     ).bind(orderId).first();
     if (!invoice) {
       await c.env.DB.prepare("UPDATE sales_orders SET status = 'INVOICED' WHERE id = ?").bind(orderId).run();
@@ -325,12 +410,29 @@ sales.post('/orders/:id/pay', requirePermissions(['manage_sales']), async (c) =>
       return c.json({ message: 'Invoice is already paid.' }, 409);
     }
 
+    // Check if there's already a payment covering the full amount
+    const existingPaid = await c.env.DB.prepare(
+      'SELECT COALESCE(SUM(amount), 0) AS paid FROM invoice_payments WHERE invoice_id = ?'
+    ).bind(invoice.id).first();
+    const alreadyPaid = Number(existingPaid?.paid || 0);
+    const netTotal = Math.max(0, Number(invoice.total_amount) - Number(invoice.discount_amount || 0));
+    const remaining = Math.max(0, netTotal - alreadyPaid);
+
+    const stmts: any[] = [];
+
+    // Insert a payment record for the remaining balance if any
+    if (remaining > 0) {
+      stmts.push(c.env.DB.prepare(`
+        INSERT INTO invoice_payments (id, invoice_id, amount, payment_method, payment_date, notes, recorded_by)
+        VALUES (?, ?, ?, 'CASH', date('now'), 'Full payment via Mark as Paid', ?)
+      `).bind(uuidv4(), invoice.id, remaining, userId));
+    }
+
     // Atomic payment
-    await c.env.DB.batch([
-      c.env.DB.prepare("UPDATE invoices SET status = 'PAID', paid_at = CURRENT_TIMESTAMP WHERE id = ?").bind(invoice.id),
-      c.env.DB.prepare("UPDATE sales_orders SET status = 'PAID' WHERE id = ?").bind(orderId),
-      createAuditLogStmt(c, 'SALES_ORDER_PAY', 'sales_orders', orderId, { status: 'INVOICED' }, { status: 'PAID', invoiceId: invoice.id })
-    ]);
+    stmts.push(c.env.DB.prepare("UPDATE invoices SET status = 'PAID', paid_at = CURRENT_TIMESTAMP WHERE id = ?").bind(invoice.id));
+    stmts.push(c.env.DB.prepare("UPDATE sales_orders SET status = 'PAID' WHERE id = ?").bind(orderId));
+    stmts.push(createAuditLogStmt(c, 'SALES_ORDER_PAY', 'sales_orders', orderId, { status: 'INVOICED' }, { status: 'PAID', invoiceId: invoice.id }));
+    await c.env.DB.batch(stmts);
 
     return c.json({ success: true });
   } catch (err: any) {
@@ -354,17 +456,29 @@ sales.post('/orders/:id/complete', requirePermissions(['manage_sales']), async (
   if (order.status === 'PAID') return c.json({ message: 'Order is already completed.' }, 409);
   if (order.status === 'INVOICED') {
     // Already invoiced, just need to pay
-    const invoice = await c.env.DB.prepare('SELECT id, status FROM invoices WHERE sales_order_id = ?').bind(orderId).first();
+    const invoice = await c.env.DB.prepare('SELECT id, status, total_amount, discount_amount FROM invoices WHERE sales_order_id = ?').bind(orderId).first();
     if (!invoice) return c.json({ message: 'Order is INVOICED but no invoice found.' }, 500);
     if (invoice.status === 'PAID') {
       await c.env.DB.prepare("UPDATE sales_orders SET status = 'PAID' WHERE id = ?").bind(orderId).run();
       return c.json({ success: true, message: 'Payment recorded.' });
     }
-    await c.env.DB.batch([
-      c.env.DB.prepare("UPDATE invoices SET status = 'PAID', paid_at = CURRENT_TIMESTAMP WHERE id = ?").bind(invoice.id),
-      c.env.DB.prepare("UPDATE sales_orders SET status = 'PAID' WHERE id = ?").bind(orderId),
-      createAuditLogStmt(c, 'SALES_ORDER_COMPLETE', 'sales_orders', orderId, { status: 'INVOICED' }, { status: 'PAID', invoiceId: invoice.id })
-    ]);
+    const existingPaid = await c.env.DB.prepare(
+      'SELECT COALESCE(SUM(amount), 0) AS paid FROM invoice_payments WHERE invoice_id = ?'
+    ).bind(invoice.id).first();
+    const alreadyPaid = Number(existingPaid?.paid || 0);
+    const netTotal = Math.max(0, Number(invoice.total_amount) - Number(invoice.discount_amount || 0));
+    const remaining = Math.max(0, netTotal - alreadyPaid);
+    const stmts: any[] = [];
+    if (remaining > 0) {
+      stmts.push(c.env.DB.prepare(`
+        INSERT INTO invoice_payments (id, invoice_id, amount, payment_method, payment_date, notes, recorded_by)
+        VALUES (?, ?, ?, 'CASH', date('now'), 'Full payment via Complete Sale', ?)
+      `).bind(uuidv4(), invoice.id, remaining, userId));
+    }
+    stmts.push(c.env.DB.prepare("UPDATE invoices SET status = 'PAID', paid_at = CURRENT_TIMESTAMP WHERE id = ?").bind(invoice.id));
+    stmts.push(c.env.DB.prepare("UPDATE sales_orders SET status = 'PAID' WHERE id = ?").bind(orderId));
+    stmts.push(createAuditLogStmt(c, 'SALES_ORDER_COMPLETE', 'sales_orders', orderId, { status: 'INVOICED' }, { status: 'PAID', invoiceId: invoice.id }));
+    await c.env.DB.batch(stmts);
     return c.json({ success: true, invoiceId: invoice.id });
   }
 
@@ -419,11 +533,13 @@ sales.post('/orders/:id/complete', requirePermissions(['manage_sales']), async (
       return c.json({ message: 'Insufficient stock for this sale.', details: insufficientLines }, 400);
     }
 
-    // Calculate total
+    // Calculate total and discount
     const totalRes = await c.env.DB.prepare(
-      'SELECT COALESCE(SUM(quantity * unit_price), 0) AS total FROM sales_order_lines WHERE sales_order_id = ?'
+      'SELECT COALESCE(SUM(quantity * unit_price), 0) AS subtotal, COALESCE(SUM(discount_amount), 0) AS total_discount FROM sales_order_lines WHERE sales_order_id = ?'
     ).bind(orderId).first();
-    const total = totalRes?.total || 0;
+    const subtotal = Number(totalRes?.subtotal || 0);
+    const discountAmount = Number(totalRes?.total_discount || 0);
+    const total = subtotal - discountAmount;
 
     // Build atomic batch
     const invoiceId = uuidv4();
@@ -431,9 +547,15 @@ sales.post('/orders/:id/complete', requirePermissions(['manage_sales']), async (
 
     // Create invoice (directly as PAID)
     stmts.push(c.env.DB.prepare(`
-      INSERT INTO invoices (id, invoice_number, sales_order_id, total_amount, status, paid_at)
-      VALUES (?, ?, ?, ?, 'PAID', CURRENT_TIMESTAMP)
-    `).bind(invoiceId, `INV-${Date.now()}`, orderId, total));
+      INSERT INTO invoices (id, invoice_number, sales_order_id, total_amount, discount_amount, status, paid_at)
+      VALUES (?, ?, ?, ?, ?, 'PAID', CURRENT_TIMESTAMP)
+    `).bind(invoiceId, `INV-${Date.now()}`, orderId, total, discountAmount));
+
+    // Insert a full payment record
+    stmts.push(c.env.DB.prepare(`
+      INSERT INTO invoice_payments (id, invoice_id, amount, payment_method, payment_date, notes, recorded_by)
+      VALUES (?, ?, ?, 'CASH', date('now'), 'Full payment via Complete Sale', ?)
+    `).bind(uuidv4(), invoiceId, total > 0 ? total : 0, userId));
 
     // Copy lines
     stmts.push(c.env.DB.prepare(`
@@ -472,7 +594,171 @@ sales.post('/orders/:id/complete', requirePermissions(['manage_sales']), async (
 });
 
 // ──────────────────────────────────────────────────────────────────────
+// RECORD INVOICE PAYMENT — partial / installment payment
+// NEW ENDPOINT — POST /sales/invoices/:id/payments
+// ──────────────────────────────────────────────────────────────────────
+sales.post('/invoices/:id/payments', requirePermissions(['manage_sales']), async (c) => {
+  const invoiceId = c.req.param('id');
+  const userId = c.get('jwtPayload').sub;
+  const body = await c.req.json();
+
+  const amount = Number(body.amount);
+  if (!amount || amount <= 0) {
+    return c.json({ message: 'Payment amount must be a positive number.' }, 400);
+  }
+
+  const paymentMethod = body.paymentMethod || 'CASH';
+  const validMethods = ['CASH', 'CARD', 'BANK_TRANSFER', 'CHEQUE'];
+  if (!validMethods.includes(paymentMethod)) {
+    return c.json({ message: `Invalid payment method. Must be one of: ${validMethods.join(', ')}.` }, 400);
+  }
+
+  const paymentDate = body.paymentDate || new Date().toISOString().split('T')[0];
+
+  // Fetch invoice
+  const invoice = await c.env.DB.prepare(
+    'SELECT i.*, so.id AS order_id FROM invoices i JOIN sales_orders so ON so.id = i.sales_order_id WHERE i.id = ?'
+  ).bind(invoiceId).first();
+  if (!invoice) return c.json({ message: 'Invoice not found.' }, 404);
+
+  // Compute current balance
+  const summary = await getInvoicePaymentSummary(
+    c.env.DB, invoiceId,
+    Number(invoice.total_amount),
+    Number(invoice.discount_amount || 0)
+  );
+
+  if (summary.balance <= 0) {
+    return c.json({ message: 'This invoice is already fully paid.' }, 400);
+  }
+  if (amount > summary.balance + 0.001) { // tiny float tolerance
+    return c.json({
+      message: `Payment of $${amount.toFixed(2)} exceeds remaining balance of $${summary.balance.toFixed(2)}.`,
+      balance: summary.balance,
+    }, 400);
+  }
+
+  const paymentId = uuidv4();
+  const isFullyPaid = Math.abs(amount - summary.balance) < 0.01;
+
+  const stmts: any[] = [
+    c.env.DB.prepare(`
+      INSERT INTO invoice_payments (id, invoice_id, amount, payment_method, payment_date, notes, recorded_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).bind(paymentId, invoiceId, amount, paymentMethod, paymentDate, body.notes || null, userId),
+  ];
+
+  // Auto-close invoice and order if fully paid
+  if (isFullyPaid) {
+    stmts.push(c.env.DB.prepare(
+      "UPDATE invoices SET status = 'PAID', paid_at = CURRENT_TIMESTAMP WHERE id = ?"
+    ).bind(invoiceId));
+    stmts.push(c.env.DB.prepare(
+      "UPDATE sales_orders SET status = 'PAID' WHERE id = ?"
+    ).bind(invoice.order_id));
+  }
+
+  stmts.push(createAuditLogStmt(c, 'INVOICE_PAYMENT_RECORD', 'invoices', invoiceId, null, {
+    amount, paymentMethod, paymentDate, isFullyPaid
+  }));
+
+  await c.env.DB.batch(stmts);
+
+  // Return updated summary
+  const newSummary = await getInvoicePaymentSummary(
+    c.env.DB, invoiceId,
+    Number(invoice.total_amount),
+    Number(invoice.discount_amount || 0)
+  );
+
+  return c.json({ success: true, payment_id: paymentId, invoice_summary: newSummary }, 201);
+});
+
+// ──────────────────────────────────────────────────────────────────────
+// GET INVOICE PAYMENT HISTORY
+// NEW ENDPOINT — GET /sales/invoices/:id/payments
+// ──────────────────────────────────────────────────────────────────────
+sales.get('/invoices/:id/payments', async (c) => {
+  const invoiceId = c.req.param('id');
+
+  const invoice = await c.env.DB.prepare(
+    'SELECT id, total_amount, discount_amount FROM invoices WHERE id = ?'
+  ).bind(invoiceId).first();
+  if (!invoice) return c.json({ message: 'Invoice not found.' }, 404);
+
+  const { results: payments } = await c.env.DB.prepare(`
+    SELECT ip.*, u.full_name AS recorded_by_name
+    FROM invoice_payments ip
+    LEFT JOIN users u ON u.id = ip.recorded_by
+    WHERE ip.invoice_id = ?
+    ORDER BY ip.created_at ASC
+  `).bind(invoiceId).all();
+
+  // Compute running balance per payment (newest first for display, but calculate ascending)
+  const totalAmount = Number(invoice.total_amount);
+  const discountAmount = Number(invoice.discount_amount || 0);
+  const netTotal = Math.max(0, totalAmount - discountAmount);
+
+  let runningBalance = netTotal;
+  const paymentsWithBalance = (payments || []).map((p: any) => {
+    runningBalance -= Number(p.amount);
+    return { ...p, running_balance: Math.max(0, runningBalance) };
+  });
+
+  const summary = await getInvoicePaymentSummary(c.env.DB, invoiceId, totalAmount, discountAmount);
+
+  return c.json({
+    payments: paymentsWithBalance.reverse(), // newest first
+    summary,
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────
+// FINANCIAL SUMMARY — outstanding balances for dashboard
+// NEW ENDPOINT — GET /sales/summary
+// ──────────────────────────────────────────────────────────────────────
+sales.get('/summary', async (c) => {
+  // Total outstanding across all non-fully-paid invoices
+  const { results: invoices } = await c.env.DB.prepare(`
+    SELECT i.id, i.total_amount, COALESCE(i.discount_amount, 0) AS discount_amount,
+           COALESCE((SELECT SUM(ip.amount) FROM invoice_payments ip WHERE ip.invoice_id = i.id), 0) AS amount_paid
+    FROM invoices i
+    WHERE i.status != 'CANCELLED'
+  `).all();
+
+  let totalOutstandingBalance = 0;
+  let countUnpaid = 0;
+  let countPartiallyPaid = 0;
+  let totalUnpaidAmount = 0;
+  let totalPartiallyPaidBalance = 0;
+
+  for (const inv of (invoices || []) as any[]) {
+    const netTotal = Math.max(0, Number(inv.total_amount) - Number(inv.discount_amount));
+    const paid = Number(inv.amount_paid);
+    const balance = Math.max(0, netTotal - paid);
+    if (balance <= 0) continue;
+    totalOutstandingBalance += balance;
+    if (paid === 0) {
+      countUnpaid++;
+      totalUnpaidAmount += balance;
+    } else {
+      countPartiallyPaid++;
+      totalPartiallyPaidBalance += balance;
+    }
+  }
+
+  return c.json({
+    total_outstanding_balance: totalOutstandingBalance,
+    count_unpaid: countUnpaid,
+    total_unpaid_amount: totalUnpaidAmount,
+    count_partially_paid: countPartiallyPaid,
+    total_partially_paid_balance: totalPartiallyPaidBalance,
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────
 // PRINT INVOICE — returns full invoice data formatted for printing
+// UPDATED: now includes discount, amount_paid, balance
 // ──────────────────────────────────────────────────────────────────────
 sales.get('/invoices/:id/print', async (c) => {
   const invoiceId = c.req.param('id');
@@ -497,6 +783,12 @@ sales.get('/invoices/:id/print', async (c) => {
     WHERE il.invoice_id = ?
   `).bind(invoiceId).all();
 
+  const summary = await getInvoicePaymentSummary(
+    c.env.DB, invoiceId,
+    Number(invoice.total_amount),
+    Number((invoice as any).discount_amount || 0)
+  );
+
   return c.json({
     invoice: {
       id: invoice.id,
@@ -504,6 +796,11 @@ sales.get('/invoices/:id/print', async (c) => {
       order_number: invoice.order_number,
       status: invoice.status,
       total_amount: invoice.total_amount,
+      discount_amount: (invoice as any).discount_amount || 0,
+      net_total: summary.net_total,
+      amount_paid: summary.amount_paid,
+      balance: summary.balance,
+      payment_status: summary.payment_status,
       issued_at: invoice.issued_at,
       paid_at: invoice.paid_at,
     },
