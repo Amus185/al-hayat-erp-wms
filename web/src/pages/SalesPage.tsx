@@ -689,8 +689,8 @@ export function SalesPage() {
                 </button>
               )}
 
-              {/* INVOICED with no payments → Mark fully paid */}
-              {selectedOrder.status === 'INVOICED' && !selectedOrder.invoice_id && hasPermission('manage_sales') && (
+              {/* INVOICED but no payment tracking yet → Mark fully paid (fallback) */}
+              {selectedOrder.status === 'INVOICED' && !canRecordPayment && hasPermission('manage_sales') && (
                 <button type="button" className="btn btn-primary" disabled={orderDetailsLoading}
                   onClick={() => handlePayInvoice(selectedOrder.id)}>
                   <DollarSign size={14} style={{ marginRight: '4px', inlineSize: 'auto' }} /> Mark as Paid

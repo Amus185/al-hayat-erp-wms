@@ -608,7 +608,7 @@ sales.post('/invoices/:id/payments', requirePermissions(['manage_sales']), async
   }
 
   const paymentMethod = body.paymentMethod || 'CASH';
-  const validMethods = ['CASH', 'CARD', 'BANK_TRANSFER', 'CHEQUE'];
+  const validMethods = ['CASH', 'CARD', 'BANK_TRANSFER', 'CHEQUE', 'WIRE'];
   if (!validMethods.includes(paymentMethod)) {
     return c.json({ message: `Invalid payment method. Must be one of: ${validMethods.join(', ')}.` }, 400);
   }
