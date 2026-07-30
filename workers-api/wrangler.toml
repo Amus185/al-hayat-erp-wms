@@ -12,9 +12,7 @@ binding = "STORAGE"
 bucket_name = "al-hayat-files"
 
 [vars]
-JWT_ACCESS_SECRET = "dev-access-secret-1234567890123456"
 JWT_ACCESS_EXPIRY = "15m"
-JWT_REFRESH_SECRET = "dev-refresh-secret-1234567890123456"
 JWT_REFRESH_EXPIRY = "7d"
 
 [observability]
