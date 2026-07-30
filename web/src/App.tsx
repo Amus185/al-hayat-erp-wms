@@ -20,6 +20,7 @@ import { CreateSalesOrderPage } from './pages/CreateSalesOrderPage';
 import { ReportsPage } from './pages/ReportsPage';
 import { AuditPage } from './pages/AuditPage';
 import { UsersPage } from './pages/UsersPage';
+import { AccountingPage } from './pages/AccountingPage';
 
 function ProtectedRoute({ permission }: { permission?: string }) {
   const { isAuthenticated, hasPermission, isLoading } = useAuth();
@@ -100,6 +101,9 @@ export function App() {
             
             {/* Identity & Access Management */}
             <Route path="/users" element={<UsersPage />} />
+
+            {/* Financial Accounting */}
+            <Route path="/accounting" element={<AccountingPage />} />
           </Route>
         </Route>
 

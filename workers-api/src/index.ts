@@ -14,6 +14,7 @@ import users from './routes/users';
 import notifications from './routes/notifications';
 import audit from './routes/audit';
 import files from './routes/files';
+import accounting from './routes/accounting';
 
 const app = new Hono();
 
@@ -49,6 +50,7 @@ app.route('/api/v1/users', users);
 app.route('/api/v1/notifications', notifications);
 app.route('/api/v1/audit', audit);
 app.route('/api/v1/files', files);
+app.route('/api/v1/accounting', accounting);
 
 // Global Error Handler - Structured JSON Logging for Cloudflare Workers Observability
 app.onError((err, c) => {

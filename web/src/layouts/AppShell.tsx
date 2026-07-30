@@ -12,6 +12,7 @@ import {
   Truck,
   Users,
   LogOut,
+  BookOpen,
 } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { useAuth } from '../contexts/AuthContext';
@@ -26,6 +27,7 @@ const navItems = [
   { label: 'Purchasing', path: '/purchasing', icon: ClipboardList, permission: 'manage_purchasing' },
   { label: 'Sales', path: '/sales', icon: ShoppingCart, permission: 'manage_sales' },
   { label: 'Reports', path: '/reports', icon: BarChart3, permission: 'view_reports' },
+  { label: 'Accounting', path: '/accounting', icon: BookOpen, permission: 'view_reports' },
   { label: 'Audit Log', path: '/audit', icon: FileClock, permission: 'view_reports' },
   { label: 'Users', path: '/users', icon: Users, permission: 'manage_users' },
 ];
