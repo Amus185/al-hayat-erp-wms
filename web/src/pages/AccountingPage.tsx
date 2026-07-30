@@ -129,6 +129,7 @@ const selectStyle: React.CSSProperties = { ...inputStyle, appearance: 'none' };
 export function AccountingPage() {
   const { addToast } = useToast();
   const [activeTab, setActiveTab] = useState('dashboard');
+  const [openMenu, setOpenMenu] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   // Shared data
@@ -648,16 +649,22 @@ export function AccountingPage() {
       {/* Tab Container */}
       <div style={{ padding: '0 24px 40px' }}>
         <nav aria-label="Accounting workspace" style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', padding: '8px', border: '1px solid #d7e6df', background: '#fff', borderRadius: '14px', boxShadow: '0 8px 24px rgba(5, 70, 54, 0.08)' }}>
-          {workspaceMenus.map((menu) => (
-            <details key={menu.label} style={{ position: 'relative' }}>
-              <summary style={{ listStyle: 'none', cursor: 'pointer', padding: '9px 13px', borderRadius: '9px', fontWeight: 700, fontSize: '13px', color: menu.items.some((item) => item.key === activeTab) ? '#065f46' : '#334155' }}>
-                {menu.label} <ChevronDown size={14} style={{ verticalAlign: 'middle' }} />
-              </summary>
-              <div style={{ position: 'absolute', zIndex: 10, minWidth: '220px', top: '40px', left: 0, padding: '6px', borderRadius: '10px', background: '#fff', border: '1px solid #d7e6df', boxShadow: '0 16px 32px rgba(5, 70, 54, 0.16)' }}>
-                {menu.items.map((item) => <button key={item.label} type="button" onClick={() => setActiveTab(item.key)} style={{ display: 'block', width: '100%', textAlign: 'left', border: 0, background: activeTab === item.key ? '#ecfdf5' : 'transparent', color: '#0f172a', borderRadius: '7px', cursor: 'pointer', padding: '9px 10px', fontSize: '13px' }}>{item.label}</button>)}
+          {workspaceMenus.map((menu) => {
+            const isOpen = openMenu === menu.label;
+            const isActive = menu.items.some((item) => item.key === activeTab);
+            return (
+              <div key={menu.label} style={{ position: 'relative' }}>
+                <button type="button" aria-expanded={isOpen} onClick={() => setOpenMenu(isOpen ? null : menu.label)} style={{ border: 0, background: isOpen ? '#ecfdf5' : 'transparent', cursor: 'pointer', padding: '9px 13px', borderRadius: '9px', fontWeight: 700, fontSize: '13px', color: isActive ? '#065f46' : '#334155' }}>
+                  {menu.label} <ChevronDown size={14} style={{ verticalAlign: 'middle', transform: isOpen ? 'rotate(180deg)' : undefined, transition: 'transform 150ms ease' }} />
+                </button>
+                {isOpen && (
+                  <div style={{ position: 'absolute', zIndex: 10, minWidth: '220px', top: '40px', left: 0, padding: '6px', borderRadius: '10px', background: '#fff', border: '1px solid #d7e6df', boxShadow: '0 16px 32px rgba(5, 70, 54, 0.16)' }}>
+                    {menu.items.map((item) => <button key={item.label} type="button" onClick={() => { setActiveTab(item.key); setOpenMenu(null); }} style={{ display: 'block', width: '100%', textAlign: 'left', border: 0, background: activeTab === item.key ? '#ecfdf5' : 'transparent', color: '#0f172a', borderRadius: '7px', cursor: 'pointer', padding: '9px 10px', fontSize: '13px' }}>{item.label}</button>)}
+                  </div>
+                )}
               </div>
-            </details>
-          ))}
+            );
+          })}
         </nav>
 
         <div style={{ marginTop: '24px' }}>
