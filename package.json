@@ -3,15 +3,15 @@
   "version": "1.0.0",
   "private": true,
   "workspaces": [
-    "backend",
+    "workers-api",
     "web",
     "mobile"
   ],
   "scripts": {
-    "dev:backend": "npm --workspace backend run start:dev",
+    "dev:backend": "npm --workspace workers-api run dev",
     "dev:web": "npm --workspace web run dev",
     "dev:mobile": "npm --workspace mobile run start",
-    "build": "npm --workspace backend run build && npm --workspace web run build"
+    "build": "npm --workspace web run build"
   }
 }
 
