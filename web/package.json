@@ -7,7 +7,7 @@
     "dev": "vite --host 0.0.0.0",
     "build": "vite build",
     "preview": "vite preview --host 0.0.0.0 --port ${PORT:-4173}",
-    "deploy": "vite build && node ../workers-api/node_modules/wrangler/bin/wrangler.js pages deploy dist --project-name=al-hayat-erp-wms",
+    "deploy": "vite build && node ../workers-api/node_modules/wrangler/bin/wrangler.js pages deploy dist --project-name=al-hayat-erp --commit-dirty=true",
     "deploy:backend": "node ../workers-api/node_modules/wrangler/bin/wrangler.js deploy --config ../workers-api/wrangler.toml"
   },
   "dependencies": {
