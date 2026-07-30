@@ -215,6 +215,31 @@ export function SalesPage() {
     }
   };
 
+  // Invoice an order first, then let the cashier record a deposit or installment.
+  const handleInvoiceAndTakeDeposit = async (order: any) => {
+    try {
+      setOrderDetailsLoading(true);
+      if (order.status === 'DRAFT') {
+        await apiPost(`/sales/orders/${order.id}/confirm`, {});
+      }
+      await apiPost(`/sales/orders/${order.id}/invoice`, {});
+      const details = await apiGet<any>(`/sales/orders/${order.id}`);
+      setSelectedOrder(details);
+      setPaymentForm({
+        amount: '',
+        paymentMethod: 'CASH',
+        paymentDate: new Date().toISOString().split('T')[0],
+        notes: '',
+      });
+      setIsPaymentOpen(true);
+      addToast('success', 'Invoice created. Enter the deposit amount received today.');
+      loadData();
+    } catch (err: any) {
+      addToast('error', err?.message || 'Failed to create invoice for payment');
+    } finally {
+      setOrderDetailsLoading(false);
+    }
+  };
   // Mark existing invoice as fully paid (legacy button — now also records a payment)
   const handlePayInvoice = async (orderId: string) => {
     try {
@@ -234,7 +259,7 @@ export function SalesPage() {
   const openPaymentModal = (order: any) => {
     const balance = order.payment_summary?.balance ?? order.balance ?? 0;
     setPaymentForm({
-      amount: balance > 0 ? String(Number(balance).toFixed(2)) : '',
+      amount: '',
       paymentMethod: 'CASH',
       paymentDate: new Date().toISOString().split('T')[0],
       notes: '',
@@ -679,14 +704,22 @@ export function SalesPage() {
                 </button>
               )}
 
-              {/* DRAFT or CONFIRMED → Complete Sale in one click */}
+              {/* DRAFT or CONFIRMED → either settle in full or invoice and collect a deposit */}
               {(selectedOrder.status === 'DRAFT' || selectedOrder.status === 'CONFIRMED') && hasPermission('manage_sales') && (
-                <button type="button" className="btn btn-primary" disabled={orderDetailsLoading}
-                  onClick={() => handleComplete(selectedOrder.id)}
-                  style={{ background: 'linear-gradient(135deg, #0b8f08, #066006)' }}>
-                  <Zap size={14} style={{ marginRight: '4px', inlineSize: 'auto' }} />
-                  Complete Sale
-                </button>
+                <>
+                  <button type="button" className="btn btn-secondary" disabled={orderDetailsLoading}
+                    onClick={() => handleInvoiceAndTakeDeposit(selectedOrder)}
+                    style={{ color: '#92400e', borderColor: '#fbbf24' }}>
+                    <CreditCard size={14} style={{ marginRight: '4px', inlineSize: 'auto' }} />
+                    Invoice & Take Deposit
+                  </button>
+                  <button type="button" className="btn btn-primary" disabled={orderDetailsLoading}
+                    onClick={() => handleComplete(selectedOrder.id)}
+                    style={{ background: 'linear-gradient(135deg, #0b8f08, #066006)' }}>
+                    <Zap size={14} style={{ marginRight: '4px', inlineSize: 'auto' }} />
+                    Complete & Pay in Full
+                  </button>
+                </>
               )}
 
               {/* INVOICED but no payment tracking yet → Mark fully paid (fallback) */}
