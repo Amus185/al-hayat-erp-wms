@@ -30,7 +30,6 @@ import {
 } from 'recharts';
 import { apiGet } from '../api/client';
 import { DataTable, type Column } from '../components/DataTable';
-import { Tabs } from '../components/Tabs';
 import { MetricCard } from '../components/MetricCard';
 import { PageSkeleton } from '../components/LoadingSpinner';
 import { useToast } from '../contexts/ToastContext';
@@ -46,6 +45,7 @@ export function ReportsPage() {
   const { addToast } = useToast();
 
   const [activeTab, setActiveTab] = useState('low-stock');
+  const [openMenu, setOpenMenu] = useState<string | null>(null);
   const [days, setDays] = useState<number>(30);
   const [loading, setLoading] = useState(true);
 
@@ -123,14 +123,11 @@ export function ReportsPage() {
     fetchReportData();
   }, [activeTab, days, selectedWarehouse, selectedCategory]);
 
-  const tabsConfig = [
-    { key: 'low-stock', label: 'Low Stock Risk' },
-    { key: 'branch-perf', label: 'Branch Performance' },
-    { key: 'inv-valuation', label: 'Inventory Valuation' },
-    { key: 'sales-profit', label: 'Sales & Profit' },
-    { key: 'quote-conversion', label: 'Quote Conversion' },
-    { key: 'supplier-perf', label: 'Purchasing & Suppliers' },
-    { key: 'receivables', label: 'Receivables & Cash Flow' },
+  const reportMenus = [
+    { label: 'Inventory', items: [{ key: 'low-stock', label: 'Stock Risk' }, { key: 'inv-valuation', label: 'Inventory Valuation' }] },
+    { label: 'Sales', items: [{ key: 'branch-perf', label: 'Branch Performance' }, { key: 'sales-profit', label: 'Sales & Profit' }, { key: 'quote-conversion', label: 'Quote Conversion' }] },
+    { label: 'Purchasing', items: [{ key: 'supplier-perf', label: 'Supplier Scorecards' }] },
+    { label: 'Finance', items: [{ key: 'receivables', label: 'Receivables & Cash Flow' }] },
   ];
 
   // Utility Formatter
@@ -492,11 +489,23 @@ export function ReportsPage() {
         </div>
       </section>
 
-      {/* Tabs Bar */}
+      {/* Report workspace navigation */}
       <section style={{ marginBottom: '16px' }}>
-        <Tabs tabs={tabsConfig} activeTab={activeTab} onTabChange={setActiveTab} />
+        <nav aria-label="Report workspaces" style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', padding: '8px', border: '1px solid #d7e6df', background: '#fff', borderRadius: '14px', boxShadow: '0 8px 24px rgba(5, 70, 54, 0.08)' }}>
+          {reportMenus.map((menu) => {
+            const isOpen = openMenu === menu.label;
+            const isActive = menu.items.some((item) => item.key === activeTab);
+            return <div key={menu.label} style={{ position: 'relative' }}>
+              <button type="button" aria-expanded={isOpen} onClick={() => setOpenMenu(isOpen ? null : menu.label)} style={{ border: 0, background: isOpen ? '#ecfdf5' : 'transparent', cursor: 'pointer', padding: '9px 13px', borderRadius: '9px', fontWeight: 700, fontSize: '13px', color: isActive ? '#065f46' : '#334155' }}>
+                {menu.label} <ChevronDown size={14} style={{ verticalAlign: 'middle', transform: isOpen ? 'rotate(180deg)' : undefined, transition: 'transform 150ms ease' }} />
+              </button>
+              {isOpen && <div style={{ position: 'absolute', zIndex: 10, minWidth: '220px', top: '40px', left: 0, padding: '6px', borderRadius: '10px', background: '#fff', border: '1px solid #d7e6df', boxShadow: '0 16px 32px rgba(5, 70, 54, 0.16)' }}>
+                {menu.items.map((item) => <button key={item.key} type="button" onClick={() => { setActiveTab(item.key); setOpenMenu(null); }} style={{ display: 'block', width: '100%', textAlign: 'left', border: 0, background: activeTab === item.key ? '#ecfdf5' : 'transparent', color: '#0f172a', borderRadius: '7px', cursor: 'pointer', padding: '9px 10px', fontSize: '13px' }}>{item.label}</button>)}
+              </div>}
+            </div>;
+          })}
+        </nav>
       </section>
-
       {/* Loading Indicator */}
       {loading ? (
         <PageSkeleton />
