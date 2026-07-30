@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useMemo } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import {
   BookOpen, BarChart3, FileText, Scale, TrendingUp, Building2,
   DollarSign, Users, Package, Calendar, RefreshCw, Plus, Send,
@@ -450,12 +450,12 @@ export function AccountingPage() {
   if (loading) return <PageSkeleton />;
 
   // ─── Tab definitions ────────────────────────────────────────────
-  const workspaceMenus = useMemo(() => [
+  const workspaceMenus = [
     { label: 'Dashboard', items: [{ key: 'dashboard', label: 'KPI Overview' }] },
     { label: 'Accounting', items: [{ key: 'journal', label: 'Journal Entries' }, { key: 'ledger', label: 'General Ledger' }, { key: 'trial-balance', label: 'Journal Items & Trial Balance' }, { key: 'coa', label: 'Chart of Accounts' }] },
     { label: 'Reporting', items: [{ key: 'income', label: 'Income Statement' }, { key: 'balance-sheet', label: 'Balance Sheet' }, { key: 'cash-flow', label: 'Cash Flow' }, { key: 'equity', label: 'Executive Summary' }] },
     { label: 'Management', items: [{ key: 'inventory', label: 'Physical Inventory Counts' }, { key: 'depreciation', label: 'Asset Depreciation' }, { key: 'journal', label: 'Year-End Closing' }] },
-  ], []);
+  ];
 
 
   // JE lines total
