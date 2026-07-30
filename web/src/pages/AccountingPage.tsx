@@ -596,56 +596,38 @@ export function AccountingPage() {
   // ══════════════════════════════════════════════════════════════════
   return (
     <div style={{ padding: '0' }}>
-      {/* Page Header */}
-      <div style={{
-        background: `linear-gradient(135deg, ${G} 0%, #0a5e0a 100%)`,
-        padding: '28px 32px', marginBottom: '28px', borderRadius: '0 0 20px 20px',
-        boxShadow: '0 4px 20px rgba(6,96,6,0.25)',
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '16px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-            <div style={{ background: 'rgba(255,255,255,0.2)', borderRadius: '12px', padding: '12px', display: 'flex' }}>
-              <BookOpen size={24} color='#fff' />
+      {/* Accounting workspace header */}
+      <section style={{ margin: '24px 24px 16px', padding: '22px 24px 18px', borderRadius: '18px', color: '#f8fafc', background: 'linear-gradient(120deg, #102a25 0%, #164e43 58%, #0f766e 100%)', boxShadow: '0 14px 34px rgba(15, 61, 49, 0.18)', border: '1px solid rgba(255,255,255,0.14)' }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', flexWrap: 'wrap', gap: '18px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '13px' }}>
+            <div style={{ background: 'rgba(255,255,255,0.13)', border: '1px solid rgba(255,255,255,0.16)', borderRadius: '12px', padding: '10px', display: 'flex' }}>
+              <BookOpen size={22} color='#d1fae5' />
             </div>
             <div>
-              <h1 style={{ margin: 0, color: '#fff', fontSize: '22px', fontWeight: 800 }}>Financial Accounting</h1>
-              <p style={{ margin: 0, color: 'rgba(255,255,255,0.75)', fontSize: '13px' }}>
-                Complete accounting cycle — Periodic Inventory System | HQ + Branch Consolidation
-              </p>
+              <p style={{ margin: '0 0 3px', color: '#99f6e4', fontSize: '11px', fontWeight: 800, letterSpacing: '0.12em', textTransform: 'uppercase' }}>Finance workspace</p>
+              <h1 style={{ margin: 0, color: '#fff', fontSize: '24px', lineHeight: 1.1, fontWeight: 800 }}>Financial Accounting</h1>
+              <p style={{ margin: '6px 0 0', color: 'rgba(236,253,245,0.75)', fontSize: '13px' }}>HQ & branch consolidation · Periodic inventory system</p>
             </div>
           </div>
-          <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-            <button onClick={() => setShowPeriodModal(true)} style={{ background: 'rgba(255,255,255,0.15)', border: '1px solid rgba(255,255,255,0.3)', color: '#fff', borderRadius: '8px', padding: '8px 16px', cursor: 'pointer', fontSize: '13px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <Calendar size={14} />New Period
-            </button>
-            <button onClick={() => setShowJEModal(true)} style={{ background: '#fff', border: 'none', color: G, borderRadius: '8px', padding: '8px 16px', cursor: 'pointer', fontSize: '13px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '6px', boxShadow: '0 2px 8px rgba(0,0,0,0.15)' }}>
-              <Plus size={14} />New Journal Entry
-            </button>
-            <button onClick={() => setShowClosingModal(true)} style={{ background: 'rgba(255,255,255,0.15)', border: '1px solid rgba(255,255,255,0.3)', color: '#fff', borderRadius: '8px', padding: '8px 16px', cursor: 'pointer', fontSize: '13px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <Layers size={14} />Year-End Close
-            </button>
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+            <button onClick={() => setShowPeriodModal(true)} style={{ background: 'transparent', border: '1px solid rgba(255,255,255,0.3)', color: '#ecfdf5', borderRadius: '9px', padding: '9px 12px', cursor: 'pointer', fontSize: '13px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '6px' }}><Calendar size={14} /> Period</button>
+            <button onClick={() => setShowJEModal(true)} style={{ background: '#ecfdf5', border: 'none', color: '#065f46', borderRadius: '9px', padding: '9px 13px', cursor: 'pointer', fontSize: '13px', fontWeight: 800, display: 'flex', alignItems: 'center', gap: '6px', boxShadow: '0 4px 12px rgba(0,0,0,0.16)' }}><Plus size={15} /> Journal Entry</button>
+            <button onClick={() => setShowClosingModal(true)} style={{ background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.24)', color: '#ecfdf5', borderRadius: '9px', padding: '9px 12px', cursor: 'pointer', fontSize: '13px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '6px' }}><Layers size={14} /> Close Year</button>
           </div>
         </div>
-
-        {/* Quick KPI strip */}
-        {dashboard && (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '12px', marginTop: '24px' }}>
-            {[
-              { label: 'Total Revenue', value: fmt(dashboard.total_revenue), color: '#a7f3d0' },
-              { label: 'Total Expenses', value: fmt(dashboard.total_expenses), color: '#fed7aa' },
-              { label: 'Net Income', value: fmt(dashboard.net_income), color: dashboard.net_income >= 0 ? '#a7f3d0' : '#fca5a5' },
-              { label: 'Journal Entries', value: `${dashboard.posted_entries} Posted`, color: '#bfdbfe' },
-              { label: 'Chart of Accounts', value: `${dashboard.chart_of_accounts} Accounts`, color: '#ddd6fe' },
-            ].map((kpi) => (
-              <div key={kpi.label} style={{ background: 'rgba(255,255,255,0.12)', borderRadius: '10px', padding: '12px 16px', backdropFilter: 'blur(10px)' }}>
-                <p style={{ margin: 0, fontSize: '11px', color: 'rgba(255,255,255,0.7)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{kpi.label}</p>
-                <p style={{ margin: '4px 0 0', fontSize: '16px', fontWeight: 800, color: '#fff' }}>{kpi.value}</p>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
+        {dashboard && <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(145px, 1fr))', gap: '1px', marginTop: '20px', overflow: 'hidden', borderRadius: '11px', background: 'rgba(255,255,255,0.16)', border: '1px solid rgba(255,255,255,0.15)' }}>
+          {[
+            { label: 'Revenue', value: fmt(dashboard.total_revenue), accent: '#6ee7b7' },
+            { label: 'Expenses', value: fmt(dashboard.total_expenses), accent: '#fcd34d' },
+            { label: 'Net income', value: fmt(dashboard.net_income), accent: dashboard.net_income >= 0 ? '#99f6e4' : '#fca5a5' },
+            { label: 'Posted entries', value: String(dashboard.posted_entries), accent: '#bfdbfe' },
+            { label: 'Active accounts', value: String(dashboard.chart_of_accounts), accent: '#ddd6fe' },
+          ].map((kpi) => <div key={kpi.label} style={{ background: 'rgba(5,46,39,0.34)', padding: '12px 14px' }}>
+            <p style={{ margin: 0, fontSize: '10px', color: 'rgba(236,253,245,0.65)', fontWeight: 800, letterSpacing: '0.09em', textTransform: 'uppercase' }}>{kpi.label}</p>
+            <p style={{ margin: '4px 0 0', fontSize: '19px', fontWeight: 800, color: kpi.accent }}>{kpi.value}</p>
+          </div>)}
+        </div>}
+      </section>
       {/* Tab Container */}
       <div style={{ padding: '0 24px 40px' }}>
         <nav aria-label="Accounting workspace" style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', padding: '8px', border: '1px solid #d7e6df', background: '#fff', borderRadius: '14px', boxShadow: '0 8px 24px rgba(5, 70, 54, 0.08)' }}>

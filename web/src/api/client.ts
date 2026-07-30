@@ -5,6 +5,19 @@ const CACHEABLE_PATHS = ['/categories', '/branches', '/warehouses', '/accounting
 const getCache = new Map<string, { expiresAt: number; value: unknown }>();
 const inFlightGets = new Map<string, Promise<unknown>>();
 
+async function fetchGetWithRetry(url: string, attempts = 2): Promise<Response> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= attempts; attempt += 1) {
+    try {
+      return await fetch(url, { method: 'GET', headers: buildHeaders() });
+    } catch (error) {
+      lastError = error;
+      if (attempt < attempts) await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)));
+    }
+  }
+  throw lastError;
+}
+
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -80,7 +93,7 @@ export async function apiGet<T>(
   if (cacheable && cached && cached.expiresAt > Date.now()) return cached.value as T;
   const existing = inFlightGets.get(url);
   if (existing) return existing as Promise<T>;
-  const request = fetch(url, { method: 'GET', headers: buildHeaders(), keepalive: true })
+  const request = fetchGetWithRetry(url)
     .then(handleResponse<T>)
     .then((data) => {
       if (cacheable) getCache.set(url, { value: data, expiresAt: Date.now() + GET_CACHE_TTL });
@@ -105,7 +118,6 @@ export async function apiPost<T>(
     method: 'POST',
     headers: buildHeaders(),
     body: body === undefined ? undefined : JSON.stringify(body),
-    keepalive: true,
   });
   invalidateApiCache();
   return handleResponse<T>(response);
@@ -119,7 +131,6 @@ export async function apiPatch<T>(
     method: 'PATCH',
     headers: buildHeaders(),
     body: body === undefined ? undefined : JSON.stringify(body),
-    keepalive: true,
   });
   invalidateApiCache();
   return handleResponse<T>(response);
