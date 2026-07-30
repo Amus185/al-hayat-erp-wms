@@ -1,5 +1,9 @@
 // ─── Al Hayat ERP+WMS — API Client ───
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:3000/api/v1';
+const GET_CACHE_TTL = 30_000;
+const CACHEABLE_PATHS = ['/categories', '/branches', '/warehouses', '/accounting/fiscal-periods', '/accounting/chart-of-accounts'];
+const getCache = new Map<string, { expiresAt: number; value: unknown }>();
+const inFlightGets = new Map<string, Promise<unknown>>();
 
 export class ApiError extends Error {
   constructor(
@@ -70,13 +74,29 @@ export async function apiGet<T>(
   params?: Record<string, string | number | boolean | undefined>
 ): Promise<T> {
   const qs = buildQueryString(params);
-  const response = await fetch(`${API_BASE_URL}${path}${qs}`, {
-    method: 'GET',
-    headers: buildHeaders(),
-  });
-  return handleResponse<T>(response);
+  const url = `${API_BASE_URL}${path}${qs}`;
+  const cacheable = CACHEABLE_PATHS.some((candidate) => path === candidate);
+  const cached = getCache.get(url);
+  if (cacheable && cached && cached.expiresAt > Date.now()) return cached.value as T;
+  const existing = inFlightGets.get(url);
+  if (existing) return existing as Promise<T>;
+  const request = fetch(url, { method: 'GET', headers: buildHeaders(), keepalive: true })
+    .then(handleResponse<T>)
+    .then((data) => {
+      if (cacheable) getCache.set(url, { value: data, expiresAt: Date.now() + GET_CACHE_TTL });
+      return data;
+    })
+    .finally(() => inFlightGets.delete(url));
+  inFlightGets.set(url, request);
+  return request;
 }
 
+/** Call after a mutation when a cached lookup may have changed. */
+export function invalidateApiCache(path?: string) {
+  for (const key of getCache.keys()) {
+    if (!path || key.includes(path)) getCache.delete(key);
+  }
+}
 export async function apiPost<T>(
   path: string,
   body?: unknown
@@ -84,8 +104,10 @@ export async function apiPost<T>(
   const response = await fetch(`${API_BASE_URL}${path}`, {
     method: 'POST',
     headers: buildHeaders(),
-    body: body ? JSON.stringify(body) : undefined,
+    body: body === undefined ? undefined : JSON.stringify(body),
+    keepalive: true,
   });
+  invalidateApiCache();
   return handleResponse<T>(response);
 }
 
@@ -96,8 +118,10 @@ export async function apiPatch<T>(
   const response = await fetch(`${API_BASE_URL}${path}`, {
     method: 'PATCH',
     headers: buildHeaders(),
-    body: body ? JSON.stringify(body) : undefined,
+    body: body === undefined ? undefined : JSON.stringify(body),
+    keepalive: true,
   });
+  invalidateApiCache();
   return handleResponse<T>(response);
 }
 
@@ -108,6 +132,7 @@ export async function apiDelete<T = void>(
     method: 'DELETE',
     headers: buildHeaders(),
   });
+  invalidateApiCache();
   return handleResponse<T>(response);
 }
 

@@ -543,6 +543,7 @@ purchasing.post('/receipts', requirePermissions(['manage_purchasing']), async (c
 // ──────────────────────────────────────────────────────────────────────
 purchasing.post('/invoices/:id/payments', requirePermissions(['manage_purchasing']), async (c) => {
   const purchaseInvoiceId = c.req.param('id');
+  if (!purchaseInvoiceId) return c.json({ message: 'Purchase invoice id is required.' }, 400);
   const userId = c.get('jwtPayload').sub;
   const body = await c.req.json();
 

@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
 import {
   BookOpen, BarChart3, FileText, Scale, TrendingUp, Building2,
   DollarSign, Users, Package, Calendar, RefreshCw, Plus, Send,
@@ -11,7 +11,6 @@ import {
 } from 'recharts';
 import { apiGet, apiPost, apiPatch } from '../api/client';
 import { DataTable, type Column } from '../components/DataTable';
-import { Tabs } from '../components/Tabs';
 import { MetricCard } from '../components/MetricCard';
 import { PageSkeleton } from '../components/LoadingSpinner';
 import { useToast } from '../contexts/ToastContext';
@@ -154,6 +153,7 @@ export function AccountingPage() {
   // Modals
   const [showJEModal, setShowJEModal] = useState(false);
   const [showJEDetail, setShowJEDetail] = useState<any>(null);
+  const [ledgerDrill, setLedgerDrill] = useState<{ account: any; rows: any[] } | null>(null);
   const [showCoAModal, setShowCoAModal] = useState(false);
   const [showPeriodModal, setShowPeriodModal] = useState(false);
   const [showInvCountModal, setShowInvCountModal] = useState(false);
@@ -304,6 +304,8 @@ export function AccountingPage() {
 
   // ── Post JE ──────────────────────────────────────────────────────
   async function postEntry(id: string) {
+    setJournalEntries((rows) => rows.map((row) => row.id === id ? { ...row, status: 'POSTED' } : row));
+    addToast('Posting entry…', 'info');
     try {
       await apiPost(`/accounting/journal-entries/${id}/post`, {});
       addToast('Entry posted to General Ledger', 'success');
@@ -315,6 +317,8 @@ export function AccountingPage() {
 
   // ── Reverse JE ───────────────────────────────────────────────────
   async function reverseEntry(id: string) {
+    setJournalEntries((rows) => rows.map((row) => row.id === id ? { ...row, status: 'REVERSED' } : row));
+    addToast('Creating reversal…', 'info');
     try {
       await apiPost(`/accounting/journal-entries/${id}/reverse`, {});
       addToast('Reversal entry created', 'success');
@@ -434,22 +438,25 @@ export function AccountingPage() {
     }
   }
 
+  async function openLedgerDrill(account: any) {
+    try {
+      const rows = await apiGet<any[]>(`/accounting/general-ledger?account_id=${account.account_id || account.id}`);
+      setLedgerDrill({ account, rows: rows || [] });
+    } catch (e) {
+      addToast('Failed to load account activity', 'error');
+    }
+  }
+
   if (loading) return <PageSkeleton />;
 
   // ─── Tab definitions ────────────────────────────────────────────
-  const tabItems = [
-    { key: 'dashboard', label: '📊 Overview' },
-    { key: 'journal', label: '📝 Journal Entries' },
-    { key: 'ledger', label: '📒 General Ledger' },
-    { key: 'trial-balance', label: '⚖️ Trial Balance' },
-    { key: 'income', label: '💰 Income Statement' },
-    { key: 'balance-sheet', label: '🏦 Balance Sheet' },
-    { key: 'cash-flow', label: '💵 Cash Flow' },
-    { key: 'equity', label: '👤 Owner\'s Equity' },
-    { key: 'coa', label: '📋 Chart of Accounts' },
-    { key: 'inventory', label: '📦 Inventory Counts' },
-    { key: 'depreciation', label: '📅 Depreciation' },
-  ];
+  const workspaceMenus = useMemo(() => [
+    { label: 'Dashboard', items: [{ key: 'dashboard', label: 'KPI Overview' }] },
+    { label: 'Accounting', items: [{ key: 'journal', label: 'Journal Entries' }, { key: 'ledger', label: 'General Ledger' }, { key: 'trial-balance', label: 'Journal Items & Trial Balance' }, { key: 'coa', label: 'Chart of Accounts' }] },
+    { label: 'Reporting', items: [{ key: 'income', label: 'Income Statement' }, { key: 'balance-sheet', label: 'Balance Sheet' }, { key: 'cash-flow', label: 'Cash Flow' }, { key: 'equity', label: 'Executive Summary' }] },
+    { label: 'Management', items: [{ key: 'inventory', label: 'Physical Inventory Counts' }, { key: 'depreciation', label: 'Asset Depreciation' }, { key: 'journal', label: 'Year-End Closing' }] },
+  ], []);
+
 
   // JE lines total
   const jeLineTotalDr = jeForm.lines.reduce((s, l) => s + (parseFloat(l.debit_amount) || 0), 0);
@@ -493,7 +500,7 @@ export function AccountingPage() {
 
   const tbCols: Column[] = [
     { key: 'code', header: 'Code', render: (r: any) => <span style={{ fontFamily: 'monospace', fontWeight: 700 }}>{r.code}</span> },
-    { key: 'account_name', header: 'Account Name' },
+    { key: 'account_name', header: 'Account Name', render: (r: any) => <button type='button' onClick={() => openLedgerDrill(r)} style={{ border: 0, background: 'transparent', color: G, cursor: 'pointer', fontWeight: 700, padding: 0 }}>{r.account_name}</button> },
     { key: 'account_type', header: 'Type', render: (r: any) => <Badge label={r.account_type} color={accountTypeColor(r.account_type)} /> },
     { key: 'total_debit', header: 'Debit ($)', render: (r: any) => <span style={{ fontFamily: 'monospace', color: G }}>{r.total_debit > 0 ? fmtN(r.total_debit) : '—'}</span> },
     { key: 'total_credit', header: 'Credit ($)', render: (r: any) => <span style={{ fontFamily: 'monospace', color: TEAL }}>{r.total_credit > 0 ? fmtN(r.total_credit) : '—'}</span> },
@@ -640,11 +647,18 @@ export function AccountingPage() {
 
       {/* Tab Container */}
       <div style={{ padding: '0 24px 40px' }}>
-        <Tabs
-          tabs={tabItems}
-          activeTab={activeTab}
-          onTabChange={setActiveTab}
-        />
+        <nav aria-label="Accounting workspace" style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', padding: '8px', border: '1px solid #d7e6df', background: '#fff', borderRadius: '14px', boxShadow: '0 8px 24px rgba(5, 70, 54, 0.08)' }}>
+          {workspaceMenus.map((menu) => (
+            <details key={menu.label} style={{ position: 'relative' }}>
+              <summary style={{ listStyle: 'none', cursor: 'pointer', padding: '9px 13px', borderRadius: '9px', fontWeight: 700, fontSize: '13px', color: menu.items.some((item) => item.key === activeTab) ? '#065f46' : '#334155' }}>
+                {menu.label} <ChevronDown size={14} style={{ verticalAlign: 'middle' }} />
+              </summary>
+              <div style={{ position: 'absolute', zIndex: 10, minWidth: '220px', top: '40px', left: 0, padding: '6px', borderRadius: '10px', background: '#fff', border: '1px solid #d7e6df', boxShadow: '0 16px 32px rgba(5, 70, 54, 0.16)' }}>
+                {menu.items.map((item) => <button key={item.label} type="button" onClick={() => setActiveTab(item.key)} style={{ display: 'block', width: '100%', textAlign: 'left', border: 0, background: activeTab === item.key ? '#ecfdf5' : 'transparent', color: '#0f172a', borderRadius: '7px', cursor: 'pointer', padding: '9px 10px', fontSize: '13px' }}>{item.label}</button>)}
+              </div>
+            </details>
+          ))}
+        </nav>
 
         <div style={{ marginTop: '24px' }}>
 
@@ -1260,6 +1274,10 @@ export function AccountingPage() {
         </div>
       </Modal>
 
+      <Modal open={!!ledgerDrill} onClose={() => setLedgerDrill(null)} title={`General Ledger — ${ledgerDrill?.account?.code || ''} ${ledgerDrill?.account?.account_name || ''}`} width={900}>
+        <p style={{ marginTop: 0, color: '#64748b', fontSize: '13px' }}>Posted transaction activity for this account</p>
+        <div style={{ overflowX: 'auto' }}><table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}><thead><tr>{['Date', 'Entry', 'Description', 'Debit', 'Credit', 'Balance'].map((label) => <th key={label} style={{ textAlign: label === 'Description' ? 'left' : 'right', padding: '9px', borderBottom: '1px solid #d7e6df', color: '#475569' }}>{label}</th>)}</tr></thead><tbody>{ledgerDrill?.rows.map((row) => <tr key={row.id}><td style={{ padding: '9px' }}>{row.entry_date}</td><td style={{ padding: '9px' }}>{row.entry_number}</td><td style={{ padding: '9px' }}>{row.description}</td><td style={{ padding: '9px', textAlign: 'right', color: G }}>{Number(row.debit_amount) ? fmt(row.debit_amount) : '—'}</td><td style={{ padding: '9px', textAlign: 'right', color: TEAL }}>{Number(row.credit_amount) ? fmt(row.credit_amount) : '—'}</td><td style={{ padding: '9px', textAlign: 'right', fontWeight: 700 }}>{fmt(row.running_balance)}</td></tr>)}</tbody></table></div>
+      </Modal>
     </div>
   );
 }

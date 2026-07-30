@@ -438,10 +438,11 @@ accounting.get('/trial-balance', requirePermissions(['view_reports']), async (c)
         ELSE
           COALESCE(SUM(jel.credit_amount), 0) - COALESCE(SUM(jel.debit_amount), 0)
       END AS net_balance
-    FROM chart_of_accounts coa
-    LEFT JOIN journal_entry_lines jel ON jel.account_id = coa.id
-    LEFT JOIN journal_entries je ON je.id = jel.journal_entry_id AND ${statusFilter} ${typeFilter} ${periodFilter}
-    WHERE coa.is_active = 1
+    FROM journal_entries je
+    JOIN journal_entry_lines jel ON jel.journal_entry_id = je.id
+    JOIN chart_of_accounts coa ON coa.id = jel.account_id
+    WHERE ${statusFilter} ${typeFilter} ${periodFilter}
+      AND coa.is_active = 1
     GROUP BY coa.id, coa.code, coa.name, coa.account_type, coa.normal_balance
     HAVING total_debit > 0 OR total_credit > 0 OR net_balance != 0
     ORDER BY coa.code ASC

@@ -599,6 +599,7 @@ sales.post('/orders/:id/complete', requirePermissions(['manage_sales']), async (
 // ──────────────────────────────────────────────────────────────────────
 sales.post('/invoices/:id/payments', requirePermissions(['manage_sales']), async (c) => {
   const invoiceId = c.req.param('id');
+  if (!invoiceId) return c.json({ message: 'Invoice id is required.' }, 400);
   const userId = c.get('jwtPayload').sub;
   const body = await c.req.json();
 

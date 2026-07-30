@@ -129,11 +129,14 @@ CREATE TABLE IF NOT EXISTS depreciation_schedules (
 
 -- ─── Indexes ──────────────────────────────────────────────────────
 CREATE INDEX IF NOT EXISTS idx_je_fiscal_period ON journal_entries(fiscal_period_id);
+CREATE INDEX IF NOT EXISTS idx_je_period_status ON journal_entries(fiscal_period_id, status, entry_date);
 CREATE INDEX IF NOT EXISTS idx_je_status ON journal_entries(status);
 CREATE INDEX IF NOT EXISTS idx_je_entry_date ON journal_entries(entry_date);
 CREATE INDEX IF NOT EXISTS idx_jel_journal ON journal_entry_lines(journal_entry_id);
 CREATE INDEX IF NOT EXISTS idx_jel_account ON journal_entry_lines(account_id);
+CREATE INDEX IF NOT EXISTS idx_jel_account_journal ON journal_entry_lines(account_id, journal_entry_id);
 CREATE INDEX IF NOT EXISTS idx_gl_account ON general_ledger(account_id, entry_date);
+CREATE INDEX IF NOT EXISTS idx_gl_branch_date ON general_ledger(branch_id, entry_date);
 CREATE INDEX IF NOT EXISTS idx_tbs_period ON trial_balance_snapshots(fiscal_period_id, snapshot_type);
 CREATE INDEX IF NOT EXISTS idx_ipc_period ON inventory_period_counts(fiscal_period_id);
 
