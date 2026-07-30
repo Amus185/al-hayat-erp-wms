@@ -736,7 +736,7 @@ export function AccountingPage() {
                   <Plus size={14} />New Entry
                 </button>} />
               <PeriodBar />
-              <DataTable data={journalEntries} columns={jeCols} emptyMessage='No journal entries yet. Create your first entry.' />
+              <DataTable data={journalEntries} columns={jeCols} keyExtractor={(row: any) => String(row.id ?? row.account_id ?? row.entry_number)} emptyMessage='No journal entries yet. Create your first entry.' />
             </div>
           )}
 
@@ -755,7 +755,7 @@ export function AccountingPage() {
                   <RefreshCw size={13} />Refresh
                 </button>
               </div>
-              <DataTable data={ledger} columns={ledgerCols} emptyMessage='No ledger entries. Post journal entries to see them here.' />
+              <DataTable data={ledger} columns={ledgerCols} keyExtractor={(row: any) => String(row.id ?? row.account_id ?? row.entry_number)} emptyMessage='No ledger entries. Post journal entries to see them here.' />
             </div>
           )}
 
@@ -792,7 +792,7 @@ export function AccountingPage() {
                       </p>
                     </div>
                   </div>
-                  <DataTable data={trialBalance.accounts || []} columns={tbCols} emptyMessage='No entries for this period/type.' />
+                  <DataTable data={trialBalance.accounts || []} columns={tbCols} keyExtractor={(row: any) => String(row.id ?? row.account_id ?? row.entry_number)} emptyMessage='No entries for this period/type.' />
                 </div>
               )}
             </div>
@@ -989,7 +989,7 @@ export function AccountingPage() {
                   );
                 })}
               </div>
-              <DataTable data={accounts} columns={coaCols} emptyMessage='No accounts found.' />
+              <DataTable data={accounts} columns={coaCols} keyExtractor={(row: any) => String(row.id ?? row.account_id ?? row.entry_number)} emptyMessage='No accounts found.' />
             </div>
           )}
 
@@ -1007,7 +1007,7 @@ export function AccountingPage() {
                   Under the Periodic Inventory System, COGS is computed at period-end: <strong>COGS = Beginning Inventory + Purchases − Ending Inventory</strong>. Approve counts to use them in financial statements.
                 </p>
               </div>
-              <DataTable data={invCounts} columns={invCountCols} emptyMessage='No inventory counts recorded. Conduct a physical count and record it here.' />
+              <DataTable data={invCounts} columns={invCountCols} keyExtractor={(row: any) => String(row.id ?? row.account_id ?? row.entry_number)} emptyMessage='No inventory counts recorded. Conduct a physical count and record it here.' />
             </div>
           )}
 
@@ -1024,7 +1024,7 @@ export function AccountingPage() {
                   Straight-Line Formula: <strong>Annual Dep. = (Cost − Salvage Value) ÷ Useful Life</strong>. Record a journal entry to post the depreciation expense.
                 </p>
               </div>
-              <DataTable data={depreciation} columns={depCols} emptyMessage='No depreciation records. Add equipment assets and record annual depreciation.' />
+              <DataTable data={depreciation} columns={depCols} keyExtractor={(row: any) => String(row.id ?? row.account_id ?? row.entry_number)} emptyMessage='No depreciation records. Add equipment assets and record annual depreciation.' />
             </div>
           )}
 

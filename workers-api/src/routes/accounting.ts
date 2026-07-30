@@ -788,7 +788,7 @@ accounting.get('/depreciation', requirePermissions(['view_reports']), async (c) 
     FROM depreciation_schedules ds
     LEFT JOIN fiscal_periods fp ON fp.id = ds.fiscal_period_id
     LEFT JOIN chart_of_accounts aa ON aa.id = ds.asset_account_id
-    LEFT JOIN chart_of_accounts ad ON ad.id = ds.accum_dep_account_account_id
+    LEFT JOIN chart_of_accounts ad ON ad.id = ds.accum_dep_account_id
     LEFT JOIN chart_of_accounts de ON de.id = ds.dep_expense_account_id
     LEFT JOIN users u ON u.id = ds.created_by
     ORDER BY ds.created_at DESC
