@@ -7,6 +7,9 @@ interface AuthContextType {
   isAuthenticated: boolean;
   isLoading: boolean;
   permissions: string[];
+  isAdmin: boolean;
+  isBranchUser: boolean;
+  branchId: string | null;
   login: (credentials: LoginRequest) => Promise<void>;
   logout: () => void;
   hasPermission: (code: string) => boolean;
@@ -59,6 +62,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [user]
   );
 
+  const isAdmin = user?.role === 'admin';
+  const isBranchUser = user?.role === 'branch_user';
+  const branchId = user?.branchId ?? null;
+
   return (
     <AuthContext.Provider
       value={{
@@ -66,6 +73,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         isAuthenticated: !!user,
         isLoading,
         permissions: user?.permissions ?? [],
+        isAdmin,
+        isBranchUser,
+        branchId,
         login,
         logout,
         hasPermission,

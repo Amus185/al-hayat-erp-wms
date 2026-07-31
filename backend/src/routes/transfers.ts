@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { Env, uuidv4 } from '../db';
-import { authMiddleware, requirePermissions } from '../middleware/auth';
+import { authMiddleware, requirePermissions, isAdminUser } from '../middleware/auth';
 import { logAudit, createAuditLogStmt } from '../services/audit';
 
 const transfers = new Hono<{ Bindings: Env; Variables: { jwtPayload: any } }>();
@@ -8,7 +8,10 @@ const transfers = new Hono<{ Bindings: Env; Variables: { jwtPayload: any } }>();
 transfers.use('/*', authMiddleware);
 
 transfers.get('/', async (c) => {
-  const { results } = await c.env.DB.prepare(`
+  const payload = c.get('jwtPayload');
+  const scopedBranchId = isAdminUser(payload) ? null : payload.branch_id;
+
+  let query = `
     SELECT
       t.*,
       COALESCE(sw.name, sb.name, 'Unknown') AS source_name,
@@ -19,9 +22,19 @@ transfers.get('/', async (c) => {
     LEFT JOIN branches   sb ON sb.id = t.source_branch_id
     LEFT JOIN warehouses dw ON dw.id = t.destination_warehouse_id
     LEFT JOIN branches   db ON db.id = t.destination_branch_id
-    ORDER BY t.requested_at DESC
-    LIMIT 100
-  `).all();
+    WHERE 1=1
+  `;
+  const params: any[] = [];
+
+  // Branch isolation — branch users see transfers involving their branch
+  if (scopedBranchId) {
+    query += ` AND (t.source_branch_id = ? OR t.destination_branch_id = ?)`;
+    params.push(scopedBranchId, scopedBranchId);
+  }
+
+  query += ` ORDER BY t.requested_at DESC LIMIT 200`;
+  const stmt = c.env.DB.prepare(query);
+  const { results } = params.length > 0 ? await stmt.bind(...params).all() : await stmt.all();
   return c.json(results);
 });
 
@@ -46,7 +59,15 @@ transfers.get('/:id', async (c) => {
 // ──────────────────────────────────────────────────────────────────────
 transfers.post('/', requirePermissions(['manage_transfers']), async (c) => {
   const body = await c.req.json();
-  const userId = c.get('jwtPayload').sub;
+  const payload = c.get('jwtPayload');
+  const userId = payload.sub;
+
+  // Branch isolation — branch users can only request transfers FROM their own branch
+  if (!isAdminUser(payload)) {
+    body.sourceOwnerType = 'BRANCH';
+    body.sourceBranchId = payload.branch_id;
+    body.sourceWarehouseId = undefined;
+  }
 
   // ── Validate owner types ──
   const validOwnerTypes = ['WAREHOUSE', 'BRANCH'];

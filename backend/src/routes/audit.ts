@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { Env } from '../db';
-import { authMiddleware, requirePermissions } from '../middleware/auth';
+import { authMiddleware, requirePermissions, isAdminUser } from '../middleware/auth';
 
 const audit = new Hono<{ Bindings: Env; Variables: { jwtPayload: any } }>();
 
@@ -20,6 +20,7 @@ audit.use('/*', authMiddleware, async (c, next) => {
 });
 
 audit.get('/', async (c) => {
+  const payload = c.get('jwtPayload');
   const entityType = c.req.query('entityType');
   const action = c.req.query('action');
   const actor = c.req.query('actor');
@@ -34,6 +35,12 @@ audit.get('/', async (c) => {
     WHERE 1=1
   `;
   const params: any[] = [];
+
+  // Branch isolation — branch users see only their own audit trail
+  if (!isAdminUser(payload)) {
+    sql += ' AND a.actor_user_id = ?';
+    params.push(payload.sub);
+  }
 
   if (entityType && entityType.trim() !== '') {
     sql += ' AND a.entity_type = ?';

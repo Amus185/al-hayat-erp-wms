@@ -18,6 +18,8 @@ export interface AuthUser {
   email: string;
   fullName: string;
   permissions: string[];
+  branchId: string | null;
+  role: string; // 'admin' | 'branch_user' | 'manager' | etc.
 }
 
 export interface RefreshRequest {

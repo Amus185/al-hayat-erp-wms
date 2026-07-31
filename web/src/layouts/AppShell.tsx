@@ -16,6 +16,7 @@ import {
   BookOpen,
   Menu,
   X,
+  MapPin,
 } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { useAuth } from '../contexts/AuthContext';
@@ -23,16 +24,16 @@ import { useAuth } from '../contexts/AuthContext';
 const navItems = [
   { label: 'Dashboard', path: '/', icon: Home, permission: '' },
   { label: 'Products', path: '/products', icon: PackageSearch, permission: 'manage_inventory' },
-  { label: 'Warehouses', path: '/warehouses', icon: Boxes, permission: 'manage_inventory' },
+  { label: 'Warehouses', path: '/warehouses', icon: Boxes, permission: 'manage_inventory', adminOnly: true },
   { label: 'Inventory', path: '/inventory', icon: ClipboardList, permission: 'manage_inventory' },
-  { label: 'Branches', path: '/branches', icon: Building2, permission: 'manage_users' },
+  { label: 'Branches', path: '/branches', icon: Building2, permission: 'manage_users', adminOnly: true },
   { label: 'Transfers', path: '/transfers', icon: Truck, permission: 'manage_transfers' },
   { label: 'Purchasing', path: '/purchasing', icon: ClipboardList, permission: 'manage_purchasing' },
   { label: 'Sales', path: '/sales', icon: ShoppingCart, permission: 'manage_sales' },
   { label: 'Reports', path: '/reports', icon: BarChart3, permission: 'view_reports' },
-  { label: 'Accounting', path: '/accounting', icon: BookOpen, permission: 'view_reports' },
+  { label: 'Accounting', path: '/accounting', icon: BookOpen, permission: 'view_reports', adminOnly: true },
   { label: 'Audit Log', path: '/audit', icon: FileClock, permission: 'view_reports' },
-  { label: 'Users', path: '/users', icon: Users, permission: 'manage_users' },
+  { label: 'Users', path: '/users', icon: Users, permission: 'manage_users', adminOnly: true },
 ];
 
 type AppShellProps = {
@@ -40,7 +41,7 @@ type AppShellProps = {
 };
 
 export function AppShell({ children }: AppShellProps) {
-  const { user, logout, hasPermission } = useAuth();
+  const { user, logout, hasPermission, isAdmin, isBranchUser } = useAuth();
   const navigate = useNavigate();
   const [isMobileOpen, setIsMobileOpen] = useState(false);
 
@@ -87,6 +88,11 @@ export function AppShell({ children }: AppShellProps) {
           <div className="sidebar-nav-main">
             {navItems.map((item) => {
               const Icon = item.icon;
+              // Hide admin-only items from branch users
+              if ((item as any).adminOnly && !isAdmin) {
+                return null;
+              }
+              // Check permission
               if (item.permission && !hasPermission(item.permission)) {
                 return null;
               }
@@ -130,8 +136,20 @@ export function AppShell({ children }: AppShellProps) {
               <Menu size={22} />
             </button>
             <div>
-              <p>Operations Dashboard</p>
-              <h1>Inventory, purchasing, transfers, and sales</h1>
+              {isBranchUser ? (
+                <>
+                  <p className="topbar-branch-label">
+                    <MapPin size={12} style={{ display: 'inline', marginRight: 4 }} />
+                    Branch Operations
+                  </p>
+                  <h1>My Branch Dashboard</h1>
+                </>
+              ) : (
+                <>
+                  <p>Operations Dashboard</p>
+                  <h1>Inventory, purchasing, transfers, and sales</h1>
+                </>
+              )}
             </div>
           </div>
           <div className="topbar__actions">
@@ -151,3 +169,5 @@ export function AppShell({ children }: AppShellProps) {
     </div>
   );
 }
+
+

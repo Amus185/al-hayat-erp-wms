@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { Env, uuidv4 } from '../db';
-import { authMiddleware, requirePermissions } from '../middleware/auth';
+import { authMiddleware, requirePermissions, isAdminUser } from '../middleware/auth';
 import { logAudit, createAuditLogStmt } from '../services/audit';
 
 const sales = new Hono<{ Bindings: Env; Variables: { jwtPayload: any } }>();
@@ -52,6 +52,8 @@ sales.post('/customers', requirePermissions(['manage_sales']), async (c) => {
 // ──────────────────────────────────────────────────────────────────────
 sales.get('/orders', async (c) => {
   const { search, status, paymentStatus, dateFrom, dateTo } = c.req.query();
+  const payload = c.get('jwtPayload');
+  const scopedBranchId = isAdminUser(payload) ? null : payload.branch_id;
 
   let query = `
     SELECT so.*, c.name AS customer_name, b.name AS branch_name, i.id AS invoice_id,
@@ -64,6 +66,12 @@ sales.get('/orders', async (c) => {
     WHERE 1=1
   `;
   const params: any[] = [];
+
+  // Branch isolation — branch users only see their own branch's orders
+  if (scopedBranchId) {
+    query += ` AND so.branch_id = ?`;
+    params.push(scopedBranchId);
+  }
 
   if (search) {
     query += ` AND (so.order_number LIKE ? OR c.name LIKE ? OR c.phone LIKE ?)`;
@@ -157,7 +165,13 @@ sales.get('/orders/:id', async (c) => {
 // ──────────────────────────────────────────────────────────────────────
 sales.post('/orders', requirePermissions(['manage_sales']), async (c) => {
   const body = await c.req.json();
-  const userId = c.get('jwtPayload').sub;
+  const payload = c.get('jwtPayload');
+  const userId = payload.sub;
+
+  // Branch isolation — branch users can only create orders for their own branch
+  if (!isAdminUser(payload)) {
+    body.branchId = payload.branch_id;
+  }
 
   // Validate branch
   if (!body.branchId) return c.json({ message: 'Branch is required.' }, 400);
@@ -719,13 +733,25 @@ sales.get('/invoices/:id/payments', async (c) => {
 // NEW ENDPOINT — GET /sales/summary
 // ──────────────────────────────────────────────────────────────────────
 sales.get('/summary', async (c) => {
-  // Total outstanding across all non-fully-paid invoices
-  const { results: invoices } = await c.env.DB.prepare(`
+  const payload = c.get('jwtPayload');
+  const scopedBranchId = isAdminUser(payload) ? null : payload.branch_id;
+
+  // Total outstanding — scoped to branch if branch user
+  let summaryQuery = `
     SELECT i.id, i.total_amount, COALESCE(i.discount_amount, 0) AS discount_amount,
            COALESCE((SELECT SUM(ip.amount) FROM invoice_payments ip WHERE ip.invoice_id = i.id), 0) AS amount_paid
     FROM invoices i
+    JOIN sales_orders so ON so.id = i.sales_order_id
     WHERE i.status != 'CANCELLED'
-  `).all();
+  `;
+  const summaryParams: any[] = [];
+  if (scopedBranchId) {
+    summaryQuery += ' AND so.branch_id = ?';
+    summaryParams.push(scopedBranchId);
+  }
+
+  const stmt = c.env.DB.prepare(summaryQuery);
+  const { results: invoices } = summaryParams.length > 0 ? await stmt.bind(...summaryParams).all() : await stmt.all();
 
   let totalOutstandingBalance = 0;
   let countUnpaid = 0;

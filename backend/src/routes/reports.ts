@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { Env } from '../db';
-import { authMiddleware, requirePermissions } from '../middleware/auth';
+import { authMiddleware, requirePermissions, isAdminUser } from '../middleware/auth';
 
 const reports = new Hono<{ Bindings: Env }>();
 
@@ -15,8 +15,12 @@ function getDaysParam(c: any): number {
 
 // 1. Low Stock Risk
 reports.get('/low-stock', async (c) => {
-  const warehouseId = c.req.query('warehouseId') || null;
-  const branchId = c.req.query('branchId') || null;
+  const payload = c.get('jwtPayload');
+  const scopedBranchId = isAdminUser(payload) ? null : payload.branch_id;
+
+  // Branch users always see only their branch; admins can filter via query param
+  const warehouseId = scopedBranchId ? null : (c.req.query('warehouseId') || null);
+  const branchId = scopedBranchId || c.req.query('branchId') || null;
   const categoryId = c.req.query('categoryId') || null;
 
   let query = `
