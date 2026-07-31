@@ -7,6 +7,8 @@ import { PageSkeleton } from '../components/LoadingSpinner';
 import { Modal } from '../components/Modal';
 import { FormField } from '../components/FormField';
 import { useToast } from '../contexts/ToastContext';
+import { confirmAction } from '../utils/swal';
+
 
 interface Branch {
   id: string;
@@ -85,8 +87,15 @@ export function BranchesPage() {
   };
 
   const handleRegenerateCredentials = async (branchId: string, branchName: string) => {
-    if (!confirm(`Regenerate credentials for "${branchName}"? This will log out the branch user immediately.`)) return;
+    const confirmed = await confirmAction(
+      'Regenerate Credentials?',
+      `Are you sure you want to regenerate credentials for "${branchName}"? This will immediately log out the branch user.`,
+      'Yes, Regenerate',
+      'warning'
+    );
+    if (!confirmed) return;
     setRegenerating(branchId);
+
     try {
       const result = await apiPost<{ branchUser: BranchUser }>(`/branches/${branchId}/regenerate-credentials`, {});
       setCredModal({ branchName, branchUser: result.branchUser });

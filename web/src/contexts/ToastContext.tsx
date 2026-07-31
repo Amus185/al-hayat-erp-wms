@@ -1,4 +1,5 @@
 import { createContext, useContext, useCallback, useState, type ReactNode } from 'react';
+import { showToast } from '../utils/swal';
 
 export type ToastType = 'success' | 'error' | 'info' | 'warning';
 
@@ -27,9 +28,10 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const addToast = useCallback(
-    (type: ToastType, message: string, duration = 5000) => {
+    (type: ToastType, message: string, duration = 4000) => {
       const id = `toast-${++toastCounter}`;
       setToasts((prev) => [...prev, { id, type, message, duration }]);
+      showToast(message, type);
       if (duration > 0) {
         setTimeout(() => removeToast(id), duration);
       }
@@ -40,21 +42,6 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   return (
     <ToastContext.Provider value={{ toasts, addToast, removeToast }}>
       {children}
-      <div className="toast-container" id="toast-container">
-        {toasts.map((toast) => (
-          <div key={toast.id} className={`toast toast--${toast.type}`} id={toast.id}>
-            <span className="toast__message">{toast.message}</span>
-            <button
-              className="toast__close"
-              onClick={() => removeToast(toast.id)}
-              type="button"
-              aria-label="Close"
-            >
-              ×
-            </button>
-          </div>
-        ))}
-      </div>
     </ToastContext.Provider>
   );
 }
@@ -66,3 +53,4 @@ export function useToast(): ToastContextType {
   }
   return context;
 }
+

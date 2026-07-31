@@ -1161,3 +1161,63 @@ tbody tr:hover { background: var(--primary-lighter); }
     font-size: 16px;
   }
 }
+
+/* ── SweetAlert2 AlHayat Enterprise Theme ──────────────────────────── */
+.swal2-alhayat-popup {
+  border-radius: 16px !important;
+  padding: 24px !important;
+  box-shadow: 0 20px 40px -10px rgba(0, 0, 0, 0.18), 0 0 0 1px rgba(0, 0, 0, 0.05) !important;
+  font-family: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif !important;
+}
+
+.swal2-alhayat-title {
+  font-size: 1.25rem !important;
+  font-weight: 700 !important;
+  color: var(--text, #1a1a1a) !important;
+  padding: 8px 0 0 !important;
+}
+
+.swal2-alhayat-html {
+  font-size: 0.92rem !important;
+  color: var(--text-muted, #667066) !important;
+  margin-top: 8px !important;
+}
+
+.swal2-alhayat-actions {
+  gap: 10px !important;
+  margin-top: 24px !important;
+}
+
+.swal2-alhayat-confirm-btn {
+  background: var(--primary, #0B8F08) !important;
+  color: #ffffff !important;
+  border: none !important;
+  border-radius: 10px !important;
+  padding: 10px 20px !important;
+  font-weight: 600 !important;
+  font-size: 0.88rem !important;
+  cursor: pointer !important;
+  transition: all 0.2s ease !important;
+}
+
+.swal2-alhayat-confirm-btn:hover {
+  background: var(--primary-dark, #066006) !important;
+  transform: translateY(-1px) !important;
+}
+
+.swal2-alhayat-cancel-btn {
+  background: #f1f5f9 !important;
+  color: #475569 !important;
+  border: 1px solid #e2e8f0 !important;
+  border-radius: 10px !important;
+  padding: 10px 18px !important;
+  font-weight: 600 !important;
+  font-size: 0.88rem !important;
+  cursor: pointer !important;
+  transition: all 0.2s ease !important;
+}
+
+.swal2-alhayat-cancel-btn:hover {
+  background: #e2e8f0 !important;
+}
+
