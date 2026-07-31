@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { Env } from '../db';
 import { authMiddleware, requirePermissions, isAdminUser } from '../middleware/auth';
 
-const reports = new Hono<{ Bindings: Env }>();
+const reports = new Hono<{ Bindings: Env; Variables: { jwtPayload: any } }>();
 
 reports.use('/*', authMiddleware, requirePermissions(['view_reports']));
 
@@ -78,10 +78,12 @@ reports.get('/low-stock', async (c) => {
 
 // 2. Branch Performance
 reports.get('/branch-performance', async (c) => {
+  const payload = c.get('jwtPayload');
+  const scopedBranchId = isAdminUser(payload) ? null : payload.branch_id;
   const days = getDaysParam(c);
   const daysModifier = `-${days} days`;
 
-  const { results } = await c.env.DB.prepare(`
+  let query = `
     SELECT 
       b.id,
       b.code,
@@ -98,9 +100,18 @@ reports.get('/branch-performance', async (c) => {
     FROM branches b
     LEFT JOIN sales_orders so ON so.branch_id = b.id AND so.created_at >= DATE('now', ?)
     LEFT JOIN invoices i ON i.sales_order_id = so.id
-    GROUP BY b.id, b.code, b.name, b.city
-    ORDER BY total_revenue DESC
-  `).bind(daysModifier).all();
+    WHERE 1=1
+  `;
+  const params: any[] = [daysModifier];
+
+  if (scopedBranchId) {
+    query += ` AND b.id = ?`;
+    params.push(scopedBranchId);
+  }
+
+  query += ` GROUP BY b.id, b.code, b.name, b.city ORDER BY total_revenue DESC`;
+
+  const { results } = await c.env.DB.prepare(query).bind(...params).all();
 
   const formatted = (results || []).map((r: any) => {
     const revenue = Number(r.total_revenue || 0);
@@ -121,17 +132,28 @@ reports.get('/branch-performance', async (c) => {
 
 // 3. Inventory Asset Valuation
 reports.get('/inventory-valuation', async (c) => {
+  const payload = c.get('jwtPayload');
+  const scopedBranchId = isAdminUser(payload) ? null : payload.branch_id;
   const categoryId = c.req.query('categoryId') || null;
 
   // 1. Overall Summary
-  const summaryRes = await c.env.DB.prepare(`
+  let summaryQuery = `
     SELECT 
       COALESCE(SUM(s.quantity_on_hand * p.cost_price), 0) AS total_cost_value,
       COALESCE(SUM(s.quantity_on_hand * p.selling_price), 0) AS total_retail_value,
       COALESCE(SUM(s.quantity_on_hand), 0) AS total_units
     FROM inventory_stock s
     JOIN products p ON p.id = s.product_id
-  `).first();
+    WHERE 1=1
+  `;
+  const summaryParams: any[] = [];
+  if (scopedBranchId) {
+    summaryQuery += ` AND s.branch_id = ? AND s.owner_type = 'BRANCH'`;
+    summaryParams.push(scopedBranchId);
+  }
+
+  const summaryStmt = c.env.DB.prepare(summaryQuery);
+  const summaryRes = summaryParams.length > 0 ? await summaryStmt.bind(...summaryParams).first() : await summaryStmt.first();
 
   // 2. Asset Breakdown by Category
   let catQuery = `
@@ -142,17 +164,24 @@ reports.get('/inventory-valuation', async (c) => {
     FROM inventory_stock s
     JOIN products p ON p.id = s.product_id
     LEFT JOIN categories c ON c.id = p.category_id
+    WHERE 1=1
   `;
+  const catParams: any[] = [];
+  if (scopedBranchId) {
+    catQuery += ` AND s.branch_id = ? AND s.owner_type = 'BRANCH'`;
+    catParams.push(scopedBranchId);
+  }
   if (categoryId) {
-    catQuery += ` WHERE p.category_id = ?`;
+    catQuery += ` AND p.category_id = ?`;
+    catParams.push(categoryId);
   }
   catQuery += ` GROUP BY c.id, c.name ORDER BY cost_value DESC`;
-  
+
   const catStmt = c.env.DB.prepare(catQuery);
-  const { results: categoryBreakdown } = categoryId ? await catStmt.bind(categoryId).all() : await catStmt.all();
+  const { results: categoryBreakdown } = catParams.length > 0 ? await catStmt.bind(...catParams).all() : await catStmt.all();
 
   // 3. Dead Stock (No sales in last 90 days, but inventory > 0)
-  const { results: deadStock } = await c.env.DB.prepare(`
+  let deadQuery = `
     SELECT 
       p.id,
       p.sku,
@@ -169,12 +198,28 @@ reports.get('/inventory-valuation', async (c) => {
       FROM sales_order_lines sol
       JOIN sales_orders so ON so.id = sol.sales_order_id
       WHERE so.created_at >= DATE('now', '-90 days')
+  `;
+  const deadParams: any[] = [];
+  if (scopedBranchId) {
+    deadQuery += ` AND so.branch_id = ?`;
+    deadParams.push(scopedBranchId);
+  }
+  deadQuery += `
     )
+  `;
+  if (scopedBranchId) {
+    deadQuery += ` AND s.branch_id = ? AND s.owner_type = 'BRANCH'`;
+    deadParams.push(scopedBranchId);
+  }
+  deadQuery += `
     GROUP BY p.id, p.sku, p.name, c.name, p.cost_price
     HAVING units_on_hand > 0
     ORDER BY tied_up_capital DESC
     LIMIT 25
-  `).all();
+  `;
+
+  const deadStmt = c.env.DB.prepare(deadQuery);
+  const { results: deadStock } = deadParams.length > 0 ? await deadStmt.bind(...deadParams).all() : await deadStmt.all();
 
   return c.json({
     summary: {
@@ -189,11 +234,12 @@ reports.get('/inventory-valuation', async (c) => {
 
 // 4. Sales & Profit Analysis
 reports.get('/sales-profit', async (c) => {
+  const payload = c.get('jwtPayload');
+  const scopedBranchId = isAdminUser(payload) ? null : payload.branch_id;
   const days = getDaysParam(c);
   const daysModifier = `-${days} days`;
 
-  // Summary & Daily Trend
-  const { results: dailyTrend } = await c.env.DB.prepare(`
+  let trendQuery = `
     SELECT 
       DATE(so.created_at) AS day,
       COUNT(DISTINCT so.id) AS order_count,
@@ -203,23 +249,18 @@ reports.get('/sales-profit', async (c) => {
     JOIN sales_order_lines sol ON sol.sales_order_id = so.id
     JOIN products p ON p.id = sol.product_id
     WHERE so.created_at >= DATE('now', ?)
-    GROUP BY DATE(so.created_at)
-    ORDER BY day ASC
-  `).bind(daysModifier).all();
+  `;
+  const trendParams: any[] = [daysModifier];
+  if (scopedBranchId) {
+    trendQuery += ` AND so.branch_id = ?`;
+    trendParams.push(scopedBranchId);
+  }
+  trendQuery += ` GROUP BY DATE(so.created_at) ORDER BY day ASC`;
 
-  // Aggregate totals
-  let totalRevenue = 0;
-  let totalProfit = 0;
-  let totalOrders = 0;
-
-  (dailyTrend || []).forEach((d: any) => {
-    totalRevenue += Number(d.revenue || 0);
-    totalProfit += Number(d.profit || 0);
-    totalOrders += Number(d.order_count || 0);
-  });
+  const { results: dailyTrend } = await c.env.DB.prepare(trendQuery).bind(...trendParams).all();
 
   // Top Products by Margin
-  const { results: topProducts } = await c.env.DB.prepare(`
+  let topProdQuery = `
     SELECT 
       p.id,
       p.name AS product_name,
@@ -235,10 +276,15 @@ reports.get('/sales-profit', async (c) => {
     LEFT JOIN brands b ON b.id = p.brand_id
     LEFT JOIN categories c ON c.id = p.category_id
     WHERE so.created_at >= DATE('now', ?)
-    GROUP BY p.id, p.name, p.sku, b.name, c.name
-    ORDER BY profit DESC
-    LIMIT 15
-  `).bind(daysModifier).all();
+  `;
+  const topProdParams: any[] = [daysModifier];
+  if (scopedBranchId) {
+    topProdQuery += ` AND so.branch_id = ?`;
+    topProdParams.push(scopedBranchId);
+  }
+  topProdQuery += ` GROUP BY p.id, p.name, p.sku, b.name, c.name ORDER BY profit DESC LIMIT 15`;
+
+  const { results: topProducts } = await c.env.DB.prepare(topProdQuery).bind(...topProdParams).all();
 
   const formattedProducts = (topProducts || []).map((p: any) => {
     const rev = Number(p.revenue || 0);
@@ -252,7 +298,7 @@ reports.get('/sales-profit', async (c) => {
   });
 
   // Top Customers by Revenue
-  const { results: topCustomers } = await c.env.DB.prepare(`
+  let topCustQuery = `
     SELECT 
       cust.id,
       cust.name AS customer_name,
@@ -263,10 +309,25 @@ reports.get('/sales-profit', async (c) => {
     JOIN sales_orders so ON so.customer_id = cust.id
     JOIN sales_order_lines sol ON sol.sales_order_id = so.id
     WHERE so.created_at >= DATE('now', ?)
-    GROUP BY cust.id, cust.name
-    ORDER BY total_spent DESC
-    LIMIT 15
-  `).bind(daysModifier).all();
+  `;
+  const topCustParams: any[] = [daysModifier];
+  if (scopedBranchId) {
+    topCustQuery += ` AND so.branch_id = ?`;
+    topCustParams.push(scopedBranchId);
+  }
+  topCustQuery += ` GROUP BY cust.id, cust.name ORDER BY total_spent DESC LIMIT 15`;
+
+  const { results: topCustomers } = await c.env.DB.prepare(topCustQuery).bind(...topCustParams).all();
+
+  let totalRevenue = 0;
+  let totalProfit = 0;
+  let totalOrders = 0;
+
+  (dailyTrend || []).forEach((d: any) => {
+    totalRevenue += Number(d.revenue || 0);
+    totalProfit += Number(d.profit || 0);
+    totalOrders += Number(d.order_count || 0);
+  });
 
   return c.json({
     summary: {
@@ -284,38 +345,48 @@ reports.get('/sales-profit', async (c) => {
 
 // 5. Quote Conversion
 reports.get('/quote-conversion', async (c) => {
+  const payload = c.get('jwtPayload');
+  const scopedBranchId = isAdminUser(payload) ? null : payload.branch_id;
   const days = getDaysParam(c);
   const daysModifier = `-${days} days`;
 
-  // Summary Metrics
-  const summaryRes = await c.env.DB.prepare(`
+  let summaryQuery = `
     SELECT 
       COUNT(*) AS total_quotes,
-      SUM(CASE WHEN status IN ('ACCEPTED', 'CONVERTED') OR id IN (SELECT DISTINCT quotation_id FROM sales_orders WHERE quotation_id IS NOT NULL) THEN 1 ELSE 0 END) AS converted_quotes,
-      AVG(CASE WHEN id IN (SELECT DISTINCT quotation_id FROM sales_orders WHERE quotation_id IS NOT NULL) THEN 
+      SUM(CASE WHEN q.status IN ('ACCEPTED', 'CONVERTED') OR q.id IN (SELECT DISTINCT quotation_id FROM sales_orders WHERE quotation_id IS NOT NULL) THEN 1 ELSE 0 END) AS converted_quotes,
+      AVG(CASE WHEN q.id IN (SELECT DISTINCT quotation_id FROM sales_orders WHERE quotation_id IS NOT NULL) THEN 
         (JULIANDAY((SELECT created_at FROM sales_orders WHERE quotation_id = q.id LIMIT 1)) - JULIANDAY(q.created_at))
       ELSE NULL END) AS avg_days_to_convert
     FROM quotations q
     WHERE q.created_at >= DATE('now', ?)
-  `).bind(daysModifier).first();
+  `;
+  const summaryParams: any[] = [daysModifier];
+  if (scopedBranchId) {
+    summaryQuery += ` AND q.branch_id = ?`;
+    summaryParams.push(scopedBranchId);
+  }
+  const summaryRes = await c.env.DB.prepare(summaryQuery).bind(...summaryParams).first();
 
   const totalQuotes = Number(summaryRes?.total_quotes || 0);
   const convertedQuotes = Number(summaryRes?.converted_quotes || 0);
 
-  // Daily/Monthly Trend
-  const { results: trend } = await c.env.DB.prepare(`
+  let trendQuery = `
     SELECT 
       DATE(q.created_at) AS day,
       COUNT(*) AS total_created,
       SUM(CASE WHEN q.status IN ('ACCEPTED', 'CONVERTED') OR q.id IN (SELECT DISTINCT quotation_id FROM sales_orders WHERE quotation_id IS NOT NULL) THEN 1 ELSE 0 END) AS total_converted
     FROM quotations q
     WHERE q.created_at >= DATE('now', ?)
-    GROUP BY DATE(q.created_at)
-    ORDER BY day ASC
-  `).bind(daysModifier).all();
+  `;
+  const trendParams: any[] = [daysModifier];
+  if (scopedBranchId) {
+    trendQuery += ` AND q.branch_id = ?`;
+    trendParams.push(scopedBranchId);
+  }
+  trendQuery += ` GROUP BY DATE(q.created_at) ORDER BY day ASC`;
+  const { results: trend } = await c.env.DB.prepare(trendQuery).bind(...trendParams).all();
 
-  // Quotation log table
-  const { results: quotesList } = await c.env.DB.prepare(`
+  let listQuery = `
     SELECT 
       q.id,
       q.quotation_number,
@@ -332,9 +403,15 @@ reports.get('/quote-conversion', async (c) => {
     LEFT JOIN branches b ON b.id = q.branch_id
     LEFT JOIN sales_orders so ON so.quotation_id = q.id
     WHERE q.created_at >= DATE('now', ?)
-    ORDER BY q.created_at DESC
-    LIMIT 30
-  `).bind(daysModifier).all();
+  `;
+  const listParams: any[] = [daysModifier];
+  if (scopedBranchId) {
+    listQuery += ` AND q.branch_id = ?`;
+    listParams.push(scopedBranchId);
+  }
+  listQuery += ` ORDER BY q.created_at DESC LIMIT 30`;
+
+  const { results: quotesList } = await c.env.DB.prepare(listQuery).bind(...listParams).all();
 
   return c.json({
     summary: {
@@ -353,7 +430,6 @@ reports.get('/supplier-performance', async (c) => {
   const days = getDaysParam(c);
   const daysModifier = `-${days} days`;
 
-  // Summary Metrics
   const summaryRes = await c.env.DB.prepare(`
     SELECT 
       COUNT(DISTINCT po.id) AS po_count,
@@ -367,7 +443,6 @@ reports.get('/supplier-performance', async (c) => {
     WHERE po.created_at >= DATE('now', ?)
   `).bind(daysModifier).first();
 
-  // Spend by Supplier Chart
   const { results: supplierSpend } = await c.env.DB.prepare(`
     SELECT 
       s.name AS supplier_name,
@@ -381,7 +456,6 @@ reports.get('/supplier-performance', async (c) => {
     ORDER BY total_spend DESC
   `).bind(daysModifier).all();
 
-  // Supplier Scorecard Table
   const { results: scorecard } = await c.env.DB.prepare(`
     SELECT 
       s.id,
@@ -428,9 +502,10 @@ reports.get('/supplier-performance', async (c) => {
 
 // 7. Receivables / Cash Flow Aging
 reports.get('/receivables', async (c) => {
-  const days = getDaysParam(c);
+  const payload = c.get('jwtPayload');
+  const scopedBranchId = isAdminUser(payload) ? null : payload.branch_id;
 
-  const { results: invoices } = await c.env.DB.prepare(`
+  let query = `
     SELECT 
       i.id,
       i.invoice_number,
@@ -449,8 +524,16 @@ reports.get('/receivables', async (c) => {
     FROM invoices i
     JOIN sales_orders so ON so.id = i.sales_order_id
     LEFT JOIN customers cust ON cust.id = so.customer_id
-    ORDER BY i.issued_at DESC
-  `).all();
+    WHERE 1=1
+  `;
+  const params: any[] = [];
+  if (scopedBranchId) {
+    query += ` AND so.branch_id = ?`;
+    params.push(scopedBranchId);
+  }
+  query += ` ORDER BY i.issued_at DESC`;
+
+  const { results: invoices } = params.length > 0 ? await c.env.DB.prepare(query).bind(...params).all() : await c.env.DB.prepare(query).all();
 
   let totalInvoiced = 0;
   let totalPaid = 0;
