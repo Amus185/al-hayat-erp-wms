@@ -117,6 +117,9 @@ sales.get('/orders', async (c) => {
 
 sales.get('/orders/:id', async (c) => {
   const id = c.req.param('id');
+  const payload = c.get('jwtPayload');
+  const scopedBranchId = isAdminUser(payload) ? null : payload.branch_id;
+
   const { results: orders } = await c.env.DB.prepare(`
     SELECT so.*, c.name AS customer_name, b.name AS branch_name,
            i.id AS invoice_id, i.invoice_number, i.total_amount AS invoice_total,
@@ -130,6 +133,10 @@ sales.get('/orders/:id', async (c) => {
   
   if (!orders.length) return c.json({ message: 'Not found' }, 404);
   const order = orders[0] as any;
+
+  if (scopedBranchId && order.branch_id !== scopedBranchId) {
+    return c.json({ message: 'Access denied: order belongs to another branch.' }, 403);
+  }
 
   const { results: lines } = await c.env.DB.prepare(`
     SELECT sol.*, p.name AS product_name, p.sku AS product_sku

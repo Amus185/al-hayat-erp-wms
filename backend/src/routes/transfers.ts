@@ -40,10 +40,17 @@ transfers.get('/', async (c) => {
 
 transfers.get('/:id', async (c) => {
   const id = c.req.param('id');
+  const payload = c.get('jwtPayload');
+  const scopedBranchId = isAdminUser(payload) ? null : payload.branch_id;
+
   const { results: transfers } = await c.env.DB.prepare('SELECT * FROM transfers WHERE id = ?').bind(id).all();
   if (!transfers.length) return c.json({ message: 'Not found' }, 404);
-  const transfer = transfers[0];
+  const transfer = transfers[0] as any;
   
+  if (scopedBranchId && transfer.source_branch_id !== scopedBranchId && transfer.destination_branch_id !== scopedBranchId) {
+    return c.json({ message: 'Access denied: transfer does not involve your branch.' }, 403);
+  }
+
   const { results: lines } = await c.env.DB.prepare(`
     SELECT tl.*, p.name as product_name, p.sku as product_sku 
     FROM transfer_lines tl
