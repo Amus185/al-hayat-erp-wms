@@ -1,17 +1,5 @@
 # Dockerfile for Railway Node.js Deployment
-FROM node:20-alpine AS builder
-
-WORKDIR /app
-
-COPY package*.json ./
-RUN npm ci
-
-COPY tsconfig.json ./
-COPY src ./src
-
-RUN npx tsc --noEmit
-
-FROM node:20-alpine AS runner
+FROM node:22-alpine
 
 WORKDIR /app
 
@@ -19,7 +7,7 @@ ENV NODE_ENV=production
 ENV PORT=3000
 
 COPY package*.json ./
-RUN npm ci --only=production
+RUN npm install --omit=dev
 
 COPY src ./src
 COPY tsconfig.json ./
