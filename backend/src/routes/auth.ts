@@ -8,7 +8,7 @@ const auth = new Hono<{ Bindings: Env }>();
 // ── Helper: build the full user payload for token signing ────────────────────
 async function buildUserPayload(db: D1Database, userId: string) {
   const user = await db.prepare(`
-    SELECT u.id, u.email, u.full_name, u.branch_id, u.password_version,
+    SELECT u.id, u.email, u.full_name, u.branch_id,
            (SELECT r.code FROM roles r JOIN user_roles ur ON ur.role_id = r.id WHERE ur.user_id = u.id LIMIT 1) as role_code,
            (SELECT GROUP_CONCAT(p.code)
             FROM user_roles ur
@@ -26,7 +26,7 @@ auth.post('/login', async (c) => {
   const { email, password } = body;
 
   const user = await c.env.DB.prepare(`
-    SELECT u.id, u.email, u.password_hash, u.full_name, u.branch_id, u.password_version,
+    SELECT u.id, u.email, u.password_hash, u.full_name, u.branch_id,
            (SELECT r.code FROM roles r JOIN user_roles ur ON ur.role_id = r.id WHERE ur.user_id = u.id LIMIT 1) as role_code,
            (SELECT GROUP_CONCAT(p.code) 
             FROM user_roles ur
@@ -41,6 +41,15 @@ auth.post('/login', async (c) => {
     return c.json({ message: 'Invalid credentials' }, 401);
   }
 
+  // Fetch password_version separately — graceful fallback if column not yet migrated
+  let pwdVer = 1;
+  try {
+    const pvRow = await c.env.DB.prepare('SELECT password_version FROM users WHERE id = ?').bind(user.id).first();
+    pwdVer = (pvRow?.password_version as number) ?? 1;
+  } catch (_) {
+    // Column not yet added — use default 1
+  }
+
   const permissions = user.permissions ? (user.permissions as string).split(',') : [];
   const roleCode = (user.role_code as string) || 'branch_user';
 
@@ -51,7 +60,7 @@ auth.post('/login', async (c) => {
     permissions,
     branch_id: (user.branch_id as string | null) ?? null,
     role: roleCode,
-    pwd_ver: (user.password_version as number) ?? 1,
+    pwd_ver: pwdVer,
   };
 
   const accessToken = await sign(
@@ -126,14 +135,21 @@ auth.post('/refresh', async (c) => {
   const user = await buildUserPayload(c.env.DB, decoded.sub);
   if (!user) return c.json({ message: 'User not found' }, 401);
 
-  // Validate password_version hasn't changed since this refresh token was issued
-  if ((user.password_version as number) !== decoded.pwd_ver) {
-    return c.json({ message: 'Credentials have been regenerated. Please log in again.' }, 401);
+  // Fetch password_version separately — graceful fallback if column not yet migrated
+  let pwdVer = 1;
+  try {
+    const pvRow = await c.env.DB.prepare('SELECT password_version FROM users WHERE id = ?').bind(user.id).first();
+    pwdVer = (pvRow?.password_version as number) ?? 1;
+    // Validate it hasn't changed since token was issued (skip if column missing)
+    if (decoded.pwd_ver && pwdVer !== decoded.pwd_ver) {
+      return c.json({ message: 'Credentials have been regenerated. Please log in again.' }, 401);
+    }
+  } catch (_) {
+    // Column not yet added — skip version check
   }
 
   const permissions = user.permissions ? (user.permissions as string).split(',') : [];
   const roleCode = (user.role_code as string) || 'branch_user';
-  const pwdVer = (user.password_version as number) ?? 1;
 
   const accessToken = await sign({
     sub: user.id as string,

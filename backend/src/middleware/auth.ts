@@ -24,16 +24,23 @@ export const authMiddleware = async (c: Context<{ Bindings: Env }>, next: Next) 
     const payload = await verify(token, c.env.JWT_ACCESS_SECRET, 'HS256') as JwtPayload;
 
     // Validate password_version against DB to support credential invalidation
-    const user = await c.env.DB.prepare(
-      'SELECT password_version FROM users WHERE id = ? AND is_active = 1'
-    ).bind(payload.sub).first();
+    // Uses try/catch in case password_version column hasn't been migrated yet
+    try {
+      const user = await c.env.DB.prepare(
+        'SELECT password_version FROM users WHERE id = ? AND is_active = 1'
+      ).bind(payload.sub).first();
 
-    if (!user) {
-      return c.json({ message: 'User not found or deactivated' }, 401);
-    }
+      if (!user) {
+        return c.json({ message: 'User not found or deactivated' }, 401);
+      }
 
-    if ((user.password_version as number) !== payload.pwd_ver) {
-      return c.json({ message: 'Credentials have been regenerated. Please log in again.' }, 401);
+      if ((user.password_version as number) !== payload.pwd_ver) {
+        return c.json({ message: 'Credentials have been regenerated. Please log in again.' }, 401);
+      }
+    } catch (dbErr: any) {
+      // If password_version column doesn't exist yet (migration pending), skip the check
+      // and fall through to allow login — this is a graceful degradation
+      if (!dbErr?.message?.includes('password_version')) throw dbErr;
     }
 
     c.set('jwtPayload', payload);
