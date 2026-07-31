@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import {
   BarChart3,
@@ -13,6 +14,8 @@ import {
   Users,
   LogOut,
   BookOpen,
+  Menu,
+  X,
 } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { useAuth } from '../contexts/AuthContext';
@@ -39,15 +42,30 @@ type AppShellProps = {
 export function AppShell({ children }: AppShellProps) {
   const { user, logout, hasPermission } = useAuth();
   const navigate = useNavigate();
+  const [isMobileOpen, setIsMobileOpen] = useState(false);
 
   const handleLogout = () => {
+    setIsMobileOpen(false);
     logout();
     navigate('/login');
   };
 
+  const closeMobileNav = () => {
+    setIsMobileOpen(false);
+  };
+
   return (
     <div className="app-shell">
-      <aside className="sidebar">
+      {/* Mobile Overlay Backdrop */}
+      {isMobileOpen && (
+        <div
+          className="sidebar-backdrop"
+          onClick={closeMobileNav}
+          aria-hidden="true"
+        />
+      )}
+
+      <aside className={`sidebar ${isMobileOpen ? 'mobile-open' : ''}`}>
         <div className="brand">
           <div className="brand__logo">
             <img src="/logo.png" alt="AlHayat Furniture Logo" />
@@ -55,13 +73,20 @@ export function AppShell({ children }: AppShellProps) {
           <div className="brand__text">
             <strong>AlHayat Furniture</strong>
           </div>
+          <button
+            type="button"
+            className="sidebar-close-btn"
+            onClick={closeMobileNav}
+            aria-label="Close menu"
+          >
+            <X size={20} />
+          </button>
         </div>
         
         <nav className="sidebar-nav">
           <div className="sidebar-nav-main">
             {navItems.map((item) => {
               const Icon = item.icon;
-              // Check if user has permission
               if (item.permission && !hasPermission(item.permission)) {
                 return null;
               }
@@ -70,6 +95,7 @@ export function AppShell({ children }: AppShellProps) {
                 <NavLink
                   to={item.path}
                   key={item.label}
+                  onClick={closeMobileNav}
                   className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}
                 >
                   <Icon size={18} />
@@ -94,9 +120,19 @@ export function AppShell({ children }: AppShellProps) {
       
       <main className="main">
         <header className="topbar">
-          <div>
-            <p>Operations Dashboard</p>
-            <h1>Inventory, purchasing, transfers, and sales</h1>
+          <div className="topbar__left">
+            <button
+              type="button"
+              className="mobile-menu-btn"
+              onClick={() => setIsMobileOpen(true)}
+              aria-label="Open menu"
+            >
+              <Menu size={22} />
+            </button>
+            <div>
+              <p>Operations Dashboard</p>
+              <h1>Inventory, purchasing, transfers, and sales</h1>
+            </div>
           </div>
           <div className="topbar__actions">
             <button type="button" title="Notifications">
