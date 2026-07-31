@@ -1,9 +1,9 @@
 import { Hono } from 'hono';
 import { Env, uuidv4 } from '../db';
-import { authMiddleware, requirePermissions } from '../middleware/auth';
-import { logAudit } from '../services/audit';
+import { authMiddleware, requirePermissions, isAdminUser } from '../middleware/auth';
+import { logAudit, createAuditLogStmt } from '../services/audit';
 
-const products = new Hono<{ Bindings: Env }>();
+const products = new Hono<{ Bindings: Env; Variables: { jwtPayload: any } }>();
 
 products.use('/*', authMiddleware);
 
@@ -21,6 +21,7 @@ products.get('/', async (c) => {
 
 products.post('/', requirePermissions(['manage_inventory']), async (c) => {
   const body = await c.req.json();
+  const payload = c.get('jwtPayload');
 
   // Input validation
   if (!body.sku || !body.sku.trim()) return c.json({ message: 'SKU is required.' }, 400);
@@ -52,19 +53,72 @@ products.post('/', requirePermissions(['manage_inventory']), async (c) => {
     if (!brand) return c.json({ message: 'Brand does not exist.' }, 400);
   }
 
-  const id = uuidv4();
-  await c.env.DB.prepare(`
+  // Context determination for initial inventory stock record
+  let ownerType: 'BRANCH' | 'WAREHOUSE' = 'BRANCH';
+  let branchId: string | null = null;
+  let warehouseId: string | null = null;
+
+  if (payload && !isAdminUser(payload) && payload.branch_id) {
+    // Branch user: force ownerType = BRANCH and assign their branch_id
+    ownerType = 'BRANCH';
+    branchId = payload.branch_id;
+  } else if (body.initialBranchId) {
+    ownerType = 'BRANCH';
+    branchId = body.initialBranchId;
+  } else if (body.initialWarehouseId) {
+    ownerType = 'WAREHOUSE';
+    warehouseId = body.initialWarehouseId;
+  } else {
+    // Admin default: attempt main warehouse first, fallback to first branch
+    const defaultWh = await c.env.DB.prepare('SELECT id FROM warehouses LIMIT 1').first();
+    if (defaultWh) {
+      ownerType = 'WAREHOUSE';
+      warehouseId = defaultWh.id as string;
+    } else {
+      const defaultBr = await c.env.DB.prepare('SELECT id FROM branches LIMIT 1').first();
+      if (defaultBr) {
+        ownerType = 'BRANCH';
+        branchId = defaultBr.id as string;
+      }
+    }
+  }
+
+  const initialQty = Math.max(0, Number(body.initialQuantity || 0));
+  const productId = uuidv4();
+  const stockId = uuidv4();
+
+  const stmts = [];
+
+  // 1. Insert product catalog entry
+  stmts.push(c.env.DB.prepare(`
     INSERT INTO products (id, sku, name, description, category_id, brand_id, cost_price, selling_price, reorder_level, barcode)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).bind(
-    id, body.sku.trim(), body.name.trim(), body.description || null, body.categoryId || null, 
+    productId, body.sku.trim(), body.name.trim(), body.description || null, body.categoryId || null, 
     body.brandId || null, cost, sell, body.reorderLevel || 5, body.barcode || null
-  ).run();
-  
-  const { results } = await c.env.DB.prepare('SELECT * FROM products WHERE id = ?').bind(id).all();
-  await logAudit(c, 'PRODUCT_CREATE', 'products', id, null, body);
-  return c.json(results[0], 201);
+  ));
+
+  // 2. Insert initial inventory_stock entry bound to owner context
+  stmts.push(c.env.DB.prepare(`
+    INSERT INTO inventory_stock (id, product_id, owner_type, warehouse_id, branch_id, quantity_on_hand, quantity_reserved)
+    VALUES (?, ?, ?, ?, ?, ?, 0)
+  `).bind(
+    stockId, productId, ownerType, warehouseId, branchId, initialQty
+  ));
+
+  // 3. Audit log statement
+  stmts.push(createAuditLogStmt(c, 'PRODUCT_CREATE', 'products', productId, null, {
+    ...body,
+    initialInventory: { ownerType, warehouseId, branchId, initialQuantity: initialQty }
+  }));
+
+  // Atomic batch execution to guarantee tight coupling
+  await c.env.DB.batch(stmts);
+
+  const product = await c.env.DB.prepare('SELECT * FROM products WHERE id = ?').bind(productId).first();
+  return c.json(product, 201);
 });
+
 
 products.get('/categories', async (c) => {
   const { results } = await c.env.DB.prepare('SELECT * FROM categories ORDER BY name ASC').all();
