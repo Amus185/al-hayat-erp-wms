@@ -13,6 +13,38 @@ export type JwtPayload = {
   pwd_ver: number;        // password_version — invalidated on credential regen
 };
 
+// ── In-Memory Password Version Cache (5-Minute TTL) ──────────────────────────
+interface CachedUserPwdVer {
+  pwdVer: number;
+  isActive: boolean;
+  expiresAt: number;
+}
+
+const userPwdVerCache = new Map<string, CachedUserPwdVer>();
+const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+export function getCachedPwdVer(userId: string): { pwdVer: number; isActive: boolean } | null {
+  const entry = userPwdVerCache.get(userId);
+  if (!entry) return null;
+  if (Date.now() > entry.expiresAt) {
+    userPwdVerCache.delete(userId);
+    return null;
+  }
+  return { pwdVer: entry.pwdVer, isActive: entry.isActive };
+}
+
+export function setCachedPwdVer(userId: string, pwdVer: number, isActive = true) {
+  userPwdVerCache.set(userId, {
+    pwdVer,
+    isActive,
+    expiresAt: Date.now() + CACHE_TTL_MS,
+  });
+}
+
+export function invalidateUserCache(userId: string) {
+  userPwdVerCache.delete(userId);
+}
+
 export const authMiddleware = async (c: Context<{ Bindings: Env }>, next: Next) => {
   const authHeader = c.req.header('Authorization');
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -23,24 +55,38 @@ export const authMiddleware = async (c: Context<{ Bindings: Env }>, next: Next) 
   try {
     const payload = await verify(token, c.env.JWT_ACCESS_SECRET, 'HS256') as JwtPayload;
 
-    // Validate password_version against DB to support credential invalidation
-    // Uses try/catch in case password_version column hasn't been migrated yet
-    try {
-      const user = await c.env.DB.prepare(
-        'SELECT password_version FROM users WHERE id = ? AND is_active = 1'
-      ).bind(payload.sub).first();
+    // Fast-path: Check in-memory cache first (<1ms)
+    let cached = getCachedPwdVer(payload.sub);
 
-      if (!user) {
-        return c.json({ message: 'User not found or deactivated' }, 401);
-      }
+    if (!cached) {
+      // Cache miss: query DB once per 5 minutes per user
+      try {
+        const user = await c.env.DB.prepare(
+          'SELECT password_version, is_active FROM users WHERE id = ?'
+        ).bind(payload.sub).first();
 
-      if ((user.password_version as number) !== payload.pwd_ver) {
-        return c.json({ message: 'Credentials have been regenerated. Please log in again.' }, 401);
+        if (!user) {
+          return c.json({ message: 'User not found or deactivated' }, 401);
+        }
+
+        const dbPwdVer = (user.password_version as number) ?? 1;
+        const isActive = Boolean(user.is_active);
+
+        setCachedPwdVer(payload.sub, dbPwdVer, isActive);
+        cached = { pwdVer: dbPwdVer, isActive };
+      } catch (dbErr: any) {
+        if (!dbErr?.message?.includes('password_version')) throw dbErr;
+        // Graceful fallback if column missing
+        cached = { pwdVer: payload.pwd_ver ?? 1, isActive: true };
       }
-    } catch (dbErr: any) {
-      // If password_version column doesn't exist yet (migration pending), skip the check
-      // and fall through to allow login — this is a graceful degradation
-      if (!dbErr?.message?.includes('password_version')) throw dbErr;
+    }
+
+    if (!cached.isActive) {
+      return c.json({ message: 'User deactivated' }, 401);
+    }
+
+    if (payload.pwd_ver !== undefined && cached.pwdVer !== payload.pwd_ver) {
+      return c.json({ message: 'Credentials have been regenerated. Please log in again.' }, 401);
     }
 
     c.set('jwtPayload', payload);
@@ -49,6 +95,7 @@ export const authMiddleware = async (c: Context<{ Bindings: Env }>, next: Next) 
     return c.json({ message: 'Invalid or expired token' }, 401);
   }
 };
+
 
 /**
  * requirePermissions — ensure caller has ALL listed permission codes.

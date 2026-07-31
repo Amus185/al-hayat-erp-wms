@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { Env, uuidv4 } from '../db';
 import * as bcrypt from 'bcryptjs';
-import { authMiddleware, requirePermissions, requireAdmin, isAdminUser } from '../middleware/auth';
+import { authMiddleware, requirePermissions, requireAdmin, isAdminUser, invalidateUserCache } from '../middleware/auth';
 import { logAudit } from '../services/audit';
 
 const branches = new Hono<{ Bindings: Env }>();
@@ -189,7 +189,10 @@ branches.post('/:id/regenerate-credentials', requireAdmin, async (c) => {
     ).bind(branchUser.id),
   ]);
 
+  invalidateUserCache(branchUser.id as string);
+
   await logAudit(c, 'BRANCH_CREDENTIALS_REGENERATED', 'branches', branchId, null, {
+
     branchUserEmail: branchUser.email,
     newPasswordVersion: newVersion,
     // rawPassword intentionally NOT logged

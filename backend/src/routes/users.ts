@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { Env, uuidv4 } from '../db';
 import * as bcrypt from 'bcryptjs';
-import { authMiddleware, requirePermissions } from '../middleware/auth';
+import { authMiddleware, requirePermissions, invalidateUserCache } from '../middleware/auth';
 import { logAudit, createAuditLogStmt } from '../services/audit';
 
 const users = new Hono<{ Bindings: Env }>();
@@ -115,6 +115,7 @@ users.patch('/:id', async (c) => {
   const user = await c.env.DB.prepare(
     'SELECT id, email, full_name, phone, branch_id, warehouse_id, is_active FROM users WHERE id = ?'
   ).bind(id).first();
+  invalidateUserCache(id);
   await logAudit(c, 'USER_UPDATE', 'users', id, oldUser, body);
   return c.json(user);
 });
@@ -127,10 +128,18 @@ users.post('/:id/change-password', async (c) => {
     return c.json({ message: 'Password must be at least 6 characters' }, 400);
   }
   const passwordHash = bcrypt.hashSync(newPassword, 12);
-  await c.env.DB.prepare('UPDATE users SET password_hash = ? WHERE id = ?').bind(passwordHash, id).run();
+  try {
+    await c.env.DB.prepare(
+      'UPDATE users SET password_hash = ?, password_version = COALESCE(password_version, 1) + 1 WHERE id = ?'
+    ).bind(passwordHash, id).run();
+  } catch (_) {
+    await c.env.DB.prepare('UPDATE users SET password_hash = ? WHERE id = ?').bind(passwordHash, id).run();
+  }
+  invalidateUserCache(id); // Clear cache so next request validates against DB
   await logAudit(c, 'USER_CHANGE_PASSWORD', 'users', id, null, { changed: true });
   return c.json({ success: true });
 });
+
 
 // DELETE user (safe — checks for active references)
 users.delete('/:id', async (c) => {

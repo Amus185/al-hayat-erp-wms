@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { sign, verify } from 'hono/jwt';
 import * as bcrypt from 'bcryptjs';
 import { Env, uuidv4 } from '../db';
+import { invalidateUserCache } from '../middleware/auth';
 
 const auth = new Hono<{ Bindings: Env }>();
 
@@ -177,6 +178,8 @@ auth.post('/refresh', async (c) => {
     `INSERT INTO refresh_tokens (id, user_id, token_hash, expires_at)
      VALUES (?, ?, ?, datetime('now', '+7 days'))`
   ).bind(uuidv4(), user.id, newTokenHash).run();
+
+  invalidateUserCache(user.id as string);
 
   return c.json({
     accessToken,
