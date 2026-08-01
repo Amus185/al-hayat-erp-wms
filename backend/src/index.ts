@@ -17,8 +17,11 @@ import files from './routes/files';
 import accounting from './routes/accounting';
 
 import { D1RemoteClient } from './d1-remote-client';
+import { PgAdapter } from './pg-client';
 
 const app = new Hono();
+
+let globalPgAdapter: PgAdapter | null = null;
 
 app.use('*', cors({
   origin: '*',
@@ -29,7 +32,7 @@ app.use('*', cors({
   credentials: true,
 }));
 
-// Environment & Remote D1 Binding Middleware for Railway / Node.js
+// Environment & Database Binding Middleware for Railway / Node.js
 app.use('*', async (c, next) => {
   const envObj = (c.env || {}) as Record<string, any>;
   (c as any).env = envObj;
@@ -40,8 +43,15 @@ app.use('*', async (c, next) => {
   envObj.JWT_ACCESS_EXPIRY = envObj.JWT_ACCESS_EXPIRY || (typeof process !== 'undefined' ? process.env.JWT_ACCESS_EXPIRY : undefined) || '15m';
   envObj.JWT_REFRESH_EXPIRY = envObj.JWT_REFRESH_EXPIRY || (typeof process !== 'undefined' ? process.env.JWT_REFRESH_EXPIRY : undefined) || '7d';
 
-  // Instantiate remote D1 REST client if c.env.DB is missing (Node.js runtime)
-  if (!envObj.DB && typeof process !== 'undefined' && (process.env.CLOUDFLARE_API_TOKEN || process.env.CLOUDFLARE_ACCOUNT_ID)) {
+  const pgConnStr = typeof process !== 'undefined' ? (process.env.DATABASE_URL || process.env.POSTGRES_URL || process.env.PG_URL) : undefined;
+
+  if (pgConnStr) {
+    if (!globalPgAdapter) {
+      console.log('⚡ Initializing native PostgreSQL Connection Pool adapter...');
+      globalPgAdapter = new PgAdapter(pgConnStr);
+    }
+    envObj.DB = globalPgAdapter;
+  } else if (!envObj.DB && typeof process !== 'undefined' && (process.env.CLOUDFLARE_API_TOKEN || process.env.CLOUDFLARE_ACCOUNT_ID)) {
     const accountId = process.env.CLOUDFLARE_ACCOUNT_ID || 'c3066ec07528b261e192b4530cca58bf';
     const databaseId = process.env.CLOUDFLARE_D1_DATABASE_ID || '1cae6841-1519-4131-9636-161a5039c3c5';
     const apiToken = process.env.CLOUDFLARE_API_TOKEN || '';
@@ -51,6 +61,7 @@ app.use('*', async (c, next) => {
 
   await next();
 });
+
 
 app.get('/', (c) => c.json({
   service: 'Al Hayat ERP & WMS Backend API',
