@@ -69,10 +69,13 @@ export class D1RemoteClient {
   }
 
   async batch(statements: D1PreparedStatement[]): Promise<any[]> {
+    const batchStart = Date.now();
     const results = [];
     for (const stmt of statements) {
       results.push(await stmt.run());
     }
+    const batchMs = Date.now() - batchStart;
+    console.log(`[D1-PERF] batch(${statements.length} stmts) = ${batchMs}ms  (avg ${Math.round(batchMs / statements.length)}ms/stmt)`);
     return results;
   }
 
@@ -85,6 +88,7 @@ export class D1RemoteClient {
 
     const url = `https://api.cloudflare.com/client/v4/accounts/${this.accountId}/d1/database/${this.databaseId}/query`;
 
+    const t0 = Date.now();
     const response = await fetch(url, {
       method: 'POST',
       headers: {
@@ -96,6 +100,7 @@ export class D1RemoteClient {
         params,
       }),
     });
+    const t1 = Date.now();
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -103,6 +108,10 @@ export class D1RemoteClient {
     }
 
     const data: any = await response.json();
+    const totalMs = Date.now() - t0;
+    const sqlPreview = sql.replace(/\s+/g, ' ').substring(0, 80);
+    console.log(`[D1-PERF] ${totalMs}ms (fetch=${t1 - t0}ms) | ${sqlPreview}`);
+
     if (!data.success || !data.result || data.result.length === 0) {
       const err = data.errors?.[0]?.message || 'Unknown D1 query error';
       throw new Error(`D1 REST API Error: ${err}`);
@@ -110,4 +119,5 @@ export class D1RemoteClient {
 
     return data.result[0];
   }
+
 }
