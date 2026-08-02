@@ -72,7 +72,7 @@ warehouses.get('/:id/inventory', async (c) => {
     SELECT i.*, p.name, p.sku, p.barcode
     FROM inventory_stock i
     JOIN products p ON p.id = i.product_id
-    WHERE i.warehouse_id = ? AND i.owner_type = 'WAREHOUSE'
+    WHERE i.warehouse_id = ? AND i.owner_type = 'WAREHOUSE' AND i.quantity_on_hand > 0
     ORDER BY p.name ASC
   `).bind(id).all();
   return c.json(results);
@@ -88,7 +88,7 @@ warehouses.get('/:id/summary', async (c) => {
       COALESCE(SUM(i.quantity_on_hand * p.cost_price), 0) as inventory_value
     FROM inventory_stock i
     JOIN products p ON p.id = i.product_id
-    WHERE i.warehouse_id = ? AND i.owner_type = 'WAREHOUSE'
+    WHERE i.warehouse_id = ? AND i.owner_type = 'WAREHOUSE' AND i.quantity_on_hand > 0
   `).bind(id).first();
 
   const locationCount = await c.env.DB.prepare(

@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { Env, uuidv4 } from '../db';
 import { authMiddleware, requirePermissions, isAdminUser } from '../middleware/auth';
 import { createAuditLogStmt } from '../services/audit';
+import { postInventoryAdjustmentJournalEntry } from '../services/accounting-service';
 
 const inventory = new Hono<{ Bindings: Env; Variables: { jwtPayload: any } }>();
 
@@ -158,6 +159,25 @@ inventory.post('/adjust', requirePermissions(['manage_inventory']), async (c) =>
 
   stmts.push(createAuditLogStmt(c, 'INVENTORY_ADJUST', 'inventory_stock', txId, null, { productId: body.productId, quantity: body.quantity, direction: body.direction, ownerType, warehouseId: body.warehouseId, branchId: body.branchId, notes: body.notes }));
   await c.env.DB.batch(stmts);
+
+  // Automatically post double-entry GL journal entry for Inventory Adjustment
+  try {
+    const prodInfo = await c.env.DB.prepare('SELECT cost_price FROM products WHERE id = ?').bind(body.productId).first();
+    await postInventoryAdjustmentJournalEntry(
+      c,
+      {
+        id: txId,
+        productId: body.productId,
+        quantity: body.quantity,
+        direction: body.direction,
+        unitCost: Number(prodInfo?.cost_price || 10),
+        branchId: body.branchId,
+      },
+      userId
+    );
+  } catch (accErr) {
+    console.error('Failed to post inventory adjustment accounting entry:', accErr);
+  }
 
   const { results } = await c.env.DB.prepare('SELECT * FROM inventory_transactions WHERE id = ?').bind(txId).all();
   return c.json(results[0], 201);

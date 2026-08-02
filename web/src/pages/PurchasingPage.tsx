@@ -301,7 +301,7 @@ export function PurchasingPage() {
 
   const handleRecordPayment = async (e: React.FormEvent) => {
     e.preventDefault();
-    const invoiceId = selectedPO?.invoice?.id;
+    const invoiceId = selectedPO?.invoice?.id || selectedPO?.purchase_invoice_id || selectedPO?.invoice_id || selectedPO?.id;
     if (!invoiceId) { addToast('error', 'No purchase invoice found for this PO.'); return; }
 
     const amount = Number(paymentForm.amount);

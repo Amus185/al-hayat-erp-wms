@@ -833,6 +833,33 @@ accounting.post('/depreciation', requirePermissions(['manage_purchasing']), asyn
     body.fiscal_period_id || null, body.period_depreciation,
     body.notes || null, userId).run();
 
+  // Create posted journal entry and general ledger entries for depreciation
+  if (body.period_depreciation > 0) {
+    try {
+      const jeId = generateId();
+      const jeNum = `JE-DEP-${Date.now()}`;
+      const accumDepAcc = body.accum_dep_account_id || 'coa-1501';
+      const expAcc = body.dep_expense_account_id || 'coa-6060';
+
+      await c.env.DB.prepare(`
+        INSERT INTO journal_entries
+          (id, entry_number, fiscal_period_id, entry_date, description, reference_type, reference_id, status, total_debit, total_credit, created_by)
+        VALUES (?, ?, ?, ?, ?, 'DEPRECIATION', ?, 'POSTED', ?, ?, ?)
+      `).bind(jeId, jeNum, body.fiscal_period_id || null, body.acquisition_date, `Depreciation: ${body.asset_name}`, id, body.period_depreciation, body.period_depreciation, userId).run();
+
+      const line1Id = generateId();
+      const line2Id = generateId();
+      await c.env.DB.batch([
+        c.env.DB.prepare(`INSERT INTO journal_entry_lines (id, journal_entry_id, account_id, description, debit_amount, credit_amount, line_order) VALUES (?, ?, ?, ?, ?, 0, 1)`).bind(line1Id, jeId, expAcc, `Depreciation Expense: ${body.asset_name}`, body.period_depreciation),
+        c.env.DB.prepare(`INSERT INTO journal_entry_lines (id, journal_entry_id, account_id, description, debit_amount, credit_amount, line_order) VALUES (?, ?, ?, ?, 0, ?, 2)`).bind(line2Id, jeId, accumDepAcc, `Accumulated Depreciation: ${body.asset_name}`, body.period_depreciation),
+        c.env.DB.prepare(`INSERT INTO general_ledger (id, account_id, journal_entry_id, line_id, entry_date, description, debit_amount, credit_amount, running_balance) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)`).bind(generateId(), expAcc, jeId, line1Id, body.acquisition_date, `Depreciation Expense: ${body.asset_name}`, body.period_depreciation, body.period_depreciation),
+        c.env.DB.prepare(`INSERT INTO general_ledger (id, account_id, journal_entry_id, line_id, entry_date, description, debit_amount, credit_amount, running_balance) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)`).bind(generateId(), accumDepAcc, jeId, line2Id, body.acquisition_date, `Accumulated Depreciation: ${body.asset_name}`, body.period_depreciation, body.period_depreciation),
+      ]);
+    } catch (depErr) {
+      console.error('Failed to post depreciation GL entry:', depErr);
+    }
+  }
+
   const row = await c.env.DB.prepare('SELECT * FROM depreciation_schedules WHERE id = ?').bind(id).first();
   return c.json(row, 201);
 });

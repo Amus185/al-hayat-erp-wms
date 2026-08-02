@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { Env, uuidv4 } from '../db';
 import { authMiddleware, requirePermissions, isAdminUser } from '../middleware/auth';
 import { logAudit, createAuditLogStmt } from '../services/audit';
+import { postSaleJournalEntry, postCustomerPaymentJournalEntry } from '../services/accounting-service';
 
 const sales = new Hono<{ Bindings: Env; Variables: { jwtPayload: any } }>();
 
@@ -603,6 +604,25 @@ sales.post('/orders/:id/complete', requirePermissions(['manage_sales']), async (
     stmts.push(createAuditLogStmt(c, 'SALES_ORDER_COMPLETE', 'sales_orders', orderId, { status: validSource }, { status: 'PAID', invoiceId, total }));
 
     await c.env.DB.batch(stmts);
+
+    // Automatically post double-entry GL journal entries for Sale Completion & Payment
+    try {
+      await postSaleJournalEntry(
+        c,
+        { id: order.id as string, order_number: (order as any).order_number as string || (order.id as string), branch_id: (order as any).branch_id as string },
+        total,
+        userId
+      );
+      await postCustomerPaymentJournalEntry(
+        c,
+        { id: invoiceId, amount: total },
+        { id: order.id as string, order_number: (order as any).order_number as string || (order.id as string), branch_id: (order as any).branch_id as string },
+        userId
+      );
+    } catch (accErr) {
+      console.error('Failed to post sales accounting entries:', accErr);
+    }
+
     return c.json({ success: true, invoiceId, total });
 
   } catch (err: any) {
@@ -685,6 +705,18 @@ sales.post('/invoices/:id/payments', requirePermissions(['manage_sales']), async
   }));
 
   await c.env.DB.batch(stmts);
+
+  // Automatically post double-entry GL journal entry for Customer Payment
+  try {
+    await postCustomerPaymentJournalEntry(
+      c,
+      { id: paymentId, amount, paymentDate },
+      { id: (invoice as any).order_id, order_number: (invoice as any).invoice_number || (invoice as any).id, branch_id: (invoice as any).branch_id },
+      userId
+    );
+  } catch (accErr) {
+    console.error('Failed to post customer payment accounting entry:', accErr);
+  }
 
   // Return updated summary
   const newSummary = await getInvoicePaymentSummary(
@@ -859,6 +891,30 @@ sales.get('/invoices/:id/print', async (c) => {
       subtotal: (l.quantity as number) * (l.unit_price as number),
     })),
   });
+});
+
+// ──────────────────────────────────────────────────────────────────────
+// CANCEL ORDER — DRAFT/CONFIRMED/INVOICED → CANCELLED
+// Discards sale without moving stock or creating accounting entries
+// ──────────────────────────────────────────────────────────────────────
+sales.post('/orders/:id/cancel', requirePermissions(['manage_sales']), async (c) => {
+  const orderId = c.req.param('id');
+  const userId = c.get('jwtPayload').sub;
+
+  const order = await c.env.DB.prepare('SELECT * FROM sales_orders WHERE id = ?').bind(orderId).first();
+  if (!order) return c.json({ message: 'Order not found.' }, 404);
+  if (order.status === 'PAID') {
+    return c.json({ message: 'Cannot cancel a fully paid sale.' }, 400);
+  }
+  if (order.status === 'CANCELLED') {
+    return c.json({ message: 'Order is already cancelled.' }, 400);
+  }
+
+  const prevStatus = order.status;
+  await c.env.DB.prepare("UPDATE sales_orders SET status = 'CANCELLED' WHERE id = ?").bind(orderId).run();
+  await logAudit(c, 'SALES_ORDER_CANCEL', 'sales_orders', orderId, { status: prevStatus }, { status: 'CANCELLED' });
+
+  return c.json({ success: true, message: 'Sales order cancelled successfully.' });
 });
 
 export default sales;

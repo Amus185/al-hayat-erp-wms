@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { Env, uuidv4 } from '../db';
 import { authMiddleware, requirePermissions } from '../middleware/auth';
 import { logAudit, createAuditLogStmt } from '../services/audit';
+import { postPurchaseApprovalJournalEntry, postPurchasePaymentJournalEntry } from '../services/accounting-service';
 
 const purchasing = new Hono<{ Bindings: Env; Variables: { jwtPayload: any } }>();
 
@@ -392,6 +393,13 @@ purchasing.post('/orders/:id/approve', requirePermissions(['manage_purchasing'])
 
   await c.env.DB.batch(stmts);
 
+  // Automatically post double-entry GL journal entry for Purchase Approval & Receipt
+  try {
+    await postPurchaseApprovalJournalEntry(c, { id: po.id as string, po_number: (po as any).po_number || po.id, branch_id: (po as any).branch_id }, grandTotal, userId);
+  } catch (accErr) {
+    console.error('Failed to post purchase approval accounting entry:', accErr);
+  }
+
   // Return full PO details
   const updated = await c.env.DB.prepare(`SELECT po.*, s.name AS supplier_name FROM purchase_orders po JOIN suppliers s ON s.id = po.supplier_id WHERE po.id = ?`).bind(id).first();
   const invoice = await c.env.DB.prepare('SELECT * FROM purchase_invoices WHERE purchase_order_id = ?').bind(id).first();
@@ -593,18 +601,29 @@ purchasing.post('/invoices/:id/payments', requirePermissions(['manage_purchasing
     `).bind(paymentId, purchaseInvoiceId, amount, paymentMethod, paymentDate, body.notes || null, userId),
   ];
 
-  // Auto-close invoice if fully paid
-  if (isFullyPaid) {
-    stmts.push(c.env.DB.prepare(
-      "UPDATE purchase_invoices SET status = 'PAID' WHERE id = ?"
-    ).bind(purchaseInvoiceId));
-  }
+  // Update invoice payment status (PAID or PARTIALLY_PAID)
+  const newStatus = isFullyPaid ? 'PAID' : 'PARTIALLY_PAID';
+  stmts.push(c.env.DB.prepare(
+    "UPDATE purchase_invoices SET status = ? WHERE id = ?"
+  ).bind(newStatus, purchaseInvoiceId));
 
   stmts.push(createAuditLogStmt(c, 'PURCHASE_INVOICE_PAYMENT', 'purchase_invoices', purchaseInvoiceId, null, {
     amount, paymentMethod, paymentDate, isFullyPaid
   }));
 
   await c.env.DB.batch(stmts);
+
+  // Automatically post double-entry GL journal entry for Purchase Payment
+  try {
+    await postPurchasePaymentJournalEntry(
+      c,
+      { id: paymentId, amount, paymentDate },
+      { id: (invoice as any).id, invoice_number: (invoice as any).invoice_number || (invoice as any).id, branch_id: (invoice as any).branch_id },
+      userId
+    );
+  } catch (accErr) {
+    console.error('Failed to post purchase payment accounting entry:', accErr);
+  }
 
   // Return updated summary
   const newSummary = await getPurchaseInvoicePaymentSummary(

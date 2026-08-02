@@ -255,6 +255,21 @@ export function SalesPage() {
     }
   };
 
+  const handleCancelOrder = async (id: string) => {
+    if (!window.confirm('Are you sure you want to cancel this sales order?')) return;
+    try {
+      setOrderDetailsLoading(true);
+      await apiPost(`/sales/orders/${id}/cancel`, {});
+      addToast('success', 'Sales order cancelled');
+      setSelectedOrder(null);
+      loadData();
+    } catch (err: any) {
+      addToast('error', err?.message || 'Failed to cancel order');
+    } finally {
+      setOrderDetailsLoading(false);
+    }
+  };
+
   // Open payment form pre-filled with remaining balance
   const openPaymentModal = (order: any) => {
     const balance = order.payment_summary?.balance ?? order.balance ?? 0;
@@ -720,6 +735,13 @@ export function SalesPage() {
                     Complete & Pay in Full
                   </button>
                 </>
+              )}
+
+              {selectedOrder.status !== 'PAID' && selectedOrder.status !== 'CANCELLED' && hasPermission('manage_sales') && (
+                <button type="button" className="btn btn-danger" disabled={orderDetailsLoading}
+                  onClick={() => handleCancelOrder(selectedOrder.id)}>
+                  Cancel Order
+                </button>
               )}
 
               {/* INVOICED but no payment tracking yet → Mark fully paid (fallback) */}

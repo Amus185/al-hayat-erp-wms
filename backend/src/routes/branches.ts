@@ -4,7 +4,7 @@ import * as bcrypt from 'bcryptjs';
 import { authMiddleware, requirePermissions, requireAdmin, isAdminUser, invalidateUserCache } from '../middleware/auth';
 import { logAudit } from '../services/audit';
 
-const branches = new Hono<{ Bindings: Env }>();
+const branches = new Hono<{ Bindings: Env; Variables: { jwtPayload: any } }>();
 
 branches.use('/*', authMiddleware);
 
