@@ -9,6 +9,7 @@ interface ModalProps {
   footer?: ReactNode;
   width?: 'sm' | 'md' | 'lg' | 'xl';
   id?: string;
+  zIndex?: number;
 }
 
 export function Modal({
@@ -19,6 +20,7 @@ export function Modal({
   footer,
   width = 'md',
   id = 'modal',
+  zIndex,
 }: ModalProps) {
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
@@ -41,7 +43,7 @@ export function Modal({
   if (!isOpen) return null;
 
   return (
-    <div className="modal-backdrop" onClick={onClose} id={`${id}-backdrop`}>
+    <div className="modal-backdrop" onClick={onClose} id={`${id}-backdrop`} style={zIndex !== undefined ? { zIndex } : undefined}>
       <div
         className={`modal-panel modal-panel--${width}`}
         onClick={(e) => e.stopPropagation()}
