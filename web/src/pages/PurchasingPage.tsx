@@ -167,6 +167,7 @@ export function PurchasingPage() {
 
   // Supplier payment modal
   const [isPaymentOpen, setIsPaymentOpen] = useState(false);
+  const [paymentTargetPO, setPaymentTargetPO] = useState<any>(null);
   const [paymentForm, setPaymentForm] = useState({
     amount: '',
     paymentMethod: 'CASH' as PaymentMethod,
@@ -288,7 +289,9 @@ export function PurchasingPage() {
 
   // ── Supplier payment ─────────────────────────────────────────────
   const openPaymentModal = (po: any) => {
-    const balance = po.invoice?.balance ?? po.balance ?? 0;
+    const target = po || selectedPO;
+    setPaymentTargetPO(target);
+    const balance = target?.invoice?.balance ?? target?.balance ?? target?.invoice_total ?? 0;
     setPaymentForm({
       amount: balance > 0 ? String(Number(balance).toFixed(2)) : '',
       paymentMethod: 'CASH',
@@ -301,7 +304,8 @@ export function PurchasingPage() {
 
   const handleRecordPayment = async (e: React.FormEvent) => {
     e.preventDefault();
-    const invoiceId = selectedPO?.invoice?.id || selectedPO?.purchase_invoice_id || selectedPO?.invoice_id || selectedPO?.id;
+    const target = paymentTargetPO || selectedPO;
+    const invoiceId = target?.invoice?.id || target?.purchase_invoice_id || target?.invoice_id || target?.id;
     if (!invoiceId) { addToast('error', 'No purchase invoice found for this PO.'); return; }
 
     const amount = Number(paymentForm.amount);
@@ -317,9 +321,16 @@ export function PurchasingPage() {
       });
       addToast('success', `Payment of ${fmt(amount)} to supplier recorded.`);
       setIsPaymentOpen(false);
-      // Refresh PO details
-      const details = await apiGet<any>(`/purchasing/orders/${selectedPO.id}`);
-      setSelectedPO(details);
+      setPaymentTargetPO(null);
+
+      // Refresh PO details if modal is open
+      const refreshPoId = target?.id || selectedPO?.id;
+      if (refreshPoId) {
+        const details = await apiGet<any>(`/purchasing/orders/${refreshPoId}`);
+        if (selectedPO?.id === refreshPoId) {
+          setSelectedPO(details);
+        }
+      }
       loadData();
     } catch (err: any) {
       addToast('error', err?.message || 'Failed to record payment');
@@ -657,61 +668,7 @@ export function PurchasingPage() {
         </form>
       </Modal>
 
-      {/* ── Record Supplier Payment Modal ── */}
-      <Modal
-        isOpen={isPaymentOpen}
-        onClose={() => setIsPaymentOpen(false)}
-        title={`Pay Supplier — ${selectedPO?.po_number || ''}`}
-        width="sm"
-      >
-        {invoiceSummary && (
-          <div style={{ marginBottom: '16px' }}>
-            <PurchaseInvoiceSummaryBox summary={invoiceSummary.summary} discountAmount={invoiceSummary.discount} />
-          </div>
-        )}
-        <form onSubmit={handleRecordPayment}>
-          <div style={{ display: 'grid', gap: '14px' }}>
-            <InputField
-              label="Payment Amount ($)"
-              id="poPayAmount"
-              type="number"
-              value={paymentForm.amount}
-              onChange={(val) => setPaymentForm(prev => ({ ...prev, amount: val }))}
-              required
-            />
-            <div className="form-field">
-              <label className="form-field__label">Payment Method</label>
-              <select
-                className="form-select"
-                value={paymentForm.paymentMethod}
-                onChange={(e) => setPaymentForm(prev => ({ ...prev, paymentMethod: e.target.value as PaymentMethod }))}
-              >
-                {PAYMENT_METHODS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
-              </select>
-            </div>
-            <InputField
-              label="Payment Date"
-              id="poPayDate"
-              type="date"
-              value={paymentForm.paymentDate}
-              onChange={(val) => setPaymentForm(prev => ({ ...prev, paymentDate: val }))}
-            />
-            <TextareaField
-              label="Notes (optional)"
-              id="poPayNotes"
-              value={paymentForm.notes}
-              onChange={(val) => setPaymentForm(prev => ({ ...prev, notes: val }))}
-            />
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '20px' }}>
-            <button type="button" className="btn btn-secondary" onClick={() => setIsPaymentOpen(false)}>Cancel</button>
-            <button type="submit" className="btn btn-primary" disabled={paymentSubmitting}>
-              <CreditCard size={14} style={{ marginRight: '4px', inlineSize: 'auto' }} />
-              {paymentSubmitting ? 'Recording…' : 'Record Payment'}
-            </button>
-          </div>
-        </form>
-      </Modal>
+
 
       {/* ── PO Details Modal ── */}
       <Modal
@@ -905,6 +862,57 @@ export function PurchasingPage() {
             </div>
           </div>
         )}
+      </Modal>
+
+      {/* ── Record Supplier Payment Modal ── */}
+      <Modal
+        isOpen={isPaymentOpen}
+        onClose={() => { setIsPaymentOpen(false); setPaymentTargetPO(null); }}
+        title={`Pay Supplier — ${paymentTargetPO?.po_number || selectedPO?.po_number || ''}`}
+        width="sm"
+      >
+        <form onSubmit={handleRecordPayment}>
+          <div style={{ display: 'grid', gap: '14px' }}>
+            <InputField
+              label="Payment Amount ($)"
+              id="poPayAmount"
+              type="number"
+              value={paymentForm.amount}
+              onChange={(val) => setPaymentForm(prev => ({ ...prev, amount: val }))}
+              required
+            />
+            <div className="form-field">
+              <label className="form-field__label">Payment Method</label>
+              <select
+                className="form-select"
+                value={paymentForm.paymentMethod}
+                onChange={(e) => setPaymentForm(prev => ({ ...prev, paymentMethod: e.target.value as PaymentMethod }))}
+              >
+                {PAYMENT_METHODS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+              </select>
+            </div>
+            <InputField
+              label="Payment Date"
+              id="poPayDate"
+              type="date"
+              value={paymentForm.paymentDate}
+              onChange={(val) => setPaymentForm(prev => ({ ...prev, paymentDate: val }))}
+            />
+            <TextareaField
+              label="Notes (optional)"
+              id="poPayNotes"
+              value={paymentForm.notes}
+              onChange={(val) => setPaymentForm(prev => ({ ...prev, notes: val }))}
+            />
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '20px' }}>
+            <button type="button" className="btn btn-secondary" onClick={() => { setIsPaymentOpen(false); setPaymentTargetPO(null); }}>Cancel</button>
+            <button type="submit" className="btn btn-primary" disabled={paymentSubmitting}>
+              <CreditCard size={14} style={{ marginRight: '4px', inlineSize: 'auto' }} />
+              {paymentSubmitting ? 'Recording…' : 'Record Payment'}
+            </button>
+          </div>
+        </form>
       </Modal>
     </div>
   );

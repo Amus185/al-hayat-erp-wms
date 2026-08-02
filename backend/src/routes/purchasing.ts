@@ -568,15 +568,16 @@ purchasing.post('/invoices/:id/payments', requirePermissions(['manage_purchasing
 
   const paymentDate = body.paymentDate || new Date().toISOString().split('T')[0];
 
-  // Fetch purchase invoice
+  // Fetch purchase invoice (support both purchase_invoice_id and purchase_order_id)
   const invoice = await c.env.DB.prepare(
-    'SELECT * FROM purchase_invoices WHERE id = ?'
-  ).bind(purchaseInvoiceId).first();
+    'SELECT * FROM purchase_invoices WHERE id = ? OR purchase_order_id = ?'
+  ).bind(purchaseInvoiceId, purchaseInvoiceId).first();
   if (!invoice) return c.json({ message: 'Purchase invoice not found.' }, 404);
+  const realInvoiceId = invoice.id as string;
 
   // Compute current balance
   const summary = await getPurchaseInvoicePaymentSummary(
-    c.env.DB, purchaseInvoiceId,
+    c.env.DB, realInvoiceId,
     Number(invoice.total_amount),
     Number((invoice as any).discount_amount || 0)
   );
@@ -598,16 +599,16 @@ purchasing.post('/invoices/:id/payments', requirePermissions(['manage_purchasing
     c.env.DB.prepare(`
       INSERT INTO purchase_invoice_payments (id, purchase_invoice_id, amount, payment_method, payment_date, notes, recorded_by)
       VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).bind(paymentId, purchaseInvoiceId, amount, paymentMethod, paymentDate, body.notes || null, userId),
+    `).bind(paymentId, realInvoiceId, amount, paymentMethod, paymentDate, body.notes || null, userId),
   ];
 
   // Update invoice payment status (PAID or PARTIALLY_PAID)
   const newStatus = isFullyPaid ? 'PAID' : 'PARTIALLY_PAID';
   stmts.push(c.env.DB.prepare(
     "UPDATE purchase_invoices SET status = ? WHERE id = ?"
-  ).bind(newStatus, purchaseInvoiceId));
+  ).bind(newStatus, realInvoiceId));
 
-  stmts.push(createAuditLogStmt(c, 'PURCHASE_INVOICE_PAYMENT', 'purchase_invoices', purchaseInvoiceId, null, {
+  stmts.push(createAuditLogStmt(c, 'PURCHASE_INVOICE_PAYMENT', 'purchase_invoices', realInvoiceId, null, {
     amount, paymentMethod, paymentDate, isFullyPaid
   }));
 
