@@ -308,31 +308,39 @@ sales.post('/orders/:id/invoice', requirePermissions(['manage_sales']), async (c
       return c.json({ message: 'Order has no line items.' }, 400);
     }
 
-    // Pre-flight stock check in parallel via Promise.all
-    const insufficientLines: string[] = [];
+    // Pre-flight stock check — single query for all products instead of N+1 individual lookups
+    const productIds = lines.map((l: any) => l.product_id as string);
+    const placeholders = productIds.map(() => '?').join(', ');
+
+    const { results: stockRows } = await c.env.DB.prepare(`
+      SELECT s.id, s.product_id, s.quantity_on_hand, p.name AS product_name
+      FROM inventory_stock s
+      JOIN products p ON p.id = s.product_id
+      WHERE s.product_id IN (${placeholders}) AND s.owner_type = 'BRANCH' AND s.branch_id = ?
+    `).bind(...productIds, branchId).all();
+
     const stockMap = new Map<string, { stockId: string; qtyOnHand: number }>();
+    const productNameMap = new Map<string, string>();
+    for (const row of (stockRows || []) as any[]) {
+      stockMap.set(row.product_id, {
+        stockId: row.id || '',
+        qtyOnHand: Number(row.quantity_on_hand) || 0,
+      });
+      productNameMap.set(row.product_id, row.product_name || row.product_id);
+    }
 
-    await Promise.all(
-      lines.map(async (line: any) => {
-        const stock = await c.env.DB.prepare(`
-          SELECT id, quantity_on_hand FROM inventory_stock
-          WHERE product_id = ? AND owner_type = 'BRANCH' AND branch_id = ?
-        `).bind(line.product_id, branchId).first();
-
-        const available = (stock?.quantity_on_hand as number) || 0;
-        const requested = line.quantity as number;
-
-        if (available < requested) {
-          const prod = await c.env.DB.prepare('SELECT name FROM products WHERE id = ?').bind(line.product_id).first();
-          insufficientLines.push(`${prod?.name || line.product_id}: need ${requested}, available ${available}`);
-        }
-
-        stockMap.set(line.product_id as string, {
-          stockId: (stock?.id as string) || '',
-          qtyOnHand: available,
-        });
-      })
-    );
+    const insufficientLines: string[] = [];
+    for (const line of lines) {
+      const pid = line.product_id as string;
+      const available = stockMap.get(pid)?.qtyOnHand || 0;
+      const requested = line.quantity as number;
+      if (available < requested) {
+        insufficientLines.push(`${productNameMap.get(pid) || pid}: need ${requested}, available ${available}`);
+      }
+      if (!stockMap.has(pid)) {
+        stockMap.set(pid, { stockId: '', qtyOnHand: 0 });
+      }
+    }
 
     if (insufficientLines.length > 0) {
       await c.env.DB.prepare("UPDATE sales_orders SET status = 'CONFIRMED' WHERE id = ?").bind(orderId).run();
@@ -533,20 +541,34 @@ sales.post('/orders/:id/complete', requirePermissions(['manage_sales']), async (
       return c.json({ message: 'Order has no line items.' }, 400);
     }
 
-    // Pre-flight stock check
+    // Pre-flight stock check — single query for all products instead of N+1 individual lookups
+    const productIds = lines.map((l: any) => l.product_id as string);
+    const placeholders = productIds.map(() => '?').join(', ');
+
+    const { results: stockRows } = await c.env.DB.prepare(`
+      SELECT s.product_id, s.quantity_on_hand, p.name AS product_name
+      FROM inventory_stock s
+      JOIN products p ON p.id = s.product_id
+      WHERE s.product_id IN (${placeholders}) AND s.owner_type = 'BRANCH' AND s.branch_id = ?
+    `).bind(...productIds, branchId).all();
+
+    const stockLookup = new Map<string, { qtyOnHand: number; name: string }>();
+    for (const row of (stockRows || []) as any[]) {
+      stockLookup.set(row.product_id, {
+        qtyOnHand: Number(row.quantity_on_hand) || 0,
+        name: row.product_name || row.product_id,
+      });
+    }
+
     const insufficientLines: string[] = [];
     for (const line of lines) {
-      const stock = await c.env.DB.prepare(`
-        SELECT quantity_on_hand FROM inventory_stock
-        WHERE product_id = ? AND owner_type = 'BRANCH' AND branch_id = ?
-      `).bind(line.product_id, branchId).first();
-
-      const available = (stock?.quantity_on_hand as number) || 0;
+      const pid = line.product_id as string;
+      const info = stockLookup.get(pid);
+      const available = info?.qtyOnHand || 0;
       const requested = line.quantity as number;
 
       if (available < requested) {
-        const prod = await c.env.DB.prepare('SELECT name FROM products WHERE id = ?').bind(line.product_id).first();
-        insufficientLines.push(`${prod?.name || line.product_id}: need ${requested}, available ${available}`);
+        insufficientLines.push(`${info?.name || pid}: need ${requested}, available ${available}`);
       }
     }
 

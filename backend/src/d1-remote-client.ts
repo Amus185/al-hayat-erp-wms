@@ -51,6 +51,14 @@ export class D1PreparedStatement {
     const res = await this.all();
     return res.results.map((row) => Object.values(row as any)) as T[];
   }
+
+  getSql(): string {
+    return this.sql;
+  }
+
+  getParams(): any[] {
+    return this.params;
+  }
 }
 
 export class D1RemoteClient {
@@ -69,14 +77,58 @@ export class D1RemoteClient {
   }
 
   async batch(statements: D1PreparedStatement[]): Promise<any[]> {
-    const batchStart = Date.now();
-    const results = [];
-    for (const stmt of statements) {
-      results.push(await stmt.run());
+    if (!this.apiToken || !this.accountId || !this.databaseId) {
+      throw new Error(
+        'Cloudflare D1 credentials missing. Set CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_D1_DATABASE_ID, and CLOUDFLARE_API_TOKEN.'
+      );
     }
-    const batchMs = Date.now() - batchStart;
-    console.log(`[D1-PERF] batch(${statements.length} stmts) = ${batchMs}ms  (avg ${Math.round(batchMs / statements.length)}ms/stmt)`);
-    return results;
+
+    if (statements.length === 0) return [];
+
+    // Build the batch payload — each statement contributes its sql + params
+    const batchPayload = statements.map((stmt) => ({
+      sql: stmt.getSql(),
+      params: stmt.getParams(),
+    }));
+
+    const url = `https://api.cloudflare.com/client/v4/accounts/${this.accountId}/d1/database/${this.databaseId}/query`;
+
+    const t0 = Date.now();
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${this.apiToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ batch: batchPayload }),
+    });
+    const t1 = Date.now();
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`D1 REST API batch HTTP ${response.status}: ${errorText}`);
+    }
+
+    const data: any = await response.json();
+    const totalMs = Date.now() - t0;
+
+    console.log(
+      `[D1-PERF] batch(${statements.length} stmts) = ${totalMs}ms (fetch=${t1 - t0}ms) | 1 HTTP request, atomic transaction`
+    );
+
+    if (!data.success) {
+      const err = data.errors?.[0]?.message || 'Unknown D1 batch error';
+      throw new Error(`D1 REST API Batch Error: ${err}`);
+    }
+
+    // D1 returns { success: true, result: [ { results, meta, success }, ... ] }
+    // Map each per-statement result into the shape callers expect
+    const resultArray = data.result || [];
+    return resultArray.map((r: any) => ({
+      results: r.results || [],
+      success: r.success ?? true,
+      meta: r.meta || { changes: r.changes || 0 },
+    }));
   }
 
   async executeQuery(sql: string, params: any[] = []): Promise<any> {
