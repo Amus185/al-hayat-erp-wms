@@ -563,61 +563,7 @@ export function SalesPage() {
         </form>
       </Modal>
 
-      {/* ── Record Payment Modal ── */}
-      <Modal
-        isOpen={isPaymentOpen}
-        onClose={() => setIsPaymentOpen(false)}
-        title={`Record Payment — ${selectedOrder?.order_number || ''}`}
-        width="sm"
-      >
-        {orderSummary && (
-          <div style={{ marginBottom: '16px' }}>
-            <InvoiceSummaryBox summary={orderSummary.summary} discountAmount={orderSummary.discount} />
-          </div>
-        )}
-        <form onSubmit={handleRecordPayment}>
-          <div style={{ display: 'grid', gap: '14px' }}>
-            <InputField
-              label="Payment Amount ($)"
-              id="payAmount"
-              type="number"
-              value={paymentForm.amount}
-              onChange={(val) => setPaymentForm(prev => ({ ...prev, amount: val }))}
-              required
-            />
-            <div className="form-field">
-              <label className="form-field__label">Payment Method</label>
-              <select
-                className="form-select"
-                value={paymentForm.paymentMethod}
-                onChange={(e) => setPaymentForm(prev => ({ ...prev, paymentMethod: e.target.value as PaymentMethod }))}
-              >
-                {PAYMENT_METHODS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
-              </select>
-            </div>
-            <InputField
-              label="Payment Date"
-              id="payDate"
-              type="date"
-              value={paymentForm.paymentDate}
-              onChange={(val) => setPaymentForm(prev => ({ ...prev, paymentDate: val }))}
-            />
-            <TextareaField
-              label="Notes (optional)"
-              id="payNotes"
-              value={paymentForm.notes}
-              onChange={(val) => setPaymentForm(prev => ({ ...prev, notes: val }))}
-            />
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '20px' }}>
-            <button type="button" className="btn btn-secondary" onClick={() => setIsPaymentOpen(false)}>Cancel</button>
-            <button type="submit" className="btn btn-primary" disabled={paymentSubmitting}>
-              <CreditCard size={14} style={{ marginRight: '4px', inlineSize: 'auto' }} />
-              {paymentSubmitting ? 'Recording…' : 'Record Payment'}
-            </button>
-          </div>
-        </form>
-      </Modal>
+
 
       {/* ── Sales Order Details Modal ── */}
       <Modal
@@ -771,6 +717,63 @@ export function SalesPage() {
             </div>
           </div>
         )}
+      </Modal>
+
+      {/* ── Record Payment Modal ── */}
+      <Modal
+        isOpen={isPaymentOpen}
+        zIndex={1100}
+        onClose={() => setIsPaymentOpen(false)}
+        title={`Record Payment — ${selectedOrder?.order_number || ''}`}
+        width="sm"
+      >
+        {orderSummary && (
+          <div style={{ marginBottom: '16px' }}>
+            <InvoiceSummaryBox summary={orderSummary.summary} discountAmount={orderSummary.discount} />
+          </div>
+        )}
+        <form onSubmit={handleRecordPayment}>
+          <div style={{ display: 'grid', gap: '14px' }}>
+            <InputField
+              label="Payment Amount ($)"
+              id="payAmount"
+              type="number"
+              value={paymentForm.amount}
+              onChange={(val) => setPaymentForm(prev => ({ ...prev, amount: val }))}
+              required
+            />
+            <div className="form-field">
+              <label className="form-field__label">Payment Method</label>
+              <select
+                className="form-select"
+                value={paymentForm.paymentMethod}
+                onChange={(e) => setPaymentForm(prev => ({ ...prev, paymentMethod: e.target.value as PaymentMethod }))}
+              >
+                {PAYMENT_METHODS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+              </select>
+            </div>
+            <InputField
+              label="Payment Date"
+              id="payDate"
+              type="date"
+              value={paymentForm.paymentDate}
+              onChange={(val) => setPaymentForm(prev => ({ ...prev, paymentDate: val }))}
+            />
+            <TextareaField
+              label="Notes (optional)"
+              id="payNotes"
+              value={paymentForm.notes}
+              onChange={(val) => setPaymentForm(prev => ({ ...prev, notes: val }))}
+            />
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '20px' }}>
+            <button type="button" className="btn btn-secondary" onClick={() => setIsPaymentOpen(false)}>Cancel</button>
+            <button type="submit" className="btn btn-primary" disabled={paymentSubmitting}>
+              <CreditCard size={14} style={{ marginRight: '4px', inlineSize: 'auto' }} />
+              {paymentSubmitting ? 'Recording…' : 'Record Payment'}
+            </button>
+          </div>
+        </form>
       </Modal>
     </div>
   );

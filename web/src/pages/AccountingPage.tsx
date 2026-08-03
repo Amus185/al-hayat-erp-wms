@@ -199,7 +199,7 @@ export function AccountingPage() {
         setBranches(bList || []);
         if (pList?.length) setSelectedPeriod(pList[0].id);
       } catch (e) {
-        addToast('Failed to load accounting data', 'error');
+        addToast('error', 'Failed to load accounting data');
       } finally {
         setLoading(false);
       }
@@ -243,7 +243,7 @@ export function AccountingPage() {
         setDepreciation(rows || []);
       }
     } catch (e) {
-      addToast('Failed to load data', 'error');
+      addToast('error', 'Failed to load data');
     }
   }, [ledgerAccountId, trialType]);
 
@@ -265,11 +265,11 @@ export function AccountingPage() {
     const totalDr = lines.reduce((s, l) => s + (parseFloat(l.debit_amount) || 0), 0);
     const totalCr = lines.reduce((s, l) => s + (parseFloat(l.credit_amount) || 0), 0);
     if (Math.abs(totalDr - totalCr) > 0.005) {
-      addToast(`Entry not balanced: Debits $${fmtN(totalDr)} ≠ Credits $${fmtN(totalCr)}`, 'error');
+      addToast('error', `Entry not balanced: Debits $${fmtN(totalDr)} ≠ Credits $${fmtN(totalCr)}`);
       return;
     }
     if (!jeForm.description || lines.length < 2) {
-      addToast('Description and at least 2 lines required', 'error');
+      addToast('error', 'Description and at least 2 lines required');
       return;
     }
     setSubmitting(true);
@@ -285,7 +285,7 @@ export function AccountingPage() {
           credit_amount: parseFloat(l.credit_amount) || 0,
         }))
       });
-      addToast('Journal entry created', 'success');
+      addToast('success', 'Journal entry created');
       setShowJEModal(false);
       setJeForm({
         entry_date: new Date().toISOString().split('T')[0],
@@ -297,7 +297,7 @@ export function AccountingPage() {
       });
       loadTabData('journal', selectedPeriod);
     } catch (e: any) {
-      addToast(e?.message || 'Failed to create journal entry', 'error');
+      addToast('error', e?.message || 'Failed to create journal entry');
     } finally {
       setSubmitting(false);
     }
@@ -306,44 +306,44 @@ export function AccountingPage() {
   // ── Post JE ──────────────────────────────────────────────────────
   async function postEntry(id: string) {
     setJournalEntries((rows) => rows.map((row) => row.id === id ? { ...row, status: 'POSTED' } : row));
-    addToast('Posting entry…', 'info');
+    addToast('info', 'Posting entry…');
     try {
       await apiPost(`/accounting/journal-entries/${id}/post`, {});
-      addToast('Entry posted to General Ledger', 'success');
+      addToast('success', 'Entry posted to General Ledger');
       loadTabData('journal', selectedPeriod);
     } catch (e: any) {
-      addToast(e?.message || 'Failed to post entry', 'error');
+      addToast('error', e?.message || 'Failed to post entry');
     }
   }
 
   // ── Reverse JE ───────────────────────────────────────────────────
   async function reverseEntry(id: string) {
     setJournalEntries((rows) => rows.map((row) => row.id === id ? { ...row, status: 'REVERSED' } : row));
-    addToast('Creating reversal…', 'info');
+    addToast('info', 'Creating reversal…');
     try {
       await apiPost(`/accounting/journal-entries/${id}/reverse`, {});
-      addToast('Reversal entry created', 'success');
+      addToast('success', 'Reversal entry created');
       loadTabData('journal', selectedPeriod);
     } catch (e: any) {
-      addToast(e?.message || 'Failed to reverse entry', 'error');
+      addToast('error', e?.message || 'Failed to reverse entry');
     }
   }
 
   // ── Submit CoA ───────────────────────────────────────────────────
   async function submitCoA() {
     if (!coaForm.code || !coaForm.name || !coaForm.account_type) {
-      addToast('Code, name, and type are required', 'error'); return;
+      addToast('error', 'Code, name, and type are required'); return;
     }
     setSubmitting(true);
     try {
       await apiPost('/accounting/chart-of-accounts', coaForm);
-      addToast('Account created', 'success');
+      addToast('success', 'Account created');
       setShowCoAModal(false);
       setCoaForm({ code: '', name: '', account_type: 'ASSET', description: '' });
       const aList = await apiGet<any[]>('/accounting/chart-of-accounts').catch(() => []);
       setAccounts(aList || []);
     } catch (e: any) {
-      addToast(e?.message || 'Failed to create account', 'error');
+      addToast('error', e?.message || 'Failed to create account');
     } finally {
       setSubmitting(false);
     }
@@ -352,17 +352,17 @@ export function AccountingPage() {
   // ── Submit Period ────────────────────────────────────────────────
   async function submitPeriod() {
     if (!periodForm.name || !periodForm.start_date || !periodForm.end_date) {
-      addToast('All period fields required', 'error'); return;
+      addToast('error', 'All period fields required'); return;
     }
     setSubmitting(true);
     try {
       await apiPost('/accounting/fiscal-periods', periodForm);
-      addToast('Fiscal period created', 'success');
+      addToast('success', 'Fiscal period created');
       setShowPeriodModal(false);
       const pList = await apiGet<any[]>('/accounting/fiscal-periods').catch(() => []);
       setPeriods(pList || []);
     } catch (e: any) {
-      addToast(e?.message || 'Failed to create period', 'error');
+      addToast('error', e?.message || 'Failed to create period');
     } finally {
       setSubmitting(false);
     }
@@ -371,18 +371,18 @@ export function AccountingPage() {
   // ── Submit Inventory Count ───────────────────────────────────────
   async function submitInvCount() {
     if (!invForm.fiscal_period_id || !invForm.count_date || !invForm.total_value) {
-      addToast('Period, date, and value required', 'error'); return;
+      addToast('error', 'Period, date, and value required'); return;
     }
     setSubmitting(true);
     try {
       await apiPost('/accounting/inventory-counts', {
         ...invForm, total_value: parseFloat(invForm.total_value)
       });
-      addToast('Inventory count recorded', 'success');
+      addToast('success', 'Inventory count recorded');
       setShowInvCountModal(false);
       loadTabData('inventory', selectedPeriod);
     } catch (e: any) {
-      addToast(e?.message || 'Failed to record count', 'error');
+      addToast('error', e?.message || 'Failed to record count');
     } finally {
       setSubmitting(false);
     }
@@ -391,7 +391,7 @@ export function AccountingPage() {
   // ── Submit Depreciation ──────────────────────────────────────────
   async function submitDep() {
     if (!depForm.asset_name || !depForm.acquisition_date || !depForm.cost || !depForm.period_depreciation) {
-      addToast('Required fields missing', 'error'); return;
+      addToast('error', 'Required fields missing'); return;
     }
     setSubmitting(true);
     try {
@@ -403,11 +403,11 @@ export function AccountingPage() {
         period_depreciation: parseFloat(depForm.period_depreciation),
         fiscal_period_id: depForm.fiscal_period_id || null,
       });
-      addToast('Depreciation recorded', 'success');
+      addToast('success', 'Depreciation recorded');
       setShowDepModal(false);
       loadTabData('depreciation', selectedPeriod);
     } catch (e: any) {
-      addToast(e?.message || 'Failed to record depreciation', 'error');
+      addToast('error', e?.message || 'Failed to record depreciation');
     } finally {
       setSubmitting(false);
     }
@@ -415,15 +415,15 @@ export function AccountingPage() {
 
   // ── Generate Closing Entries ─────────────────────────────────────
   async function generateClosing() {
-    if (!selectedPeriod) { addToast('Select a fiscal period first', 'error'); return; }
+    if (!selectedPeriod) { addToast('error', 'Select a fiscal period first'); return; }
     setSubmitting(true);
     try {
       const res = await apiPost<any>('/accounting/closing-entries', { fiscal_period_id: selectedPeriod });
-      addToast(`Closing entries generated — Net Income: ${fmt(res.net_income)}`, 'success');
+      addToast('success', `Closing entries generated — Net Income: ${fmt(res.net_income)}`);
       setShowClosingModal(false);
       loadTabData('journal', selectedPeriod);
     } catch (e: any) {
-      addToast(e?.message || 'Failed to generate closing entries', 'error');
+      addToast('error', e?.message || 'Failed to generate closing entries');
     } finally {
       setSubmitting(false);
     }
@@ -435,7 +435,7 @@ export function AccountingPage() {
       const d = await apiGet<any>(`/accounting/journal-entries/${id}`);
       setShowJEDetail(d);
     } catch (e) {
-      addToast('Failed to load entry details', 'error');
+      addToast('error', 'Failed to load entry details');
     }
   }
 
@@ -444,7 +444,7 @@ export function AccountingPage() {
       const rows = await apiGet<any[]>(`/accounting/general-ledger?account_id=${account.account_id || account.id}`);
       setLedgerDrill({ account, rows: rows || [] });
     } catch (e) {
-      addToast('Failed to load account activity', 'error');
+      addToast('error', 'Failed to load account activity');
     }
   }
 
@@ -531,9 +531,9 @@ export function AccountingPage() {
         <button onClick={async () => {
           try {
             await apiPatch(`/accounting/inventory-counts/${r.id}/approve`, {});
-            addToast('Inventory count approved', 'success');
+            addToast('success', 'Inventory count approved');
             loadTabData('inventory', selectedPeriod);
-          } catch (e) { addToast('Failed to approve', 'error'); }
+          } catch (e) { addToast('error', 'Failed to approve'); }
         }} style={{ background: G + '18', border: 'none', color: G, borderRadius: '6px', padding: '4px 10px', cursor: 'pointer', fontSize: '12px', fontWeight: 600 }}>
           <CheckCircle2 size={11} style={{ marginRight: '4px' }} />Approve
         </button>
