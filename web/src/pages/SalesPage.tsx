@@ -15,6 +15,7 @@ import { FilterBar } from '../components/FilterBar';
 import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
 import type { PaymentMethod, InvoicePayment, PaymentSummary } from '../types';
+import { confirmAction } from '../utils/swal';
 
 // ── Local interface shapes matching API responses ───────────────────
 interface Customer {
@@ -256,7 +257,13 @@ export function SalesPage() {
   };
 
   const handleCancelOrder = async (id: string) => {
-    if (!window.confirm('Are you sure you want to cancel this sales order?')) return;
+    const confirmed = await confirmAction(
+      'Cancel Sales Order?',
+      'Are you sure you want to cancel this sales order? This action cannot be undone.',
+      'Yes, Cancel Order',
+      'warning'
+    );
+    if (!confirmed) return;
     try {
       setOrderDetailsLoading(true);
       await apiPost(`/sales/orders/${id}/cancel`, {});
