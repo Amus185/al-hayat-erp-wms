@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   ShoppingCart, Plus, UserPlus, Eye, CheckCircle,
-  DollarSign, Zap, Printer, CreditCard, History, ChevronDown, ChevronUp,
+  DollarSign, Zap, Printer, CreditCard, History, ChevronDown, ChevronUp, Loader2,
 } from 'lucide-react';
 import { apiGet, apiPost } from '../api/client';
 import { DataTable, type Column } from '../components/DataTable';
@@ -201,9 +201,12 @@ export function SalesPage() {
     }
   };
 
+  const [actionProcessing, setActionProcessing] = useState<'complete' | 'invoice_deposit' | 'cancel' | 'pay' | null>(null);
+
   // ONE-CLICK: confirm + invoice + pay all at once
   const handleComplete = async (id: string) => {
     try {
+      setActionProcessing('complete');
       setOrderDetailsLoading(true);
       await apiPost(`/sales/orders/${id}/complete`, {});
       addToast('success', '✅ Sale completed! Invoice issued and payment recorded.');
@@ -213,12 +216,14 @@ export function SalesPage() {
       addToast('error', err?.message || 'Failed to complete sale');
     } finally {
       setOrderDetailsLoading(false);
+      setActionProcessing(null);
     }
   };
 
   // Invoice an order first, then let the cashier record a deposit or installment.
   const handleInvoiceAndTakeDeposit = async (order: any) => {
     try {
+      setActionProcessing('invoice_deposit');
       setOrderDetailsLoading(true);
       if (order.status === 'DRAFT') {
         await apiPost(`/sales/orders/${order.id}/confirm`, {});
@@ -239,11 +244,13 @@ export function SalesPage() {
       addToast('error', err?.message || 'Failed to create invoice for payment');
     } finally {
       setOrderDetailsLoading(false);
+      setActionProcessing(null);
     }
   };
   // Mark existing invoice as fully paid (legacy button — now also records a payment)
   const handlePayInvoice = async (orderId: string) => {
     try {
+      setActionProcessing('pay');
       setOrderDetailsLoading(true);
       await apiPost(`/sales/orders/${orderId}/pay`, {});
       addToast('success', 'Payment recorded successfully');
@@ -253,6 +260,7 @@ export function SalesPage() {
       addToast('error', err?.message || 'Failed to post payment');
     } finally {
       setOrderDetailsLoading(false);
+      setActionProcessing(null);
     }
   };
 
@@ -265,6 +273,7 @@ export function SalesPage() {
     );
     if (!confirmed) return;
     try {
+      setActionProcessing('cancel');
       setOrderDetailsLoading(true);
       await apiPost(`/sales/orders/${id}/cancel`, {});
       addToast('success', 'Sales order cancelled');
@@ -274,6 +283,7 @@ export function SalesPage() {
       addToast('error', err?.message || 'Failed to cancel order');
     } finally {
       setOrderDetailsLoading(false);
+      setActionProcessing(null);
     }
   };
 
@@ -675,33 +685,49 @@ export function SalesPage() {
               {/* DRAFT or CONFIRMED → either settle in full or invoice and collect a deposit */}
               {(selectedOrder.status === 'DRAFT' || selectedOrder.status === 'CONFIRMED') && hasPermission('manage_sales') && (
                 <>
-                  <button type="button" className="btn btn-secondary" disabled={orderDetailsLoading}
+                  <button type="button" className="btn btn-secondary" disabled={orderDetailsLoading || !!actionProcessing}
                     onClick={() => handleInvoiceAndTakeDeposit(selectedOrder)}
-                    style={{ color: '#92400e', borderColor: '#fbbf24' }}>
-                    <CreditCard size={14} style={{ marginRight: '4px', inlineSize: 'auto' }} />
-                    Invoice & Take Deposit
+                    style={{ color: '#92400e', borderColor: '#fbbf24', display: 'flex', alignItems: 'center' }}>
+                    {actionProcessing === 'invoice_deposit' ? (
+                      <><Loader2 size={14} className="spin-icon" /> Invoicing…</>
+                    ) : (
+                      <><CreditCard size={14} style={{ marginRight: '4px', inlineSize: 'auto' }} /> Invoice & Take Deposit</>
+                    )}
                   </button>
-                  <button type="button" className="btn btn-primary" disabled={orderDetailsLoading}
+                  <button type="button" className="btn btn-primary" disabled={orderDetailsLoading || !!actionProcessing}
                     onClick={() => handleComplete(selectedOrder.id)}
-                    style={{ background: 'linear-gradient(135deg, #0b8f08, #066006)' }}>
-                    <Zap size={14} style={{ marginRight: '4px', inlineSize: 'auto' }} />
-                    Complete & Pay in Full
+                    style={{ background: 'linear-gradient(135deg, #0b8f08, #066006)', display: 'flex', alignItems: 'center' }}>
+                    {actionProcessing === 'complete' ? (
+                      <><Loader2 size={14} className="spin-icon" /> Processing Sale…</>
+                    ) : (
+                      <><Zap size={14} style={{ marginRight: '4px', inlineSize: 'auto' }} /> Complete & Pay in Full</>
+                    )}
                   </button>
                 </>
               )}
 
               {selectedOrder.status !== 'PAID' && selectedOrder.status !== 'CANCELLED' && hasPermission('manage_sales') && (
-                <button type="button" className="btn btn-danger" disabled={orderDetailsLoading}
-                  onClick={() => handleCancelOrder(selectedOrder.id)}>
-                  Cancel Order
+                <button type="button" className="btn btn-danger" disabled={orderDetailsLoading || !!actionProcessing}
+                  onClick={() => handleCancelOrder(selectedOrder.id)}
+                  style={{ display: 'flex', alignItems: 'center' }}>
+                  {actionProcessing === 'cancel' ? (
+                    <><Loader2 size={14} className="spin-icon" /> Cancelling…</>
+                  ) : (
+                    'Cancel Order'
+                  )}
                 </button>
               )}
 
               {/* INVOICED but no payment tracking yet → Mark fully paid (fallback) */}
               {selectedOrder.status === 'INVOICED' && !canRecordPayment && hasPermission('manage_sales') && (
-                <button type="button" className="btn btn-primary" disabled={orderDetailsLoading}
-                  onClick={() => handlePayInvoice(selectedOrder.id)}>
-                  <DollarSign size={14} style={{ marginRight: '4px', inlineSize: 'auto' }} /> Mark as Paid
+                <button type="button" className="btn btn-primary" disabled={orderDetailsLoading || !!actionProcessing}
+                  onClick={() => handlePayInvoice(selectedOrder.id)}
+                  style={{ display: 'flex', alignItems: 'center' }}>
+                  {actionProcessing === 'pay' ? (
+                    <><Loader2 size={14} className="spin-icon" /> Processing…</>
+                  ) : (
+                    <><DollarSign size={14} style={{ marginRight: '4px', inlineSize: 'auto' }} /> Mark as Paid</>
+                  )}
                 </button>
               )}
 
