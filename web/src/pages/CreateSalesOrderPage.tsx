@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ShoppingCart, ArrowLeft, Plus, Trash2 } from 'lucide-react';
+import { ShoppingCart, ArrowLeft, Plus, Trash2, Loader2 } from 'lucide-react';
 import { apiGet, apiPost } from '../api/client';
 import { FormField, InputField, TextareaField } from '../components/FormField';
 import { SearchInput } from '../components/SearchInput';
@@ -116,8 +116,11 @@ export function CreateSalesOrderPage() {
     });
   };
 
+  const [submittingAction, setSubmittingAction] = useState<'complete' | 'draft' | null>(null);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submittingAction) return;
     const completeNow = (document.getElementById('completeNowFlag') as HTMLInputElement)?.value !== '0';
     if (!customerId) {
       addToast('error', 'Please select a customer');
@@ -144,6 +147,7 @@ export function CreateSalesOrderPage() {
     };
 
     try {
+      setSubmittingAction(completeNow ? 'complete' : 'draft');
       const order = await apiPost<any>('/sales/orders', payload);
       if (completeNow) {
         await apiPost(`/sales/orders/${order.id}/complete`, {});
@@ -154,6 +158,8 @@ export function CreateSalesOrderPage() {
       navigate('/sales');
     } catch (err: any) {
       addToast('error', err?.message || 'Failed to submit Sales Order');
+    } finally {
+      setSubmittingAction(null);
     }
   };
 
@@ -362,17 +368,25 @@ export function CreateSalesOrderPage() {
         </div>
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
-          <button type="button" className="btn btn-secondary" onClick={() => navigate('/sales')}>
+          <button type="button" className="btn btn-secondary" onClick={() => navigate('/sales')} disabled={!!submittingAction}>
             Cancel
           </button>
-          <button type="submit" className="btn btn-secondary" disabled={lines.length === 0}
+          <button type="submit" className="btn btn-secondary" disabled={lines.length === 0 || !!submittingAction}
             onClick={() => (document.getElementById('completeNowFlag') as HTMLInputElement).value = '0'}>
-            Save as Draft
+            {submittingAction === 'draft' ? (
+              <><Loader2 size={14} className="spin-icon" /> Saving Draft…</>
+            ) : (
+              'Save as Draft'
+            )}
           </button>
-          <button type="submit" className="btn btn-primary" disabled={lines.length === 0}
+          <button type="submit" className="btn btn-primary" disabled={lines.length === 0 || !!submittingAction}
             onClick={() => (document.getElementById('completeNowFlag') as HTMLInputElement).value = '1'}
-            style={{ background: 'linear-gradient(135deg, #0b8f08, #066006)' }}>
-            ⚡ Create & Complete
+            style={{ background: 'linear-gradient(135deg, #0b8f08, #066006)', display: 'flex', alignItems: 'center' }}>
+            {submittingAction === 'complete' ? (
+              <><Loader2 size={14} className="spin-icon" /> Processing Sale…</>
+            ) : (
+              '⚡ Create & Complete'
+            )}
           </button>
           <input type="hidden" id="completeNowFlag" name="completeNow" defaultValue="1" />
         </div>
