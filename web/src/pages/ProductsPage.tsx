@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { PackageSearch, Plus, Trash2, List, Settings, PlusCircle } from 'lucide-react';
+import { PackageSearch, Plus, Trash2, List, Settings, PlusCircle, Loader2 } from 'lucide-react';
 import { apiGet, apiPost, apiPatch, apiDelete, apiDownload } from '../api/client';
 import { DataTable, type Column } from '../components/DataTable';
 import { SearchInput } from '../components/SearchInput';
@@ -200,6 +200,7 @@ export function ProductsPage() {
     if (newProduct.brandId) payload.brandId = newProduct.brandId;
 
     try {
+      setSubmitting(true);
       const created: any = await apiPost('/products', payload);
 
       // Distribute initial stock across multiple locations in parallel
@@ -242,6 +243,8 @@ export function ProductsPage() {
       loadData();
     } catch (err: any) {
       addToast('error', err?.message || 'Failed to create product');
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -265,8 +268,9 @@ export function ProductsPage() {
 
   const handleEditProduct = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editingProduct) return;
+    if (!editingProduct || submitting) return;
     try {
+      setSubmitting(true);
       await apiPatch(`/products/${editingProduct.id}`, {
         sku: editingProduct.sku,
         barcode: editingProduct.barcode,
@@ -284,6 +288,8 @@ export function ProductsPage() {
       loadData();
     } catch (err: any) {
       addToast('error', err?.message || 'Failed to update product');
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -586,11 +592,15 @@ export function ProductsPage() {
           </div>
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '20px' }}>
-            <button type="button" className="btn btn-secondary" onClick={() => setIsCreateOpen(false)}>
+            <button type="button" className="btn btn-secondary" onClick={() => setIsCreateOpen(false)} disabled={submitting}>
               Cancel
             </button>
-            <button type="submit" className="btn btn-primary">
-              Create Product
+            <button type="submit" className="btn btn-primary" disabled={submitting} style={{ display: 'flex', alignItems: 'center' }}>
+              {submitting ? (
+                <><Loader2 size={14} className="spin-icon" /> Creating Product…</>
+              ) : (
+                'Create Product'
+              )}
             </button>
           </div>
         </form>
@@ -651,8 +661,14 @@ export function ProductsPage() {
               <InputField type="number" label="Reorder Level *" id="editReorder" value={editingProduct.reorder_level.toString()} onChange={(val) => setEditingProduct({ ...editingProduct, reorder_level: parseInt(val, 10) })} required />
             </div>
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '20px' }}>
-              <button type="button" className="btn btn-secondary" onClick={() => { setIsEditOpen(false); setEditingProduct(null); }}>Cancel</button>
-              <button type="submit" className="btn btn-primary">Save Changes</button>
+              <button type="button" className="btn btn-secondary" onClick={() => { setIsEditOpen(false); setEditingProduct(null); }} disabled={submitting}>Cancel</button>
+              <button type="submit" className="btn btn-primary" disabled={submitting} style={{ display: 'flex', alignItems: 'center' }}>
+                {submitting ? (
+                  <><Loader2 size={14} className="spin-icon" /> Saving…</>
+                ) : (
+                  'Save Changes'
+                )}
+              </button>
             </div>
           </form>
         </Modal>

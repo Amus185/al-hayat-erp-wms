@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { PackagePlus, ArrowLeft, Plus, Trash2 } from 'lucide-react';
+import { PackagePlus, ArrowLeft, Plus, Trash2, Loader2 } from 'lucide-react';
 import { apiGet, apiPost } from '../api/client';
 import { FormField, InputField, TextareaField } from '../components/FormField';
 import { SearchInput } from '../components/SearchInput';
@@ -114,8 +114,11 @@ export function CreatePOPage() {
     } : l));
   };
 
+  const [submitting, setSubmitting] = useState(false);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submitting) return;
     if (!supplierId) {
       addToast('error', 'Please select a supplier');
       return;
@@ -142,11 +145,14 @@ export function CreatePOPage() {
     };
 
     try {
+      setSubmitting(true);
       await apiPost('/purchasing/orders', payload);
       addToast('success', 'Purchase order created and submitted successfully');
       navigate('/purchasing');
     } catch (err: any) {
       addToast('error', err?.message || 'Failed to submit Purchase Order');
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -362,11 +368,15 @@ export function CreatePOPage() {
         </div>
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
-          <button type="button" className="btn btn-secondary" onClick={() => navigate('/purchasing')}>
+          <button type="button" className="btn btn-secondary" onClick={() => navigate('/purchasing')} disabled={submitting}>
             Cancel
           </button>
-          <button type="submit" className="btn btn-primary" disabled={lines.length === 0}>
-            Submit Purchase Order
+          <button type="submit" className="btn btn-primary" disabled={lines.length === 0 || submitting} style={{ display: 'flex', alignItems: 'center' }}>
+            {submitting ? (
+              <><Loader2 size={14} className="spin-icon" /> Submitting Order…</>
+            ) : (
+              'Submit Purchase Order'
+            )}
           </button>
         </div>
       </form>

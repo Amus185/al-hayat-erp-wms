@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Users, UserPlus, Shield, Landmark, Warehouse, Pencil, Trash2, KeyRound } from 'lucide-react';
+import { Users, UserPlus, Shield, Landmark, Warehouse, Pencil, Trash2, KeyRound, Loader2 } from 'lucide-react';
 import { apiGet, apiPost, apiDelete } from '../api/client';
 import { DataTable, type Column } from '../components/DataTable';
 import { Modal } from '../components/Modal';
@@ -110,9 +110,12 @@ export function UsersPage() {
   const getBranchName = (id: string | null) => branches.find(b => b.id === id)?.name || '';
   const getWarehouseName = (id: string | null) => warehouses.find(w => w.id === id)?.name || '';
 
+  const [submitting, setSubmitting] = useState(false);
+
   // ── Create ───────────────────────────────────────────────
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submitting) return;
     if (!form.email || !form.password || !form.fullName) {
       addToast('error', 'Please fill out all required fields'); return;
     }
@@ -120,6 +123,7 @@ export function UsersPage() {
       addToast('error', 'Select at least one security role'); return;
     }
     try {
+      setSubmitting(true);
       await apiPost('/users', {
         email: form.email,
         password: form.password,
@@ -135,6 +139,8 @@ export function UsersPage() {
       loadData();
     } catch (err: any) {
       addToast('error', err?.message || 'Failed to register new user');
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -162,8 +168,9 @@ export function UsersPage() {
   // ── Save Edit ────────────────────────────────────────────
   const handleEdit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editUser) return;
+    if (!editUser || submitting) return;
     try {
+      setSubmitting(true);
       // Use fetch directly with PATCH since apiPatch is available in client
       const token = localStorage.getItem('access_token');
       const base = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:3000/api/v1';
@@ -186,6 +193,8 @@ export function UsersPage() {
       loadData();
     } catch (err: any) {
       addToast('error', err?.message || 'Failed to update user');
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -210,10 +219,11 @@ export function UsersPage() {
   // ── Change Password ──────────────────────────────────────
   const handleChangePassword = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!pwUser) return;
+    if (!pwUser || submitting) return;
     if (newPassword.length < 6) { addToast('error', 'Password must be at least 6 characters'); return; }
     if (newPassword !== confirmPassword) { addToast('error', 'Passwords do not match'); return; }
     try {
+      setSubmitting(true);
       await apiPost(`/users/${pwUser.id}/change-password`, { newPassword });
       addToast('success', 'Password changed successfully');
       setPwUser(null);
@@ -221,6 +231,8 @@ export function UsersPage() {
       setConfirmPassword('');
     } catch (err: any) {
       addToast('error', err?.message || 'Failed to change password');
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -365,8 +377,14 @@ export function UsersPage() {
             <RoleChecklist ids={form.roleIds} onToggle={(id) => handleRoleToggle(id, form.roleIds, setForm, 'roleIds')} />
           </div>
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '20px' }}>
-            <button type="button" className="btn btn-secondary" onClick={() => setIsCreateOpen(false)}>Cancel</button>
-            <button type="submit" className="btn btn-primary">Register User</button>
+            <button type="button" className="btn btn-secondary" onClick={() => setIsCreateOpen(false)} disabled={submitting}>Cancel</button>
+            <button type="submit" className="btn btn-primary" disabled={submitting} style={{ display: 'flex', alignItems: 'center' }}>
+              {submitting ? (
+                <><Loader2 size={14} className="spin-icon" /> Registering…</>
+              ) : (
+                'Register User'
+              )}
+            </button>
           </div>
         </form>
       </Modal>
@@ -420,8 +438,14 @@ export function UsersPage() {
               : <RoleChecklist ids={editForm.roleIds} onToggle={(id) => handleRoleToggle(id, editForm.roleIds, setEditForm, 'roleIds')} />}
           </div>
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '20px' }}>
-            <button type="button" className="btn btn-secondary" onClick={() => setEditUser(null)}>Cancel</button>
-            <button type="submit" className="btn btn-primary">Save Changes</button>
+            <button type="button" className="btn btn-secondary" onClick={() => setEditUser(null)} disabled={submitting}>Cancel</button>
+            <button type="submit" className="btn btn-primary" disabled={submitting} style={{ display: 'flex', alignItems: 'center' }}>
+              {submitting ? (
+                <><Loader2 size={14} className="spin-icon" /> Saving…</>
+              ) : (
+                'Save Changes'
+              )}
+            </button>
           </div>
         </form>
       </Modal>
@@ -436,8 +460,14 @@ export function UsersPage() {
               onChange={setConfirmPassword} required />
           </div>
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '20px' }}>
-            <button type="button" className="btn btn-secondary" onClick={() => setPwUser(null)}>Cancel</button>
-            <button type="submit" className="btn btn-primary"><KeyRound size={14} style={{ marginRight: '6px', inlineSize: 'auto' }} />Update Password</button>
+            <button type="button" className="btn btn-secondary" onClick={() => setPwUser(null)} disabled={submitting}>Cancel</button>
+            <button type="submit" className="btn btn-primary" disabled={submitting} style={{ display: 'flex', alignItems: 'center' }}>
+              {submitting ? (
+                <><Loader2 size={14} className="spin-icon" /> Updating…</>
+              ) : (
+                <><KeyRound size={14} style={{ marginRight: '6px', inlineSize: 'auto' }} />Update Password</>
+              )}
+            </button>
           </div>
         </form>
       </Modal>

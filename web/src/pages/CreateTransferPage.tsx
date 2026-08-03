@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Truck, ArrowLeft, Plus, Trash2, Search } from 'lucide-react';
+import { Truck, ArrowLeft, Plus, Trash2, Search, Loader2 } from 'lucide-react';
 import { apiGet, apiPost } from '../api/client';
 import { FormField, InputField } from '../components/FormField';
 import { SearchInput } from '../components/SearchInput';
@@ -111,8 +111,11 @@ export function CreateTransferPage() {
     });
   };
 
+  const [submitting, setSubmitting] = useState(false);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submitting) return;
     if (!sourceId) {
       addToast('error', 'Please select a source');
       return;
@@ -145,11 +148,14 @@ export function CreateTransferPage() {
     };
 
     try {
+      setSubmitting(true);
       await apiPost('/transfers', payload);
       addToast('success', 'Transfer order created successfully');
       navigate('/transfers');
     } catch (err: any) {
-      addToast('error', err?.message || 'Failed to create transfer');
+      addToast('error', err?.message || 'Failed to create Transfer Order');
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -355,11 +361,15 @@ export function CreateTransferPage() {
         </div>
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
-          <button type="button" className="btn btn-secondary" onClick={() => navigate('/transfers')}>
+          <button type="button" className="btn btn-secondary" onClick={() => navigate('/transfers')} disabled={submitting}>
             Cancel
           </button>
-          <button type="submit" className="btn btn-primary" disabled={lines.length === 0}>
-            Submit Transfer Request
+          <button type="submit" className="btn btn-primary" disabled={lines.length === 0 || submitting} style={{ display: 'flex', alignItems: 'center' }}>
+            {submitting ? (
+              <><Loader2 size={14} className="spin-icon" /> Submitting Transfer…</>
+            ) : (
+              'Submit Transfer Request'
+            )}
           </button>
         </div>
       </form>

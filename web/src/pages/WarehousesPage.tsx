@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Boxes, MapPin, Eye, Trash2, Edit2 } from 'lucide-react';
+import { Boxes, MapPin, Eye, Trash2, Edit2, Loader2 } from 'lucide-react';
 import { apiGet, apiPost, apiPatch, apiDelete } from '../api/client';
 import { Modal } from '../components/Modal';
 import { ConfirmModal } from '../components/ConfirmModal';
@@ -61,9 +61,13 @@ export function WarehousesPage() {
     loadWarehouses();
   }, []);
 
+  const [submitting, setSubmitting] = useState(false);
+
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submitting) return;
     try {
+      setSubmitting(true);
       await apiPost('/warehouses', newWh);
       addToast('success', 'Warehouse created successfully');
       setNewWh({ code: '', name: '', city: '', address: '' });
@@ -71,13 +75,16 @@ export function WarehousesPage() {
       loadWarehouses();
     } catch (err: any) {
       addToast('error', err?.message || 'Failed to create warehouse');
+    } finally {
+      setSubmitting(false);
     }
   };
 
   const handleEdit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editingWh) return;
+    if (!editingWh || submitting) return;
     try {
+      setSubmitting(true);
       await apiPatch(`/warehouses/${editingWh.id}`, {
         code: editingWh.code,
         name: editingWh.name,
@@ -90,6 +97,8 @@ export function WarehousesPage() {
       loadWarehouses();
     } catch (err: any) {
       addToast('error', err?.message || 'Failed to update warehouse');
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -165,8 +174,14 @@ export function WarehousesPage() {
             <input type="text" className="form-input" value={newWh.address || ''} onChange={e => setNewWh({...newWh, address: e.target.value})} />
           </FormField>
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
-            <button type="button" className="btn btn-secondary" onClick={() => setIsModalOpen(false)}>Cancel</button>
-            <button type="submit" className="btn btn-primary">Create</button>
+            <button type="button" className="btn btn-secondary" onClick={() => setIsModalOpen(false)} disabled={submitting}>Cancel</button>
+            <button type="submit" className="btn btn-primary" disabled={submitting} style={{ display: 'flex', alignItems: 'center' }}>
+              {submitting ? (
+                <><Loader2 size={14} className="spin-icon" /> Creating…</>
+              ) : (
+                'Create Warehouse'
+              )}
+            </button>
           </div>
         </form>
       </Modal>
@@ -188,8 +203,14 @@ export function WarehousesPage() {
               <input type="text" className="form-input" value={editingWh.address || ''} onChange={e => setEditingWh({...editingWh, address: e.target.value})} />
             </FormField>
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
-              <button type="button" className="btn btn-secondary" onClick={() => { setIsEditModalOpen(false); setEditingWh(null); }}>Cancel</button>
-              <button type="submit" className="btn btn-primary">Save Changes</button>
+              <button type="button" className="btn btn-secondary" onClick={() => { setIsEditModalOpen(false); setEditingWh(null); }} disabled={submitting}>Cancel</button>
+              <button type="submit" className="btn btn-primary" disabled={submitting} style={{ display: 'flex', alignItems: 'center' }}>
+                {submitting ? (
+                  <><Loader2 size={14} className="spin-icon" /> Saving…</>
+                ) : (
+                  'Save Changes'
+                )}
+              </button>
             </div>
           </form>
         </Modal>
