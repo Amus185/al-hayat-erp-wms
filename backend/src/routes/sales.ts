@@ -478,10 +478,14 @@ sales.post('/orders/:id/pay', requirePermissions(['manage_sales']), async (c) =>
 // Respects the state machine but does it in one step with all guards
 // ──────────────────────────────────────────────────────────────────────
 sales.post('/orders/:id/complete', requirePermissions(['manage_sales']), async (c) => {
+  const reqStart = (c as any).reqStartTime || Date.now();
+  console.log(`[WATERFALL] +${Date.now() - reqStart}ms | sales.post('/orders/:id/complete') handler start`);
   const orderId = c.req.param('id');
   const userId = c.get('jwtPayload').sub;
 
+  const tOrder0 = Date.now();
   const order = await c.env.DB.prepare('SELECT * FROM sales_orders WHERE id = ?').bind(orderId).first();
+  console.log(`[WATERFALL] +${Date.now() - reqStart}ms | SELECT sales_orders completed (${Date.now() - tOrder0}ms)`);
   if (!order) return c.json({ message: 'Order not found.' }, 404);
   if (order.status === 'PAID') return c.json({ message: 'Order is already completed.' }, 409);
   if (order.status === 'INVOICED') {
@@ -515,9 +519,11 @@ sales.post('/orders/:id/complete', requirePermissions(['manage_sales']), async (
   // Order is DRAFT or CONFIRMED — need to invoice + pay
   // CAS lock
   const validSource = order.status === 'DRAFT' ? 'DRAFT' : 'CONFIRMED';
+  const tCas0 = Date.now();
   const cas = await c.env.DB.prepare(
     "UPDATE sales_orders SET status = 'PROCESSING' WHERE id = ? AND status = ?"
   ).bind(orderId, validSource).run();
+  console.log(`[WATERFALL] +${Date.now() - reqStart}ms | CAS update status = PROCESSING completed (${Date.now() - tCas0}ms)`);
 
   if (!cas.meta.changes || cas.meta.changes === 0) {
     return c.json({ message: 'Order state changed concurrently. Please refresh and try again.' }, 409);
@@ -525,16 +531,20 @@ sales.post('/orders/:id/complete', requirePermissions(['manage_sales']), async (
 
   try {
     // Duplicate invoice check
+    const tDup0 = Date.now();
     const existingInvoice = await c.env.DB.prepare('SELECT id FROM invoices WHERE sales_order_id = ?').bind(orderId).first();
+    console.log(`[WATERFALL] +${Date.now() - reqStart}ms | Duplicate invoice check completed (${Date.now() - tDup0}ms)`);
     if (existingInvoice) {
       await c.env.DB.prepare("UPDATE sales_orders SET status = ?").bind(validSource).run();
       return c.json({ message: 'An invoice already exists for this order.' }, 409);
     }
 
     const branchId = order.branch_id;
+    const tLines0 = Date.now();
     const { results: lines } = await c.env.DB.prepare(
       'SELECT product_id, quantity FROM sales_order_lines WHERE sales_order_id = ?'
     ).bind(orderId).all();
+    console.log(`[WATERFALL] +${Date.now() - reqStart}ms | SELECT sales_order_lines completed (${Date.now() - tLines0}ms)`);
 
     if (!lines || lines.length === 0) {
       await c.env.DB.prepare("UPDATE sales_orders SET status = ? WHERE id = ?").bind(validSource, orderId).run();
@@ -545,12 +555,14 @@ sales.post('/orders/:id/complete', requirePermissions(['manage_sales']), async (
     const productIds = lines.map((l: any) => l.product_id as string);
     const placeholders = productIds.map(() => '?').join(', ');
 
+    const tStock0 = Date.now();
     const { results: stockRows } = await c.env.DB.prepare(`
       SELECT s.product_id, s.quantity_on_hand, p.name AS product_name
       FROM inventory_stock s
       JOIN products p ON p.id = s.product_id
       WHERE s.product_id IN (${placeholders}) AND s.owner_type = 'BRANCH' AND s.branch_id = ?
     `).bind(...productIds, branchId).all();
+    console.log(`[WATERFALL] +${Date.now() - reqStart}ms | Consolidated stock check query completed (${Date.now() - tStock0}ms)`);
 
     const stockLookup = new Map<string, { qtyOnHand: number; name: string }>();
     for (const row of (stockRows || []) as any[]) {
@@ -578,9 +590,11 @@ sales.post('/orders/:id/complete', requirePermissions(['manage_sales']), async (
     }
 
     // Calculate total and discount
+    const tTotal0 = Date.now();
     const totalRes = await c.env.DB.prepare(
       'SELECT COALESCE(SUM(quantity * unit_price), 0) AS subtotal, COALESCE(SUM(discount_amount), 0) AS total_discount FROM sales_order_lines WHERE sales_order_id = ?'
     ).bind(orderId).first();
+    console.log(`[WATERFALL] +${Date.now() - reqStart}ms | SELECT order total/discount completed (${Date.now() - tTotal0}ms)`);
     const subtotal = Number(totalRes?.subtotal || 0);
     const discountAmount = Number(totalRes?.total_discount || 0);
     const total = subtotal - discountAmount;
@@ -625,26 +639,34 @@ sales.post('/orders/:id/complete', requirePermissions(['manage_sales']), async (
     stmts.push(c.env.DB.prepare("UPDATE sales_orders SET status = 'PAID' WHERE id = ?").bind(orderId));
     stmts.push(createAuditLogStmt(c, 'SALES_ORDER_COMPLETE', 'sales_orders', orderId, { status: validSource }, { status: 'PAID', invoiceId, total }));
 
+    const tBatch0 = Date.now();
     await c.env.DB.batch(stmts);
+    console.log(`[WATERFALL] +${Date.now() - reqStart}ms | Main sale write batch (${stmts.length} stmts) completed (${Date.now() - tBatch0}ms)`);
 
     // Automatically post double-entry GL journal entries for Sale Completion & Payment
     try {
+      const tGl1_0 = Date.now();
       await postSaleJournalEntry(
         c,
         { id: order.id as string, order_number: (order as any).order_number as string || (order.id as string), branch_id: (order as any).branch_id as string },
         total,
         userId
       );
+      console.log(`[WATERFALL] +${Date.now() - reqStart}ms | postSaleJournalEntry completed (${Date.now() - tGl1_0}ms)`);
+
+      const tGl2_0 = Date.now();
       await postCustomerPaymentJournalEntry(
         c,
         { id: invoiceId, amount: total },
         { id: order.id as string, order_number: (order as any).order_number as string || (order.id as string), branch_id: (order as any).branch_id as string },
         userId
       );
-    } catch (accErr) {
-      console.error('Failed to post sales accounting entries:', accErr);
+      console.log(`[WATERFALL] +${Date.now() - reqStart}ms | postCustomerPaymentJournalEntry completed (${Date.now() - tGl2_0}ms)`);
+    } catch (glErr) {
+      console.error('Non-fatal GL posting error:', glErr);
     }
 
+    console.log(`[WATERFALL] +${Date.now() - reqStart}ms | Complete sale request finished! Sending JSON response.`);
     return c.json({ success: true, invoiceId, total });
 
   } catch (err: any) {

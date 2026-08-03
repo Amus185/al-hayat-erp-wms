@@ -46,6 +46,10 @@ export function invalidateUserCache(userId: string) {
 }
 
 export const authMiddleware = async (c: Context<{ Bindings: Env }>, next: Next) => {
+  const reqStart = Date.now();
+  (c as any).reqStartTime = reqStart;
+  console.log(`[WATERFALL] +0ms | Request received: ${c.req.method} ${c.req.url}`);
+
   const authHeader = c.req.header('Authorization');
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return c.json({ message: 'Unauthorized' }, 401);
@@ -53,17 +57,22 @@ export const authMiddleware = async (c: Context<{ Bindings: Env }>, next: Next) 
 
   const token = authHeader.replace('Bearer ', '');
   try {
+    const t0 = Date.now();
     const payload = await verify(token, c.env.JWT_ACCESS_SECRET, 'HS256') as JwtPayload;
+    console.log(`[WATERFALL] +${Date.now() - reqStart}ms | authMiddleware JWT verified (${Date.now() - t0}ms)`);
 
     // Fast-path: Check in-memory cache first (<1ms)
+    const tCache0 = Date.now();
     let cached = getCachedPwdVer(payload.sub);
 
     if (!cached) {
       // Cache miss: query DB once per 5 minutes per user
       try {
+        const tDb0 = Date.now();
         const user = await c.env.DB.prepare(
           'SELECT password_version, is_active FROM users WHERE id = ?'
         ).bind(payload.sub).first();
+        console.log(`[WATERFALL] +${Date.now() - reqStart}ms | authMiddleware DB pwd_ver lookup miss (${Date.now() - tDb0}ms)`);
 
         if (!user) {
           return c.json({ message: 'User not found or deactivated' }, 401);
@@ -79,6 +88,8 @@ export const authMiddleware = async (c: Context<{ Bindings: Env }>, next: Next) 
         // Graceful fallback if column missing
         cached = { pwdVer: payload.pwd_ver ?? 1, isActive: true };
       }
+    } else {
+      console.log(`[WATERFALL] +${Date.now() - reqStart}ms | authMiddleware pwd_ver cache hit (<1ms)`);
     }
 
     if (!cached.isActive) {
@@ -102,6 +113,8 @@ export const authMiddleware = async (c: Context<{ Bindings: Env }>, next: Next) 
  */
 export const requirePermissions = (requiredPermissions: string[]) => {
   return async (c: Context<{ Bindings: Env; Variables: { jwtPayload: JwtPayload } }>, next: Next) => {
+    const reqStart = (c as any).reqStartTime || Date.now();
+    console.log(`[WATERFALL] +${Date.now() - reqStart}ms | requirePermissions check started`);
     const payload = c.get('jwtPayload');
     if (!payload) {
       return c.json({ message: 'Unauthorized' }, 401);
@@ -116,6 +129,7 @@ export const requirePermissions = (requiredPermissions: string[]) => {
       return c.json({ message: 'Forbidden' }, 403);
     }
 
+    console.log(`[WATERFALL] +${Date.now() - reqStart}ms | requirePermissions check passed`);
     await next();
   };
 };

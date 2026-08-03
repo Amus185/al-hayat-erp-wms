@@ -113,7 +113,7 @@ export class D1RemoteClient {
     const totalMs = Date.now() - t0;
 
     console.log(
-      `[D1-PERF] batch(${statements.length} stmts) = ${totalMs}ms (fetch=${t1 - t0}ms) | 1 HTTP request, atomic transaction`
+      `[WATERFALL-D1] [BATCH] ${totalMs}ms (http=${t1 - t0}ms) | stmts=${statements.length} | 1 HTTP request | res_items=${data.result?.length || 0}`
     );
 
     if (!data.success) {
@@ -162,7 +162,7 @@ export class D1RemoteClient {
     const data: any = await response.json();
     const totalMs = Date.now() - t0;
     const sqlPreview = sql.replace(/\s+/g, ' ').substring(0, 80);
-    console.log(`[D1-PERF] ${totalMs}ms (fetch=${t1 - t0}ms) | ${sqlPreview}`);
+    console.log(`[WATERFALL-D1] [SINGLE] ${totalMs}ms (http=${t1 - t0}ms) | ${sqlPreview}`);
 
     if (!data.success || !data.result || data.result.length === 0) {
       const err = data.errors?.[0]?.message || 'Unknown D1 query error';
