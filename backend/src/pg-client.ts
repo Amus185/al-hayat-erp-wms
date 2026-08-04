@@ -23,6 +23,8 @@ export function convertSqliteToPg(sql: string): string {
   let converted = sql
     // SQLite datetime → Postgres interval expression
     .replace(/datetime\('now',\s*'\+(\d+)\s+days'\)/gi, (_, d) => `(CURRENT_TIMESTAMP + INTERVAL '${d} days')`)
+    // SQLite date('now', ...) → Postgres timestamp interval
+    .replace(/date\('now',\s*([^)]+)\)/gi, (_, arg) => `(CURRENT_TIMESTAMP + (${arg})::interval)`)
     // SQLite date() → Postgres CURRENT_DATE (returns text for compatibility)
     .replace(/date\('now'\)/gi, 'CURRENT_DATE::text')
     // SQLite UUID idiom → Postgres built-in

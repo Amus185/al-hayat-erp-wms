@@ -47,6 +47,7 @@ export function CreateTransferPage() {
 
   // Selected lines
   const [lines, setLines] = useState<{ productId: string; sku: string; name: string; quantity: number }[]>([]);
+  const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
     async function loadMetadata() {
@@ -110,8 +111,6 @@ export function CreateTransferPage() {
       return copy;
     });
   };
-
-  const [submitting, setSubmitting] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();

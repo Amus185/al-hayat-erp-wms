@@ -163,13 +163,13 @@ export async function ensurePostgresInit(pool: Pool) {
         id TEXT PRIMARY KEY, purchase_invoice_id TEXT NOT NULL REFERENCES purchase_invoices(id), amount DOUBLE PRECISION NOT NULL, payment_method TEXT NOT NULL DEFAULT 'CASH', payment_date TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP, notes TEXT, recorded_by TEXT REFERENCES users(id), created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
       );
       CREATE TABLE IF NOT EXISTS transfers (
-        id TEXT PRIMARY KEY, transfer_number TEXT UNIQUE NOT NULL, source_owner_type TEXT NOT NULL CHECK (source_owner_type IN ('WAREHOUSE', 'BRANCH')), source_warehouse_id TEXT REFERENCES warehouses(id), source_branch_id TEXT REFERENCES branches(id), dest_owner_type TEXT NOT NULL CHECK (dest_owner_type IN ('WAREHOUSE', 'BRANCH')), dest_warehouse_id TEXT REFERENCES warehouses(id), dest_branch_id TEXT REFERENCES branches(id), status TEXT NOT NULL DEFAULT 'DRAFT', notes TEXT, created_by TEXT REFERENCES users(id), approved_by TEXT REFERENCES users(id), approved_at TIMESTAMP WITH TIME ZONE, dispatched_by TEXT REFERENCES users(id), dispatched_at TIMESTAMP WITH TIME ZONE, received_by TEXT REFERENCES users(id), received_at TIMESTAMP WITH TIME ZONE, created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+        id TEXT PRIMARY KEY, transfer_number TEXT UNIQUE NOT NULL, source_owner_type TEXT CHECK (source_owner_type IN ('WAREHOUSE', 'BRANCH')), source_warehouse_id TEXT REFERENCES warehouses(id), source_branch_id TEXT REFERENCES branches(id), destination_owner_type TEXT CHECK (destination_owner_type IN ('WAREHOUSE', 'BRANCH')), destination_warehouse_id TEXT REFERENCES warehouses(id), destination_branch_id TEXT REFERENCES branches(id), dest_owner_type TEXT, dest_warehouse_id TEXT, dest_branch_id TEXT, status TEXT NOT NULL DEFAULT 'DRAFT', notes TEXT, requested_by TEXT REFERENCES users(id), transfer_date TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP, created_by TEXT REFERENCES users(id), approved_by TEXT REFERENCES users(id), approved_at TIMESTAMP WITH TIME ZONE, dispatched_by TEXT REFERENCES users(id), dispatched_at TIMESTAMP WITH TIME ZONE, received_by TEXT REFERENCES users(id), received_at TIMESTAMP WITH TIME ZONE, created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
       );
       CREATE TABLE IF NOT EXISTS transfer_lines (
         id TEXT PRIMARY KEY, transfer_id TEXT NOT NULL REFERENCES transfers(id) ON DELETE CASCADE, product_id TEXT NOT NULL REFERENCES products(id), quantity INTEGER NOT NULL
       );
       CREATE TABLE IF NOT EXISTS fiscal_periods (
-        id TEXT PRIMARY KEY, period_name TEXT NOT NULL, start_date DATE NOT NULL, end_date DATE NOT NULL, status TEXT NOT NULL DEFAULT 'OPEN', created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+        id TEXT PRIMARY KEY, period_name TEXT NOT NULL, start_date DATE NOT NULL, end_date DATE NOT NULL, status TEXT NOT NULL DEFAULT 'OPEN', created_by TEXT REFERENCES users(id), created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
       );
       CREATE TABLE IF NOT EXISTS journal_entries (
         id TEXT PRIMARY KEY, entry_number TEXT UNIQUE NOT NULL, fiscal_period_id TEXT REFERENCES fiscal_periods(id), entry_date DATE NOT NULL, description TEXT NOT NULL, reference_type TEXT, reference_id TEXT, branch_id TEXT REFERENCES branches(id), status TEXT NOT NULL DEFAULT 'DRAFT', total_debit DOUBLE PRECISION NOT NULL DEFAULT 0, total_credit DOUBLE PRECISION NOT NULL DEFAULT 0, created_by TEXT REFERENCES users(id), posted_by TEXT REFERENCES users(id), posted_at TIMESTAMP WITH TIME ZONE, created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -189,6 +189,30 @@ export async function ensurePostgresInit(pool: Pool) {
       CREATE TABLE IF NOT EXISTS files (
         id TEXT PRIMARY KEY, file_name TEXT NOT NULL, file_size INTEGER NOT NULL, mime_type TEXT NOT NULL, object_key TEXT UNIQUE NOT NULL, uploaded_by TEXT REFERENCES users(id), created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
       );
+
+      -- Column Migrations for existing PostgreSQL instances
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMP WITH TIME ZONE;
+      ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS is_active INTEGER NOT NULL DEFAULT 1;
+      ALTER TABLE fiscal_periods ADD COLUMN IF NOT EXISTS created_by TEXT REFERENCES users(id);
+      ALTER TABLE chart_of_accounts ADD COLUMN IF NOT EXISTS branch_id TEXT REFERENCES branches(id);
+      ALTER TABLE inventory_stock ADD COLUMN IF NOT EXISTS warehouse_location_id TEXT REFERENCES warehouse_locations(id);
+      ALTER TABLE transfers ADD COLUMN IF NOT EXISTS destination_owner_type TEXT;
+      ALTER TABLE transfers ADD COLUMN IF NOT EXISTS destination_warehouse_id TEXT REFERENCES warehouses(id);
+      ALTER TABLE transfers ADD COLUMN IF NOT EXISTS destination_branch_id TEXT REFERENCES branches(id);
+      ALTER TABLE transfers ADD COLUMN IF NOT EXISTS source_owner_type TEXT;
+      ALTER TABLE transfers ADD COLUMN IF NOT EXISTS source_warehouse_id TEXT REFERENCES warehouses(id);
+      ALTER TABLE transfers ADD COLUMN IF NOT EXISTS source_branch_id TEXT REFERENCES branches(id);
+      ALTER TABLE transfers ADD COLUMN IF NOT EXISTS requested_by TEXT REFERENCES users(id);
+      ALTER TABLE transfers ADD COLUMN IF NOT EXISTS transfer_date TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP;
+      ALTER TABLE inventory_transactions ADD COLUMN IF NOT EXISTS destination_owner_type TEXT;
+      ALTER TABLE inventory_transactions ADD COLUMN IF NOT EXISTS destination_warehouse_id TEXT REFERENCES warehouses(id);
+      ALTER TABLE inventory_transactions ADD COLUMN IF NOT EXISTS destination_branch_id TEXT REFERENCES branches(id);
+      ALTER TABLE inventory_transactions ADD COLUMN IF NOT EXISTS destination_location_id TEXT REFERENCES warehouse_locations(id);
+      ALTER TABLE inventory_transactions ADD COLUMN IF NOT EXISTS source_owner_type TEXT;
+      ALTER TABLE inventory_transactions ADD COLUMN IF NOT EXISTS source_warehouse_id TEXT REFERENCES warehouses(id);
+      ALTER TABLE inventory_transactions ADD COLUMN IF NOT EXISTS source_branch_id TEXT REFERENCES branches(id);
+      ALTER TABLE inventory_transactions ADD COLUMN IF NOT EXISTS source_location_id TEXT REFERENCES warehouse_locations(id);
+      ALTER TABLE inventory_transactions ADD COLUMN IF NOT EXISTS notes TEXT;
     `);
 
     // 2. Populate auth & reference data from D1 Backup
