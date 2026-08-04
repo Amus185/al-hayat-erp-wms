@@ -296,7 +296,12 @@ export function ProductsPage() {
 
   const filteredProducts = products.filter((p) => {
     const q = search.trim().toLowerCase();
-    if (q && !p.name.toLowerCase().includes(q) && !p.sku.toLowerCase().includes(q)) return false;
+    if (
+      q &&
+      !String(p.name || '').toLowerCase().includes(q) &&
+      !String(p.sku || '').toLowerCase().includes(q) &&
+      !String(p.barcode || '').toLowerCase().includes(q)
+    ) return false;
     if (filterValues.category && p.category_id !== filterValues.category) return false;
     if (filterValues.brand && p.brand_id !== filterValues.brand) return false;
     if (filterValues.status === 'active' && !p.is_active) return false;

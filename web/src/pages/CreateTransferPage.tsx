@@ -82,11 +82,12 @@ export function CreateTransferPage() {
       setSearchResults([]);
       return;
     }
+    const q = searchQuery.trim().toLowerCase();
     const filtered = products.filter(
       (v) =>
-        v.sku.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        v.barcode.includes(searchQuery) ||
-        v.name.toLowerCase().includes(searchQuery.toLowerCase())
+        (v.sku && String(v.sku).toLowerCase().includes(q)) ||
+        (v.barcode && String(v.barcode).toLowerCase().includes(q)) ||
+        (v.name && String(v.name).toLowerCase().includes(q))
     );
     setSearchResults(filtered.slice(0, 5));
   }, [searchQuery, products]);

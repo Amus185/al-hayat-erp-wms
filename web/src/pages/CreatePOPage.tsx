@@ -81,11 +81,12 @@ export function CreatePOPage() {
       setSearchResults([]);
       return;
     }
+    const q = searchQuery.trim().toLowerCase();
     const filtered = productsList.filter(
       (v) =>
-        v.sku.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        v.barcode.includes(searchQuery) ||
-        v.productName.toLowerCase().includes(searchQuery.toLowerCase())
+        (v.sku && String(v.sku).toLowerCase().includes(q)) ||
+        (v.barcode && String(v.barcode).toLowerCase().includes(q)) ||
+        (v.productName && String(v.productName).toLowerCase().includes(q))
     );
     setSearchResults(filtered.slice(0, 5));
   }, [searchQuery, productsList]);
