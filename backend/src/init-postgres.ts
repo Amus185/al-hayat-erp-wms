@@ -217,6 +217,9 @@ export async function ensurePostgresInit(pool: Pool) {
       ALTER TABLE inventory_transactions ADD COLUMN IF NOT EXISTS source_location_id TEXT REFERENCES warehouse_locations(id);
       ALTER TABLE inventory_transactions ADD COLUMN IF NOT EXISTS notes TEXT;
       ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS user_agent TEXT;
+      ALTER TABLE transfers ALTER COLUMN dest_owner_type DROP NOT NULL;
+      ALTER TABLE transfers ALTER COLUMN dest_warehouse_id DROP NOT NULL;
+      ALTER TABLE transfers ALTER COLUMN dest_branch_id DROP NOT NULL;
     `);
 
     // 2. Populate auth & reference data from D1 Backup

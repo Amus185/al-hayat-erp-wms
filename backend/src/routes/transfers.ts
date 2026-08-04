@@ -149,9 +149,29 @@ transfers.post('/', requirePermissions(['manage_transfers']), async (c) => {
 
   const stmts = [];
   stmts.push(c.env.DB.prepare(`
-    INSERT INTO transfers (id, transfer_number, status, source_owner_type, source_warehouse_id, source_branch_id, destination_owner_type, destination_warehouse_id, destination_branch_id, requested_by, transfer_date)
-    VALUES (?, ?, 'PENDING_APPROVAL', ?, ?, ?, ?, ?, ?, ?, ?)
-  `).bind(id, transferNumber, body.sourceOwnerType, body.sourceWarehouseId || null, body.sourceBranchId || null, body.destinationOwnerType, body.destinationWarehouseId || null, body.destinationBranchId || null, userId, body.transferDate || null));
+    INSERT INTO transfers (
+      id, transfer_number, status, 
+      source_owner_type, source_warehouse_id, source_branch_id, 
+      destination_owner_type, destination_warehouse_id, destination_branch_id,
+      dest_owner_type, dest_warehouse_id, dest_branch_id,
+      requested_by, transfer_date
+    )
+    VALUES (?, ?, 'PENDING_APPROVAL', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).bind(
+    id, 
+    transferNumber, 
+    body.sourceOwnerType, 
+    body.sourceWarehouseId || null, 
+    body.sourceBranchId || null, 
+    body.destinationOwnerType, 
+    body.destinationWarehouseId || null, 
+    body.destinationBranchId || null,
+    body.destinationOwnerType, 
+    body.destinationWarehouseId || null, 
+    body.destinationBranchId || null,
+    userId, 
+    body.transferDate || null
+  ));
 
   for (const line of body.lines) {
     stmts.push(c.env.DB.prepare(`
