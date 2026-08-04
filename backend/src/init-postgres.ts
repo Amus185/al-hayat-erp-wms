@@ -196,6 +196,7 @@ export async function ensurePostgresInit(pool: Pool) {
       ALTER TABLE fiscal_periods ADD COLUMN IF NOT EXISTS created_by TEXT REFERENCES users(id);
       ALTER TABLE chart_of_accounts ADD COLUMN IF NOT EXISTS branch_id TEXT REFERENCES branches(id);
       ALTER TABLE inventory_stock ADD COLUMN IF NOT EXISTS warehouse_location_id TEXT REFERENCES warehouse_locations(id);
+      ALTER TABLE transfers ADD COLUMN IF NOT EXISTS requested_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP;
       ALTER TABLE transfers ADD COLUMN IF NOT EXISTS destination_owner_type TEXT;
       ALTER TABLE transfers ADD COLUMN IF NOT EXISTS destination_warehouse_id TEXT REFERENCES warehouses(id);
       ALTER TABLE transfers ADD COLUMN IF NOT EXISTS destination_branch_id TEXT REFERENCES branches(id);

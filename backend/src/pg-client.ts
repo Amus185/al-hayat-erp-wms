@@ -21,10 +21,9 @@ import { Pool, PoolClient } from 'pg';
  */
 export function convertSqliteToPg(sql: string): string {
   let converted = sql
-    // SQLite datetime → Postgres interval expression
-    .replace(/datetime\('now',\s*'\+(\d+)\s+days'\)/gi, (_, d) => `(CURRENT_TIMESTAMP + INTERVAL '${d} days')`)
-    // SQLite date('now', ...) → Postgres timestamp interval
-    .replace(/date\('now',\s*([^)]+)\)/gi, (_, arg) => `(CURRENT_TIMESTAMP + (${arg})::interval)`)
+    // SQLite datetime/date ('now', offset) → Postgres TIMESTAMP / DATE interval math
+    .replace(/datetime\('now',\s*([^)]+)\)/gi, (_, arg) => `(CURRENT_TIMESTAMP + CAST(${arg} AS INTERVAL))`)
+    .replace(/date\('now',\s*([^)]+)\)/gi, (_, arg) => `(CURRENT_DATE + CAST(${arg} AS INTERVAL))`)
     // SQLite date() → Postgres CURRENT_DATE (returns text for compatibility)
     .replace(/date\('now'\)/gi, 'CURRENT_DATE::text')
     // SQLite UUID idiom → Postgres built-in
