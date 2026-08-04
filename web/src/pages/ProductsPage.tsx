@@ -58,6 +58,7 @@ export function ProductsPage() {
   };
 
   // Modals state
+  const [submitting, setSubmitting] = useState(false);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState('');
