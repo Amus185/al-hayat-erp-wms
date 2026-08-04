@@ -98,16 +98,13 @@ products.post('/', requirePermissions(['manage_inventory']), async (c) => {
     body.brandId || null, cost, sell, body.reorderLevel || 5, body.barcode || null
   ));
 
-  // 2. Insert initial inventory_stock entry bound to owner context ONLY if specified or initialQty > 0
-  const hasExplicitLocation = Boolean(body.initialWarehouseId || body.initialBranchId || (payload && !isAdminUser(payload) && payload.branch_id));
-  if (hasExplicitLocation || initialQty > 0) {
-    stmts.push(c.env.DB.prepare(`
-      INSERT INTO inventory_stock (id, product_id, owner_type, warehouse_id, branch_id, quantity_on_hand, quantity_reserved)
-      VALUES (?, ?, ?, ?, ?, ?, 0)
-    `).bind(
-      stockId, productId, ownerType, warehouseId, branchId, initialQty
-    ));
-  }
+  // 2. Insert initial inventory_stock entry so product directly goes to inventory
+  stmts.push(c.env.DB.prepare(`
+    INSERT INTO inventory_stock (id, product_id, owner_type, warehouse_id, branch_id, quantity_on_hand, quantity_reserved)
+    VALUES (?, ?, ?, ?, ?, ?, 0)
+  `).bind(
+    stockId, productId, ownerType, warehouseId, branchId, initialQty
+  ));
 
   // 3. Audit log statement
   stmts.push(createAuditLogStmt(c, 'PRODUCT_CREATE', 'products', productId, null, {
