@@ -23,6 +23,21 @@ const app = new Hono();
 
 let globalPgAdapter: PgAdapter | null = null;
 
+// ⚡ LIGHTWEIGHT HEALTH CHECK ROUTE (Must run BEFORE any middleware/DB init for instant 200 OK!)
+app.get('/', (c) => c.json({
+  service: 'Al Hayat ERP & WMS Backend API',
+  version: '1.0.0',
+  status: 'active',
+  environment: 'production',
+  healthCheck: '/api/v1/health',
+}));
+
+app.get('/api/v1/health', (c) => c.json({
+  status: 'ok',
+  dbEngine: globalPgAdapter ? 'postgres' : 'd1',
+  timestamp: new Date().toISOString()
+}));
+
 app.use('*', cors({
   origin: '*',
   allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
@@ -49,7 +64,10 @@ app.use('*', async (c, next) => {
     if (!globalPgAdapter) {
       console.log('⚡ Initializing native PostgreSQL Connection Pool adapter...');
       globalPgAdapter = new PgAdapter(pgConnStr);
-      await ensurePostgresInit(globalPgAdapter.getPool());
+      // Run DB initialization non-blocking so health checks respond instantly
+      ensurePostgresInit(globalPgAdapter.getPool()).catch(err => {
+        console.error('PostgreSQL init error:', err);
+      });
     }
     envObj.DB = globalPgAdapter;
   } else if (!envObj.DB) {
@@ -58,21 +76,6 @@ app.use('*', async (c, next) => {
 
   await next();
 });
-
-
-app.get('/', (c) => c.json({
-  service: 'Al Hayat ERP & WMS Backend API',
-  version: '1.0.0',
-  status: 'active',
-  environment: 'production',
-  healthCheck: '/api/v1/health',
-}));
-
-app.get('/api/v1/health', (c) => c.json({
-  status: 'ok',
-  dbEngine: globalPgAdapter ? 'postgres' : 'd1',
-  timestamp: new Date().toISOString()
-}));
 
 app.route('/api/v1/auth', auth);
 app.route('/api/v1/products', products);
@@ -133,4 +136,3 @@ app.notFound((c) => {
 });
 
 export default app;
-
