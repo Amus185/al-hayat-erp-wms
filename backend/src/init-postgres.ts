@@ -186,7 +186,7 @@ export async function ensurePostgresInit(pool: Pool) {
         id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, title TEXT NOT NULL, message TEXT NOT NULL, type TEXT NOT NULL DEFAULT 'INFO', read_at TIMESTAMP WITH TIME ZONE, created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
       );
       CREATE TABLE IF NOT EXISTS audit_logs (
-        id TEXT PRIMARY KEY, action TEXT NOT NULL, entity_type TEXT NOT NULL, entity_id TEXT, old_value TEXT, new_value TEXT, actor_user_id TEXT REFERENCES users(id), ip_address TEXT, created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+        id TEXT PRIMARY KEY, action TEXT NOT NULL, entity_type TEXT NOT NULL, entity_id TEXT, old_value TEXT, new_value TEXT, actor_user_id TEXT REFERENCES users(id), ip_address TEXT, user_agent TEXT, created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
       );
       CREATE TABLE IF NOT EXISTS files (
         id TEXT PRIMARY KEY, file_name TEXT NOT NULL, file_size INTEGER NOT NULL, mime_type TEXT NOT NULL, object_key TEXT UNIQUE NOT NULL, uploaded_by TEXT REFERENCES users(id), created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -216,6 +216,7 @@ export async function ensurePostgresInit(pool: Pool) {
       ALTER TABLE inventory_transactions ADD COLUMN IF NOT EXISTS source_branch_id TEXT REFERENCES branches(id);
       ALTER TABLE inventory_transactions ADD COLUMN IF NOT EXISTS source_location_id TEXT REFERENCES warehouse_locations(id);
       ALTER TABLE inventory_transactions ADD COLUMN IF NOT EXISTS notes TEXT;
+      ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS user_agent TEXT;
     `);
 
     // 2. Populate auth & reference data from D1 Backup
