@@ -129,6 +129,10 @@ export class PgAdapter {
     });
   }
 
+  getPool(): Pool {
+    return this.pool;
+  }
+
   prepare(sql: string): PgPreparedStatement {
     return new PgPreparedStatement(this.pool, sql);
   }

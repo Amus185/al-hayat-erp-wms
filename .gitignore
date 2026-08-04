@@ -10,6 +10,8 @@ node_modules/
 backend/.env
 web/.env
 mobile/.env
+d1_backup.json
+backend/d1_backup.json
 
 # Build outputs
 dist/

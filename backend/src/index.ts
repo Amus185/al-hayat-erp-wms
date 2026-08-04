@@ -16,8 +16,8 @@ import audit from './routes/audit';
 import files from './routes/files';
 import accounting from './routes/accounting';
 
-import { D1RemoteClient } from './d1-remote-client';
 import { PgAdapter } from './pg-client';
+import { ensurePostgresInit } from './init-postgres';
 
 const app = new Hono();
 
@@ -49,14 +49,11 @@ app.use('*', async (c, next) => {
     if (!globalPgAdapter) {
       console.log('⚡ Initializing native PostgreSQL Connection Pool adapter...');
       globalPgAdapter = new PgAdapter(pgConnStr);
+      await ensurePostgresInit(globalPgAdapter.getPool());
     }
     envObj.DB = globalPgAdapter;
-  } else if (!envObj.DB && typeof process !== 'undefined' && (process.env.CLOUDFLARE_API_TOKEN || process.env.CLOUDFLARE_ACCOUNT_ID)) {
-    const accountId = process.env.CLOUDFLARE_ACCOUNT_ID || 'c3066ec07528b261e192b4530cca58bf';
-    const databaseId = process.env.CLOUDFLARE_D1_DATABASE_ID || '1cae6841-1519-4131-9636-161a5039c3c5';
-    const apiToken = process.env.CLOUDFLARE_API_TOKEN || '';
-
-    envObj.DB = new D1RemoteClient({ accountId, databaseId, apiToken });
+  } else if (!envObj.DB) {
+    throw new Error('Fatal Error: DATABASE_URL is missing. Backend runs 100% on PostgreSQL.');
   }
 
   await next();
@@ -71,33 +68,11 @@ app.get('/', (c) => c.json({
   healthCheck: '/api/v1/health',
 }));
 
-app.get('/api/v1/health', (c) => c.json({ status: 'ok', timestamp: new Date().toISOString() }));
-
-app.get('/api/v1/admin/dump-d1', async (c) => {
-  const tables = [
-    'branches', 'warehouses', 'permissions', 'roles', 'role_permissions',
-    'users', 'user_roles', 'refresh_tokens', 'warehouse_locations',
-    'chart_of_accounts', 'categories', 'brands', 'products', 'inventory_stock',
-    'inventory_transactions', 'customers', 'suppliers', 'sales_orders',
-    'sales_order_lines', 'quotations', 'invoices', 'invoice_lines',
-    'invoice_payments', 'purchase_orders', 'purchase_order_lines',
-    'goods_receipts', 'goods_receipt_lines', 'purchase_invoices',
-    'purchase_invoice_payments', 'transfers', 'transfer_lines',
-    'journal_entries', 'journal_entry_lines', 'general_ledger',
-    'fiscal_periods', 'notifications', 'audit_logs', 'files'
-  ];
-
-  const dump: Record<string, any[]> = {};
-  for (const table of tables) {
-    try {
-      const { results } = await c.env.DB.prepare(`SELECT * FROM ${table}`).all();
-      dump[table] = results || [];
-    } catch (e: any) {
-      dump[table] = [];
-    }
-  }
-  return c.json(dump);
-});
+app.get('/api/v1/health', (c) => c.json({
+  status: 'ok',
+  dbEngine: globalPgAdapter ? 'postgres' : 'd1',
+  timestamp: new Date().toISOString()
+}));
 
 app.route('/api/v1/auth', auth);
 app.route('/api/v1/products', products);
