@@ -174,21 +174,41 @@ products.get('/:id', async (c) => {
 products.delete('/:id', requirePermissions(['manage_inventory']), async (c) => {
   const id = c.req.param('id');
 
-  // Check for active references
-  const inOrders = await c.env.DB.prepare('SELECT id FROM sales_order_lines WHERE product_id = ? LIMIT 1').bind(id).first();
-  if (inOrders) return c.json({ message: 'Cannot delete: product is referenced in sales orders.' }, 400);
+  // Check for active (Confirmed or Paid) sales orders
+  const activeSale = await c.env.DB.prepare(`
+    SELECT sol.id FROM sales_order_lines sol
+    JOIN sales_orders so ON so.id = sol.sales_order_id
+    WHERE sol.product_id = ? AND so.status IN ('CONFIRMED', 'PAID')
+    LIMIT 1
+  `).bind(id).first();
+  if (activeSale) return c.json({ message: 'Cannot delete: product is referenced in active (Confirmed or Paid) sales orders.' }, 400);
 
-  const inPO = await c.env.DB.prepare('SELECT id FROM purchase_order_lines WHERE product_id = ? LIMIT 1').bind(id).first();
-  if (inPO) return c.json({ message: 'Cannot delete: product is referenced in purchase orders.' }, 400);
+  // Check for active (Approved) purchase orders
+  const activePO = await c.env.DB.prepare(`
+    SELECT pol.id FROM purchase_order_lines pol
+    JOIN purchase_orders po ON po.id = pol.purchase_order_id
+    WHERE pol.product_id = ? AND po.status IN ('APPROVED', 'RECEIVED')
+    LIMIT 1
+  `).bind(id).first();
+  if (activePO) return c.json({ message: 'Cannot delete: product is referenced in approved or received purchase orders.' }, 400);
 
+  // Check for positive physical inventory stock
   const inStock = await c.env.DB.prepare('SELECT id FROM inventory_stock WHERE product_id = ? AND quantity_on_hand > 0 LIMIT 1').bind(id).first();
-  if (inStock) return c.json({ message: 'Cannot delete: product has active inventory stock.' }, 400);
+  if (inStock) return c.json({ message: 'Cannot delete: product currently has active stock on hand. Adjust stock to 0 first.' }, 400);
 
   const prod = await c.env.DB.prepare('SELECT * FROM products WHERE id = ?').bind(id).first();
   if (!prod) return c.json({ message: 'Product not found' }, 404);
 
-  await c.env.DB.prepare('DELETE FROM products WHERE id = ?').bind(id).run();
-  await logAudit(c, 'PRODUCT_DELETE', 'products', id, prod, null);
+  // Atomically clean up draft/cancelled order lines and inventory_stock before deleting product
+  const batchStmts = [
+    c.env.DB.prepare('DELETE FROM sales_order_lines WHERE product_id = ?').bind(id),
+    c.env.DB.prepare('DELETE FROM purchase_order_lines WHERE product_id = ?').bind(id),
+    c.env.DB.prepare('DELETE FROM inventory_stock WHERE product_id = ?').bind(id),
+    c.env.DB.prepare('DELETE FROM products WHERE id = ?').bind(id),
+    createAuditLogStmt(c, 'PRODUCT_DELETE', 'products', id, prod, null)
+  ];
+  await c.env.DB.batch(batchStmts);
+
   return c.json({ success: true });
 });
 

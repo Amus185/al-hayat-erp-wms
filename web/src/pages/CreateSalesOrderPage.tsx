@@ -150,8 +150,14 @@ export function CreateSalesOrderPage() {
       setSubmittingAction(completeNow ? 'complete' : 'draft');
       const order = await apiPost<any>('/sales/orders', payload);
       if (completeNow) {
-        await apiPost(`/sales/orders/${order.id}/complete`, {});
-        addToast('success', '✅ Sale completed! Invoice issued and payment recorded.');
+        try {
+          await apiPost(`/sales/orders/${order.id}/complete`, {});
+          addToast('success', '✅ Sale completed! Invoice issued and payment recorded.');
+        } catch (err: any) {
+          // If completion fails (e.g. stock validation), cancel the draft order so orphan DRAFT orders don't linger
+          await apiPost(`/sales/orders/${order.id}/cancel`, {}).catch(() => {});
+          throw err;
+        }
       } else {
         addToast('success', 'Sales order saved as draft');
       }

@@ -130,7 +130,7 @@ branches.get('/:id/performance', async (c) => {
       COALESCE(SUM(i.total_amount), 0) as invoiced_amount,
       COALESCE(SUM(sol.quantity), 0) as units_sold
     FROM branches b
-    LEFT JOIN sales_orders so ON so.branch_id = b.id
+    LEFT JOIN sales_orders so ON so.branch_id = b.id AND so.status IN ('CONFIRMED', 'PAID')
     LEFT JOIN invoices i ON i.sales_order_id = so.id AND i.status = 'PAID'
     LEFT JOIN sales_order_lines sol ON sol.sales_order_id = so.id
     WHERE b.id = ?

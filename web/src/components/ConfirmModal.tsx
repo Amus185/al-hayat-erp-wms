@@ -45,13 +45,12 @@ export function ConfirmModal({
       background: 'var(--bg-card, #ffffff)',
       color: 'var(--text, #1a1a1a)',
     }).then((result) => {
+      onCancel(); // Always reset isOpen to false in parent
       if (result.isConfirmed) {
         onConfirm();
-      } else {
-        onCancel();
       }
     });
-  }, [isOpen, title, message, confirmLabel, cancelLabel, isDestructive, onConfirm, onCancel]);
+  }, [isOpen]);
 
   return null;
 }
