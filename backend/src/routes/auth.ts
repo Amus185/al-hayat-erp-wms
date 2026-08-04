@@ -11,7 +11,7 @@ async function buildUserPayload(db: D1Database, userId: string) {
   const user = await db.prepare(`
     SELECT u.id, u.email, u.full_name, u.branch_id,
            (SELECT r.code FROM roles r JOIN user_roles ur ON ur.role_id = r.id WHERE ur.user_id = u.id LIMIT 1) as role_code,
-           (SELECT STRING_AGG(p.code, ',')
+           (SELECT STRING_AGG(DISTINCT p.code, ',')
             FROM user_roles ur
             JOIN role_permissions rp ON rp.role_id = ur.role_id
             JOIN permissions p ON p.id = rp.permission_id
@@ -29,7 +29,7 @@ auth.post('/login', async (c) => {
   const user = await c.env.DB.prepare(`
     SELECT u.id, u.email, u.password_hash, u.full_name, u.branch_id,
            (SELECT r.code FROM roles r JOIN user_roles ur ON ur.role_id = r.id WHERE ur.user_id = u.id LIMIT 1) as role_code,
-           (SELECT STRING_AGG(p.code, ',') 
+           (SELECT STRING_AGG(DISTINCT p.code, ',') 
             FROM user_roles ur
             JOIN role_permissions rp ON rp.role_id = ur.role_id
             JOIN permissions p ON p.id = rp.permission_id
