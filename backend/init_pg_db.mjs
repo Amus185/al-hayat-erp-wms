@@ -1,38 +1,96 @@
-import pkg from 'pg';
-import fs from 'fs';
-import path from 'path';
+#!/usr/bin/env node
+/**
+ * init_pg_db.mjs
+ * Initialize the Railway Postgres database with the full schema.
+ *
+ * Usage:
+ *   node init_pg_db.mjs
+ *
+ * Required:
+ *   DATABASE_URL  — Railway Postgres connection string (auto-injected in Railway)
+ *
+ * Safe to run multiple times — uses IF NOT EXISTS and ON CONFLICT DO NOTHING.
+ * Does NOT drop existing tables unless --reset flag is passed.
+ *
+ * With --reset:
+ *   node init_pg_db.mjs --reset
+ *   WARNING: This DROPS all tables. Only use on a fresh staging instance.
+ */
+
+import pg from 'pg';
+import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
 
-const { Pool } = pkg;
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const { Client } = pg;
 
-async function initPg() {
-  const connectionString = process.env.DATABASE_URL || process.env.POSTGRES_URL || process.argv[2];
-  if (!connectionString) {
-    console.error('Usage: node init_pg_db.mjs <DATABASE_URL>');
-    process.exit(1);
-  }
+const DATABASE_URL = process.env.DATABASE_URL || process.env.POSTGRES_URL || process.env.PG_URL;
+const RESET = process.argv.includes('--reset');
 
-  console.log('🔌 Connecting to PostgreSQL database...');
-  const pool = new Pool({
-    connectionString,
-    ssl: connectionString.includes('localhost') || connectionString.includes('127.0.0.1') ? false : { rejectUnauthorized: false },
+if (!DATABASE_URL) {
+  console.error('❌  DATABASE_URL is required');
+  process.exit(1);
+}
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
+async function main() {
+  const client = new Client({
+    connectionString: DATABASE_URL,
+    ssl: DATABASE_URL.includes('localhost') || DATABASE_URL.includes('127.0.0.1')
+      ? false
+      : { rejectUnauthorized: false },
   });
 
-  const schemaSql = fs.readFileSync(path.join(__dirname, 'schema_pg.sql'), 'utf8');
+  await client.connect();
+  console.log('🐘 Connected to PostgreSQL');
 
   try {
-    const client = await pool.connect();
-    console.log('⚡ Executing schema_pg.sql...');
+    // Verify Postgres version supports gen_random_uuid() natively (requires PG 13+)
+    const verRes = await client.query('SELECT version()');
+    console.log(`   ${verRes.rows[0].version.split(' ').slice(0, 2).join(' ')}`);
+
+    const schemaPath = join(__dirname, 'schema_pg.sql');
+    const schema = readFileSync(schemaPath, 'utf-8');
+
+    if (RESET) {
+      console.log('⚠️  --reset flag: running full schema (includes DROP TABLE CASCADE)');
+    }
+
+    // The schema_pg.sql already includes DROP TABLE IF EXISTS ... CASCADE at the top
+    // when --reset is used we run it as-is. Without --reset, we skip DROP statements.
+    let schemaSql = schema;
+    if (!RESET) {
+      // Remove DROP TABLE lines so existing data is preserved
+      schemaSql = schema
+        .split('\n')
+        .filter(line => !line.trim().toUpperCase().startsWith('DROP TABLE'))
+        .join('\n');
+    }
+
     await client.query(schemaSql);
-    console.log('✅ PostgreSQL Schema & Seed Data initialized successfully!');
-    client.release();
-  } catch (err) {
-    console.error('❌ Failed to initialize PostgreSQL database:', err);
+    console.log('✅  Schema applied successfully');
+
+    // Quick sanity check — count tables
+    const tablesRes = await client.query(`
+      SELECT COUNT(*) AS cnt
+      FROM information_schema.tables
+      WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+    `);
+    console.log(`📋  ${tablesRes.rows[0].cnt} tables present in public schema`);
+
+    // Confirm gen_random_uuid() works (needed for INSERT…SELECT with randomblob translation)
+    const uuidRes = await client.query('SELECT gen_random_uuid()::text AS uuid');
+    console.log(`🔑  gen_random_uuid() works: ${uuidRes.rows[0].uuid}`);
+
+    console.log('\n✅  Database is ready. Next step: node migrate_d1_to_pg.mjs');
+
   } finally {
-    await pool.end();
+    await client.end();
   }
 }
 
-initPg();
+main().catch(err => {
+  console.error('❌  Failed to initialize database:', err.message);
+  process.exit(1);
+});
