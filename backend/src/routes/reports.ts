@@ -213,7 +213,7 @@ reports.get('/inventory-valuation', async (c) => {
   }
   deadQuery += `
     GROUP BY p.id, p.sku, p.name, c.name, p.cost_price
-    HAVING units_on_hand > 0
+    HAVING SUM(s.quantity_on_hand) > 0
     ORDER BY tied_up_capital DESC
     LIMIT 25
   `;

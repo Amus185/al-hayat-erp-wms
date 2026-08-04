@@ -444,7 +444,7 @@ accounting.get('/trial-balance', requirePermissions(['view_reports']), async (c)
     WHERE ${statusFilter} ${typeFilter} ${periodFilter}
       AND coa.is_active = 1
     GROUP BY coa.id, coa.code, coa.name, coa.account_type, coa.normal_balance
-    HAVING total_debit > 0 OR total_credit > 0 OR net_balance != 0
+    HAVING SUM(jel.debit_amount) > 0 OR SUM(jel.credit_amount) > 0
     ORDER BY coa.code ASC
   `).bind(...params).all();
 
@@ -886,7 +886,7 @@ accounting.post('/closing-entries', requirePermissions(['manage_purchasing']), a
       AND je.status = 'POSTED' AND je.fiscal_period_id = ?
     WHERE coa.account_type = 'REVENUE' AND coa.is_active = 1
     GROUP BY coa.id, coa.code, coa.name
-    HAVING balance > 0
+    HAVING COALESCE(SUM(jel.credit_amount - jel.debit_amount), 0) > 0
   `).bind(fiscal_period_id).all() as { results: any[] };
 
   const { results: expenses } = await c.env.DB.prepare(`
@@ -898,7 +898,7 @@ accounting.post('/closing-entries', requirePermissions(['manage_purchasing']), a
       AND je.status = 'POSTED' AND je.fiscal_period_id = ?
     WHERE coa.account_type IN ('EXPENSE', 'COGS') AND coa.is_active = 1
     GROUP BY coa.id, coa.code, coa.name
-    HAVING balance > 0
+    HAVING COALESCE(SUM(jel.debit_amount - jel.credit_amount), 0) > 0
   `).bind(fiscal_period_id).all() as { results: any[] };
 
   const totalRevenue = (revenues || []).reduce((s: number, r: any) => s + Number(r.balance), 0);
