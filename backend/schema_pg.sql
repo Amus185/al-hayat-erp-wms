@@ -426,7 +426,7 @@ ON CONFLICT DO NOTHING;
 
 -- Default Admin User: admin@alhayat.com / Admin@123
 INSERT INTO users (id, email, password_hash, full_name, is_active, password_version) VALUES 
-('88888888-8888-8888-8888-888888888888', 'admin@alhayat.com', '$2b$12$Z0/GkC.2rEOMiM92tF1x7eLIsO2x/Q0f53YQj1t42n1L.o/H3gQoG', 'Admin User', 1, 1)
+('88888888-8888-8888-8888-888888888888', 'admin@alhayat.com', '$2a$10$lg9bBDFZgleGwjwYDVCp3.iA1AT3n7SltsaQyYMbtvAeOH.CWO7ue', 'Admin User', 1, 1)
 ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO user_roles (user_id, role_id) VALUES 

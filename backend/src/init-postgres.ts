@@ -47,7 +47,7 @@ export const D1_AUTH_BACKUP = {
     { role_id: 'role-accountant', permission_id: '66666666-6666-6666-6666-666666666666' }
   ],
   users: [
-    { id: '88888888-8888-8888-8888-888888888888', email: 'admin@alhayat.com', password_hash: '$2b$12$Z0/GkC.2rEOMiM92tF1x7eLIsO2x/Q0f53YQj1t42n1L.o/H3gQoG', full_name: 'Admin User', branch_id: null, is_active: 1, password_version: 1 },
+    { id: '88888888-8888-8888-8888-888888888888', email: 'admin@alhayat.com', password_hash: '$2a$10$lg9bBDFZgleGwjwYDVCp3.iA1AT3n7SltsaQyYMbtvAeOH.CWO7ue', full_name: 'Admin User', branch_id: null, is_active: 1, password_version: 1 },
     { id: 'user-hq-branch-01', email: 'branch.hq@alhayat.com', password_hash: '$2b$10$eE5yX0rB.L8m8yT2H.X7u.Q5G3z1V9K2H3m8Y4T5U6V7W8X9Y0Z1', full_name: 'HQ Branch Manager', branch_id: 'branch-hq-main', is_active: 1, password_version: 1 },
     { id: 'user-cl-branch-02', email: 'branch.cl@alhayat.com', password_hash: '$2b$10$eE5yX0rB.L8m8yT2H.X7u.Q5G3z1V9K2H3m8Y4T5U6V7W8X9Y0Z1', full_name: 'CL Branch Manager', branch_id: 'branch-cl-show', is_active: 1, password_version: 1 }
   ],
