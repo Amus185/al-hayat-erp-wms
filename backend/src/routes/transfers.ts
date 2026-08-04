@@ -175,8 +175,8 @@ transfers.post('/', requirePermissions(['manage_transfers']), async (c) => {
 
   for (const line of body.lines) {
     stmts.push(c.env.DB.prepare(`
-      INSERT INTO transfer_lines (id, transfer_id, product_id, quantity_requested) VALUES (?, ?, ?, ?)
-    `).bind(uuidv4(), id, line.productId, line.quantityRequested));
+      INSERT INTO transfer_lines (id, transfer_id, product_id, quantity_requested, quantity) VALUES (?, ?, ?, ?, ?)
+    `).bind(uuidv4(), id, line.productId, line.quantityRequested, line.quantityRequested));
   }
 
   stmts.push(createAuditLogStmt(c, 'TRANSFER_CREATE', 'transfers', id, null, { transferNumber, sourceOwnerType: body.sourceOwnerType, destinationOwnerType: body.destinationOwnerType, lines: body.lines }));
@@ -296,7 +296,7 @@ transfers.post('/:id/approve', requirePermissions(['manage_transfers']), async (
         ]);
 
         const srcQty = (srcStock?.quantity_on_hand as number) || 0;
-        const reqQty = line.quantity_requested as number;
+        const reqQty = Number(line.quantity_requested ?? line.quantity ?? 0);
 
         if (srcQty < reqQty) {
           insufficientLines.push(

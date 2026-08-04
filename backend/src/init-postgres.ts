@@ -220,6 +220,10 @@ export async function ensurePostgresInit(pool: Pool) {
       ALTER TABLE transfers ALTER COLUMN dest_owner_type DROP NOT NULL;
       ALTER TABLE transfers ALTER COLUMN dest_warehouse_id DROP NOT NULL;
       ALTER TABLE transfers ALTER COLUMN dest_branch_id DROP NOT NULL;
+      ALTER TABLE transfer_lines ADD COLUMN IF NOT EXISTS quantity_requested INTEGER;
+      ALTER TABLE transfer_lines ADD COLUMN IF NOT EXISTS quantity_dispatched INTEGER;
+      ALTER TABLE transfer_lines ADD COLUMN IF NOT EXISTS quantity_received INTEGER;
+      ALTER TABLE transfer_lines ADD COLUMN IF NOT EXISTS quantity INTEGER;
     `);
 
     // 2. Populate auth & reference data from D1 Backup
