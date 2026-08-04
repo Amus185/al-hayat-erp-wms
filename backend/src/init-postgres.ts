@@ -223,9 +223,10 @@ export async function ensurePostgresInit(pool: Pool) {
     }
     for (const row of D1_AUTH_BACKUP.users) {
       await client.query(
-        `INSERT INTO users (id, email, password_hash, full_name, branch_id, is_active, password_version) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (id) DO UPDATE SET password_hash = EXCLUDED.password_hash, password_version = EXCLUDED.password_version`,
+        `INSERT INTO users (id, email, password_hash, full_name, branch_id, is_active, password_version) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (email) DO UPDATE SET password_hash = EXCLUDED.password_hash, password_version = EXCLUDED.password_version`,
         [row.id, row.email, row.password_hash, row.full_name, row.branch_id, row.is_active, row.password_version]
       );
+      await client.query(`UPDATE users SET password_hash = $1 WHERE email = $2`, [row.password_hash, row.email]);
     }
     for (const row of D1_AUTH_BACKUP.user_roles) {
       await client.query(
