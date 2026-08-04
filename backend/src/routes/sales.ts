@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { Env, uuidv4 } from '../db';
 import { authMiddleware, requirePermissions, isAdminUser } from '../middleware/auth';
 import { logAudit, createAuditLogStmt } from '../services/audit';
-import { postSaleJournalEntry, postCustomerPaymentJournalEntry } from '../services/accounting-service';
+import { postSaleJournalEntry, postCustomerPaymentJournalEntry, fetchOpenFiscalPeriodId, fetchCoaMapForCodes } from '../services/accounting-service';
 
 const sales = new Hono<{ Bindings: Env; Variables: { jwtPayload: any } }>();
 
@@ -644,22 +644,43 @@ sales.post('/orders/:id/complete', requirePermissions(['manage_sales']), async (
     console.log(`[WATERFALL] +${Date.now() - reqStart}ms | Main sale write batch (${stmts.length} stmts) completed (${Date.now() - tBatch0}ms)`);
 
     // Automatically post double-entry GL journal entries for Sale Completion & Payment
+    // Task 1: Pre-fetch shared context ONCE for both journal entries.
+    //   - Fiscal period: same date for both entries → fetch once, pass in.
+    //   - CoA codes: Sale needs {1020,4010}, Payment needs {1010,1020} → union {1010,1020,4010} → single IN() query.
+    //   - GL running_balance: NOT pre-fetched here — account 1020 is written by the
+    //     first entry and read by the second, so the reads must be sequential (see Task 2 analysis).
     try {
+      const entryDate = new Date().toISOString().split('T')[0];
+
+      const tGlPre0 = Date.now();
+      const [sharedFiscalPeriodId, sharedCoaMap] = await Promise.all([
+        fetchOpenFiscalPeriodId(c.env.DB, entryDate),
+        fetchCoaMapForCodes(c.env.DB, ['1010', '1020', '4010']),
+      ]);
+      console.log(`[WATERFALL] +${Date.now() - reqStart}ms | GL pre-fetch (fiscal period + 3 CoA codes) completed (${Date.now() - tGlPre0}ms)`);
+
       const tGl1_0 = Date.now();
       await postSaleJournalEntry(
         c,
         { id: order.id as string, order_number: (order as any).order_number as string || (order.id as string), branch_id: (order as any).branch_id as string },
         total,
-        userId
+        userId,
+        sharedFiscalPeriodId,
+        sharedCoaMap
       );
       console.log(`[WATERFALL] +${Date.now() - reqStart}ms | postSaleJournalEntry completed (${Date.now() - tGl1_0}ms)`);
 
+      // NOTE: postCustomerPaymentJournalEntry runs AFTER the first batch commits.
+      // Account 1020 was debited by the sale entry; the payment entry reads its
+      // updated running_balance. The GL read inside is therefore intentionally live.
       const tGl2_0 = Date.now();
       await postCustomerPaymentJournalEntry(
         c,
         { id: invoiceId, amount: total },
         { id: order.id as string, order_number: (order as any).order_number as string || (order.id as string), branch_id: (order as any).branch_id as string },
-        userId
+        userId,
+        sharedFiscalPeriodId,  // fiscal period is the same — safe to reuse
+        sharedCoaMap           // CoA codes are static config — safe to reuse
       );
       console.log(`[WATERFALL] +${Date.now() - reqStart}ms | postCustomerPaymentJournalEntry completed (${Date.now() - tGl2_0}ms)`);
     } catch (glErr) {
