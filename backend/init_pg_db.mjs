@@ -18,9 +18,29 @@
  */
 
 import pg from 'pg';
-import { readFileSync } from 'fs';
+import { readFileSync, existsSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
+// Auto-load backend/.env or root .env if present
+const envPaths = [join(__dirname, '.env'), join(__dirname, '..', '.env')];
+for (const p of envPaths) {
+  if (existsSync(p)) {
+    const lines = readFileSync(p, 'utf8').split('\n');
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (trimmed && !trimmed.startsWith('#') && trimmed.includes('=')) {
+        const idx = trimmed.indexOf('=');
+        const k = trimmed.slice(0, idx).trim();
+        const v = trimmed.slice(idx + 1).trim().replace(/^["']|["']$/g, '');
+        if (!process.env[k]) process.env[k] = v;
+      }
+    }
+  }
+}
 
 const { Client } = pg;
 
@@ -31,8 +51,6 @@ if (!DATABASE_URL) {
   console.error('❌  DATABASE_URL is required');
   process.exit(1);
 }
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
 
 async function main() {
   const client = new Client({
