@@ -982,4 +982,39 @@ sales.post('/orders/:id/cancel', requirePermissions(['manage_sales']), async (c)
   return c.json({ success: true, message: 'Sales order cancelled successfully.' });
 });
 
+// ──────────────────────────────────────────────────────────────────────
+// DELETE ORDER — Admin / Manage Sales override
+// Permanently deletes sales order and associated invoice/payments
+// ──────────────────────────────────────────────────────────────────────
+sales.delete('/orders/:id', requirePermissions(['manage_sales']), async (c) => {
+  const id = c.req.param('id');
+  const payload = c.get('jwtPayload');
+  const admin = isAdminUser(payload);
+  const scopedBranchId = admin ? null : payload.branch_id;
+
+  const order = await c.env.DB.prepare('SELECT * FROM sales_orders WHERE id = ?').bind(id).first();
+  if (!order) return c.json({ message: 'Sales order not found' }, 404);
+
+  if (scopedBranchId && (order as any).branch_id !== scopedBranchId) {
+    return c.json({ message: 'Access denied: order belongs to another branch.' }, 403);
+  }
+
+  // Find invoice if any
+  const invoice = await c.env.DB.prepare('SELECT id FROM invoices WHERE sales_order_id = ?').bind(id).first();
+  const invoiceId = invoice ? (invoice as any).id : null;
+
+  const stmts = [];
+  if (invoiceId) {
+    stmts.push(c.env.DB.prepare('DELETE FROM invoice_payments WHERE invoice_id = ?').bind(invoiceId));
+    stmts.push(c.env.DB.prepare('DELETE FROM invoice_lines WHERE invoice_id = ?').bind(invoiceId));
+    stmts.push(c.env.DB.prepare('DELETE FROM invoices WHERE id = ?').bind(invoiceId));
+  }
+  stmts.push(c.env.DB.prepare('DELETE FROM sales_order_lines WHERE sales_order_id = ?').bind(id));
+  stmts.push(c.env.DB.prepare('DELETE FROM sales_orders WHERE id = ?').bind(id));
+  stmts.push(createAuditLogStmt(c, 'SALES_ORDER_DELETE', 'sales_orders', id, order, null));
+
+  await c.env.DB.batch(stmts);
+  return c.json({ success: true });
+});
+
 export default sales;

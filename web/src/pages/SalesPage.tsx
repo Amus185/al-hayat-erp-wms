@@ -2,9 +2,9 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   ShoppingCart, Plus, UserPlus, Eye, CheckCircle,
-  DollarSign, Zap, Printer, CreditCard, History, ChevronDown, ChevronUp, Loader2,
+  DollarSign, Zap, Printer, CreditCard, History, ChevronDown, ChevronUp, Loader2, Trash2,
 } from 'lucide-react';
-import { apiGet, apiPost } from '../api/client';
+import { apiGet, apiPost, apiDelete } from '../api/client';
 import { DataTable, type Column } from '../components/DataTable';
 import { Tabs } from '../components/Tabs';
 import { Modal } from '../components/Modal';
@@ -201,7 +201,30 @@ export function SalesPage() {
     }
   };
 
-  const [actionProcessing, setActionProcessing] = useState<'complete' | 'invoice_deposit' | 'cancel' | 'pay' | null>(null);
+  const [actionProcessing, setActionProcessing] = useState<'complete' | 'invoice_deposit' | 'cancel' | 'pay' | 'delete' | null>(null);
+
+  const handleDeleteOrder = async (id: string) => {
+    const confirmed = await confirmAction(
+      'Delete Sales Order?',
+      'Are you sure you want to permanently delete this sales order?',
+      'Yes, Delete Order',
+      'warning'
+    );
+    if (!confirmed) return;
+    try {
+      setActionProcessing('delete');
+      setOrderDetailsLoading(true);
+      await apiDelete(`/sales/orders/${id}`);
+      addToast('success', 'Sales order deleted successfully');
+      setSelectedOrder(null);
+      loadData();
+    } catch (err: any) {
+      addToast('error', err?.message || 'Failed to delete order');
+    } finally {
+      setOrderDetailsLoading(false);
+      setActionProcessing(null);
+    }
+  };
 
   // ONE-CLICK: confirm + invoice + pay all at once
   const handleComplete = async (id: string) => {
@@ -707,13 +730,25 @@ export function SalesPage() {
               )}
 
               {selectedOrder.status !== 'PAID' && selectedOrder.status !== 'CANCELLED' && hasPermission('manage_sales') && (
-                <button type="button" className="btn btn-danger" disabled={orderDetailsLoading || !!actionProcessing}
+                <button type="button" className="btn btn-secondary" disabled={orderDetailsLoading || !!actionProcessing}
                   onClick={() => handleCancelOrder(selectedOrder.id)}
                   style={{ display: 'flex', alignItems: 'center' }}>
                   {actionProcessing === 'cancel' ? (
                     <><Loader2 size={14} className="spin-icon" /> Cancelling…</>
                   ) : (
                     'Cancel Order'
+                  )}
+                </button>
+              )}
+
+              {hasPermission('manage_sales') && (
+                <button type="button" className="btn btn-danger" disabled={orderDetailsLoading || !!actionProcessing}
+                  onClick={() => handleDeleteOrder(selectedOrder.id)}
+                  style={{ display: 'flex', alignItems: 'center' }}>
+                  {actionProcessing === 'delete' ? (
+                    <><Loader2 size={14} className="spin-icon" /> Deleting…</>
+                  ) : (
+                    <><Trash2 size={14} style={{ marginRight: '4px', inlineSize: 'auto' }} /> Delete Order</>
                   )}
                 </button>
               )}
