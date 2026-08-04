@@ -6,6 +6,8 @@ import {
 } from 'lucide-react';
 import { apiGet, apiPost } from '../api/client';
 import { DataTable, type Column } from '../components/DataTable';
+import { KanbanBoard, type KanbanColumnDef } from '../components/KanbanBoard';
+import { ViewSwitcher } from '../components/ViewSwitcher';
 import { FilterBar } from '../components/FilterBar';
 import { Tabs } from '../components/Tabs';
 import { Modal } from '../components/Modal';
@@ -594,6 +596,16 @@ export function PurchasingPage() {
     invoiceSummary &&
     invoiceSummary.summary.balance > 0.001;
 
+  const [viewMode, setViewMode] = useState<'kanban' | 'table'>('kanban');
+
+  const kanbanColumns: KanbanColumnDef[] = [
+    { id: 'DRAFT', title: 'Drafts', badgeTone: 'neutral', accentColor: '#94a3b8' },
+    { id: 'SUBMITTED', title: 'Submitted', badgeTone: 'blue', accentColor: '#3b82f6' },
+    { id: 'APPROVED', title: 'Approved', badgeTone: 'yellow', accentColor: '#f59e0b' },
+    { id: 'PARTIALLY_RECEIVED', title: 'Partial', badgeTone: 'purple', accentColor: '#a855f7' },
+    { id: 'RECEIVED', title: 'Received', badgeTone: 'green', accentColor: '#10b981' },
+  ];
+
   return (
     <div className="module-page">
       <section className="module-header">
@@ -604,7 +616,8 @@ export function PurchasingPage() {
           <p>Procurement</p>
           <h2>Suppliers, purchase orders, receipts, and payments</h2>
         </div>
-        <div style={{ display: 'flex', gap: '10px' }}>
+        <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+          <ViewSwitcher viewMode={viewMode} onViewChange={setViewMode} />
           <button type="button" className="btn btn-secondary" onClick={() => setIsSupplierOpen(true)}>
             <UserPlus size={16} style={{ marginRight: '6px', inlineSize: 'auto' }} /> Add Supplier
           </button>
@@ -614,9 +627,11 @@ export function PurchasingPage() {
         </div>
       </section>
 
-      <section style={{ marginBottom: '14px' }}>
-        <Tabs tabs={tabItems} activeTab={activeTab} onTabChange={setActiveTab} />
-      </section>
+      {viewMode === 'table' && (
+        <section style={{ marginBottom: '14px' }}>
+          <Tabs tabs={tabItems} activeTab={activeTab} onTabChange={setActiveTab} />
+        </section>
+      )}
 
       <section className="panel">
         <FilterBar
@@ -642,14 +657,49 @@ export function PurchasingPage() {
           filterValues={poFilters}
           onFilterChange={(key, val) => setPoFilters(prev => ({ ...prev, [key]: val }))}
         />
-        <DataTable
-          columns={columns}
-          data={filteredPOs}
-          keyExtractor={(row) => row.id as string}
-          loading={loading}
-          onRowClick={(row) => viewPoDetails(row as PurchaseOrder)}
-          emptyMessage="No purchase orders match your filters"
-        />
+
+        {viewMode === 'kanban' ? (
+          <KanbanBoard
+            columns={kanbanColumns}
+            items={filteredPOs}
+            getItemStage={(po) => (po.status === 'FULLY_RECEIVED' ? 'RECEIVED' : po.status)}
+            keyExtractor={(po) => po.id}
+            onCardClick={(po) => viewPoDetails(po)}
+            renderCard={(po) => (
+              <>
+                <div className="kanban-card__header">
+                  <span className="kanban-card__id">{po.po_number}</span>
+                  <span className="kanban-card__date">
+                    {new Date(po.created_at).toLocaleDateString()}
+                  </span>
+                </div>
+                <div className="kanban-card__body">
+                  <span className="kanban-card__subtitle">{po.supplier_name || 'Supplier'}</span>
+                  {po.expected_date && (
+                    <span className="kanban-card__meta">Exp: {new Date(po.expected_date).toLocaleDateString()}</span>
+                  )}
+                </div>
+                <div className="kanban-card__footer">
+                  <span className="kanban-card__amount">
+                    {po.net_total != null ? fmt(po.net_total) : (po.invoice_total != null ? fmt(po.invoice_total) : '—')}
+                  </span>
+                  {po.payment_status && (
+                    <StatusBadge label={po.payment_status.replace('_', ' ')} tone={paymentStatusTone(po.payment_status)} />
+                  )}
+                </div>
+              </>
+            )}
+          />
+        ) : (
+          <DataTable
+            columns={columns}
+            data={filteredPOs}
+            keyExtractor={(row) => row.id as string}
+            loading={loading}
+            onRowClick={(row) => viewPoDetails(row as PurchaseOrder)}
+            emptyMessage="No purchase orders match your filters"
+          />
+        )}
       </section>
 
       {/* ── Supplier Modal ── */}

@@ -3,6 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import { Truck, Plus, CheckCircle, ArrowRight, User, Calendar } from 'lucide-react';
 import { apiGet, apiPost } from '../api/client';
 import { DataTable, type Column } from '../components/DataTable';
+import { KanbanBoard, type KanbanColumnDef } from '../components/KanbanBoard';
+import { ViewSwitcher } from '../components/ViewSwitcher';
 import { Tabs } from '../components/Tabs';
 import { Modal } from '../components/Modal';
 import { StatusBadge } from '../components/StatusBadge';
@@ -120,8 +122,17 @@ export function TransfersPage() {
     }
   };
 
+  const [viewMode, setViewMode] = useState<'kanban' | 'table'>('kanban');
+
+  const kanbanColumns: KanbanColumnDef[] = [
+    { id: 'PENDING_APPROVAL', title: 'Pending Approval', badgeTone: 'yellow', accentColor: '#f59e0b' },
+    { id: 'APPROVED', title: 'Approved', badgeTone: 'blue', accentColor: '#3b82f6' },
+    { id: 'DISPATCHED', title: 'Dispatched', badgeTone: 'purple', accentColor: '#a855f7' },
+    { id: 'RECEIVED', title: 'Received', badgeTone: 'green', accentColor: '#10b981' },
+  ];
+
   const filteredTransfers = transfers.filter((t) => {
-    if (activeTab !== 'ALL') {
+    if (viewMode === 'table' && activeTab !== 'ALL') {
       if (activeTab === 'PENDING' && t.status !== 'PENDING_APPROVAL') return false;
       else if (activeTab !== 'PENDING' && t.status !== activeTab) return false;
     }
@@ -183,9 +194,12 @@ export function TransfersPage() {
           <p>Movement</p>
           <h2>Warehouse-to-branch and branch-to-branch stock transfers</h2>
         </div>
-        <button type="button" className="btn btn-primary" onClick={() => navigate('/transfers/new')}>
-          <Plus size={16} style={{ marginRight: '6px', inlineSize: 'auto' }} /> New Transfer
-        </button>
+        <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+          <ViewSwitcher viewMode={viewMode} onViewChange={setViewMode} />
+          <button type="button" className="btn btn-primary" onClick={() => navigate('/transfers/new')}>
+            <Plus size={16} style={{ marginRight: '6px', inlineSize: 'auto' }} /> New Transfer
+          </button>
+        </div>
       </section>
 
       <section style={{ marginBottom: '14px' }}>
@@ -208,18 +222,51 @@ export function TransfersPage() {
           filterValues={{srcWh: '', dstBr: ''}}
           onFilterChange={() => {}}
         />
-        <Tabs tabs={tabItems} activeTab={activeTab} onTabChange={setActiveTab} />
+        {viewMode === 'table' && (
+          <Tabs tabs={tabItems} activeTab={activeTab} onTabChange={setActiveTab} />
+        )}
       </section>
 
       <section className="panel">
-        <DataTable
-          columns={columns}
-          data={filteredTransfers}
-          keyExtractor={(row) => row.id}
-          loading={loading}
-          onRowClick={(row) => setSelectedTransfer(row)}
-          emptyMessage="No transfers match your filters"
-        />
+        {viewMode === 'kanban' ? (
+          <KanbanBoard
+            columns={kanbanColumns}
+            items={filteredTransfers}
+            getItemStage={(t) => t.status}
+            keyExtractor={(t) => t.id}
+            onCardClick={(t) => setSelectedTransfer(t)}
+            renderCard={(t) => (
+              <>
+                <div className="kanban-card__header">
+                  <span className="kanban-card__id">{t.transfer_number}</span>
+                  <span className="kanban-card__date">
+                    {new Date(t.requested_at).toLocaleDateString()}
+                  </span>
+                </div>
+                <div className="kanban-card__body">
+                  <span className="kanban-card__subtitle">
+                    {getOwnerName(t.source_owner_type, t.source_warehouse_id, t.source_branch_id)}
+                  </span>
+                  <div className="kanban-card__meta" style={{ color: '#066006', fontWeight: 600 }}>
+                    <ArrowRight size={12} /> {getOwnerName(t.destination_owner_type, t.destination_warehouse_id, t.destination_branch_id)}
+                  </div>
+                </div>
+                <div className="kanban-card__footer">
+                  <span className="kanban-card__meta">Req by {t.requested_by ? 'User' : 'System'}</span>
+                </div>
+              </>
+            )}
+          />
+        ) : (
+          <DataTable
+            columns={columns}
+            data={filteredTransfers}
+            keyExtractor={(row) => row.id}
+            loading={loading}
+            onRowClick={(row) => setSelectedTransfer(row)}
+            emptyMessage="No transfers match your filters"
+          />
+        )}
       </section>
 
       {/* Detail Action Modal */}
