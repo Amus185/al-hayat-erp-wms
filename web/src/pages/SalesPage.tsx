@@ -497,9 +497,25 @@ export function SalesPage() {
       key: 'actions',
       label: 'Actions',
       render: (row) => (
-        <button type="button" className="btn btn-secondary btn-sm" onClick={() => viewOrderDetails(row)}>
-          <Eye size={14} style={{ marginRight: '4px', inlineSize: 'auto' }} /> Details
-        </button>
+        <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+          <button type="button" className="btn btn-secondary btn-sm" onClick={() => viewOrderDetails(row)}>
+            <Eye size={14} style={{ marginRight: '4px', inlineSize: 'auto' }} /> Details
+          </button>
+          {hasPermission('manage_sales') && (
+            <button
+              type="button"
+              className="btn btn-danger btn-sm"
+              onClick={(e) => {
+                e.stopPropagation();
+                handleDeleteOrder(row.id);
+              }}
+              title="Delete Order"
+              style={{ padding: '6px 10px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
+            >
+              <Trash2 size={14} style={{ marginRight: '4px', inlineSize: 'auto' }} /> Delete
+            </button>
+          )}
+        </div>
       ),
     },
   ];
