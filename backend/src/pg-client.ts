@@ -27,6 +27,8 @@ export function convertSqliteToPg(sql: string): string {
     .replace(/date\('now'\)/gi, 'CURRENT_DATE::text')
     // SQLite UUID idiom → Postgres built-in
     .replace(/lower\(hex\(randomblob\(16\)\)\)/gi, 'gen_random_uuid()::text')
+    // SQLite GROUP_CONCAT → Postgres STRING_AGG
+    .replace(/group_concat\(([^)]+)\)/gi, 'string_agg($1::text, \',\')')
     // SQLite INSERT OR IGNORE → Postgres upsert
     .replace(/INSERT\s+OR\s+IGNORE\s+INTO/gi, 'INSERT INTO');
 
