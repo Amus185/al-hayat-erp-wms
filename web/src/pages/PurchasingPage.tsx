@@ -494,7 +494,7 @@ export function PurchasingPage() {
 
   // ── Filtering ─────────────────────────────────────────────────────
   const filteredPOs = pos.filter((po) => {
-    if (activeTab !== 'ALL' && po.status !== activeTab) return false;
+    if (poFilters.status && poFilters.status !== 'ALL' && po.status !== poFilters.status) return false;
     const q = poSearch.trim().toLowerCase();
     if (q && !po.po_number.toLowerCase().includes(q) && !String(po.supplier_name || '').toLowerCase().includes(q)) return false;
     if (poFilters.supplier && po.supplier_id !== poFilters.supplier) return false;
@@ -649,16 +649,23 @@ export function PurchasingPage() {
         </div>
       </section>
 
-      <section style={{ marginBottom: '14px' }}>
-        <Tabs tabs={tabItems} activeTab={activeTab} onTabChange={setActiveTab} />
-      </section>
-
       <section className="panel">
         <FilterBar
           searchValue={poSearch}
           onSearchChange={setPoSearch}
           searchPlaceholder="Search PO number or supplier name…"
           filters={[
+            {
+              key: 'status',
+              label: 'All Statuses',
+              options: [
+                { value: 'DRAFT', label: 'Drafts' },
+                { value: 'SUBMITTED', label: 'Submitted' },
+                { value: 'APPROVED', label: 'Approved' },
+                { value: 'PARTIALLY_RECEIVED', label: 'Partial' },
+                { value: 'RECEIVED', label: 'Received' },
+              ],
+            },
             {
               key: 'supplier',
               label: 'All Suppliers',

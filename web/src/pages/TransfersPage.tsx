@@ -1,15 +1,11 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Truck, Plus, CheckCircle, ArrowRight, User, Calendar } from 'lucide-react';
+import { Truck, Plus, CheckCircle, ArrowRight, User, Calendar, Search, X } from 'lucide-react';
 import { apiGet, apiPost } from '../api/client';
 import { DataTable, type Column } from '../components/DataTable';
-import { KanbanBoard, type KanbanColumnDef } from '../components/KanbanBoard';
-import { ViewSwitcher } from '../components/ViewSwitcher';
-import { Tabs } from '../components/Tabs';
 import { Modal } from '../components/Modal';
 import { StatusBadge } from '../components/StatusBadge';
 import { LoadingSpinner } from '../components/LoadingSpinner';
-import { FilterBar } from '../components/FilterBar';
 import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -228,31 +224,40 @@ export function TransfersPage() {
         </div>
       </section>
 
-      <section style={{ marginBottom: '14px' }}>
-        <Tabs tabs={tabItems} activeTab={activeTab} onTabChange={setActiveTab} />
-      </section>
+      <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '16px', alignItems: 'center' }}>
+        <div style={{ position: 'relative', flex: '1', minWidth: '240px' }}>
+          <Search size={14} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#9ca3af' }} />
+          <input
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search by Transfer ID, origin or destination…"
+            style={{ width: '100%', padding: '9px 10px 9px 32px', border: '1px solid #e5e7eb', borderRadius: '8px', fontSize: '14px', outline: 'none', boxSizing: 'border-box' }}
+          />
+        </div>
+
+        <select
+          value={activeTab}
+          onChange={(e) => setActiveTab(e.target.value)}
+          style={{ padding: '9px 12px', border: '1px solid #e5e7eb', borderRadius: '8px', fontSize: '14px', background: '#fff', cursor: 'pointer' }}
+        >
+          <option value="ALL">All Statuses</option>
+          <option value="PENDING_APPROVAL">Pending Approval</option>
+          <option value="APPROVED">Approved</option>
+          <option value="DISPATCHED">Dispatched</option>
+          <option value="RECEIVED">Received</option>
+        </select>
+
+        {activeTab !== 'ALL' || searchQuery ? (
+          <button
+            onClick={() => { setActiveTab('ALL'); setSearchQuery(''); }}
+            style={{ padding: '9px 12px', border: '1px solid #e5e7eb', borderRadius: '8px', fontSize: '14px', background: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', color: '#6b7280' }}
+          >
+            <X size={14} /> Clear
+          </button>
+        ) : null}
+      </div>
 
       <section className="panel">
-        <FilterBar
-          searchValue={searchQuery}
-          onSearchChange={setSearchQuery}
-          searchPlaceholder="Search by Transfer ID, origin or destination…"
-          filters={[
-            {
-              key: 'srcWh',
-              label: 'Source Warehouse',
-              options: warehouses.map((w: any) => ({ value: w.id, label: w.name })),
-            },
-            {
-              key: 'dstBr',
-              label: 'Destination Branch',
-              options: branches.map((b: any) => ({ value: b.id, label: b.name })),
-            },
-          ]}
-          filterValues={{srcWh: '', dstBr: ''}}
-          onFilterChange={() => {}}
-        />
-
         <DataTable
           columns={columns}
           data={filteredTransfers}

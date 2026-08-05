@@ -130,55 +130,65 @@ export function BranchesPage() {
   }
 
   return (
-    <div className="module-page">
+    <div style={{ padding: '24px', maxWidth: '1200px', margin: '0 auto' }}>
       {/* Module Header */}
-      <section className="module-header" style={{ marginBottom: '20px' }}>
-        <div className="module-header__icon" style={{ background: 'var(--primary-light, #e9f6e8)', color: 'var(--primary, #0B8F08)', borderRadius: '12px', padding: '10px' }}>
-          <Building2 size={28} />
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '24px', gap: '16px', flexWrap: 'wrap' }}>
+        <div>
+          <h2 style={{ margin: 0, fontSize: '22px', fontWeight: 700, color: '#111827' }}>Branches</h2>
+          <p style={{ margin: '4px 0 0', color: '#6b7280', fontSize: '14px' }}>{branches.length} total outlets · {activeBranches} active</p>
         </div>
-        <div className="module-header__info">
-          <p style={{ textTransform: 'uppercase', letterSpacing: '0.06em', fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted, #667066)', margin: 0 }}>Retail Network</p>
-          <h2 style={{ margin: 0, fontSize: '1.4rem', fontWeight: 800 }}>Branch Inventory & Outlet Monitoring</h2>
-        </div>
-        <div style={{ marginLeft: 'auto' }}>
-          <button type="button" className="btn btn-primary" onClick={() => setIsModalOpen(true)} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <Plus size={16} /> New Branch
-          </button>
-        </div>
-      </section>
+        <button
+          onClick={() => setIsModalOpen(true)}
+          style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 18px', background: '#0b8f08', color: '#fff', border: 'none', borderRadius: '8px', fontWeight: 600, fontSize: '14px', cursor: 'pointer' }}
+        >
+          <Plus size={16} /> New Branch
+        </button>
+      </div>
 
       {/* KPI Stats Bar */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '16px', marginBottom: '24px' }}>
-        <div style={{ background: 'var(--bg-card, #ffffff)', padding: '18px 20px', borderRadius: '16px', border: '1px solid var(--border-light, #edf1ed)', boxShadow: '0 2px 8px rgba(6,96,6,0.04)' }}>
-          <p style={{ margin: 0, fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted, #667066)', textTransform: 'uppercase' }}>Total Network Outlets</p>
-          <p style={{ margin: '6px 0 0', fontSize: '1.8rem', fontWeight: 800, color: 'var(--text, #1a1a1a)' }}>{totalBranches}</p>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '16px', marginBottom: '24px' }}>
+        <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: '12px', padding: '16px 20px', display: 'flex', alignItems: 'center', gap: '14px' }}>
+          <div style={{ background: '#f0fdf4', borderRadius: '8px', padding: '8px' }}><Building2 size={20} color="#0b8f08" /></div>
+          <div>
+            <div style={{ fontSize: '20px', fontWeight: 700, color: '#111827' }}>{totalBranches}</div>
+            <div style={{ fontSize: '12px', color: '#6b7280' }}>Total Network Outlets</div>
+          </div>
         </div>
-        <div style={{ background: 'var(--bg-card, #ffffff)', padding: '18px 20px', borderRadius: '16px', border: '1px solid var(--border-light, #edf1ed)', boxShadow: '0 2px 8px rgba(6,96,6,0.04)' }}>
-          <p style={{ margin: 0, fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted, #667066)', textTransform: 'uppercase' }}>Active Branches</p>
-          <p style={{ margin: '6px 0 0', fontSize: '1.8rem', fontWeight: 800, color: 'var(--primary, #0B8F08)' }}>{activeBranches}</p>
+        <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: '12px', padding: '16px 20px', display: 'flex', alignItems: 'center', gap: '14px' }}>
+          <div style={{ background: '#eff6ff', borderRadius: '8px', padding: '8px' }}><CheckCheck size={20} color="#2563eb" /></div>
+          <div>
+            <div style={{ fontSize: '20px', fontWeight: 700, color: '#111827' }}>{activeBranches}</div>
+            <div style={{ fontSize: '12px', color: '#6b7280' }}>Active Outlets</div>
+          </div>
         </div>
-        <div style={{ background: 'var(--bg-card, #ffffff)', padding: '18px 20px', borderRadius: '16px', border: '1px solid var(--border-light, #edf1ed)', boxShadow: '0 2px 8px rgba(6,96,6,0.04)' }}>
-          <p style={{ margin: 0, fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted, #667066)', textTransform: 'uppercase' }}>Cities Covered</p>
-          <p style={{ margin: '6px 0 0', fontSize: '1.8rem', fontWeight: 800, color: '#b45309' }}>{citiesCount}</p>
+        <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: '12px', padding: '16px 20px', display: 'flex', alignItems: 'center', gap: '14px' }}>
+          <div style={{ background: '#ede9fe', borderRadius: '8px', padding: '8px' }}><MapPin size={20} color="#7c3aed" /></div>
+          <div>
+            <div style={{ fontSize: '20px', fontWeight: 700, color: '#111827' }}>{citiesCount}</div>
+            <div style={{ fontSize: '12px', color: '#6b7280' }}>Cities Covered</div>
+          </div>
         </div>
       </div>
 
       {/* Filter / Search Bar */}
-      <div style={{ marginBottom: '20px', display: 'flex', gap: '12px', alignItems: 'center' }}>
-        <div style={{ position: 'relative', flex: 1, maxWidth: '400px' }}>
-          <Search size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted, #667066)' }} />
+      <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '20px', alignItems: 'center' }}>
+        <div style={{ position: 'relative', flex: 1, minWidth: '240px' }}>
+          <Search size={14} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#9ca3af' }} />
           <input
             type="text"
-            className="form-input"
             placeholder="Search branches by name, code, city..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            style={{ paddingLeft: '36px', width: '100%', borderRadius: '10px' }}
+            style={{ width: '100%', padding: '9px 10px 9px 32px', border: '1px solid #e5e7eb', borderRadius: '8px', fontSize: '14px', outline: 'none', boxSizing: 'border-box' }}
           />
         </div>
         {searchQuery && (
-          <button type="button" className="btn btn-ghost" onClick={() => setSearchQuery('')} style={{ fontSize: '0.82rem' }}>
-            Clear Search
+          <button
+            type="button"
+            onClick={() => setSearchQuery('')}
+            style={{ padding: '9px 12px', border: '1px solid #e5e7eb', borderRadius: '8px', fontSize: '14px', background: '#fff', cursor: 'pointer', color: '#6b7280' }}
+          >
+            Clear
           </button>
         )}
       </div>
@@ -277,13 +287,13 @@ export function BranchesPage() {
           </div>
 
           <div>
-            <p style={{ margin: '0 0 6px', fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-muted, #667066)' }}>BRANCH</p>
+            <p style={{ margin: '0 0 6px', fontSize: '0.78rem', fontWeight: 600, color: '#64748b' }}>BRANCH</p>
             <p style={{ margin: 0, fontWeight: 700, fontSize: '1.05rem' }}>{credModal?.branchName}</p>
           </div>
 
           {/* Username row */}
           <div>
-            <p style={{ margin: '0 0 6px', fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-muted, #667066)' }}>USERNAME / LOGIN EMAIL</p>
+            <p style={{ margin: '0 0 6px', fontSize: '0.78rem', fontWeight: 600, color: '#64748b' }}>USERNAME / LOGIN EMAIL</p>
             <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
               <code style={{
                 flex: 1, background: '#f8fafc', borderRadius: '8px',
@@ -305,7 +315,7 @@ export function BranchesPage() {
 
           {/* Password row */}
           <div>
-            <p style={{ margin: '0 0 6px', fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-muted, #667066)' }}>PASSWORD</p>
+            <p style={{ margin: '0 0 6px', fontSize: '0.78rem', fontWeight: 600, color: '#64748b' }}>PASSWORD</p>
             <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
               <code style={{
                 flex: 1, background: '#f8fafc', borderRadius: '8px',
@@ -332,66 +342,74 @@ export function BranchesPage() {
       </Modal>
 
       {/* Branch Cards */}
-      <div className="card-grid">
-        {filteredBranches.length === 0 ? (
-          <div className="empty-state">
-            <Building2 size={48} style={{ opacity: 0.4 }} />
-            <h3>{searchQuery ? 'No matching branches found' : 'No branches yet'}</h3>
-            <p>{searchQuery ? 'Try adjusting your search query' : 'Create your first branch to get started'}</p>
-          </div>
-        ) : (
-          filteredBranches.map((branch) => (
+      {filteredBranches.length === 0 ? (
+        <div style={{ textAlign: 'center', padding: '60px', color: '#9ca3af', background: '#fff', borderRadius: '12px', border: '1px solid #e5e7eb' }}>
+          <Building2 size={40} style={{ marginBottom: '12px', opacity: 0.3 }} />
+          <p style={{ margin: 0, fontWeight: 500 }}>{searchQuery ? 'No matching branches found' : 'No branches yet'}</p>
+          <p style={{ margin: '4px 0 0', fontSize: '13px' }}>{searchQuery ? 'Try adjusting your search' : 'Click "New Branch" to get started'}</p>
+        </div>
+      ) : (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '16px' }}>
+          {filteredBranches.map((branch) => (
             <div
               key={branch.id}
-              className="card"
               onClick={() => navigate(`/branches/${branch.id}`)}
-              style={{ cursor: 'pointer' }}
+              style={{
+                background: '#fff',
+                border: '1px solid #e5e7eb',
+                borderRadius: '12px',
+                padding: '20px',
+                display: 'flex',
+                flexDirection: 'column',
+                justifyContent: 'space-between',
+                cursor: 'pointer',
+                transition: 'box-shadow 0.2s',
+              }}
             >
-              <div className="card__header">
-                <div>
-                  <h3>{branch.name}</h3>
-                  <code style={{ fontSize: '0.75rem', background: '#f1f5f9', padding: '2px 6px', borderRadius: '4px', color: '#475569', fontWeight: 600 }}>{branch.code}</code>
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px' }}>
+                  <div>
+                    <h3 style={{ margin: '0 0 4px', fontSize: '16px', fontWeight: 700, color: '#111827' }}>{branch.name}</h3>
+                    <span style={{ fontSize: '11px', background: '#f3f4f6', padding: '2px 8px', borderRadius: '6px', color: '#4b5563', fontWeight: 600, fontFamily: 'monospace' }}>{branch.code}</span>
+                  </div>
+                  <StatusBadge status={branch.is_active ? 'ACTIVE' : 'INACTIVE'} />
                 </div>
-                <StatusBadge status={branch.is_active ? 'ACTIVE' : 'INACTIVE'} />
-              </div>
-              <div className="card__body">
                 {branch.city && (
-                  <p style={{ display: 'flex', gap: '6px', alignItems: 'center', fontSize: '0.85rem', color: 'var(--text-muted, #667066)', margin: '4px 0' }}>
-                    <MapPin size={14} style={{ color: 'var(--primary, #0B8F08)', flexShrink: 0 }} />
-                    <strong>{branch.city}</strong>
+                  <p style={{ display: 'flex', gap: '6px', alignItems: 'center', fontSize: '13px', color: '#6b7280', margin: '4px 0' }}>
+                    <MapPin size={14} style={{ color: '#0b8f08', flexShrink: 0 }} />
+                    <strong style={{ color: '#374151' }}>{branch.city}</strong>
                     {branch.address && ` — ${branch.address}`}
                   </p>
                 )}
                 {branch.phone && (
-                  <p style={{ display: 'flex', gap: '6px', alignItems: 'center', fontSize: '0.85rem', color: 'var(--text-muted, #667066)', margin: '2px 0' }}>
-                    <Phone size={14} style={{ color: 'var(--primary, #0B8F08)', flexShrink: 0 }} />
+                  <p style={{ display: 'flex', gap: '6px', alignItems: 'center', fontSize: '13px', color: '#6b7280', margin: '4px 0' }}>
+                    <Phone size={14} style={{ color: '#0b8f08', flexShrink: 0 }} />
                     {branch.phone}
                   </p>
                 )}
               </div>
-              <div className="card__footer">
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '16px', paddingTop: '12px', borderTop: '1px solid #f3f4f6' }}>
                 <button
                   type="button"
-                  className="btn btn-ghost btn-sm"
                   onClick={(e) => {
                     e.stopPropagation();
                     handleRegenerateCredentials(branch.id, branch.name);
                   }}
                   disabled={regenerating === branch.id}
                   title="Regenerate branch user login credentials"
-                  style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '0.78rem' }}
+                  style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px', padding: '5px 10px', border: '1px solid #e5e7eb', borderRadius: '6px', background: '#fff', cursor: 'pointer', color: '#4b5563' }}
                 >
-                  <RefreshCw size={13} className={regenerating === branch.id ? 'spin-icon' : ''} />
+                  <RefreshCw size={12} className={regenerating === branch.id ? 'spin-icon' : ''} />
                   {regenerating === branch.id ? 'Regenerating…' : 'Regen Creds'}
                 </button>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '4px', color: 'var(--primary, #0B8F08)', fontSize: '0.82rem', fontWeight: 700, marginLeft: 'auto' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '4px', color: '#0b8f08', fontSize: '13px', fontWeight: 600 }}>
                   View Details <ArrowRight size={14} />
                 </div>
               </div>
             </div>
-          ))
-        )}
-      </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

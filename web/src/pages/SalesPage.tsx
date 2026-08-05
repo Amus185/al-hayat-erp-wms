@@ -437,7 +437,7 @@ export function SalesPage() {
 
   // ── Filtering ────────────────────────────────────────────────────
   const filteredOrders = orders.filter((so) => {
-    if (activeTab !== 'ALL' && so.status !== activeTab) return false;
+    if (soFilters.status && soFilters.status !== 'ALL' && so.status !== soFilters.status) return false;
     const q = soSearch.trim().toLowerCase();
     if (q && !so.order_number.toLowerCase().includes(q) && !String(so.customer_name || '').toLowerCase().includes(q)) return false;
     if (soFilters.customer && so.customer_id !== soFilters.customer) return false;
@@ -581,16 +581,22 @@ export function SalesPage() {
         </div>
       </section>
 
-      <section style={{ marginBottom: '14px' }}>
-        <Tabs tabs={tabItems} activeTab={activeTab} onTabChange={setActiveTab} />
-      </section>
-
       <section className="panel">
         <FilterBar
           searchValue={soSearch}
           onSearchChange={setSoSearch}
           searchPlaceholder="Search by order ID, customer name, or phone…"
           filters={[
+            {
+              key: 'status',
+              label: 'All Statuses',
+              options: [
+                { value: 'DRAFT', label: 'Drafts' },
+                { value: 'CONFIRMED', label: 'Confirmed' },
+                { value: 'INVOICED', label: 'Invoiced' },
+                { value: 'PAID', label: 'Paid' },
+              ],
+            },
             {
               key: 'customer',
               label: 'All Customers',
