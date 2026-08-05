@@ -272,26 +272,28 @@ transfers.post('/:id/approve', requirePermissions(['manage_transfers']), async (
         const [srcStock, dstStock] = await Promise.all([
           c.env.DB.prepare(`
             SELECT id, quantity_on_hand FROM inventory_stock
-            WHERE product_id = ? AND owner_type = ?
-              AND (warehouse_id = ? OR (warehouse_id IS NULL AND ? IS NULL))
-              AND (branch_id = ? OR (branch_id IS NULL AND ? IS NULL))
+            WHERE product_id = ?
+              AND owner_type = ?
+              AND warehouse_id IS NOT DISTINCT FROM ?
+              AND branch_id IS NOT DISTINCT FROM ?
           `).bind(
             line.product_id,
             transfer.source_owner_type,
-            transfer.source_warehouse_id || null, transfer.source_warehouse_id || null,
-            transfer.source_branch_id || null, transfer.source_branch_id || null
+            transfer.source_warehouse_id || null,
+            transfer.source_branch_id || null
           ).first(),
 
           c.env.DB.prepare(`
             SELECT id FROM inventory_stock
-            WHERE product_id = ? AND owner_type = ?
-              AND (warehouse_id = ? OR (warehouse_id IS NULL AND ? IS NULL))
-              AND (branch_id = ? OR (branch_id IS NULL AND ? IS NULL))
+            WHERE product_id = ?
+              AND owner_type = ?
+              AND warehouse_id IS NOT DISTINCT FROM ?
+              AND branch_id IS NOT DISTINCT FROM ?
           `).bind(
             line.product_id,
-            transfer.destination_owner_type,
-            transfer.destination_warehouse_id || null, transfer.destination_warehouse_id || null,
-            transfer.destination_branch_id || null, transfer.destination_branch_id || null
+            transfer.destination_owner_type || transfer.dest_owner_type,
+            transfer.destination_warehouse_id || transfer.dest_warehouse_id || null,
+            transfer.destination_branch_id || transfer.dest_branch_id || null
           ).first()
         ]);
 
@@ -334,14 +336,15 @@ transfers.post('/:id/approve', requirePermissions(['manage_transfers']), async (
         UPDATE inventory_stock
         SET quantity_on_hand = quantity_on_hand - ?,
             updated_at = CURRENT_TIMESTAMP
-        WHERE product_id = ? AND owner_type = ?
-          AND (warehouse_id = ? OR (warehouse_id IS NULL AND ? IS NULL))
-          AND (branch_id = ? OR (branch_id IS NULL AND ? IS NULL))
+        WHERE product_id = ?
+          AND owner_type = ?
+          AND warehouse_id IS NOT DISTINCT FROM ?
+          AND branch_id IS NOT DISTINCT FROM ?
       `).bind(
         qty, line.product_id,
         transfer.source_owner_type,
-        transfer.source_warehouse_id || null, transfer.source_warehouse_id || null,
-        transfer.source_branch_id || null, transfer.source_branch_id || null
+        transfer.source_warehouse_id || null,
+        transfer.source_branch_id || null
       ));
 
       // 4b. TRANSFER_OUT ledger entry
