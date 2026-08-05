@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { NavLink, useNavigate } from 'react-router-dom';
+import { NavLink, useNavigate, useLocation } from 'react-router-dom';
 import {
   BarChart3,
   Bell,
@@ -36,6 +36,32 @@ const navItems = [
   { label: 'Users', path: '/users', icon: Users, permission: 'manage_users', adminOnly: true },
 ];
 
+// Map route prefixes → { section, title } for the topbar heading
+const pageTitles: Record<string, { section: string; title: string }> = {
+  '/':           { section: 'Operations Dashboard',   title: 'Inventory, purchasing, transfers, and sales' },
+  '/products':   { section: 'Catalog',                title: 'Products' },
+  '/warehouses': { section: 'Inventory',              title: 'Warehouses' },
+  '/inventory':  { section: 'Stock Control',          title: 'Inventory' },
+  '/branches':   { section: 'Organization',           title: 'Branches' },
+  '/transfers':  { section: 'Movement',               title: 'Stock Transfers' },
+  '/purchasing': { section: 'Procurement',            title: 'Purchasing' },
+  '/sales':      { section: 'Revenue',                title: 'Sales' },
+  '/reports':    { section: 'Analytics',              title: 'Reports' },
+  '/accounting': { section: 'Finance',                title: 'Accounting' },
+  '/audit':      { section: 'Compliance',             title: 'Audit Log' },
+  '/users':      { section: 'Administration',         title: 'Users & Permissions' },
+};
+
+function usePageTitle() {
+  const location = useLocation();
+  const path = location.pathname;
+  // Find longest matching prefix
+  const match = Object.keys(pageTitles)
+    .filter((key) => key === '/' ? path === '/' : path === key || path.startsWith(key + '/'))
+    .sort((a, b) => b.length - a.length)[0];
+  return pageTitles[match] ?? { section: 'AlHayat ERP', title: path.replace('/', '') };
+}
+
 type AppShellProps = {
   children: ReactNode;
 };
@@ -44,6 +70,7 @@ export function AppShell({ children }: AppShellProps) {
   const { user, logout, hasPermission, isAdmin, isBranchUser } = useAuth();
   const navigate = useNavigate();
   const [isMobileOpen, setIsMobileOpen] = useState(false);
+  const pageTitle = usePageTitle();
 
   const handleLogout = () => {
     setIsMobileOpen(false);
@@ -146,8 +173,8 @@ export function AppShell({ children }: AppShellProps) {
                 </>
               ) : (
                 <>
-                  <p>Operations Dashboard</p>
-                  <h1>Inventory, purchasing, transfers, and sales</h1>
+                  <p>{pageTitle.section}</p>
+                  <h1>{pageTitle.title}</h1>
                 </>
               )}
             </div>
