@@ -638,12 +638,12 @@ export function AccountingPage() {
 
       {/* Page Content Container */}
       <div style={{ padding: '0 24px 40px' }}>
-        {/* Horizontal Navigation Pill Tabs */}
-        <div style={{
+        {/* Grouped Dropdown Navigation Menus */}
+        <nav aria-label="Accounting workspace" style={{
           display: 'flex',
-          gap: '6px',
-          overflowX: 'auto',
-          padding: '6px',
+          gap: '8px',
+          flexWrap: 'wrap',
+          padding: '6px 8px',
           background: '#fff',
           borderRadius: '12px',
           border: '1px solid #e5e7eb',
@@ -651,41 +651,77 @@ export function AccountingPage() {
           marginBottom: '24px'
         }}>
           {[
-            { key: 'dashboard', label: 'Dashboard' },
-            { key: 'journal', label: 'Journal Entries' },
-            { key: 'ledger', label: 'General Ledger' },
-            { key: 'trial-balance', label: 'Trial Balance' },
-            { key: 'coa', label: 'Chart of Accounts' },
-            { key: 'income', label: 'Income Statement' },
-            { key: 'balance-sheet', label: 'Balance Sheet' },
-            { key: 'cash-flow', label: 'Cash Flow' },
-            { key: 'inventory', label: 'Inventory Counts' },
-            { key: 'depreciation', label: 'Depreciation' },
-          ].map((tab) => {
-            const active = activeTab === tab.key;
+            { label: 'Dashboard', items: [{ key: 'dashboard', label: 'KPI Overview' }] },
+            { label: 'Accounting', items: [{ key: 'journal', label: 'Journal Entries' }, { key: 'ledger', label: 'General Ledger' }, { key: 'trial-balance', label: 'Journal Items & Trial Balance' }, { key: 'coa', label: 'Chart of Accounts' }] },
+            { label: 'Reporting', items: [{ key: 'income', label: 'Income Statement' }, { key: 'balance-sheet', label: 'Balance Sheet' }, { key: 'cash-flow', label: 'Cash Flow' }, { key: 'equity', label: 'Executive Summary' }] },
+            { label: 'Management', items: [{ key: 'inventory', label: 'Physical Inventory Counts' }, { key: 'depreciation', label: 'Asset Depreciation' }] },
+          ].map((menu) => {
+            const isOpen = openMenu === menu.label;
+            const isActive = menu.items.some((item) => item.key === activeTab);
             return (
-              <button
-                key={tab.key}
-                onClick={() => setActiveTab(tab.key)}
-                style={{
-                  padding: '8px 16px',
-                  borderRadius: '8px',
-                  fontSize: '13px',
-                  fontWeight: active ? 700 : 500,
-                  border: 'none',
-                  background: active ? '#ecfdf5' : 'transparent',
-                  color: active ? '#065f46' : '#4b5563',
-                  cursor: 'pointer',
-                  whiteSpace: 'nowrap',
-                  transition: 'all 0.15s ease',
-                  boxShadow: active ? 'inset 0 0 0 1.5px #a7f3d0' : 'none',
-                }}
-              >
-                {tab.label}
-              </button>
+              <div key={menu.label} style={{ position: 'relative' }}>
+                <button
+                  type="button"
+                  aria-expanded={isOpen}
+                  onClick={() => setOpenMenu(isOpen ? null : menu.label)}
+                  style={{
+                    border: 0,
+                    background: isOpen || isActive ? '#ecfdf5' : 'transparent',
+                    cursor: 'pointer',
+                    padding: '9px 15px',
+                    borderRadius: '8px',
+                    fontWeight: 700,
+                    fontSize: '13px',
+                    color: isActive ? '#065f46' : '#374151',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    boxShadow: isActive ? 'inset 0 0 0 1.5px #a7f3d0' : 'none',
+                  }}
+                >
+                  {menu.label} <ChevronDown size={14} style={{ transform: isOpen ? 'rotate(180deg)' : undefined, transition: 'transform 150ms ease' }} />
+                </button>
+                {isOpen && (
+                  <div style={{
+                    position: 'absolute',
+                    zIndex: 50,
+                    minWidth: '220px',
+                    top: '42px',
+                    left: 0,
+                    padding: '6px',
+                    borderRadius: '10px',
+                    background: '#fff',
+                    border: '1px solid #e5e7eb',
+                    boxShadow: '0 12px 28px rgba(0,0,0,0.12)'
+                  }}>
+                    {menu.items.map((item) => (
+                      <button
+                        key={item.label}
+                        type="button"
+                        onClick={() => { setActiveTab(item.key); setOpenMenu(null); }}
+                        style={{
+                          display: 'block',
+                          width: '100%',
+                          textAlign: 'left',
+                          border: 0,
+                          background: activeTab === item.key ? '#ecfdf5' : 'transparent',
+                          color: activeTab === item.key ? '#065f46' : '#1f2937',
+                          fontWeight: activeTab === item.key ? 700 : 500,
+                          borderRadius: '7px',
+                          cursor: 'pointer',
+                          padding: '9px 12px',
+                          fontSize: '13px'
+                        }}
+                      >
+                        {item.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
             );
           })}
-        </div>
+        </nav>
 
         <div>
           {/* ── DASHBOARD ──────────────────────────────────────────── */}
