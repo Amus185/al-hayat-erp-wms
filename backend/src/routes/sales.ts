@@ -421,13 +421,9 @@ sales.post('/orders/:id/invoice', requirePermissions(['manage_sales']), async (c
 
     await c.env.DB.batch(stmts);
 
-    // Auto-post double-entry journal to Accounting
-    try {
-      const cogsAmount = await calculateOrderCogs(c.env.DB, orderId as string);
-      await postSaleJournalEntry(c, { id: orderId, order_number: String((order as any)?.order_number || orderId), branch_id: branchId ? String(branchId) : undefined } as any, total, cogsAmount, userId);
-    } catch (accErr) {
-      console.error('Failed to post sale invoice accounting entry:', accErr);
-    }
+    // Auto-post double-entry journal to Accounting (Must succeed or entire order invoicing fails)
+    const cogsAmount = await calculateOrderCogs(c.env.DB, orderId as string);
+    await postSaleJournalEntry(c, { id: orderId, order_number: String((order as any)?.order_number || orderId), branch_id: branchId ? String(branchId) : undefined } as any, total, cogsAmount, userId);
 
     const { results } = await c.env.DB.prepare('SELECT * FROM invoices WHERE id = ?').bind(invoiceId).all();
     return c.json(results[0], 201);
@@ -501,18 +497,14 @@ sales.post('/orders/:id/pay', requirePermissions(['manage_sales']), async (c) =>
     stmts.push(createAuditLogStmt(c, 'SALES_ORDER_PAY', 'sales_orders', orderId, { status: 'INVOICED' }, { status: 'PAID', invoiceId: invoice.id }));
     await c.env.DB.batch(stmts);
 
-    // Auto-post double-entry journal to Accounting
-    try {
-      const orderRow = await c.env.DB.prepare('SELECT order_number, branch_id FROM sales_orders WHERE id = ?').bind(orderId).first() as any;
-      await postCustomerPaymentJournalEntry(
-        c,
-        { id: String((invoice as any).id || orderId), amount: remaining > 0 ? remaining : netTotal },
-        { id: orderId, order_number: String(orderRow?.order_number || orderId), branch_id: orderRow?.branch_id ? String(orderRow.branch_id) : undefined } as any,
-        userId
-      );
-    } catch (accErr) {
-      console.error('Failed to post customer payment accounting entry:', accErr);
-    }
+    // Auto-post double-entry journal to Accounting (Must succeed or entire payment fails)
+    const orderRow = await c.env.DB.prepare('SELECT order_number, branch_id FROM sales_orders WHERE id = ?').bind(orderId).first() as any;
+    await postCustomerPaymentJournalEntry(
+      c,
+      { id: String((invoice as any).id || orderId), amount: remaining > 0 ? remaining : netTotal },
+      { id: orderId, order_number: String(orderRow?.order_number || orderId), branch_id: orderRow?.branch_id ? String(orderRow.branch_id) : undefined } as any,
+      userId
+    );
 
     return c.json({ success: true });
   } catch (err: any) {

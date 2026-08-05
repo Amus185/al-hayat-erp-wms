@@ -393,12 +393,8 @@ purchasing.post('/orders/:id/approve', requirePermissions(['manage_purchasing'])
 
   await c.env.DB.batch(stmts);
 
-  // Automatically post double-entry GL journal entry for Purchase Approval & Receipt
-  try {
-    await postPurchaseApprovalJournalEntry(c, { id: po.id as string, po_number: (po as any).po_number || po.id, branch_id: (po as any).branch_id }, grandTotal, userId);
-  } catch (accErr) {
-    console.error('Failed to post purchase approval accounting entry:', accErr);
-  }
+  // Automatically post double-entry GL journal entry for Purchase Approval & Receipt (Must succeed)
+  await postPurchaseApprovalJournalEntry(c, { id: po.id as string, po_number: (po as any).po_number || po.id, branch_id: (po as any).branch_id }, grandTotal, userId);
 
   // Return full PO details
   const updated = await c.env.DB.prepare(`SELECT po.*, s.name AS supplier_name FROM purchase_orders po JOIN suppliers s ON s.id = po.supplier_id WHERE po.id = ?`).bind(id).first();
@@ -614,17 +610,13 @@ purchasing.post('/invoices/:id/payments', requirePermissions(['manage_purchasing
 
   await c.env.DB.batch(stmts);
 
-  // Automatically post double-entry GL journal entry for Purchase Payment
-  try {
-    await postPurchasePaymentJournalEntry(
-      c,
-      { id: paymentId, amount, paymentDate },
-      { id: (invoice as any).id, invoice_number: (invoice as any).invoice_number || (invoice as any).id, branch_id: (invoice as any).branch_id },
-      userId
-    );
-  } catch (accErr) {
-    console.error('Failed to post purchase payment accounting entry:', accErr);
-  }
+  // Automatically post double-entry GL journal entry for Purchase Payment (Must succeed)
+  await postPurchasePaymentJournalEntry(
+    c,
+    { id: paymentId, amount, paymentDate },
+    { id: (invoice as any).id, invoice_number: (invoice as any).invoice_number || (invoice as any).id, branch_id: (invoice as any).branch_id },
+    userId
+  );
 
   // Return updated summary
   const newSummary = await getPurchaseInvoicePaymentSummary(

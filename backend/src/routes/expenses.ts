@@ -119,7 +119,7 @@ expenses.post('/', requirePermissions(['manage_purchasing']), async (c) => {
     }),
   ]);
 
-  // Auto-post double-entry journal to Accounting
+  // Auto-post double-entry journal to Accounting (Must succeed or expense creation fails)
   await postExpenseJournalEntry(c, {
     id,
     title: body.title.trim(),
@@ -127,7 +127,7 @@ expenses.post('/', requirePermissions(['manage_purchasing']), async (c) => {
     category: body.category.trim(),
     expense_date: body.expense_date,
     branch_id: branchId || undefined,
-  }, userId).catch((err: any) => console.error('Failed to post expense journal entry:', err));
+  }, userId);
 
   const row = await c.env.DB.prepare('SELECT * FROM expenses WHERE id = ?').bind(id).first();
   return c.json(row, 201);
