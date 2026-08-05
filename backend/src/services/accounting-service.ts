@@ -313,7 +313,7 @@ export async function createAndPostJournalEntry(
 
 /**
  * Journal Entry for Purchase Order Approval / Receipt
- * DR: Purchases (5010)
+ * DR: Inventory Asset (1030)
  * CR: Accounts Payable (2010)
  */
 export async function postPurchaseApprovalJournalEntry(
@@ -323,13 +323,13 @@ export async function postPurchaseApprovalJournalEntry(
   userId?: string
 ) {
   return createAndPostJournalEntry(c, {
-    description: `Purchase Order Approved & Received #${po.po_number}`,
+    description: `Purchase Goods Received #${po.po_number}`,
     referenceType: 'PURCHASE',
     referenceId: po.id,
     branchId: po.branch_id || null,
     userId,
     lines: [
-      { accountCode: '5010', debitAmount: totalAmount, creditAmount: 0 },
+      { accountCode: '1030', debitAmount: totalAmount, creditAmount: 0 },
       { accountCode: '2010', debitAmount: 0, creditAmount: totalAmount },
     ],
   });
@@ -364,15 +364,27 @@ export async function postPurchasePaymentJournalEntry(
  * Journal Entry for Sale Order Completion / Invoice
  * DR: Accounts Receivable (1020)
  * CR: Sales Revenue (4010)
+ * Optional COGS: DR COGS (5010), CR Inventory Asset (1030)
  */
 export async function postSaleJournalEntry(
   c: any,
   order: { id: string; order_number: string; branch_id?: string },
   totalAmount: number,
+  cogsAmount: number = 0,
   userId?: string,
   prefetchedFiscalPeriodId?: string | null,
   prefetchedCoaMap?: Map<string, { id: string; normal_balance: string }>
 ) {
+  const lines: JournalLineInput[] = [
+    { accountCode: '1020', debitAmount: totalAmount, creditAmount: 0 },
+    { accountCode: '4010', debitAmount: 0, creditAmount: totalAmount },
+  ];
+
+  if (cogsAmount > 0) {
+    lines.push({ accountCode: '5010', debitAmount: cogsAmount, creditAmount: 0 });
+    lines.push({ accountCode: '1030', debitAmount: 0, creditAmount: cogsAmount });
+  }
+
   return createAndPostJournalEntry(c, {
     description: `Sales Order Completed & Invoiced #${order.order_number}`,
     referenceType: 'SALE',
@@ -381,10 +393,7 @@ export async function postSaleJournalEntry(
     userId,
     prefetchedFiscalPeriodId,
     prefetchedCoaMap,
-    lines: [
-      { accountCode: '1020', debitAmount: totalAmount, creditAmount: 0 },
-      { accountCode: '4010', debitAmount: 0, creditAmount: totalAmount },
-    ],
+    lines,
   });
 }
 
@@ -418,9 +427,35 @@ export async function postCustomerPaymentJournalEntry(
 }
 
 /**
+ * Journal Entry for Expense Recorded
+ * DR: Expense Account (6010 / 6050)
+ * CR: Cash & Cash Equivalents (1010)
+ */
+export async function postExpenseJournalEntry(
+  c: any,
+  expense: { id: string; title: string; amount: number; category: string; expense_date: string; branch_id?: string },
+  userId?: string
+) {
+  const expenseCode = ['Rent', 'Salaries', 'Utilities', 'Maintenance'].includes(expense.category) ? '6010' : '6050';
+
+  return createAndPostJournalEntry(c, {
+    description: `Expense Paid: ${expense.title} (${expense.category})`,
+    referenceType: 'EXPENSE',
+    referenceId: expense.id,
+    entryDate: expense.expense_date,
+    branchId: expense.branch_id || null,
+    userId,
+    lines: [
+      { accountCode: expenseCode, debitAmount: expense.amount, creditAmount: 0 },
+      { accountCode: '1010', debitAmount: 0, creditAmount: expense.amount },
+    ],
+  });
+}
+
+/**
  * Journal Entry for Inventory Stock Adjustment
- * Positive adjustment (stock increase): DR Inventory (1030), CR Misc Expense/Adjustment Revenue (6050)
- * Negative adjustment (stock decrease): DR Misc Expense (6050), CR Inventory (1030)
+ * Positive adjustment (stock increase): DR Inventory (1030), CR Inventory Gain (5030)
+ * Negative adjustment (stock decrease): DR Inventory Loss (5020), CR Inventory (1030)
  */
 export async function postInventoryAdjustmentJournalEntry(
   c: any,
@@ -446,12 +481,49 @@ export async function postInventoryAdjustmentJournalEntry(
     lines: isIncrease
       ? [
           { accountCode: '1030', debitAmount: estimatedCost, creditAmount: 0 },
-          { accountCode: '6050', debitAmount: 0, creditAmount: estimatedCost },
+          { accountCode: '5030', debitAmount: 0, creditAmount: estimatedCost },
         ]
       : [
-          { accountCode: '6050', debitAmount: estimatedCost, creditAmount: 0 },
+          { accountCode: '5020', debitAmount: estimatedCost, creditAmount: 0 },
           { accountCode: '1030', debitAmount: 0, creditAmount: estimatedCost },
         ],
+  });
+}
+
+/**
+ * Reverse a Journal Entry by ID (Non-destructive cancellation)
+ */
+export async function reverseJournalEntry(
+  c: any,
+  journalEntryId: string,
+  reason: string,
+  userId?: string
+) {
+  const db = c.env.DB;
+  const original = await db.prepare('SELECT * FROM journal_entries WHERE id = ?').bind(journalEntryId).first();
+  if (!original) return null;
+
+  const { results: lines } = await db.prepare(
+    'SELECT jel.*, coa.code as account_code FROM journal_entry_lines jel JOIN chart_of_accounts coa ON coa.id = jel.account_id WHERE jel.journal_entry_id = ?'
+  ).bind(journalEntryId).all();
+
+  if (!lines || !lines.length) return null;
+
+  const reverseLines: JournalLineInput[] = lines.map((l: any) => ({
+    accountCode: l.account_code,
+    debitAmount: l.credit_amount,
+    creditAmount: l.debit_amount,
+    description: `Reversal: ${l.description || original.description}`,
+    branchId: l.branch_id,
+  }));
+
+  return createAndPostJournalEntry(c, {
+    description: `REVERSAL of JE #${original.entry_number}: ${reason}`,
+    referenceType: 'MANUAL',
+    referenceId: original.reference_id || original.id,
+    branchId: original.branch_id,
+    userId,
+    lines: reverseLines,
   });
 }
 

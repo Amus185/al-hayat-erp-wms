@@ -275,11 +275,33 @@ export async function ensurePostgresInit(pool: Pool) {
         [row.user_id, row.role_id]
       );
     }
-    for (const row of D1_AUTH_BACKUP.fiscal_periods) {
-      await client.query(
-        `INSERT INTO fiscal_periods (id, period_name, start_date, end_date, status) VALUES ($1,$2,$3,$4,$5) ON CONFLICT (id) DO NOTHING`,
-        [row.id, row.period_name, row.start_date, row.end_date, row.status]
-      );
+    // Default Fiscal Periods
+    await client.query(`
+      INSERT INTO fiscal_periods (id, name, period_type, start_date, end_date, status)
+      VALUES ('fp-2026-annual', 'FY 2026', 'ANNUAL', '2026-01-01', '2026-12-31', 'OPEN')
+      ON CONFLICT (id) DO NOTHING
+    `);
+
+    // Standard Chart of Accounts (COA)
+    const coaAccounts = [
+      { id: 'coa-1010', code: '1010', name: 'Cash & Cash Equivalents', account_type: 'ASSET', normal_balance: 'DEBIT' },
+      { id: 'coa-1020', code: '1020', name: 'Accounts Receivable', account_type: 'ASSET', normal_balance: 'DEBIT' },
+      { id: 'coa-1030', code: '1030', name: 'Inventory Asset', account_type: 'ASSET', normal_balance: 'DEBIT' },
+      { id: 'coa-2010', code: '2010', name: 'Accounts Payable', account_type: 'LIABILITY', normal_balance: 'CREDIT' },
+      { id: 'coa-4010', code: '4010', name: 'Sales Revenue', account_type: 'REVENUE', normal_balance: 'CREDIT' },
+      { id: 'coa-5010', code: '5010', name: 'Cost of Goods Sold', account_type: 'EXPENSE', normal_balance: 'DEBIT' },
+      { id: 'coa-5020', code: '5020', name: 'Inventory Loss / Shrinkage', account_type: 'EXPENSE', normal_balance: 'DEBIT' },
+      { id: 'coa-5030', code: '5030', name: 'Inventory Gain', account_type: 'REVENUE', normal_balance: 'CREDIT' },
+      { id: 'coa-6010', code: '6010', name: 'Operating Expenses', account_type: 'EXPENSE', normal_balance: 'DEBIT' },
+      { id: 'coa-6050', code: '6050', name: 'General & Administrative Expenses', account_type: 'EXPENSE', normal_balance: 'DEBIT' },
+    ];
+
+    for (const acc of coaAccounts) {
+      await client.query(`
+        INSERT INTO chart_of_accounts (id, code, name, account_type, normal_balance, is_active)
+        VALUES ($1, $2, $3, $4, $5, 1)
+        ON CONFLICT (id) DO NOTHING
+      `, [acc.id, acc.code, acc.name, acc.account_type, acc.normal_balance]);
     }
 
     console.log('✅ PostgreSQL Master Schema & Auth Data Migration Verified on Startup!');

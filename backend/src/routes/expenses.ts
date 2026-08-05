@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { Env, uuidv4 } from '../db';
 import { authMiddleware, requirePermissions, isAdminUser } from '../middleware/auth';
 import { createAuditLogStmt } from '../services/audit';
+import { postExpenseJournalEntry } from '../services/accounting-service';
 
 const expenses = new Hono<{ Bindings: Env; Variables: { jwtPayload: any } }>();
 
@@ -117,6 +118,16 @@ expenses.post('/', requirePermissions(['manage_purchasing']), async (c) => {
       title: body.title, amount: body.amount, category: body.category, branch_id: branchId
     }),
   ]);
+
+  // Auto-post double-entry journal to Accounting
+  await postExpenseJournalEntry(c, {
+    id,
+    title: body.title.trim(),
+    amount: body.amount,
+    category: body.category.trim(),
+    expense_date: body.expense_date,
+    branch_id: branchId || undefined,
+  }, userId).catch((err: any) => console.error('Failed to post expense journal entry:', err));
 
   const row = await c.env.DB.prepare('SELECT * FROM expenses WHERE id = ?').bind(id).first();
   return c.json(row, 201);

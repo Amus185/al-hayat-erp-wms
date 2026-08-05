@@ -421,6 +421,13 @@ sales.post('/orders/:id/invoice', requirePermissions(['manage_sales']), async (c
 
     await c.env.DB.batch(stmts);
 
+    // Auto-post double-entry journal to Accounting
+    try {
+      await postSaleJournalEntry(c, { id: orderId, order_number: String((order as any)?.order_number || orderId), branch_id: branchId ? String(branchId) : undefined } as any, total, 0, userId);
+    } catch (accErr) {
+      console.error('Failed to post sale invoice accounting entry:', accErr);
+    }
+
     const { results } = await c.env.DB.prepare('SELECT * FROM invoices WHERE id = ?').bind(invoiceId).all();
     return c.json(results[0], 201);
 
@@ -492,6 +499,19 @@ sales.post('/orders/:id/pay', requirePermissions(['manage_sales']), async (c) =>
     stmts.push(c.env.DB.prepare("UPDATE sales_orders SET status = 'PAID' WHERE id = ?").bind(orderId));
     stmts.push(createAuditLogStmt(c, 'SALES_ORDER_PAY', 'sales_orders', orderId, { status: 'INVOICED' }, { status: 'PAID', invoiceId: invoice.id }));
     await c.env.DB.batch(stmts);
+
+    // Auto-post double-entry journal to Accounting
+    try {
+      const orderRow = await c.env.DB.prepare('SELECT order_number, branch_id FROM sales_orders WHERE id = ?').bind(orderId).first() as any;
+      await postCustomerPaymentJournalEntry(
+        c,
+        { id: String((invoice as any).id || orderId), amount: remaining > 0 ? remaining : netTotal },
+        { id: orderId, order_number: String(orderRow?.order_number || orderId), branch_id: orderRow?.branch_id ? String(orderRow.branch_id) : undefined } as any,
+        userId
+      );
+    } catch (accErr) {
+      console.error('Failed to post customer payment accounting entry:', accErr);
+    }
 
     return c.json({ success: true });
   } catch (err: any) {
@@ -691,10 +711,11 @@ sales.post('/orders/:id/complete', requirePermissions(['manage_sales']), async (
       const tGl1_0 = Date.now();
       await postSaleJournalEntry(
         c,
-        { id: order.id as string, order_number: (order as any).order_number as string || (order.id as string), branch_id: (order as any).branch_id as string },
+        { id: order.id as string, order_number: (order as any).order_number as string || (order.id as string), branch_id: (order as any).branch_id ? String((order as any).branch_id) : undefined },
         total,
+        0,
         userId,
-        sharedFiscalPeriodId,
+        sharedFiscalPeriodId || undefined,
         sharedCoaMap
       );
       console.log(`[WATERFALL] +${Date.now() - reqStart}ms | postSaleJournalEntry completed (${Date.now() - tGl1_0}ms)`);
