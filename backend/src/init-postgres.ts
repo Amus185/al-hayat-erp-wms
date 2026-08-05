@@ -227,6 +227,20 @@ export async function ensurePostgresInit(pool: Pool) {
       ALTER TABLE transfer_lines ADD COLUMN IF NOT EXISTS quantity_dispatched INTEGER;
       ALTER TABLE transfer_lines ADD COLUMN IF NOT EXISTS quantity_received INTEGER;
       ALTER TABLE transfer_lines ADD COLUMN IF NOT EXISTS quantity INTEGER;
+
+      CREATE TABLE IF NOT EXISTS expenses (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        amount DOUBLE PRECISION NOT NULL CHECK (amount > 0),
+        category TEXT NOT NULL,
+        expense_date TEXT NOT NULL,
+        branch_id TEXT REFERENCES branches(id),
+        payment_method TEXT NOT NULL DEFAULT 'CASH',
+        notes TEXT,
+        recorded_by TEXT REFERENCES users(id),
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
     `);
 
     // 2. Populate auth & reference data from D1 Backup

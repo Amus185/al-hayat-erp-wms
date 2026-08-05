@@ -15,6 +15,7 @@ import notifications from './routes/notifications';
 import audit from './routes/audit';
 import files from './routes/files';
 import accounting from './routes/accounting';
+import expenses from './routes/expenses';
 
 import { PgAdapter } from './pg-client';
 import { ensurePostgresInit } from './init-postgres';
@@ -91,6 +92,7 @@ app.route('/api/v1/notifications', notifications);
 app.route('/api/v1/audit', audit);
 app.route('/api/v1/files', files);
 app.route('/api/v1/accounting', accounting);
+app.route('/api/v1/expenses', expenses);
 
 // Global Error Handler - Structured JSON Logging for Cloudflare Workers Observability
 app.onError((err, c) => {

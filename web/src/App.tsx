@@ -21,6 +21,8 @@ import { ReportsPage } from './pages/ReportsPage';
 import { AuditPage } from './pages/AuditPage';
 import { UsersPage } from './pages/UsersPage';
 import { AccountingPage } from './pages/AccountingPage';
+import { CustomersPage } from './pages/CustomersPage';
+import { ExpensesPage } from './pages/ExpensesPage';
 
 function ProtectedRoute({ permission }: { permission?: string }) {
   const { isAuthenticated, hasPermission, isLoading } = useAuth();
@@ -104,6 +106,12 @@ export function App() {
 
             {/* Financial Accounting */}
             <Route path="/accounting" element={<AccountingPage />} />
+
+            {/* Customers */}
+            <Route path="/customers" element={<CustomersPage />} />
+
+            {/* Expenses */}
+            <Route path="/expenses" element={<ExpensesPage />} />
           </Route>
         </Route>
 

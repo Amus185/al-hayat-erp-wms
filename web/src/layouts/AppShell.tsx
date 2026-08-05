@@ -17,6 +17,8 @@ import {
   Menu,
   X,
   MapPin,
+  UserCheck,
+  Receipt,
 } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { useAuth } from '../contexts/AuthContext';
@@ -30,6 +32,8 @@ const navItems = [
   { label: 'Transfers', path: '/transfers', icon: Truck, permission: 'manage_transfers' },
   { label: 'Purchasing', path: '/purchasing', icon: ClipboardList, permission: 'manage_purchasing' },
   { label: 'Sales', path: '/sales', icon: ShoppingCart, permission: 'manage_sales' },
+  { label: 'Customers', path: '/customers', icon: UserCheck, permission: 'manage_sales' },
+  { label: 'Expenses', path: '/expenses', icon: Receipt, permission: 'manage_purchasing' },
   { label: 'Reports', path: '/reports', icon: BarChart3, permission: 'view_reports' },
   { label: 'Accounting', path: '/accounting', icon: BookOpen, permission: 'view_reports', adminOnly: true },
   { label: 'Audit Log', path: '/audit', icon: FileClock, permission: 'view_reports' },
@@ -46,6 +50,8 @@ const pageTitles: Record<string, { section: string; title: string }> = {
   '/transfers':  { section: 'Movement',               title: 'Stock Transfers' },
   '/purchasing': { section: 'Procurement',            title: 'Purchasing' },
   '/sales':      { section: 'Revenue',                title: 'Sales' },
+  '/customers':  { section: 'Sales',                  title: 'Customers' },
+  '/expenses':   { section: 'Finance',                title: 'Expenses' },
   '/reports':    { section: 'Analytics',              title: 'Reports' },
   '/accounting': { section: 'Finance',                title: 'Accounting' },
   '/audit':      { section: 'Compliance',             title: 'Audit Log' },

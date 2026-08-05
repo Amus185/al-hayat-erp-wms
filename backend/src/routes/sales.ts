@@ -48,6 +48,35 @@ sales.post('/customers', requirePermissions(['manage_sales']), async (c) => {
   return c.json(results[0], 201);
 });
 
+sales.patch('/customers/:id', requirePermissions(['manage_sales']), async (c) => {
+  const { id } = c.req.param();
+  const body = await c.req.json<{ name?: string; phone?: string; email?: string; address?: string }>();
+  const existing = await c.env.DB.prepare('SELECT * FROM customers WHERE id = ?').bind(id).first();
+  if (!existing) return c.json({ message: 'Customer not found.' }, 404);
+
+  const fields: string[] = [];
+  const vals: any[] = [];
+  if (body.name !== undefined) { fields.push('name = ?'); vals.push(body.name.trim()); }
+  if (body.phone !== undefined) { fields.push('phone = ?'); vals.push(body.phone || null); }
+  if (body.email !== undefined) { fields.push('email = ?'); vals.push(body.email || null); }
+  if (body.address !== undefined) { fields.push('address = ?'); vals.push(body.address || null); }
+  if (!fields.length) return c.json({ message: 'No fields to update.' }, 400);
+  vals.push(id);
+
+  await c.env.DB.prepare(`UPDATE customers SET ${fields.join(', ')} WHERE id = ?`).bind(...vals).run();
+  const row = await c.env.DB.prepare('SELECT * FROM customers WHERE id = ?').bind(id).first();
+  return c.json(row);
+});
+
+sales.delete('/customers/:id', requirePermissions(['manage_sales']), async (c) => {
+  const { id } = c.req.param();
+  const existing = await c.env.DB.prepare('SELECT * FROM customers WHERE id = ?').bind(id).first();
+  if (!existing) return c.json({ message: 'Customer not found.' }, 404);
+  await c.env.DB.prepare('DELETE FROM customers WHERE id = ?').bind(id).run();
+  return c.json({ success: true });
+});
+
+
 // ──────────────────────────────────────────────────────────────────────
 // ORDERS — LIST & GET
 // ──────────────────────────────────────────────────────────────────────
