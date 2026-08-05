@@ -243,19 +243,7 @@ export async function ensurePostgresInit(pool: Pool) {
       );
     `);
 
-    // 2. Populate auth & reference data from D1 Backup
-    for (const row of D1_AUTH_BACKUP.branches) {
-      await client.query(
-        `INSERT INTO branches (id, code, name, city, address, phone, is_active) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (id) DO NOTHING`,
-        [row.id, row.code, row.name, row.city, row.address, row.phone, row.is_active]
-      );
-    }
-    for (const row of D1_AUTH_BACKUP.warehouses) {
-      await client.query(
-        `INSERT INTO warehouses (id, code, name, city, address, phone, is_active) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (id) DO NOTHING`,
-        [row.id, row.code, row.name, row.city, row.address, row.phone, row.is_active]
-      );
-    }
+    // 2. Populate auth & permissions data from D1 Backup
     for (const row of D1_AUTH_BACKUP.permissions) {
       await client.query(
         `INSERT INTO permissions (id, code, description) VALUES ($1,$2,$3) ON CONFLICT (id) DO NOTHING`,

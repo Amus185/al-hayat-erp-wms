@@ -125,4 +125,57 @@ warehouses.get('/:id', async (c) => {
   return c.json(wh);
 });
 
+warehouses.patch('/:id', requirePermissions(['manage_inventory']), async (c) => {
+  const id = c.req.param('id');
+  const body = await c.req.json<{ code?: string; name?: string; city?: string; address?: string; phone?: string; is_active?: number }>();
+  
+  const existing = await c.env.DB.prepare('SELECT * FROM warehouses WHERE id = ?').bind(id).first();
+  if (!existing) return c.json({ message: 'Warehouse not found.' }, 404);
+
+  const fields: string[] = [];
+  const vals: any[] = [];
+
+  if (body.code !== undefined && body.code.trim()) { fields.push('code = ?'); vals.push(body.code.trim()); }
+  if (body.name !== undefined && body.name.trim()) { fields.push('name = ?'); vals.push(body.name.trim()); }
+  if (body.city !== undefined && body.city.trim()) { fields.push('city = ?'); vals.push(body.city.trim()); }
+  if (body.address !== undefined) { fields.push('address = ?'); vals.push(body.address || null); }
+  if (body.phone !== undefined) { fields.push('phone = ?'); vals.push(body.phone || null); }
+  if (body.is_active !== undefined) { fields.push('is_active = ?'); vals.push(body.is_active); }
+
+  if (!fields.length) return c.json({ message: 'No fields to update.' }, 400);
+
+  fields.push('updated_at = CURRENT_TIMESTAMP');
+  vals.push(id);
+
+  await c.env.DB.prepare(`UPDATE warehouses SET ${fields.join(', ')} WHERE id = ?`).bind(...vals).run();
+  const row = await c.env.DB.prepare('SELECT * FROM warehouses WHERE id = ?').bind(id).first();
+  await logAudit(c, 'WAREHOUSE_UPDATE', 'warehouses', id, existing, row);
+  return c.json(row);
+});
+
+warehouses.delete('/:id', requirePermissions(['manage_inventory']), async (c) => {
+  const id = c.req.param('id');
+  const existing = await c.env.DB.prepare('SELECT * FROM warehouses WHERE id = ?').bind(id).first();
+  if (!existing) return c.json({ message: 'Warehouse not found.' }, 404);
+
+  // Check if warehouse has on-hand stock
+  const stock = await c.env.DB.prepare(
+    'SELECT COUNT(*) as count FROM inventory_stock WHERE warehouse_id = ? AND quantity_on_hand > 0'
+  ).bind(id).first();
+  if (Number(stock?.count || 0) > 0) {
+    return c.json({ message: 'Cannot delete warehouse: active inventory exists on hand. Transfer or adjust stock first.' }, 400);
+  }
+
+  // Delete locations, zero stock records, and warehouse
+  await c.env.DB.batch([
+    c.env.DB.prepare('DELETE FROM warehouse_locations WHERE warehouse_id = ?').bind(id),
+    c.env.DB.prepare('DELETE FROM inventory_stock WHERE warehouse_id = ?').bind(id),
+    c.env.DB.prepare('DELETE FROM warehouses WHERE id = ?').bind(id),
+  ]);
+
+  await logAudit(c, 'WAREHOUSE_DELETE', 'warehouses', id, existing, null);
+  return c.json({ success: true, message: 'Warehouse deleted successfully.' });
+});
+
 export default warehouses;
+
