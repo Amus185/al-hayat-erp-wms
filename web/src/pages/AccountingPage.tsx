@@ -189,14 +189,16 @@ export function AccountingPage() {
     async function loadBase() {
       setLoading(true);
       try {
-        const [pList, aList, bList] = await Promise.all([
+        const [pList, aList, bList, dashData] = await Promise.all([
           apiGet<any[]>('/accounting/fiscal-periods').catch(() => []),
           apiGet<any[]>('/accounting/chart-of-accounts').catch(() => []),
           apiGet<any[]>('/branches').catch(() => []),
+          apiGet<any>('/accounting/dashboard').catch(() => null),
         ]);
         setPeriods(pList || []);
         setAccounts(aList || []);
         setBranches(bList || []);
+        setDashboard(dashData || null);
         if (pList?.length) setSelectedPeriod(pList[0].id);
       } catch (e) {
         addToast('error', 'Failed to load accounting data');
@@ -596,70 +598,133 @@ export function AccountingPage() {
   // ══════════════════════════════════════════════════════════════════
   return (
     <div style={{ padding: '0' }}>
-      {/* Accounting workspace header */}
-      <section style={{ margin: '24px 24px 16px', padding: '22px 24px 18px', borderRadius: '18px', color: '#f8fafc', background: 'linear-gradient(120deg, #102a25 0%, #164e43 58%, #0f766e 100%)', boxShadow: '0 14px 34px rgba(15, 61, 49, 0.18)', border: '1px solid rgba(255,255,255,0.14)' }}>
-        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', flexWrap: 'wrap', gap: '18px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '13px' }}>
-            <div style={{ background: 'rgba(255,255,255,0.13)', border: '1px solid rgba(255,255,255,0.16)', borderRadius: '12px', padding: '10px', display: 'flex' }}>
-              <BookOpen size={22} color='#d1fae5' />
+      {/* Executive Hero Header Banner */}
+      <section style={{
+        margin: '24px 24px 20px',
+        padding: '24px 28px',
+        borderRadius: '16px',
+        color: '#f8fafc',
+        background: 'linear-gradient(135deg, #0b4f2c 0%, #065f46 60%, #0d9488 100%)',
+        boxShadow: '0 12px 28px rgba(6, 95, 70, 0.2)',
+        border: '1px solid rgba(255,255,255,0.15)',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '20px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+            <div style={{ background: 'rgba(255,255,255,0.15)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: '12px', padding: '12px', display: 'flex' }}>
+              <BookOpen size={24} color='#a7f3d0' />
             </div>
             <div>
-              <p style={{ margin: '0 0 3px', color: '#99f6e4', fontSize: '11px', fontWeight: 800, letterSpacing: '0.12em', textTransform: 'uppercase' }}>Finance workspace</p>
-              <h1 style={{ margin: 0, color: '#fff', fontSize: '24px', lineHeight: 1.1, fontWeight: 800 }}>Financial Accounting</h1>
-              <p style={{ margin: '6px 0 0', color: 'rgba(236,253,245,0.75)', fontSize: '13px' }}>HQ & branch consolidation · Periodic inventory system</p>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ color: '#a7f3d0', fontSize: '11px', fontWeight: 800, letterSpacing: '0.1em', textTransform: 'uppercase' }}>Financial Engine</span>
+                <span style={{ background: 'rgba(255,255,255,0.2)', color: '#fff', fontSize: '10px', fontWeight: 700, padding: '2px 8px', borderRadius: '10px' }}>Double-Entry</span>
+              </div>
+              <h1 style={{ margin: '4px 0 0', color: '#fff', fontSize: '24px', fontWeight: 800 }}>Financial Accounting</h1>
+              <p style={{ margin: '4px 0 0', color: 'rgba(236,253,245,0.8)', fontSize: '13px' }}>Real-time General Ledger, Automated Double-Entry Postings & Financial Statements</p>
             </div>
           </div>
-          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-            <button onClick={() => setShowPeriodModal(true)} style={{ background: 'transparent', border: '1px solid rgba(255,255,255,0.3)', color: '#ecfdf5', borderRadius: '9px', padding: '9px 12px', cursor: 'pointer', fontSize: '13px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '6px' }}><Calendar size={14} /> Period</button>
-            <button onClick={() => setShowJEModal(true)} style={{ background: '#ecfdf5', border: 'none', color: '#065f46', borderRadius: '9px', padding: '9px 13px', cursor: 'pointer', fontSize: '13px', fontWeight: 800, display: 'flex', alignItems: 'center', gap: '6px', boxShadow: '0 4px 12px rgba(0,0,0,0.16)' }}><Plus size={15} /> Journal Entry</button>
-            <button onClick={() => setShowClosingModal(true)} style={{ background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.24)', color: '#ecfdf5', borderRadius: '9px', padding: '9px 12px', cursor: 'pointer', fontSize: '13px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '6px' }}><Layers size={14} /> Close Year</button>
+          <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+            <button onClick={() => setShowPeriodModal(true)} style={{ background: 'rgba(255,255,255,0.12)', border: '1px solid rgba(255,255,255,0.25)', color: '#ecfdf5', borderRadius: '10px', padding: '10px 14px', cursor: 'pointer', fontSize: '13px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <Calendar size={14} /> Fiscal Period
+            </button>
+            <button onClick={() => setShowClosingModal(true)} style={{ background: 'rgba(255,255,255,0.12)', border: '1px solid rgba(255,255,255,0.25)', color: '#ecfdf5', borderRadius: '10px', padding: '10px 14px', cursor: 'pointer', fontSize: '13px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <Layers size={14} /> Close Year
+            </button>
+            <button onClick={() => setShowJEModal(true)} style={{ background: '#ecfdf5', border: 'none', color: '#065f46', borderRadius: '10px', padding: '10px 16px', cursor: 'pointer', fontSize: '13px', fontWeight: 800, display: 'flex', alignItems: 'center', gap: '6px', boxShadow: '0 4px 14px rgba(0,0,0,0.15)' }}>
+              <Plus size={16} /> New Journal Entry
+            </button>
           </div>
         </div>
-        {dashboard && <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(145px, 1fr))', gap: '1px', marginTop: '20px', overflow: 'hidden', borderRadius: '11px', background: 'rgba(255,255,255,0.16)', border: '1px solid rgba(255,255,255,0.15)' }}>
-          {[
-            { label: 'Revenue', value: fmt(dashboard.total_revenue), accent: '#6ee7b7' },
-            { label: 'Expenses', value: fmt(dashboard.total_expenses), accent: '#fcd34d' },
-            { label: 'Net income', value: fmt(dashboard.net_income), accent: dashboard.net_income >= 0 ? '#99f6e4' : '#fca5a5' },
-            { label: 'Posted entries', value: String(dashboard.posted_entries), accent: '#bfdbfe' },
-            { label: 'Active accounts', value: String(dashboard.chart_of_accounts), accent: '#ddd6fe' },
-          ].map((kpi) => <div key={kpi.label} style={{ background: 'rgba(5,46,39,0.34)', padding: '12px 14px' }}>
-            <p style={{ margin: 0, fontSize: '10px', color: 'rgba(236,253,245,0.65)', fontWeight: 800, letterSpacing: '0.09em', textTransform: 'uppercase' }}>{kpi.label}</p>
-            <p style={{ margin: '4px 0 0', fontSize: '19px', fontWeight: 800, color: kpi.accent }}>{kpi.value}</p>
-          </div>)}
-        </div>}
       </section>
-      {/* Tab Container */}
+
+      {/* Page Content Container */}
       <div style={{ padding: '0 24px 40px' }}>
-        <nav aria-label="Accounting workspace" style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', padding: '8px', border: '1px solid #d7e6df', background: '#fff', borderRadius: '14px', boxShadow: '0 8px 24px rgba(5, 70, 54, 0.08)' }}>
-          {workspaceMenus.map((menu) => {
-            const isOpen = openMenu === menu.label;
-            const isActive = menu.items.some((item) => item.key === activeTab);
+        {/* Horizontal Navigation Pill Tabs */}
+        <div style={{
+          display: 'flex',
+          gap: '6px',
+          overflowX: 'auto',
+          padding: '6px',
+          background: '#fff',
+          borderRadius: '12px',
+          border: '1px solid #e5e7eb',
+          boxShadow: '0 2px 6px rgba(0,0,0,0.03)',
+          marginBottom: '24px'
+        }}>
+          {[
+            { key: 'dashboard', label: 'Dashboard' },
+            { key: 'journal', label: 'Journal Entries' },
+            { key: 'ledger', label: 'General Ledger' },
+            { key: 'trial-balance', label: 'Trial Balance' },
+            { key: 'coa', label: 'Chart of Accounts' },
+            { key: 'income', label: 'Income Statement' },
+            { key: 'balance-sheet', label: 'Balance Sheet' },
+            { key: 'cash-flow', label: 'Cash Flow' },
+            { key: 'inventory', label: 'Inventory Counts' },
+            { key: 'depreciation', label: 'Depreciation' },
+          ].map((tab) => {
+            const active = activeTab === tab.key;
             return (
-              <div key={menu.label} style={{ position: 'relative' }}>
-                <button type="button" aria-expanded={isOpen} onClick={() => setOpenMenu(isOpen ? null : menu.label)} style={{ border: 0, background: isOpen ? '#ecfdf5' : 'transparent', cursor: 'pointer', padding: '9px 13px', borderRadius: '9px', fontWeight: 700, fontSize: '13px', color: isActive ? '#065f46' : '#334155' }}>
-                  {menu.label} <ChevronDown size={14} style={{ verticalAlign: 'middle', transform: isOpen ? 'rotate(180deg)' : undefined, transition: 'transform 150ms ease' }} />
-                </button>
-                {isOpen && (
-                  <div style={{ position: 'absolute', zIndex: 10, minWidth: '220px', top: '40px', left: 0, padding: '6px', borderRadius: '10px', background: '#fff', border: '1px solid #d7e6df', boxShadow: '0 16px 32px rgba(5, 70, 54, 0.16)' }}>
-                    {menu.items.map((item) => <button key={item.label} type="button" onClick={() => { setActiveTab(item.key); setOpenMenu(null); }} style={{ display: 'block', width: '100%', textAlign: 'left', border: 0, background: activeTab === item.key ? '#ecfdf5' : 'transparent', color: '#0f172a', borderRadius: '7px', cursor: 'pointer', padding: '9px 10px', fontSize: '13px' }}>{item.label}</button>)}
-                  </div>
-                )}
-              </div>
+              <button
+                key={tab.key}
+                onClick={() => setActiveTab(tab.key)}
+                style={{
+                  padding: '8px 16px',
+                  borderRadius: '8px',
+                  fontSize: '13px',
+                  fontWeight: active ? 700 : 500,
+                  border: 'none',
+                  background: active ? '#ecfdf5' : 'transparent',
+                  color: active ? '#065f46' : '#4b5563',
+                  cursor: 'pointer',
+                  whiteSpace: 'nowrap',
+                  transition: 'all 0.15s ease',
+                  boxShadow: active ? 'inset 0 0 0 1.5px #a7f3d0' : 'none',
+                }}
+              >
+                {tab.label}
+              </button>
             );
           })}
-        </nav>
+        </div>
 
-        <div style={{ marginTop: '24px' }}>
-
+        <div>
           {/* ── DASHBOARD ──────────────────────────────────────────── */}
           {activeTab === 'dashboard' && (
             <div>
               <PeriodBar />
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '16px', marginBottom: '28px' }}>
-                <MetricCard label='Total Revenue' value={fmt(dashboard?.total_revenue || 0)} icon={<TrendingUp size={20} color={G} />} />
-                <MetricCard label='Total Expenses' value={fmt(dashboard?.total_expenses || 0)} icon={<Receipt size={20} color={AMBER} />} />
-                <MetricCard label='Net Income' value={fmt(dashboard?.net_income || 0)} icon={<DollarSign size={20} color={dashboard?.net_income >= 0 ? G2 : RED} />} />
-                <MetricCard label='Journal Entries' value={String(dashboard?.journal_entries || 0)} icon={<FileText size={20} color={BLUE} />} />
+
+              {/* 4 High-Impact KPI Summary Cards (Expenses design system) */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px', marginBottom: '24px' }}>
+                <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: '12px', padding: '18px 20px', display: 'flex', alignItems: 'center', gap: '14px', boxShadow: '0 2px 4px rgba(0,0,0,0.02)' }}>
+                  <div style={{ background: '#f0fdf4', borderRadius: '10px', padding: '10px', display: 'flex' }}><TrendingUp size={22} color="#0b8f08" /></div>
+                  <div>
+                    <div style={{ fontSize: '20px', fontWeight: 700, color: '#111827' }}>{fmt(dashboard?.total_revenue || 0)}</div>
+                    <div style={{ fontSize: '12px', color: '#6b7280', fontWeight: 500 }}>Total Revenue</div>
+                  </div>
+                </div>
+                <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: '12px', padding: '18px 20px', display: 'flex', alignItems: 'center', gap: '14px', boxShadow: '0 2px 4px rgba(0,0,0,0.02)' }}>
+                  <div style={{ background: '#fef2f2', borderRadius: '10px', padding: '10px', display: 'flex' }}><Receipt size={22} color="#dc2626" /></div>
+                  <div>
+                    <div style={{ fontSize: '20px', fontWeight: 700, color: '#111827' }}>{fmt(dashboard?.total_expenses || 0)}</div>
+                    <div style={{ fontSize: '12px', color: '#6b7280', fontWeight: 500 }}>Total Expenses</div>
+                  </div>
+                </div>
+                <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: '12px', padding: '18px 20px', display: 'flex', alignItems: 'center', gap: '14px', boxShadow: '0 2px 4px rgba(0,0,0,0.02)' }}>
+                  <div style={{ background: (dashboard?.net_income || 0) >= 0 ? '#f0fdf4' : '#fef2f2', borderRadius: '10px', padding: '10px', display: 'flex' }}>
+                    <DollarSign size={22} color={(dashboard?.net_income || 0) >= 0 ? '#0b8f08' : '#dc2626'} />
+                  </div>
+                  <div>
+                    <div style={{ fontSize: '20px', fontWeight: 700, color: (dashboard?.net_income || 0) >= 0 ? '#065f46' : '#dc2626' }}>{fmt(dashboard?.net_income || 0)}</div>
+                    <div style={{ fontSize: '12px', color: '#6b7280', fontWeight: 500 }}>Net Income</div>
+                  </div>
+                </div>
+                <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: '12px', padding: '18px 20px', display: 'flex', alignItems: 'center', gap: '14px', boxShadow: '0 2px 4px rgba(0,0,0,0.02)' }}>
+                  <div style={{ background: '#f0fdfa', borderRadius: '10px', padding: '10px', display: 'flex' }}><FileText size={22} color="#0d9488" /></div>
+                  <div>
+                    <div style={{ fontSize: '20px', fontWeight: 700, color: '#111827' }}>{dashboard?.posted_entries || 0}</div>
+                    <div style={{ fontSize: '12px', color: '#6b7280', fontWeight: 500 }}>Posted Journal Entries</div>
+                  </div>
+                </div>
               </div>
 
               {/* Income vs Expense Bar */}
