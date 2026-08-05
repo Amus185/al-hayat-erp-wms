@@ -96,7 +96,7 @@ warehouses.get('/:id/summary', async (c) => {
   ).bind(id).first();
 
   const receiptsCount = await c.env.DB.prepare(
-    'SELECT COUNT(*) as count FROM goods_receipts WHERE warehouse_id = ?'
+    'SELECT COUNT(*) as count FROM goods_receipts WHERE destination_warehouse_id = ?'
   ).bind(id).first();
 
   const transfersIn = await c.env.DB.prepare(
