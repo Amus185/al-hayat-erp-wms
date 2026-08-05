@@ -435,19 +435,9 @@ export function SalesPage() {
     }
   };
 
-  const [viewMode, setViewMode] = useState<'kanban' | 'table'>('kanban');
-
-  const kanbanColumns: KanbanColumnDef[] = [
-    { id: 'DRAFT', title: 'Drafts', badgeTone: 'neutral', accentColor: '#94a3b8' },
-    { id: 'CONFIRMED', title: 'Confirmed', badgeTone: 'yellow', accentColor: '#f59e0b' },
-    { id: 'INVOICED', title: 'Invoiced', badgeTone: 'blue', accentColor: '#3b82f6' },
-    { id: 'PAID', title: 'Paid', badgeTone: 'green', accentColor: '#10b981' },
-    { id: 'CANCELLED', title: 'Cancelled', badgeTone: 'red', accentColor: '#ef4444' },
-  ];
-
   // ── Filtering ────────────────────────────────────────────────────
   const filteredOrders = orders.filter((so) => {
-    if (viewMode === 'table' && activeTab !== 'ALL' && so.status !== activeTab) return false;
+    if (activeTab !== 'ALL' && so.status !== activeTab) return false;
     const q = soSearch.trim().toLowerCase();
     if (q && !so.order_number.toLowerCase().includes(q) && !String(so.customer_name || '').toLowerCase().includes(q)) return false;
     if (soFilters.customer && so.customer_id !== soFilters.customer) return false;
@@ -466,13 +456,38 @@ export function SalesPage() {
   ];
 
   const columns: Column<any>[] = [
-    { key: 'order_number', label: 'Order ID' },
-    { key: 'customer_name', label: 'Customer' },
-    { key: 'branch_name', label: 'Branch' },
+    {
+      key: 'order_number',
+      label: 'Order ID',
+      render: (row) => (
+        <span style={{ fontWeight: 700, color: '#0b8f08', fontFamily: 'monospace' }}>
+          {row.order_number}
+        </span>
+      ),
+    },
+    {
+      key: 'customer_name',
+      label: 'Customer & Branch',
+      render: (row) => (
+        <div>
+          <div style={{ fontWeight: 600, color: '#0f172a' }}>{row.customer_name || 'Customer'}</div>
+          <div style={{ fontSize: '11px', color: '#64748b' }}>{row.branch_name || 'Branch'}</div>
+        </div>
+      ),
+    },
     {
       key: 'created_at',
       label: 'Date',
       render: (row) => new Date(row.created_at).toLocaleDateString(),
+    },
+    {
+      key: 'total',
+      label: 'Total Amount',
+      render: (row) => (
+        <span style={{ fontWeight: 600 }}>
+          {row.net_total != null ? fmt(row.net_total) : (row.invoice_total != null ? fmt(row.invoice_total) : '—')}
+        </span>
+      ),
     },
     {
       key: 'status',
@@ -492,18 +507,6 @@ export function SalesPage() {
       render: (row) => {
         if (!row.payment_status) return <span style={{ color: '#aaa', fontSize: '12px' }}>—</span>;
         return <StatusBadge label={row.payment_status.replace('_', ' ')} tone={paymentStatusTone(row.payment_status)} />;
-      },
-    },
-    {
-      key: 'balance',
-      label: 'Balance',
-      render: (row) => {
-        if (row.balance == null) return <span style={{ color: '#aaa' }}>—</span>;
-        return (
-          <span style={{ fontWeight: 600, color: Number(row.balance) > 0 ? '#b45309' : '#0b8f08' }}>
-            {fmt(row.balance)}
-          </span>
-        );
       },
     },
     {
@@ -565,7 +568,6 @@ export function SalesPage() {
           <h2>Customers, orders, invoices, and payments</h2>
         </div>
         <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-          <ViewSwitcher viewMode={viewMode} onViewChange={setViewMode} />
           {hasPermission('manage_sales') && (
             <button type="button" className="btn btn-secondary" onClick={() => setIsCustomerOpen(true)}>
               <UserPlus size={16} style={{ marginRight: '6px', inlineSize: 'auto' }} /> Register Customer
@@ -579,11 +581,9 @@ export function SalesPage() {
         </div>
       </section>
 
-      {viewMode === 'table' && (
-        <section style={{ marginBottom: '14px' }}>
-          <Tabs tabs={tabItems} activeTab={activeTab} onTabChange={setActiveTab} />
-        </section>
-      )}
+      <section style={{ marginBottom: '14px' }}>
+        <Tabs tabs={tabItems} activeTab={activeTab} onTabChange={setActiveTab} />
+      </section>
 
       <section className="panel">
         <FilterBar
@@ -610,46 +610,14 @@ export function SalesPage() {
           onFilterChange={(key, val) => setSoFilters(prev => ({ ...prev, [key]: val }))}
         />
 
-        {viewMode === 'kanban' ? (
-          <KanbanBoard
-            columns={kanbanColumns}
-            items={filteredOrders}
-            getItemStage={(so) => so.status}
-            keyExtractor={(so) => so.id}
-            onCardClick={(so) => viewOrderDetails(so)}
-            renderCard={(so) => (
-              <>
-                <div className="kanban-card__header">
-                  <span className="kanban-card__id">{so.order_number}</span>
-                  <span className="kanban-card__date">
-                    {new Date(so.created_at).toLocaleDateString()}
-                  </span>
-                </div>
-                <div className="kanban-card__body">
-                  <span className="kanban-card__subtitle">{so.customer_name || 'Customer'}</span>
-                  <span className="kanban-card__meta">{so.branch_name || 'Branch'}</span>
-                </div>
-                <div className="kanban-card__footer">
-                  <span className="kanban-card__amount">
-                    {so.net_total != null ? fmt(so.net_total) : (so.invoice_total != null ? fmt(so.invoice_total) : '—')}
-                  </span>
-                  {so.payment_status && (
-                    <StatusBadge label={so.payment_status.replace('_', ' ')} tone={paymentStatusTone(so.payment_status)} />
-                  )}
-                </div>
-              </>
-            )}
-          />
-        ) : (
-          <DataTable
-            columns={columns}
-            data={filteredOrders}
-            keyExtractor={(row) => row.id as string}
-            loading={loading}
-            onRowClick={(row) => viewOrderDetails(row as SalesOrder)}
-            emptyMessage="No sales orders match your filters"
-          />
-        )}
+        <DataTable
+          columns={columns}
+          data={filteredOrders}
+          keyExtractor={(row) => row.id as string}
+          loading={loading}
+          onRowClick={(row) => viewOrderDetails(row as SalesOrder)}
+          emptyMessage="No sales orders match your filters"
+        />
       </section>
 
       {/* ── Register Customer Modal ── */}

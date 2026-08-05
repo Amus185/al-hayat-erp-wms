@@ -514,17 +514,42 @@ export function PurchasingPage() {
   ];
 
   const columns: Column<any>[] = [
-    { key: 'po_number', label: 'PO Number' },
-    { key: 'supplier_name', label: 'Supplier' },
     {
-      key: 'expected_date',
-      label: 'Expected Date',
-      render: (row) => row.expected_date ? new Date(row.expected_date).toLocaleDateString() : 'N/A',
+      key: 'po_number',
+      label: 'PO Number',
+      render: (row) => (
+        <span style={{ fontWeight: 700, color: '#0b8f08', fontFamily: 'monospace' }}>
+          {row.po_number}
+        </span>
+      ),
+    },
+    {
+      key: 'supplier_name',
+      label: 'Supplier',
+      render: (row) => (
+        <div>
+          <div style={{ fontWeight: 600, color: '#0f172a' }}>{row.supplier_name || 'N/A'}</div>
+          {row.expected_date && (
+            <div style={{ fontSize: '11px', color: '#64748b' }}>
+              Exp: {new Date(row.expected_date).toLocaleDateString()}
+            </div>
+          )}
+        </div>
+      ),
     },
     {
       key: 'created_at',
-      label: 'Created At',
+      label: 'Created Date',
       render: (row) => new Date(row.created_at).toLocaleDateString(),
+    },
+    {
+      key: 'total',
+      label: 'Total Amount',
+      render: (row) => (
+        <span style={{ fontWeight: 600 }}>
+          {row.net_total != null ? fmt(row.net_total) : (row.invoice_total != null ? fmt(row.invoice_total) : '—')}
+        </span>
+      ),
     },
     {
       key: 'status',
@@ -541,33 +566,41 @@ export function PurchasingPage() {
       key: 'payment_status',
       label: 'Payment',
       render: (row) => {
-        if (!row.payment_status) return <span style={{ color: '#aaa', fontSize: '12px' }}>—</span>;
+        if (!row.payment_status) return <span style={{ color: '#94a3b8', fontSize: '12px' }}>—</span>;
         return <StatusBadge label={row.payment_status.replace('_', ' ')} tone={paymentStatusTone(row.payment_status)} />;
-      },
-    },
-    {
-      key: 'balance',
-      label: 'Balance',
-      render: (row) => {
-        if (row.balance == null) return <span style={{ color: '#aaa' }}>—</span>;
-        return (
-          <span style={{ fontWeight: 600, color: Number(row.balance) > 0 ? '#b45309' : '#0b8f08' }}>
-            {fmt(row.balance)}
-          </span>
-        );
       },
     },
     {
       key: 'actions',
       label: 'Actions',
       render: (row) => (
-        <div style={{ display: 'flex', gap: '6px' }}>
-          <button type="button" className="btn btn-secondary btn-sm" onClick={() => viewPoDetails(row)}>
+        <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm"
+            onClick={(e) => { e.stopPropagation(); viewPoDetails(row); }}
+          >
             <Eye size={14} style={{ marginRight: '4px', inlineSize: 'auto' }} /> Details
           </button>
+          {(row.status === 'APPROVED' || row.status === 'PARTIALLY_RECEIVED') && hasPermission('manage_purchasing') && (
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              onClick={(e) => {
+                e.stopPropagation();
+                viewPoDetails(row);
+              }}
+            >
+              <Truck size={14} style={{ marginRight: '4px', inlineSize: 'auto' }} /> Receive
+            </button>
+          )}
           {(row.status === 'RECEIVED' || row.status === 'FULLY_RECEIVED') && (
-            <button type="button" className="btn btn-secondary btn-sm" title="Print Purchase Invoice"
-              onClick={(e) => { e.stopPropagation(); handlePrintPurchaseInvoice(row.id); }}>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              title="Print Purchase Invoice"
+              onClick={(e) => { e.stopPropagation(); handlePrintPurchaseInvoice(row.id); }}
+            >
               <Printer size={14} style={{ inlineSize: 'auto' }} />
             </button>
           )}
@@ -596,16 +629,6 @@ export function PurchasingPage() {
     invoiceSummary &&
     invoiceSummary.summary.balance > 0.001;
 
-  const [viewMode, setViewMode] = useState<'kanban' | 'table'>('kanban');
-
-  const kanbanColumns: KanbanColumnDef[] = [
-    { id: 'DRAFT', title: 'Drafts', badgeTone: 'neutral', accentColor: '#94a3b8' },
-    { id: 'SUBMITTED', title: 'Submitted', badgeTone: 'blue', accentColor: '#3b82f6' },
-    { id: 'APPROVED', title: 'Approved', badgeTone: 'yellow', accentColor: '#f59e0b' },
-    { id: 'PARTIALLY_RECEIVED', title: 'Partial', badgeTone: 'purple', accentColor: '#a855f7' },
-    { id: 'RECEIVED', title: 'Received', badgeTone: 'green', accentColor: '#10b981' },
-  ];
-
   return (
     <div className="module-page">
       <section className="module-header">
@@ -617,7 +640,6 @@ export function PurchasingPage() {
           <h2>Suppliers, purchase orders, receipts, and payments</h2>
         </div>
         <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-          <ViewSwitcher viewMode={viewMode} onViewChange={setViewMode} />
           <button type="button" className="btn btn-secondary" onClick={() => setIsSupplierOpen(true)}>
             <UserPlus size={16} style={{ marginRight: '6px', inlineSize: 'auto' }} /> Add Supplier
           </button>
@@ -627,11 +649,9 @@ export function PurchasingPage() {
         </div>
       </section>
 
-      {viewMode === 'table' && (
-        <section style={{ marginBottom: '14px' }}>
-          <Tabs tabs={tabItems} activeTab={activeTab} onTabChange={setActiveTab} />
-        </section>
-      )}
+      <section style={{ marginBottom: '14px' }}>
+        <Tabs tabs={tabItems} activeTab={activeTab} onTabChange={setActiveTab} />
+      </section>
 
       <section className="panel">
         <FilterBar
@@ -658,48 +678,14 @@ export function PurchasingPage() {
           onFilterChange={(key, val) => setPoFilters(prev => ({ ...prev, [key]: val }))}
         />
 
-        {viewMode === 'kanban' ? (
-          <KanbanBoard
-            columns={kanbanColumns}
-            items={filteredPOs}
-            getItemStage={(po) => (po.status === 'FULLY_RECEIVED' ? 'RECEIVED' : po.status)}
-            keyExtractor={(po) => po.id}
-            onCardClick={(po) => viewPoDetails(po)}
-            renderCard={(po) => (
-              <>
-                <div className="kanban-card__header">
-                  <span className="kanban-card__id">{po.po_number}</span>
-                  <span className="kanban-card__date">
-                    {new Date(po.created_at).toLocaleDateString()}
-                  </span>
-                </div>
-                <div className="kanban-card__body">
-                  <span className="kanban-card__subtitle">{po.supplier_name || 'Supplier'}</span>
-                  {po.expected_date && (
-                    <span className="kanban-card__meta">Exp: {new Date(po.expected_date).toLocaleDateString()}</span>
-                  )}
-                </div>
-                <div className="kanban-card__footer">
-                  <span className="kanban-card__amount">
-                    {po.net_total != null ? fmt(po.net_total) : (po.invoice_total != null ? fmt(po.invoice_total) : '—')}
-                  </span>
-                  {po.payment_status && (
-                    <StatusBadge label={po.payment_status.replace('_', ' ')} tone={paymentStatusTone(po.payment_status)} />
-                  )}
-                </div>
-              </>
-            )}
-          />
-        ) : (
-          <DataTable
-            columns={columns}
-            data={filteredPOs}
-            keyExtractor={(row) => row.id as string}
-            loading={loading}
-            onRowClick={(row) => viewPoDetails(row as PurchaseOrder)}
-            emptyMessage="No purchase orders match your filters"
-          />
-        )}
+        <DataTable
+          columns={columns}
+          data={filteredPOs}
+          keyExtractor={(row) => row.id as string}
+          loading={loading}
+          onRowClick={(row) => viewPoDetails(row as PurchaseOrder)}
+          emptyMessage="No purchase orders match your filters"
+        />
       </section>
 
       {/* ── Supplier Modal ── */}
