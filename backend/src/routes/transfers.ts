@@ -326,7 +326,7 @@ transfers.post('/:id/approve', requirePermissions(['manage_transfers']), async (
     const stmts: ReturnType<ReturnType<typeof c.env.DB.prepare>['bind']>[] = [];
 
     for (const line of lines) {
-      const qty = line.quantity_requested as number;
+      const qty = Number(line.quantity_requested ?? line.quantity ?? 0);
       const info = stockInfoMap.get(line.id as string)!;
 
       // 4a. Deduct from source (row MUST exist because we verified above)
@@ -350,14 +350,17 @@ transfers.post('/:id/approve', requirePermissions(['manage_transfers']), async (
         (id, product_id, transaction_type, quantity,
          source_owner_type, source_warehouse_id, source_branch_id,
          destination_owner_type, destination_warehouse_id, destination_branch_id,
+         dest_owner_type, dest_warehouse_id, dest_branch_id,
          reference_type, reference_id, created_by)
-        VALUES (?, ?, 'TRANSFER_OUT', ?,  ?, ?, ?,  ?, ?, ?,  'TRANSFER', ?, ?)
+        VALUES (?, ?, 'TRANSFER_OUT', ?,  ?, ?, ?,  ?, ?, ?,  ?, ?, ?,  'TRANSFER', ?, ?)
       `).bind(
         uuidv4(), line.product_id, -qty,
         transfer.source_owner_type,
         transfer.source_warehouse_id || null, transfer.source_branch_id || null,
-        transfer.destination_owner_type,
-        transfer.destination_warehouse_id || null, transfer.destination_branch_id || null,
+        transfer.destination_owner_type || transfer.dest_owner_type || null,
+        transfer.destination_warehouse_id || transfer.dest_warehouse_id || null, transfer.destination_branch_id || transfer.dest_branch_id || null,
+        transfer.destination_owner_type || transfer.dest_owner_type || null,
+        transfer.destination_warehouse_id || transfer.dest_warehouse_id || null, transfer.destination_branch_id || transfer.dest_branch_id || null,
         id, userId
       ));
 
@@ -376,9 +379,9 @@ transfers.post('/:id/approve', requirePermissions(['manage_transfers']), async (
           VALUES (?, ?, ?, ?, ?, ?)
         `).bind(
           uuidv4(), line.product_id,
-          transfer.destination_owner_type,
-          transfer.destination_warehouse_id || null,
-          transfer.destination_branch_id || null,
+          transfer.destination_owner_type || transfer.dest_owner_type,
+          transfer.destination_warehouse_id || transfer.dest_warehouse_id || null,
+          transfer.destination_branch_id || transfer.dest_branch_id || null,
           qty
         ));
       }
@@ -389,14 +392,17 @@ transfers.post('/:id/approve', requirePermissions(['manage_transfers']), async (
         (id, product_id, transaction_type, quantity,
          source_owner_type, source_warehouse_id, source_branch_id,
          destination_owner_type, destination_warehouse_id, destination_branch_id,
+         dest_owner_type, dest_warehouse_id, dest_branch_id,
          reference_type, reference_id, created_by)
-        VALUES (?, ?, 'TRANSFER_IN', ?,  ?, ?, ?,  ?, ?, ?,  'TRANSFER', ?, ?)
+        VALUES (?, ?, 'TRANSFER_IN', ?,  ?, ?, ?,  ?, ?, ?,  ?, ?, ?,  'TRANSFER', ?, ?)
       `).bind(
         uuidv4(), line.product_id, qty,
         transfer.source_owner_type,
         transfer.source_warehouse_id || null, transfer.source_branch_id || null,
-        transfer.destination_owner_type,
-        transfer.destination_warehouse_id || null, transfer.destination_branch_id || null,
+        transfer.destination_owner_type || transfer.dest_owner_type || null,
+        transfer.destination_warehouse_id || transfer.dest_warehouse_id || null, transfer.destination_branch_id || transfer.dest_branch_id || null,
+        transfer.destination_owner_type || transfer.dest_owner_type || null,
+        transfer.destination_warehouse_id || transfer.dest_warehouse_id || null, transfer.destination_branch_id || transfer.dest_branch_id || null,
         id, userId
       ));
 
