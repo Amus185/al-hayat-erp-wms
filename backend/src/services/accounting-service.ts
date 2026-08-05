@@ -123,21 +123,47 @@ export async function getAccountIdByCode(
 }
 
 /**
+ * Dynamic Inventory Costing Extension Point
+ * Computes Cost of Goods Sold (COGS) for a sales order using product cost prices.
+ * Extension point for FIFO / Weighted Average Valuation.
+ */
+export async function calculateOrderCogs(db: any, orderId: string): Promise<number> {
+  const { results: lines } = await db.prepare(`
+    SELECT sol.quantity, p.cost_price
+    FROM sales_order_lines sol
+    JOIN products p ON p.id = sol.product_id
+    WHERE sol.sales_order_id = ?
+  `).bind(orderId).all().catch(() => ({ results: [] }));
+
+  let totalCogs = 0;
+  for (const line of (lines || []) as any[]) {
+    const qty = Number(line.quantity || 0);
+    const unitCost = Number(line.cost_price || 0);
+    totalCogs += qty * unitCost;
+  }
+  return totalCogs;
+}
+
+/**
  * Creates a balanced Journal Entry, inserts its lines, and posts directly to
- * General Ledger.
- *
- * Optimized:
- * - Task 1a: Accepts pre-fetched fiscal period id (no SELECT if caller provides it)
- * - Task 1b: Accepts pre-fetched CoA map (no per-code SELECT if caller provides it)
- * - Task 2:  GL running_balance reads are consolidated into a single IN(?) query
- *            per entry (instead of one query per line). This is safe WITHIN a single
- *            entry because no single journal entry touches the same account twice.
+ * General Ledger. Idempotent: returns existing ID if already posted.
  */
 export async function createAndPostJournalEntry(
   c: any,
   params: PostJournalParams
 ): Promise<string | null> {
   const db = c.env.DB;
+
+  // ── Idempotency Check: Prevent duplicate postings ─────────────────────────
+  if (params.referenceType && params.referenceId && params.referenceType !== 'MANUAL') {
+    const existing = await db.prepare(
+      "SELECT id FROM journal_entries WHERE reference_type = ? AND reference_id = ? AND status = 'POSTED' LIMIT 1"
+    ).bind(params.referenceType, params.referenceId).first().catch(() => null);
+    if (existing?.id) {
+      return existing.id as string;
+    }
+  }
+
   const entryDate = params.entryDate || new Date().toISOString().split('T')[0];
   const now = new Date().toISOString();
   const entryId = uuidv4();

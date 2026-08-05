@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { Env, uuidv4 } from '../db';
 import { authMiddleware, requirePermissions, isAdminUser } from '../middleware/auth';
 import { logAudit, createAuditLogStmt } from '../services/audit';
-import { postSaleJournalEntry, postCustomerPaymentJournalEntry, fetchOpenFiscalPeriodId, fetchCoaMapForCodes } from '../services/accounting-service';
+import { postSaleJournalEntry, postCustomerPaymentJournalEntry, fetchOpenFiscalPeriodId, fetchCoaMapForCodes, calculateOrderCogs } from '../services/accounting-service';
 
 const sales = new Hono<{ Bindings: Env; Variables: { jwtPayload: any } }>();
 
@@ -423,7 +423,8 @@ sales.post('/orders/:id/invoice', requirePermissions(['manage_sales']), async (c
 
     // Auto-post double-entry journal to Accounting
     try {
-      await postSaleJournalEntry(c, { id: orderId, order_number: String((order as any)?.order_number || orderId), branch_id: branchId ? String(branchId) : undefined } as any, total, 0, userId);
+      const cogsAmount = await calculateOrderCogs(c.env.DB, orderId as string);
+      await postSaleJournalEntry(c, { id: orderId, order_number: String((order as any)?.order_number || orderId), branch_id: branchId ? String(branchId) : undefined } as any, total, cogsAmount, userId);
     } catch (accErr) {
       console.error('Failed to post sale invoice accounting entry:', accErr);
     }
@@ -709,11 +710,12 @@ sales.post('/orders/:id/complete', requirePermissions(['manage_sales']), async (
       console.log(`[WATERFALL] +${Date.now() - reqStart}ms | GL pre-fetch (fiscal period + 3 CoA codes) completed (${Date.now() - tGlPre0}ms)`);
 
       const tGl1_0 = Date.now();
+      const cogsAmount = await calculateOrderCogs(c.env.DB, order.id as string);
       await postSaleJournalEntry(
         c,
         { id: order.id as string, order_number: (order as any).order_number as string || (order.id as string), branch_id: (order as any).branch_id ? String((order as any).branch_id) : undefined },
         total,
-        0,
+        cogsAmount,
         userId,
         sharedFiscalPeriodId || undefined,
         sharedCoaMap
