@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Receipt, Plus, Search, X, Edit2, Trash2, DollarSign, TrendingDown, Filter } from 'lucide-react';
-import { apiRequest } from '../api/client';
+import { apiGet, apiPost, apiPatch, apiDelete } from '../api/client';
 import { useAuth } from '../contexts/AuthContext';
 
 interface Expense {
@@ -63,7 +63,7 @@ export function ExpensesPage() {
       if (filterBranch !== 'ALL') params.set('branch_id', filterBranch);
       if (dateFrom) params.set('dateFrom', dateFrom);
       if (dateTo) params.set('dateTo', dateTo);
-      const data = await apiRequest(`/expenses?${params.toString()}`);
+      const data = await apiGet<Expense[]>(`/expenses?${params.toString()}`);
       setExpenses(Array.isArray(data) ? data : []);
     } finally {
       setLoading(false);
@@ -73,7 +73,7 @@ export function ExpensesPage() {
   useEffect(() => { load(); }, [load]);
 
   useEffect(() => {
-    apiRequest('/branches').then((data: any) => setBranches(Array.isArray(data) ? data : [])).catch(() => {});
+    apiGet<Branch[]>('/branches').then((data) => setBranches(Array.isArray(data) ? data : [])).catch(() => {});
   }, []);
 
   const filtered = expenses.filter(e =>
@@ -116,9 +116,9 @@ export function ExpensesPage() {
         notes: form.notes || undefined,
       };
       if (editExpense) {
-        await apiRequest(`/expenses/${editExpense.id}`, { method: 'PATCH', body: payload });
+        await apiPatch(`/expenses/${editExpense.id}`, payload);
       } else {
-        await apiRequest('/expenses', { method: 'POST', body: payload });
+        await apiPost('/expenses', payload);
       }
       setShowModal(false);
       load();
@@ -128,7 +128,7 @@ export function ExpensesPage() {
   };
 
   const handleDelete = async (id: string) => {
-    await apiRequest(`/expenses/${id}`, { method: 'DELETE' });
+    await apiDelete(`/expenses/${id}`);
     setDeleteConfirm(null);
     load();
   };

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Users, Phone, Mail, MapPin, Plus, Search, ShoppingBag, DollarSign, X, Edit2, Trash2, ChevronDown, ChevronUp } from 'lucide-react';
-import { apiRequest } from '../api/client';
+import { apiGet, apiPost, apiPatch, apiDelete } from '../api/client';
 
 interface Customer {
   id: string;
@@ -49,7 +49,7 @@ export function CustomersPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await apiRequest('/sales/customers');
+      const data = await apiGet<Customer[]>('/sales/customers');
       setCustomers(Array.isArray(data) ? data : []);
     } finally {
       setLoading(false);
@@ -68,7 +68,7 @@ export function CustomersPage() {
     if (orders[customerId]) return;
     setLoadingOrders(customerId);
     try {
-      const data = await apiRequest(`/sales/orders?customer_id=${customerId}`);
+      const data = await apiGet<SalesOrder[]>(`/sales/orders?customer_id=${customerId}`);
       setOrders(prev => ({ ...prev, [customerId]: Array.isArray(data) ? data : [] }));
     } catch {
       setOrders(prev => ({ ...prev, [customerId]: [] }));
@@ -103,9 +103,9 @@ export function CustomersPage() {
     setSaving(true);
     try {
       if (editCustomer) {
-        await apiRequest(`/sales/customers/${editCustomer.id}`, { method: 'PATCH', body: form });
+        await apiPatch(`/sales/customers/${editCustomer.id}`, form);
       } else {
-        await apiRequest('/sales/customers', { method: 'POST', body: form });
+        await apiPost('/sales/customers', form);
       }
       setShowModal(false);
       load();
@@ -115,7 +115,7 @@ export function CustomersPage() {
   };
 
   const handleDelete = async (id: string) => {
-    await apiRequest(`/sales/customers/${id}`, { method: 'DELETE' });
+    await apiDelete(`/sales/customers/${id}`);
     setDeleteConfirm(null);
     load();
   };
