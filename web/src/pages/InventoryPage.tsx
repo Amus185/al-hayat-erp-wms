@@ -430,7 +430,30 @@ export function InventoryPage() {
                         <div
                           key={p.id}
                           onClick={() => {
-                            setAdjustForm((prev) => ({ ...prev, productId: p.id }));
+                            const activeStock = stocks.find(s => s.product_id === p.id && s.quantity_on_hand > 0) || stocks.find(s => s.product_id === p.id);
+                            if (activeStock) {
+                              if (activeStock.owner_type === 'WAREHOUSE') {
+                                setAdjustForm((prev) => ({
+                                  ...prev,
+                                  productId: p.id,
+                                  ownerType: 'WAREHOUSE',
+                                  warehouseId: activeStock.warehouse_id || '',
+                                  warehouseLocationId: activeStock.warehouse_location_id || '',
+                                  branchId: '',
+                                }));
+                              } else {
+                                setAdjustForm((prev) => ({
+                                  ...prev,
+                                  productId: p.id,
+                                  ownerType: 'BRANCH',
+                                  branchId: activeStock.branch_id || '',
+                                  warehouseId: '',
+                                  warehouseLocationId: '',
+                                }));
+                              }
+                            } else {
+                              setAdjustForm((prev) => ({ ...prev, productId: p.id }));
+                            }
                             setProductQuery(p.label);
                           }}
                           style={{
@@ -495,7 +518,11 @@ export function InventoryPage() {
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
                 <FormField label="Select Warehouse">
                   <SearchableSelect
-                    options={warehouses.map((w) => ({ value: w.id, label: w.name }))}
+                    options={warehouses.map((w) => {
+                      const stockItem = stocks.find(s => s.product_id === adjustForm.productId && s.warehouse_id === w.id);
+                      const qtyBadge = stockItem ? ` (${stockItem.quantity_on_hand} on hand)` : '';
+                      return { value: w.id, label: `${w.name}${qtyBadge}` };
+                    })}
                     value={adjustForm.warehouseId}
                     onChange={(val) => setAdjustForm((prev) => ({ ...prev, warehouseId: val, warehouseLocationId: '' }))}
                     placeholder="Search Warehouse..."
@@ -514,7 +541,11 @@ export function InventoryPage() {
             ) : (
               <FormField label="Select Branch">
                 <SearchableSelect
-                  options={branches.map((b) => ({ value: b.id, label: b.name }))}
+                  options={branches.map((b) => {
+                    const stockItem = stocks.find(s => s.product_id === adjustForm.productId && s.branch_id === b.id);
+                    const qtyBadge = stockItem ? ` (${stockItem.quantity_on_hand} on hand)` : '';
+                    return { value: b.id, label: `${b.name}${qtyBadge}` };
+                  })}
                   value={adjustForm.branchId}
                   onChange={(val) => setAdjustForm((prev) => ({ ...prev, branchId: val }))}
                   placeholder="Search Branch..."

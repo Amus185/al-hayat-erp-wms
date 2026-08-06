@@ -20,7 +20,7 @@ inventory.get('/stock', async (c) => {
     LEFT JOIN warehouses w ON w.id = s.warehouse_id
     LEFT JOIN branches b ON b.id = s.branch_id
     LEFT JOIN warehouse_locations l ON l.id = s.warehouse_location_id
-    WHERE 1=1
+    WHERE (s.quantity_on_hand > 0 OR s.quantity_reserved > 0)
   `;
   const params: any[] = [];
 

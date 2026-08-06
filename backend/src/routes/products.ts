@@ -192,10 +192,6 @@ products.delete('/:id', requirePermissions(['manage_inventory']), async (c) => {
   `).bind(id).first();
   if (activePO) return c.json({ message: 'Cannot delete: product is referenced in approved or received purchase orders.' }, 400);
 
-  // Check for positive physical inventory stock
-  const inStock = await c.env.DB.prepare('SELECT id FROM inventory_stock WHERE product_id = ? AND quantity_on_hand > 0 LIMIT 1').bind(id).first();
-  if (inStock) return c.json({ message: 'Cannot delete: product currently has active stock on hand. Adjust stock to 0 first.' }, 400);
-
   const prod = await c.env.DB.prepare('SELECT * FROM products WHERE id = ?').bind(id).first();
   if (!prod) return c.json({ message: 'Product not found' }, 404);
 
