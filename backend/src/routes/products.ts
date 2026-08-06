@@ -195,10 +195,11 @@ products.delete('/:id', requirePermissions(['manage_inventory']), async (c) => {
   const prod = await c.env.DB.prepare('SELECT * FROM products WHERE id = ?').bind(id).first();
   if (!prod) return c.json({ message: 'Product not found' }, 404);
 
-  // Atomically clean up draft/cancelled order lines and inventory_stock before deleting product
+  // Atomically clean up draft/cancelled order lines, inventory transactions, and inventory_stock before deleting product
   const batchStmts = [
     c.env.DB.prepare('DELETE FROM sales_order_lines WHERE product_id = ?').bind(id),
     c.env.DB.prepare('DELETE FROM purchase_order_lines WHERE product_id = ?').bind(id),
+    c.env.DB.prepare('DELETE FROM inventory_transactions WHERE product_id = ?').bind(id),
     c.env.DB.prepare('DELETE FROM inventory_stock WHERE product_id = ?').bind(id),
     c.env.DB.prepare('DELETE FROM products WHERE id = ?').bind(id),
     createAuditLogStmt(c, 'PRODUCT_DELETE', 'products', id, prod, null)
