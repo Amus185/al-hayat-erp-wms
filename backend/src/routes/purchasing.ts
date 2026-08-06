@@ -466,8 +466,8 @@ purchasing.post('/receipts', requirePermissions(['manage_purchasing']), async (c
     body.lines.map(async (line: any) => {
       const existingStock = await c.env.DB.prepare(`
         SELECT id FROM inventory_stock
-        WHERE product_id = ?::uuid AND owner_type = 'WAREHOUSE' AND warehouse_id = ?::uuid AND branch_id IS NULL
-          AND warehouse_location_id IS NOT DISTINCT FROM ?::uuid
+        WHERE product_id = ?::text AND owner_type = 'WAREHOUSE' AND warehouse_id = ?::text AND branch_id IS NULL
+          AND warehouse_location_id IS NOT DISTINCT FROM ?::text
       `).bind(line.productId, body.warehouseId, line.warehouseLocationId || null).first();
       stockLookups.set(`${line.productId}:${line.warehouseLocationId || ''}`, (existingStock?.id as string) || null);
     })

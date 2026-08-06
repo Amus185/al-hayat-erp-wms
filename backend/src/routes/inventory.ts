@@ -112,10 +112,10 @@ inventory.post('/adjust', requirePermissions(['manage_inventory']), async (c) =>
 
   const existingStock = await c.env.DB.prepare(`
     SELECT id, quantity_on_hand FROM inventory_stock
-    WHERE product_id = ?::uuid AND owner_type = ? 
-      AND warehouse_id IS NOT DISTINCT FROM ?::uuid
-      AND branch_id IS NOT DISTINCT FROM ?::uuid
-      AND warehouse_location_id IS NOT DISTINCT FROM ?::uuid
+    WHERE product_id = ?::text AND owner_type = ? 
+      AND warehouse_id IS NOT DISTINCT FROM ?::text
+      AND branch_id IS NOT DISTINCT FROM ?::text
+      AND warehouse_location_id IS NOT DISTINCT FROM ?::text
   `).bind(
     body.productId,
     ownerType, 
