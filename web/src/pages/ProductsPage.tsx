@@ -75,6 +75,7 @@ export function ProductsPage() {
     costPrice: 0,
     sellingPrice: 0,
     reorderLevel: 5,
+    totalOpeningStock: 0,
   });
 
   // Multi-location initial stock lines
@@ -85,12 +86,11 @@ export function ProductsPage() {
     quantity: number;
   }
   const [initialStockLines, setInitialStockLines] = useState<StockLine[]>([]);
-  const nextLineId = { current: 1 };
 
-  const addStockLine = () => {
+  const addStockLine = (qty = 0) => {
     setInitialStockLines(prev => [
       ...prev,
-      { id: Date.now(), ownerType: 'WAREHOUSE', locationId: '', quantity: 0 }
+      { id: Date.now() + Math.random(), ownerType: 'WAREHOUSE', locationId: '', quantity: qty }
     ]);
   };
 
@@ -102,6 +102,31 @@ export function ProductsPage() {
     setInitialStockLines(prev =>
       prev.map(l => (l.id === id ? { ...l, ...patch } : l))
     );
+  };
+
+  // Helper metrics for allocation calculations
+  const totalAllocated = initialStockLines.reduce((sum, line) => sum + (Number(line.quantity) || 0), 0);
+  const totalOpening = Number(newProduct.totalOpeningStock || 0);
+  const remainingToAllocate = totalOpening - totalAllocated;
+
+  // Split total stock equally across all location lines
+  const handleSplitEqually = () => {
+    if (initialStockLines.length === 0 || totalOpening <= 0) return;
+    const baseQty = Math.floor(totalOpening / initialStockLines.length);
+    let remainder = totalOpening - (baseQty * initialStockLines.length);
+
+    setInitialStockLines(prev =>
+      prev.map((line, idx) => {
+        const qty = baseQty + (idx < remainder ? 1 : 0);
+        return { ...line, quantity: qty };
+      })
+    );
+  };
+
+  // Fill remaining unallocated stock into a new or empty location row
+  const handleFillRemaining = () => {
+    if (remainingToAllocate <= 0) return;
+    addStockLine(remainingToAllocate);
   };
 
   const [confirmState, setConfirmState] = useState<{ isOpen: boolean; title: string; message: string; onConfirm: () => void; }>({
@@ -186,6 +211,22 @@ export function ProductsPage() {
     if (newProduct.costPrice > newProduct.sellingPrice) {
       addToast('error', 'Cost Price cannot be greater than Selling Price');
       return;
+    }
+
+    // Strict 100% location allocation validation
+    if (totalOpening > 0) {
+      if (totalAllocated !== totalOpening) {
+        addToast(
+          'error',
+          `Stock allocation mismatch: Total Opening Stock is ${totalOpening} units, but ${totalAllocated} units are assigned to locations. Please assign all ${totalOpening} units.`
+        );
+        return;
+      }
+      const unassigned = initialStockLines.filter(l => !l.locationId);
+      if (unassigned.length > 0) {
+        addToast('error', 'Please select a location for all stock rows.');
+        return;
+      }
     }
 
     const payload: any = {
@@ -506,22 +547,118 @@ export function ProductsPage() {
 
           {/* Initial Stock Section — Multi-location */}
           <div style={{ marginTop: '16px', padding: '16px', background: '#f4fbf4', borderRadius: '10px', border: '1px solid #d1e8d1' }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
-              <div>
-                <p style={{ margin: 0, fontWeight: 700, color: '#066006', fontSize: '14px' }}>📦 Initial Stock Distribution (Optional)</p>
-                <p style={{ margin: '3px 0 0', fontSize: '12px', color: '#667066' }}>Distribute opening stock across multiple warehouses & branches.</p>
+            <div style={{ marginBottom: '14px' }}>
+              <p style={{ margin: 0, fontWeight: 700, color: '#066006', fontSize: '14px' }}>📦 Initial Opening Stock (Optional)</p>
+              <p style={{ margin: '3px 0 0', fontSize: '12px', color: '#667066' }}>Specify total opening units (e.g. 100, 1,000) and split them across warehouses & branches.</p>
+            </div>
+
+            {/* Total Opening Stock Input & Quick Presets */}
+            <div style={{ background: '#fff', padding: '12px 14px', borderRadius: '8px', border: '1px solid #d9e8d9', marginBottom: '14px' }}>
+              <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#2d3748', marginBottom: '6px' }}>
+                Total Opening Stock (Units)
+              </label>
+              <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+                <input
+                  type="number"
+                  min={0}
+                  placeholder="e.g. 1000"
+                  value={newProduct.totalOpeningStock || ''}
+                  onChange={(e) => setNewProduct(prev => ({ ...prev, totalOpeningStock: Math.max(0, Number(e.target.value)) }))}
+                  style={{ flex: 1, minWidth: '140px', padding: '8px 12px', border: '1px solid #cbd5e1', borderRadius: '8px', fontSize: '14px', fontWeight: 600 }}
+                />
+                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                  {[100, 500, 1000, 5000].map(preset => (
+                    <button
+                      key={preset}
+                      type="button"
+                      onClick={() => setNewProduct(prev => ({ ...prev, totalOpeningStock: preset }))}
+                      style={{
+                        padding: '6px 12px',
+                        borderRadius: '6px',
+                        border: '1px solid #cbd5e1',
+                        background: newProduct.totalOpeningStock === preset ? '#e6f4e6' : '#f8fafc',
+                        color: newProduct.totalOpeningStock === preset ? '#066006' : '#475569',
+                        fontWeight: newProduct.totalOpeningStock === preset ? 700 : 500,
+                        fontSize: '12px',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      +{preset.toLocaleString()}
+                    </button>
+                  ))}
+                </div>
               </div>
+            </div>
+
+            {/* Allocation Status Banner */}
+            {totalOpening > 0 && (
+              <div style={{
+                padding: '10px 14px',
+                borderRadius: '8px',
+                marginBottom: '14px',
+                fontSize: '13px',
+                fontWeight: 600,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                flexWrap: 'wrap',
+                gap: '10px',
+                background: totalAllocated === totalOpening ? '#f0fdf4' : remainingToAllocate > 0 ? '#fffbe6' : '#fef2f2',
+                border: `1px solid ${totalAllocated === totalOpening ? '#bbf7d0' : remainingToAllocate > 0 ? '#ffe58f' : '#fecaca'}`,
+                color: totalAllocated === totalOpening ? '#166534' : remainingToAllocate > 0 ? '#873800' : '#991b1b',
+              }}>
+                <div>
+                  {totalAllocated === totalOpening && (
+                    <span>🟢 <strong>100% Allocated</strong> ({totalAllocated.toLocaleString()} / {totalOpening.toLocaleString()} units assigned)</span>
+                  )}
+                  {remainingToAllocate > 0 && (
+                    <span>🟡 <strong>Incomplete Allocation</strong>: {totalAllocated.toLocaleString()} / {totalOpening.toLocaleString()} assigned — <strong>{remainingToAllocate.toLocaleString()} units remaining</strong></span>
+                  )}
+                  {remainingToAllocate < 0 && (
+                    <span>🔴 <strong>Over Allocated</strong>: {totalAllocated.toLocaleString()} assigned (exceeds total opening stock by {Math.abs(remainingToAllocate).toLocaleString()} units)</span>
+                  )}
+                </div>
+
+                {/* Quick Helper Actions */}
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  {initialStockLines.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={handleSplitEqually}
+                      style={{ padding: '5px 10px', borderRadius: '6px', background: '#fff', border: '1px solid #cbd5e1', fontSize: '12px', fontWeight: 600, cursor: 'pointer', color: '#1e293b' }}
+                    >
+                      ⚡ Split Equally
+                    </button>
+                  )}
+                  {remainingToAllocate > 0 && (
+                    <button
+                      type="button"
+                      onClick={handleFillRemaining}
+                      style={{ padding: '5px 10px', borderRadius: '6px', background: '#066006', color: '#fff', border: 'none', fontSize: '12px', fontWeight: 600, cursor: 'pointer' }}
+                    >
+                      ➕ Fill Remaining ({remainingToAllocate.toLocaleString()})
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Location Table Controls Header */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+              <span style={{ fontSize: '12px', fontWeight: 700, color: '#334155' }}>
+                Stock Locations ({initialStockLines.length})
+              </span>
               <button
                 type="button"
-                onClick={addStockLine}
+                onClick={() => addStockLine(remainingToAllocate > 0 ? remainingToAllocate : 0)}
                 style={{
                   display: 'flex', alignItems: 'center', gap: '6px',
-                  padding: '7px 14px', background: '#066006', color: '#fff',
-                  border: 'none', borderRadius: '8px', cursor: 'pointer',
-                  fontSize: '13px', fontWeight: 600, whiteSpace: 'nowrap',
+                  padding: '6px 12px', background: '#066006', color: '#fff',
+                  border: 'none', borderRadius: '7px', cursor: 'pointer',
+                  fontSize: '12px', fontWeight: 600, whiteSpace: 'nowrap',
                 }}
               >
-                <PlusCircle size={15} /> Add Location
+                <PlusCircle size={14} /> Add Location
               </button>
             </div>
 
