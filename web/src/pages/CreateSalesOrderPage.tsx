@@ -5,6 +5,7 @@ import { apiGet, apiPost } from '../api/client';
 import { FormField, InputField, TextareaField } from '../components/FormField';
 import { SearchInput } from '../components/SearchInput';
 import { SearchableSelect } from '../components/SearchableSelect';
+import { Modal } from '../components/Modal';
 import { useToast } from '../contexts/ToastContext';
 
 interface Customer {
@@ -37,6 +38,43 @@ export function CreateSalesOrderPage() {
   const [customerId, setCustomerId] = useState('');
   const [branchId, setBranchId] = useState('');
   const [notes, setNotes] = useState('');
+
+  // Inline Customer Modal state
+  const [isInlineCustomerOpen, setIsInlineCustomerOpen] = useState(false);
+  const [newCustomerForm, setNewCustomerForm] = useState({
+    name: '',
+    phone: '',
+    email: '',
+    address: '',
+  });
+  const [savingCustomer, setSavingCustomer] = useState(false);
+
+  const handleCreateInlineCustomer = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newCustomerForm.name || !newCustomerForm.name.trim()) return;
+    try {
+      setSavingCustomer(true);
+      const created: any = await apiPost('/sales/customers', {
+        name: newCustomerForm.name.trim(),
+        phone: newCustomerForm.phone.trim() || null,
+        email: newCustomerForm.email.trim() || null,
+        address: newCustomerForm.address.trim() || null,
+      });
+
+      addToast('success', `Customer "${created.name || newCustomerForm.name}" created`);
+      setIsInlineCustomerOpen(false);
+      setNewCustomerForm({ name: '', phone: '', email: '', address: '' });
+
+      // Reload customers list & auto select
+      const updatedCusts = await apiGet<Customer[]>('/sales/customers');
+      setCustomers(updatedCusts || []);
+      setCustomerId(created.id);
+    } catch (err: any) {
+      addToast('error', err?.message || 'Failed to create customer');
+    } finally {
+      setSavingCustomer(false);
+    }
+  };
 
   // Searching products
   const [searchQuery, setSearchQuery] = useState('');
@@ -204,12 +242,36 @@ export function CreateSalesOrderPage() {
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
             <FormField label="Customer *">
-              <SearchableSelect
-                options={customers.map((c) => ({ value: c.id, label: c.name }))}
-                value={customerId}
-                onChange={setCustomerId}
-                placeholder="Search Customer..."
-              />
+              <div style={{ display: 'flex', gap: '6px' }}>
+                <div style={{ flex: 1 }}>
+                  <SearchableSelect
+                    options={customers.map((c) => ({ value: c.id, label: c.name }))}
+                    value={customerId}
+                    onChange={setCustomerId}
+                    placeholder="Search Customer..."
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsInlineCustomerOpen(true)}
+                  style={{
+                    padding: '0 10px',
+                    background: '#ecfdf5',
+                    border: '1px solid #a7f3d0',
+                    color: '#065f46',
+                    borderRadius: '8px',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                    fontSize: '12px',
+                    fontWeight: 700,
+                  }}
+                  title="Add New Customer"
+                >
+                  <Plus size={14} /> New
+                </button>
+              </div>
             </FormField>
 
             <FormField label="Originating Branch *">
@@ -395,9 +457,55 @@ export function CreateSalesOrderPage() {
               '⚡ Create & Complete'
             )}
           </button>
-          <input type="hidden" id="completeNowFlag" name="completeNow" defaultValue="1" />
         </div>
       </form>
+
+      {/* Inline Customer Creation Modal */}
+      <Modal isOpen={isInlineCustomerOpen} onClose={() => setIsInlineCustomerOpen(false)} title="Add New Customer">
+        <form onSubmit={handleCreateInlineCustomer} style={{ display: 'grid', gap: '14px' }}>
+          <InputField
+            label="Customer Name *"
+            id="custName"
+            value={newCustomerForm.name}
+            onChange={(val) => setNewCustomerForm((prev) => ({ ...prev, name: val }))}
+            placeholder="e.g. Acme Corp, Ali Omar..."
+            required
+          />
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
+            <InputField
+              label="Phone Number"
+              id="custPhone"
+              value={newCustomerForm.phone}
+              onChange={(val) => setNewCustomerForm((prev) => ({ ...prev, phone: val }))}
+              placeholder="+252 61..."
+            />
+            <InputField
+              label="Email Address"
+              id="custEmail"
+              type="email"
+              value={newCustomerForm.email}
+              onChange={(val) => setNewCustomerForm((prev) => ({ ...prev, email: val }))}
+              placeholder="info@acme.com"
+            />
+          </div>
+          <TextareaField
+            label="Address"
+            id="custAddr"
+            value={newCustomerForm.address}
+            onChange={(val) => setNewCustomerForm((prev) => ({ ...prev, address: val }))}
+            placeholder="Mogadishu, Somalia..."
+            rows={2}
+          />
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '6px' }}>
+            <button type="button" className="btn btn-secondary" onClick={() => setIsInlineCustomerOpen(false)}>
+              Cancel
+            </button>
+            <button type="submit" className="btn btn-primary" disabled={savingCustomer} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              {savingCustomer ? <><Loader2 size={14} className="spin-icon" /> Saving...</> : 'Save & Select'}
+            </button>
+          </div>
+        </form>
+      </Modal>
     </div>
   );
 }

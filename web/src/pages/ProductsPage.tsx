@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { PackageSearch, Plus, Trash2, List, Settings, PlusCircle, Loader2 } from 'lucide-react';
+import { PackageSearch, Plus, Trash2, List, Settings, PlusCircle, Loader2, Upload, Download, FileSpreadsheet, CheckCircle, AlertCircle } from 'lucide-react';
 import { apiGet, apiPost, apiPatch, apiDelete, apiDownload } from '../api/client';
 import { DataTable, type Column } from '../components/DataTable';
 import { SearchInput } from '../components/SearchInput';
@@ -64,6 +64,16 @@ export function ProductsPage() {
   const [newCategoryName, setNewCategoryName] = useState('');
   const [isEditOpen, setIsEditOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
+
+  // Inline Category Creation Modal
+  const [isInlineCategoryOpen, setIsInlineCategoryOpen] = useState(false);
+  const [inlineCategoryName, setInlineCategoryName] = useState('');
+
+  // Bulk Product Import Modal
+  const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
+  const [bulkRows, setBulkRows] = useState<any[]>([]);
+  const [bulkFileName, setBulkFileName] = useState('');
+  const [bulkSubmitting, setBulkSubmitting] = useState(false);
   
   const [newProduct, setNewProduct] = useState({
     sku: '',
@@ -182,6 +192,117 @@ export function ProductsPage() {
       fetchFilters();
     } catch (err: any) {
       addToast('error', err?.message || 'Failed to create category');
+    }
+  };
+
+  // Inline Category Creation Handler
+  const handleCreateInlineCategory = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!inlineCategoryName || !inlineCategoryName.trim()) return;
+    try {
+      setSubmitting(true);
+      const created = await apiPost<any>('/products/categories', { name: inlineCategoryName.trim() });
+      addToast('success', `Category "${created.name}" created`);
+      setInlineCategoryName('');
+      setIsInlineCategoryOpen(false);
+      await fetchFilters();
+      setNewProduct(prev => ({ ...prev, categoryId: created.id }));
+    } catch (err: any) {
+      addToast('error', err?.message || 'Failed to create category');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  // CSV Template Downloader
+  const handleDownloadTemplate = () => {
+    const csvContent =
+      "SKU,Barcode,Name,Description,Category,Brand,CostPrice,SellingPrice,ReorderLevel,InitialStock,LocationType,LocationName\n" +
+      "FUR-001,8901001,Executive Desk 180cm,Ergonomic office desk,Office Furniture,AlHayat,250,400,5,10,WAREHOUSE,Central Warehouse\n" +
+      "CHAIR-001,8901002,Ergonomic Mesh Chair,Breathable mesh chair,Office Furniture,AlHayat,80,150,10,25,BRANCH,Calaamad Showroom\n";
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', 'product_import_template.csv');
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  // Client-side CSV Parser
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setBulkFileName(file.name);
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const text = event.target?.result as string;
+      if (!text) return;
+      const lines = text.split(/\r?\n/).filter(line => line.trim().length > 0);
+      if (lines.length < 2) {
+        addToast('error', 'CSV file must contain a header row and at least 1 data row.');
+        return;
+      }
+
+      const headers = lines[0].split(',').map(h => h.trim().replace(/^"|"$/g, ''));
+      const parsedRows: any[] = [];
+
+      for (let i = 1; i < lines.length; i++) {
+        const values = lines[i].split(',').map(v => v.trim().replace(/^"|"$/g, ''));
+        const getVal = (colName: string, altIdx: number) => {
+          const idx = headers.findIndex(h => h.toLowerCase() === colName.toLowerCase());
+          return idx !== -1 ? values[idx] || '' : values[altIdx] || '';
+        };
+
+        const sku = getVal('SKU', 0);
+        const name = getVal('Name', 2);
+        if (!sku || !name) continue;
+
+        parsedRows.push({
+          sku,
+          barcode: getVal('Barcode', 1),
+          name,
+          description: getVal('Description', 3),
+          categoryName: getVal('Category', 4),
+          brandName: getVal('Brand', 5),
+          costPrice: Number(getVal('CostPrice', 6) || 0),
+          sellingPrice: Number(getVal('SellingPrice', 7) || 0),
+          reorderLevel: Number(getVal('ReorderLevel', 8) || 5),
+          initialStock: Number(getVal('InitialStock', 9) || 0),
+          locationType: (getVal('LocationType', 10) || 'WAREHOUSE').toUpperCase(),
+          locationName: getVal('LocationName', 11),
+        });
+      }
+
+      setBulkRows(parsedRows);
+      if (parsedRows.length === 0) {
+        addToast('warning', 'No valid product rows found in CSV file.');
+      } else {
+        addToast('info', `Loaded ${parsedRows.length} product(s) from CSV`);
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  // Bulk Submit Handler
+  const handleBulkSubmit = async () => {
+    if (bulkRows.length === 0) return;
+    try {
+      setBulkSubmitting(true);
+      const res: any = await apiPost('/products/bulk', { products: bulkRows });
+      addToast('success', `🎉 Successfully imported ${res.count || bulkRows.length} products!`);
+      setIsBulkModalOpen(false);
+      setBulkRows([]);
+      setBulkFileName('');
+      loadData();
+      fetchFilters();
+    } catch (err: any) {
+      addToast('error', err?.message || 'Bulk import failed');
+    } finally {
+      setBulkSubmitting(false);
     }
   };
 
@@ -406,6 +527,11 @@ export function ProductsPage() {
             </button>
           )}
           {hasPermission('manage_inventory') && (
+            <button type="button" className="btn btn-secondary" onClick={() => setIsBulkModalOpen(true)} style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+              <Upload size={16} /> Bulk Import
+            </button>
+          )}
+          {hasPermission('manage_inventory') && (
             <button type="button" className="btn btn-primary" onClick={() => setIsCreateOpen(true)}>
               <Plus size={16} style={{ marginRight: '6px', inlineSize: 'auto' }} /> New Product
             </button>
@@ -509,12 +635,24 @@ export function ProductsPage() {
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px', marginTop: '10px' }}>
             <FormField label="Category">
-              <SearchableSelect
-                options={categories.map((c) => ({ value: c.id, label: c.name }))}
-                value={newProduct.categoryId}
-                onChange={(val) => setNewProduct((prev) => ({ ...prev, categoryId: val }))}
-                placeholder="Search Category..."
-              />
+              <div style={{ display: 'flex', gap: '6px' }}>
+                <div style={{ flex: 1 }}>
+                  <SearchableSelect
+                    options={categories.map((c) => ({ value: c.id, label: c.name }))}
+                    value={newProduct.categoryId}
+                    onChange={(val) => setNewProduct((prev) => ({ ...prev, categoryId: val }))}
+                    placeholder="Search Category..."
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsInlineCategoryOpen(true)}
+                  style={{ padding: '0 10px', background: '#ecfdf5', border: '1px solid #a7f3d0', color: '#065f46', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px', fontWeight: 700 }}
+                  title="Add New Category"
+                >
+                  <Plus size={14} /> New
+                </button>
+              </div>
             </FormField>
             <FormField label="Brand">
               <SearchableSelect
@@ -816,6 +954,92 @@ export function ProductsPage() {
           </form>
         </Modal>
       )}
+
+      {/* Inline Category Creation Modal */}
+      <Modal isOpen={isInlineCategoryOpen} onClose={() => setIsInlineCategoryOpen(false)} title="Add New Category">
+        <form onSubmit={handleCreateInlineCategory} style={{ display: 'grid', gap: '14px' }}>
+          <InputField
+            label="Category Name *"
+            id="inlineCatName"
+            value={inlineCategoryName}
+            onChange={setInlineCategoryName}
+            placeholder="e.g. Office Furniture, Lamps, Hardware..."
+            required
+          />
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+            <button type="button" className="btn btn-secondary" onClick={() => setIsInlineCategoryOpen(false)}>Cancel</button>
+            <button type="submit" className="btn btn-primary" disabled={submitting}>
+              {submitting ? 'Saving...' : 'Save & Select'}
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Bulk Product Import Modal */}
+      <Modal isOpen={isBulkModalOpen} onClose={() => setIsBulkModalOpen(false)} title="Bulk Import Products (CSV / Excel)" width="lg">
+        <div style={{ display: 'grid', gap: '16px' }}>
+          <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '10px', padding: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
+            <div>
+              <p style={{ margin: 0, fontWeight: 700, fontSize: '14px', color: '#1e293b' }}>1. Download Import Template</p>
+              <p style={{ margin: '2px 0 0', fontSize: '12px', color: '#64748b' }}>Includes sample headers: SKU, Barcode, Name, Description, Category, Brand, Cost, Selling Price, Initial Stock.</p>
+            </div>
+            <button type="button" onClick={handleDownloadTemplate} className="btn btn-secondary" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+              <Download size={15} /> Download CSV Template
+            </button>
+          </div>
+
+          <div style={{ background: '#fff', border: '2px dashed #cbd5e1', borderRadius: '10px', padding: '20px', textAlign: 'center' }}>
+            <FileSpreadsheet size={32} color="#065f46" style={{ marginBottom: '8px' }} />
+            <p style={{ margin: 0, fontWeight: 700, fontSize: '14px', color: '#334155' }}>2. Upload CSV File</p>
+            <p style={{ margin: '4px 0 12px', fontSize: '12px', color: '#64748b' }}>Select your CSV file to preview products before importing.</p>
+            <input type="file" accept=".csv" onChange={handleFileUpload} style={{ fontSize: '13px' }} />
+            {bulkFileName && <p style={{ margin: '8px 0 0', fontSize: '12px', fontWeight: 600, color: '#066006' }}>File: {bulkFileName}</p>}
+          </div>
+
+          {bulkRows.length > 0 && (
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                <span style={{ fontSize: '13px', fontWeight: 700, color: '#065f46' }}>
+                  🟢 Preview Products Ready ({bulkRows.length} items)
+                </span>
+              </div>
+              <div style={{ maxHeight: '200px', overflowY: 'auto', border: '1px solid #e2e8f0', borderRadius: '8px' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
+                  <thead>
+                    <tr style={{ background: '#f1f5f9', textAlign: 'left' }}>
+                      <th style={{ padding: '8px 10px' }}>SKU</th>
+                      <th style={{ padding: '8px 10px' }}>Name</th>
+                      <th style={{ padding: '8px 10px' }}>Category</th>
+                      <th style={{ padding: '8px 10px' }}>Cost</th>
+                      <th style={{ padding: '8px 10px' }}>Selling</th>
+                      <th style={{ padding: '8px 10px' }}>Opening Stock</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {bulkRows.map((r, i) => (
+                      <tr key={i} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                        <td style={{ padding: '6px 10px', fontWeight: 700 }}>{r.sku}</td>
+                        <td style={{ padding: '6px 10px' }}>{r.name}</td>
+                        <td style={{ padding: '6px 10px' }}>{r.categoryName || '—'}</td>
+                        <td style={{ padding: '6px 10px' }}>${r.costPrice}</td>
+                        <td style={{ padding: '6px 10px' }}>${r.sellingPrice}</td>
+                        <td style={{ padding: '6px 10px', fontWeight: 700, color: '#066006' }}>{r.initialStock} units ({r.locationName || r.locationType})</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '10px' }}>
+            <button type="button" className="btn btn-secondary" onClick={() => setIsBulkModalOpen(false)} disabled={bulkSubmitting}>Cancel</button>
+            <button type="button" className="btn btn-primary" onClick={handleBulkSubmit} disabled={bulkSubmitting || bulkRows.length === 0} style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+              {bulkSubmitting ? <><Loader2 size={14} className="spin-icon" /> Importing…</> : `Import ${bulkRows.length} Product(s)`}
+            </button>
+          </div>
+        </div>
+      </Modal>
 
       <ConfirmModal
         isOpen={confirmState.isOpen}

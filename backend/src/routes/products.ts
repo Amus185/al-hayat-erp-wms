@@ -119,6 +119,122 @@ products.post('/', requirePermissions(['manage_inventory']), async (c) => {
   return c.json(product, 201);
 });
 
+products.post('/bulk', requirePermissions(['manage_inventory']), async (c) => {
+  const body = await c.req.json();
+  const items: any[] = Array.isArray(body) ? body : (body.products || []);
+  if (!items.length) return c.json({ message: 'No product items provided' }, 400);
+
+  // Load existing categories, brands, warehouses, branches
+  const [existingCats, existingBrands, existingWhs, existingBrs] = await Promise.all([
+    c.env.DB.prepare('SELECT id, name FROM categories').all(),
+    c.env.DB.prepare('SELECT id, name FROM brands').all(),
+    c.env.DB.prepare('SELECT id, name FROM warehouses').all(),
+    c.env.DB.prepare('SELECT id, name FROM branches').all(),
+  ]);
+
+  const catMap = new Map<string, string>((existingCats.results || []).map((x: any) => [String(x.name || '').toLowerCase().trim(), x.id]));
+  const brandMap = new Map<string, string>((existingBrands.results || []).map((x: any) => [String(x.name || '').toLowerCase().trim(), x.id]));
+  const whMap = new Map<string, string>((existingWhs.results || []).map((x: any) => [String(x.name || '').toLowerCase().trim(), x.id]));
+  const brMap = new Map<string, string>((existingBrs.results || []).map((x: any) => [String(x.name || '').toLowerCase().trim(), x.id]));
+
+  const defaultWhId = (existingWhs.results?.[0]?.id as string) || null;
+  const defaultBrId = (existingBrs.results?.[0]?.id as string) || null;
+
+  const stmts: any[] = [];
+  let createdCount = 0;
+
+  for (const item of items) {
+    if (!item.sku || !item.name) continue;
+    const sku = String(item.sku).trim();
+    const name = String(item.name).trim();
+
+    // Ensure Category
+    let categoryId: string | null = null;
+    if (item.categoryName && String(item.categoryName).trim()) {
+      const cName = String(item.categoryName).trim();
+      const lower = cName.toLowerCase();
+      if (catMap.has(lower)) {
+        categoryId = catMap.get(lower)!;
+      } else {
+        categoryId = uuidv4();
+        stmts.push(c.env.DB.prepare('INSERT INTO categories (id, name) VALUES (?, ?)').bind(categoryId, cName));
+        catMap.set(lower, categoryId);
+      }
+    }
+
+    // Ensure Brand
+    let brandId: string | null = null;
+    if (item.brandName && String(item.brandName).trim()) {
+      const bName = String(item.brandName).trim();
+      const lower = bName.toLowerCase();
+      if (brandMap.has(lower)) {
+        brandId = brandMap.get(lower)!;
+      } else {
+        brandId = uuidv4();
+        stmts.push(c.env.DB.prepare('INSERT INTO brands (id, name) VALUES (?, ?)').bind(brandId, bName));
+        brandMap.set(lower, brandId);
+      }
+    }
+
+    const productId = uuidv4();
+    const cost = Math.max(0, Number(item.costPrice || 0));
+    const sell = Math.max(cost, Number(item.sellingPrice || 0));
+
+    stmts.push(c.env.DB.prepare(`
+      INSERT INTO products (id, sku, barcode, name, description, category_id, brand_id, cost_price, selling_price, reorder_level)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT (sku) DO NOTHING
+    `).bind(
+      productId, sku, item.barcode || null, name, item.description || null,
+      categoryId, brandId, cost, sell, Number(item.reorderLevel || 5)
+    ));
+
+    // Handle initial stock allocation
+    const initStock = Math.max(0, Number(item.initialStock || 0));
+    if (initStock > 0) {
+      let locType: 'WAREHOUSE' | 'BRANCH' = 'WAREHOUSE';
+      let targetWhId: string | null = null;
+      let targetBrId: string | null = null;
+
+      if (item.locationName && String(item.locationName).trim()) {
+        const locLower = String(item.locationName).trim().toLowerCase();
+        if (whMap.has(locLower)) {
+          locType = 'WAREHOUSE';
+          targetWhId = whMap.get(locLower)!;
+        } else if (brMap.has(locLower)) {
+          locType = 'BRANCH';
+          targetBrId = brMap.get(locLower)!;
+        }
+      }
+
+      if (!targetWhId && !targetBrId) {
+        if (item.locationType === 'BRANCH' && defaultBrId) {
+          locType = 'BRANCH';
+          targetBrId = defaultBrId;
+        } else if (defaultWhId) {
+          locType = 'WAREHOUSE';
+          targetWhId = defaultWhId;
+        } else if (defaultBrId) {
+          locType = 'BRANCH';
+          targetBrId = defaultBrId;
+        }
+      }
+
+      stmts.push(c.env.DB.prepare(`
+        INSERT INTO inventory_stock (id, product_id, owner_type, warehouse_id, branch_id, quantity_on_hand, quantity_reserved)
+        VALUES (?, ?, ?, ?, ?, ?, 0)
+      `).bind(uuidv4(), productId, locType, targetWhId, targetBrId, initStock));
+    }
+
+    createdCount++;
+  }
+
+  if (stmts.length > 0) {
+    await c.env.DB.batch(stmts);
+  }
+
+  return c.json({ success: true, count: createdCount }, 201);
+});
 
 products.get('/categories', async (c) => {
   const { results } = await c.env.DB.prepare('SELECT * FROM categories ORDER BY name ASC').all();
