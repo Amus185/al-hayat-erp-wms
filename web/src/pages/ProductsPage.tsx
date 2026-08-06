@@ -139,6 +139,81 @@ export function ProductsPage() {
     addStockLine(remainingToAllocate);
   };
 
+  // Edit modal multi-location stock lines state
+  const [editStockLines, setEditStockLines] = useState<StockLine[]>([]);
+  const [editTotalOpeningStock, setEditTotalOpeningStock] = useState<number | ''>('');
+  const [initialStockMap, setInitialStockMap] = useState<Map<string, { id: string; ownerType: 'WAREHOUSE' | 'BRANCH'; locationId: string; quantity: number }>>(new Map());
+
+  const addEditStockLine = (qty = 0) => {
+    setEditStockLines(prev => [
+      ...prev,
+      { id: Date.now() + Math.random(), ownerType: 'WAREHOUSE', locationId: '', quantity: qty }
+    ]);
+  };
+
+  const removeEditStockLine = (id: number) => {
+    setEditStockLines(prev => prev.filter(l => l.id !== id));
+  };
+
+  const updateEditStockLine = (id: number, patch: Partial<StockLine>) => {
+    setEditStockLines(prev =>
+      prev.map(l => (l.id === id ? { ...l, ...patch } : l))
+    );
+  };
+
+  const editTotalAllocated = editStockLines.reduce((sum, line) => sum + (Number(line.quantity) || 0), 0);
+  const editTotalOpening = Number(editTotalOpeningStock || 0);
+  const editRemainingToAllocate = editTotalOpening - editTotalAllocated;
+
+  const handleEditSplitEqually = () => {
+    if (editStockLines.length === 0 || editTotalOpening <= 0) return;
+    const baseQty = Math.floor(editTotalOpening / editStockLines.length);
+    let remainder = editTotalOpening - (baseQty * editStockLines.length);
+
+    setEditStockLines(prev =>
+      prev.map((line, idx) => {
+        const qty = baseQty + (idx < remainder ? 1 : 0);
+        return { ...line, quantity: qty };
+      })
+    );
+  };
+
+  const handleEditFillRemaining = () => {
+    if (editRemainingToAllocate <= 0) return;
+    addEditStockLine(editRemainingToAllocate);
+  };
+
+  const openEditModal = async (prod: Product) => {
+    setEditingProduct(prod);
+    setIsEditOpen(true);
+    try {
+      const allStock = await apiGet<any[]>('/inventory/stock');
+      const prodStocks = (allStock || []).filter(s => s.product_id === prod.id);
+
+      const initMap = new Map();
+      const lines: StockLine[] = prodStocks.map((s, idx) => {
+        const locId = s.owner_type === 'WAREHOUSE' ? s.warehouse_id : s.branch_id;
+        const key = `${s.owner_type}:${locId}`;
+        initMap.set(key, { id: s.id, ownerType: s.owner_type, locationId: locId, quantity: s.quantity_on_hand });
+        return {
+          id: idx + 1,
+          ownerType: s.owner_type,
+          locationId: locId || '',
+          quantity: s.quantity_on_hand,
+        };
+      });
+
+      setInitialStockMap(initMap);
+      setEditStockLines(lines.length > 0 ? lines : [{ id: 1, ownerType: 'WAREHOUSE', locationId: '', quantity: 0 }]);
+      const currentTotal = lines.reduce((sum, l) => sum + (l.quantity || 0), 0);
+      setEditTotalOpeningStock(currentTotal);
+    } catch (err) {
+      console.error('Failed to load stock for edit modal', err);
+      setEditStockLines([]);
+      setEditTotalOpeningStock(0);
+    }
+  };
+
   const [confirmState, setConfirmState] = useState<{ isOpen: boolean; title: string; message: string; onConfirm: () => void; }>({
     isOpen: false,
     title: '',
@@ -432,6 +507,28 @@ export function ProductsPage() {
   const handleEditProduct = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingProduct || submitting) return;
+
+    if (editingProduct.cost_price > editingProduct.selling_price) {
+      addToast('error', 'Cost Price cannot be greater than Selling Price');
+      return;
+    }
+
+    // Strict location allocation validation if total stock specified
+    if (editTotalOpening > 0) {
+      if (editTotalAllocated !== editTotalOpening) {
+        addToast(
+          'error',
+          `Stock allocation mismatch: Total Stock is ${editTotalOpening} units, but ${editTotalAllocated} units are assigned to locations. Please assign all ${editTotalOpening} units.`
+        );
+        return;
+      }
+      const unassigned = editStockLines.filter((l) => !l.locationId);
+      if (unassigned.length > 0) {
+        addToast('error', 'Please select a location for all stock rows.');
+        return;
+      }
+    }
+
     try {
       setSubmitting(true);
       await apiPatch(`/products/${editingProduct.id}`, {
@@ -445,6 +542,31 @@ export function ProductsPage() {
         sellingPrice: editingProduct.selling_price,
         reorderLevel: editingProduct.reorder_level,
       });
+
+      // Post stock deltas for modified/added stock lines
+      const validEditLines = editStockLines.filter((l) => l.locationId);
+      for (const line of validEditLines) {
+        const key = `${line.ownerType}:${line.locationId}`;
+        const original = initialStockMap.get(key);
+        const oldQty = original ? original.quantity : 0;
+        const diff = line.quantity - oldQty;
+
+        if (diff !== 0) {
+          const direction = diff > 0 ? 'INCREASE' : 'DECREASE';
+          const quantity = Math.abs(diff);
+          await apiPost('/inventory/adjust', {
+            productId: editingProduct.id,
+            direction,
+            quantity,
+            ownerType: line.ownerType,
+            ...(line.ownerType === 'WAREHOUSE'
+              ? { warehouseId: line.locationId }
+              : { branchId: line.locationId }),
+            notes: 'Stock updated during product edit',
+          }).catch((err) => console.error('Failed to post stock delta for edit', err));
+        }
+      }
+
       addToast('success', 'Product updated successfully');
       setIsEditOpen(false);
       setEditingProduct(null);
@@ -489,8 +611,7 @@ export function ProductsPage() {
               className="btn btn-secondary btn-sm"
               onClick={(e) => {
                 e.stopPropagation();
-                setEditingProduct(row);
-                setIsEditOpen(true);
+                openEditModal(row);
               }}
             >
               Edit
@@ -896,56 +1017,275 @@ export function ProductsPage() {
               <InputField label="Barcode *" id="editBarcode" value={editingProduct.barcode || ''} onChange={(val) => setEditingProduct({ ...editingProduct, barcode: val })} required />
             </div>
             <div style={{ marginTop: '10px' }}>
-              <InputField label="Name *" id="editName" value={editingProduct.name} onChange={(val) => setEditingProduct({ ...editingProduct, name: val })} required />
+              <InputField label="Product Name *" id="editName" value={editingProduct.name} onChange={(val) => setEditingProduct({ ...editingProduct, name: val })} required />
             </div>
-            <div className="form-group" style={{ marginTop: '10px' }}>
-              <label>Description</label>
+            <div style={{ marginTop: '10px' }}>
+              <label className="form-field__label">Description</label>
               <textarea
-                style={{ width: '100%', padding: '8px', border: '1px solid var(--border-color)', borderRadius: '4px' }}
-                rows={3}
+                className="form-textarea"
+                rows={2}
                 value={editingProduct.description || ''}
                 onChange={(e) => setEditingProduct({ ...editingProduct, description: e.target.value })}
                 placeholder="Detailed product description..."
               />
             </div>
+
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px', marginTop: '10px' }}>
-              <div className="form-group">
-                <label>Category</label>
-                <select
-                  style={{ width: '100%', padding: '8px', border: '1px solid var(--border-color)', borderRadius: '4px' }}
-                  value={editingProduct.category_id || ''}
-                  onChange={(e) => setEditingProduct({ ...editingProduct, category_id: e.target.value })}
-                >
-                  <option value="">No Category</option>
-                  {categories.map((c) => (
-                    <option key={c.id} value={c.id}>{c.name}</option>
-                  ))}
-                </select>
-              </div>
-              <div className="form-group">
-                <label>Brand</label>
-                <select
-                  style={{ width: '100%', padding: '8px', border: '1px solid var(--border-color)', borderRadius: '4px' }}
+              <FormField label="Category">
+                <div style={{ display: 'flex', gap: '6px' }}>
+                  <div style={{ flex: 1 }}>
+                    <SearchableSelect
+                      options={categories.map((c) => ({ value: c.id, label: c.name }))}
+                      value={editingProduct.category_id || ''}
+                      onChange={(val) => setEditingProduct({ ...editingProduct, category_id: val })}
+                      placeholder="Search Category..."
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setIsInlineCategoryOpen(true)}
+                    style={{ padding: '0 10px', background: '#ecfdf5', border: '1px solid #a7f3d0', color: '#065f46', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px', fontWeight: 700 }}
+                    title="Add New Category"
+                  >
+                    <Plus size={14} /> New
+                  </button>
+                </div>
+              </FormField>
+
+              <FormField label="Brand">
+                <SearchableSelect
+                  options={brands.map((b) => ({ value: b.id, label: b.name }))}
                   value={editingProduct.brand_id || ''}
-                  onChange={(e) => setEditingProduct({ ...editingProduct, brand_id: e.target.value })}
-                >
-                  <option value="">No Brand</option>
-                  {brands.map((b) => (
-                    <option key={b.id} value={b.id}>{b.name}</option>
-                  ))}
-                </select>
-              </div>
+                  onChange={(val) => setEditingProduct({ ...editingProduct, brand_id: val })}
+                  placeholder="Search Brand..."
+                />
+              </FormField>
             </div>
+
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '14px', marginTop: '10px' }}>
               <InputField type="number" label="Cost Price ($) *" id="editCost" value={editingProduct.cost_price.toString()} onChange={(val) => setEditingProduct({ ...editingProduct, cost_price: parseFloat(val) })} required />
               <InputField type="number" label="Selling Price ($) *" id="editSell" value={editingProduct.selling_price.toString()} onChange={(val) => setEditingProduct({ ...editingProduct, selling_price: parseFloat(val) })} required />
               <InputField type="number" label="Reorder Level *" id="editReorder" value={editingProduct.reorder_level.toString()} onChange={(val) => setEditingProduct({ ...editingProduct, reorder_level: parseInt(val, 10) })} required />
             </div>
+
+            {/* Total Opening Stock & Quick Presets */}
+            <div style={{ marginTop: '18px', paddingTop: '14px', borderTop: '1px solid #e1e8e1' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                <label className="form-field__label" style={{ fontWeight: 700, color: '#065f46', margin: 0 }}>
+                  Total Opening Stock (Units)
+                </label>
+                <div style={{ display: 'flex', gap: '4px' }}>
+                  {[100, 500, 1000, 5000].map(preset => (
+                    <button
+                      key={preset}
+                      type="button"
+                      onClick={() => setEditTotalOpeningStock(preset)}
+                      style={{
+                        padding: '2px 8px',
+                        fontSize: '11px',
+                        fontWeight: 600,
+                        background: editTotalOpeningStock === preset ? '#066006' : '#eaf4ea',
+                        color: editTotalOpeningStock === preset ? '#fff' : '#066006',
+                        border: '1px solid #c3e2c3',
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      +{preset}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <input
+                type="number"
+                min={0}
+                className="form-input"
+                placeholder="e.g. 100, 1000..."
+                value={editTotalOpeningStock}
+                onChange={(e) => setEditTotalOpeningStock(e.target.value === '' ? '' : Number(e.target.value))}
+              />
+            </div>
+
+            {/* Live Allocation Banner */}
+            {editTotalOpening > 0 && (
+              <div
+                style={{
+                  marginTop: '10px',
+                  padding: '8px 12px',
+                  borderRadius: '8px',
+                  fontSize: '12px',
+                  fontWeight: 600,
+                  display: 'flex',
+                  justify: 'space-between',
+                  alignItems: 'center',
+                  background:
+                    editTotalAllocated === editTotalOpening
+                      ? '#ecfdf5'
+                      : editTotalAllocated > editTotalOpening
+                      ? '#fef2f2'
+                      : '#fffbe6',
+                  border:
+                    editTotalAllocated === editTotalOpening
+                      ? '1px solid #a7f3d0'
+                      : editTotalAllocated > editTotalOpening
+                      ? '1px solid #fecaca'
+                      : '1px solid #ffe58f',
+                  color:
+                    editTotalAllocated === editTotalOpening
+                      ? '#065f46'
+                      : editTotalAllocated > editTotalOpening
+                      ? '#991b1b'
+                      : '#854d0e',
+                }}
+              >
+                <span>
+                  {editTotalAllocated === editTotalOpening && '🟢 100% Allocated — All opening stock assigned to locations!'}
+                  {editTotalAllocated < editTotalOpening && `🟡 ${editRemainingToAllocate} units remaining to allocate across locations.`}
+                  {editTotalAllocated > editTotalOpening && `🔴 Over-allocated by ${editTotalAllocated - editTotalOpening} units!`}
+                </span>
+                <div style={{ display: 'flex', gap: '6px' }}>
+                  <button
+                    type="button"
+                    onClick={handleEditSplitEqually}
+                    disabled={editStockLines.length === 0}
+                    style={{
+                      padding: '2px 8px',
+                      fontSize: '11px',
+                      fontWeight: 700,
+                      background: '#fff',
+                      border: '1px solid #065f46',
+                      color: '#065f46',
+                      borderRadius: '4px',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    ⚡ Split Equally
+                  </button>
+                  {editRemainingToAllocate > 0 && (
+                    <button
+                      type="button"
+                      onClick={handleEditFillRemaining}
+                      style={{
+                        padding: '2px 8px',
+                        fontSize: '11px',
+                        fontWeight: 700,
+                        background: '#065f46',
+                        color: '#fff',
+                        border: 'none',
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      ➕ Fill Remaining ({editRemainingToAllocate})
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Multi-Location Stock Allocation Section */}
+            <div style={{ marginTop: '14px', padding: '14px', background: '#f6faf6', border: '1px solid #d1e5d1', borderRadius: '10px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                <div>
+                  <h4 style={{ margin: 0, fontSize: '13px', color: '#066006', fontWeight: 700 }}>
+                    Location Stock Allocation
+                  </h4>
+                  <span style={{ fontSize: '11px', color: '#667066' }}>
+                    Assign stock quantities across warehouses and branches
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => addEditStockLine(0)}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                    padding: '4px 10px',
+                    fontSize: '12px',
+                    fontWeight: 700,
+                    color: '#066006',
+                    background: '#e4f3e4',
+                    border: '1px solid #b2dcb2',
+                    borderRadius: '6px',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <Plus size={14} /> Add Location
+                </button>
+              </div>
+
+              {editStockLines.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '18px 0', color: '#889388', fontSize: '13px', border: '1px dashed #c8dcc8', borderRadius: '8px' }}>
+                  No stock locations added — click <strong>Add Location</strong> to assign stock.
+                </div>
+              ) : (
+                <div style={{ display: 'grid', gap: '8px' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '130px 1fr 100px 36px', gap: '8px', padding: '0 4px' }}>
+                    <span style={{ fontSize: '11px', color: '#667066', fontWeight: 600, textTransform: 'uppercase' }}>Owner Type</span>
+                    <span style={{ fontSize: '11px', color: '#667066', fontWeight: 600, textTransform: 'uppercase' }}>Location</span>
+                    <span style={{ fontSize: '11px', color: '#667066', fontWeight: 600, textTransform: 'uppercase' }}>Qty</span>
+                    <span></span>
+                  </div>
+
+                  {editStockLines.map((line) => (
+                    <div key={line.id} style={{ display: 'grid', gridTemplateColumns: '130px 1fr 100px 36px', gap: '8px', alignItems: 'center', background: '#fff', padding: '8px 10px', borderRadius: '8px', border: '1px solid #d9e8d9' }}>
+                      <select
+                        className="form-select"
+                        style={{ fontSize: '13px', padding: '6px 8px' }}
+                        value={line.ownerType}
+                        onChange={(e) => updateEditStockLine(line.id, { ownerType: e.target.value as any, locationId: '' })}
+                      >
+                        <option value="WAREHOUSE">Warehouse</option>
+                        <option value="BRANCH">Branch</option>
+                      </select>
+
+                      <SearchableSelect
+                        options={
+                          line.ownerType === 'WAREHOUSE'
+                            ? warehouses.map((w) => ({ value: w.id, label: w.name }))
+                            : branches.map((b) => ({ value: b.id, label: b.name }))
+                        }
+                        value={line.locationId}
+                        onChange={(val) => updateEditStockLine(line.id, { locationId: val })}
+                        placeholder={line.ownerType === 'WAREHOUSE' ? 'Select Warehouse...' : 'Select Branch...'}
+                      />
+
+                      <input
+                        type="number"
+                        min={0}
+                        value={line.quantity}
+                        onChange={(e) => updateEditStockLine(line.id, { quantity: Number(e.target.value) })}
+                        style={{ width: '100%', padding: '6px 8px', border: '1px solid #d9e2d9', borderRadius: '8px', fontSize: '13px' }}
+                      />
+
+                      <button
+                        type="button"
+                        onClick={() => removeEditStockLine(line.id)}
+                        style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#cc3333', padding: '4px', display: 'flex', alignItems: 'center' }}
+                        title="Remove row"
+                      >
+                        <Trash2 size={15} />
+                      </button>
+                    </div>
+                  ))}
+
+                  {editStockLines.length > 0 && (
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', paddingTop: '6px', borderTop: '1px solid #d1e8d1', marginTop: '4px' }}>
+                      <span style={{ fontSize: '13px', color: '#066006', fontWeight: 700 }}>
+                        Total Allocated Stock: {editTotalAllocated} units
+                      </span>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '20px' }}>
               <button type="button" className="btn btn-secondary" onClick={() => { setIsEditOpen(false); setEditingProduct(null); }} disabled={submitting}>Cancel</button>
               <button type="submit" className="btn btn-primary" disabled={submitting} style={{ display: 'flex', alignItems: 'center' }}>
                 {submitting ? (
-                  <><Loader2 size={14} className="spin-icon" /> Saving…</>
+                  <><Loader2 size={14} className="spin-icon" /> Saving Changes…</>
                 ) : (
                   'Save Changes'
                 )}
