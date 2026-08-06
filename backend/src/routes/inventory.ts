@@ -112,15 +112,16 @@ inventory.post('/adjust', requirePermissions(['manage_inventory']), async (c) =>
 
   const existingStock = await c.env.DB.prepare(`
     SELECT id, quantity_on_hand FROM inventory_stock
-    WHERE product_id = ? AND owner_type = ? 
-      AND (warehouse_id = ? OR (warehouse_id IS NULL AND ? IS NULL))
-      AND (branch_id = ? OR (branch_id IS NULL AND ? IS NULL))
-      AND (warehouse_location_id = ? OR (warehouse_location_id IS NULL AND ? IS NULL))
+    WHERE product_id = ?::uuid AND owner_type = ? 
+      AND warehouse_id IS NOT DISTINCT FROM ?::uuid
+      AND branch_id IS NOT DISTINCT FROM ?::uuid
+      AND warehouse_location_id IS NOT DISTINCT FROM ?::uuid
   `).bind(
-    body.productId, ownerType, 
-    body.warehouseId || null, body.warehouseId || null,
-    body.branchId || null, body.branchId || null,
-    body.warehouseLocationId || null, body.warehouseLocationId || null
+    body.productId,
+    ownerType, 
+    body.warehouseId || null,
+    body.branchId || null,
+    body.warehouseLocationId || null
   ).first();
 
   // Prevent negative inventory on DECREASE
