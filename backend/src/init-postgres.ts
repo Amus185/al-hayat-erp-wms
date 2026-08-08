@@ -196,6 +196,9 @@ export async function ensurePostgresInit(pool: Pool) {
       ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMP WITH TIME ZONE;
       ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS is_active INTEGER NOT NULL DEFAULT 1;
       ALTER TABLE fiscal_periods ADD COLUMN IF NOT EXISTS created_by TEXT REFERENCES users(id);
+      ALTER TABLE fiscal_periods ADD COLUMN IF NOT EXISTS name TEXT;
+      ALTER TABLE fiscal_periods ADD COLUMN IF NOT EXISTS period_name TEXT;
+      ALTER TABLE fiscal_periods ADD COLUMN IF NOT EXISTS period_type TEXT DEFAULT 'ANNUAL';
       ALTER TABLE chart_of_accounts ADD COLUMN IF NOT EXISTS branch_id TEXT REFERENCES branches(id);
       ALTER TABLE inventory_stock ADD COLUMN IF NOT EXISTS warehouse_location_id TEXT REFERENCES warehouse_locations(id);
       ALTER TABLE transfers ADD COLUMN IF NOT EXISTS requested_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP;
@@ -280,8 +283,9 @@ export async function ensurePostgresInit(pool: Pool) {
     if (Number(fpCountRes.rows[0]?.count || 0) === 0) {
       const currentYear = new Date().getFullYear();
       await client.query(`
-        INSERT INTO fiscal_periods (id, name, period_type, start_date, end_date, status)
-        VALUES ($1, $2, 'ANNUAL', $3, $4, 'OPEN')
+        INSERT INTO fiscal_periods (id, name, period_name, period_type, start_date, end_date, status)
+        VALUES ($1, $2, $2, 'ANNUAL', $3, $4, 'OPEN')
+        ON CONFLICT (id) DO NOTHING
       `, [`fp-${currentYear}-annual`, `FY ${currentYear}`, `${currentYear}-01-01`, `${currentYear}-12-31`]);
     }
 

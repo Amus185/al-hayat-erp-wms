@@ -102,12 +102,35 @@ export async function fetchCoaMapForCodes(
  * tied to period rollover — leave that decision to the application layer.
  */
 export async function fetchOpenFiscalPeriodId(db: any, entryDate: string): Promise<string | null> {
-  const fp = await db
+  const dateStr = entryDate || new Date().toISOString().split('T')[0];
+  let fp = await db
     .prepare("SELECT id FROM fiscal_periods WHERE status = 'OPEN' AND ? BETWEEN start_date AND end_date LIMIT 1")
-    .bind(entryDate)
+    .bind(dateStr)
     .first()
     .catch(() => null);
-  return (fp?.id as string) || null;
+
+  if (fp?.id) return fp.id as string;
+
+  // Fallback 1: Any open fiscal period
+  fp = await db
+    .prepare("SELECT id FROM fiscal_periods WHERE status = 'OPEN' ORDER BY start_date DESC LIMIT 1")
+    .first()
+    .catch(() => null);
+
+  if (fp?.id) return fp.id as string;
+
+  // Fallback 2: Auto-create annual period for the entry date's year
+  const year = dateStr.split('-')[0] || String(new Date().getFullYear());
+  const fpId = `fp-${year}-annual`;
+  try {
+    await db.prepare(`
+      INSERT INTO fiscal_periods (id, name, period_name, period_type, start_date, end_date, status)
+      VALUES (?, ?, ?, 'ANNUAL', ?, ?, 'OPEN')
+    `).bind(fpId, `FY ${year}`, `FY ${year}`, `${year}-01-01`, `${year}-12-31`).run();
+    return fpId;
+  } catch (_) {
+    return fpId;
+  }
 }
 
 /**
@@ -436,10 +459,11 @@ export async function postCustomerPaymentJournalEntry(
   prefetchedFiscalPeriodId?: string | null,
   prefetchedCoaMap?: Map<string, { id: string; normal_balance: string }>
 ) {
+  const refId = (payment.id && payment.id !== order.id) ? payment.id : `${order.id}-pay`;
   return createAndPostJournalEntry(c, {
     description: `Customer Payment Received for Order #${order.order_number}`,
     referenceType: 'SALE',
-    referenceId: order.id,
+    referenceId: refId,
     entryDate: payment.paymentDate,
     branchId: order.branch_id || null,
     userId,
@@ -551,6 +575,88 @@ export async function reverseJournalEntry(
     userId,
     lines: reverseLines,
   });
+}
+
+/**
+ * Reconciles and backfills missing double-entry GL journal entries for existing
+ * PAID or INVOICED sales orders that were processed prior to GL sync.
+ */
+export async function reconcileMissingSalesJournalEntries(c: any): Promise<number> {
+  const db = c.env.DB;
+  let count = 0;
+  try {
+    const { results: orders } = await db.prepare(
+      "SELECT * FROM sales_orders WHERE status IN ('PAID', 'INVOICED')"
+    ).all().catch(() => ({ results: [] }));
+
+    if (!orders || orders.length === 0) return 0;
+
+    const entryDate = new Date().toISOString().split('T')[0];
+    const sharedFiscalPeriodId = await fetchOpenFiscalPeriodId(db, entryDate);
+    const sharedCoaMap = await fetchCoaMapForCodes(db, ['1010', '1020', '1030', '4010', '5010']);
+
+    for (const order of (orders as any[])) {
+      // 1. Sale Journal Entry
+      const existingSaleJe = await db.prepare(
+        "SELECT id FROM journal_entries WHERE reference_type = 'SALE' AND reference_id = ? AND status = 'POSTED' LIMIT 1"
+      ).bind(order.id).first().catch(() => null);
+
+      let saleJeId = existingSaleJe?.id;
+
+      if (!saleJeId) {
+        const totalRes = await db.prepare(
+          'SELECT COALESCE(SUM(quantity * unit_price - discount_amount), 0) AS total FROM sales_order_lines WHERE sales_order_id = ?'
+        ).bind(order.id).first().catch(() => null);
+
+        const total = Number(totalRes?.total || order.total_amount || 0);
+        if (total > 0) {
+          const cogsAmount = await calculateOrderCogs(db, order.id);
+          saleJeId = await postSaleJournalEntry(
+            c,
+            { id: order.id, order_number: order.order_number || order.id, branch_id: order.branch_id },
+            total,
+            cogsAmount,
+            order.created_by || null,
+            sharedFiscalPeriodId || undefined,
+            sharedCoaMap
+          );
+          if (saleJeId) count++;
+        }
+      }
+
+      // 2. Customer Payment Journal Entry (for PAID status)
+      if (order.status === 'PAID') {
+        const payRefId = `${order.id}-pay`;
+        const existingPayJe = await db.prepare(
+          "SELECT id FROM journal_entries WHERE reference_type = 'SALE' AND reference_id = ? AND status = 'POSTED' LIMIT 1"
+        ).bind(payRefId).first().catch(() => null);
+
+        if (!existingPayJe) {
+          const invoice = await db.prepare(
+            'SELECT id, total_amount, discount_amount FROM invoices WHERE sales_order_id = ?'
+          ).bind(order.id).first().catch(() => null);
+
+          const invoiceId = invoice?.id || order.id;
+          const netTotal = Math.max(0, Number(invoice?.total_amount || order.total_amount || 0) - Number(invoice?.discount_amount || 0));
+
+          if (netTotal > 0) {
+            const payJeId = await postCustomerPaymentJournalEntry(
+              c,
+              { id: invoiceId, amount: netTotal },
+              { id: order.id, order_number: order.order_number || order.id, branch_id: order.branch_id },
+              order.created_by || null,
+              sharedFiscalPeriodId || undefined,
+              sharedCoaMap
+            );
+            if (payJeId) count++;
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.error('reconcileMissingSalesJournalEntries error:', err);
+  }
+  return count;
 }
 
 // ─── NOTE: Why fiscal_period is not cached here ────────────────────────────────

@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { Env } from '../db';
 import { authMiddleware, requirePermissions } from '../middleware/auth';
+import { reconcileMissingSalesJournalEntries } from '../services/accounting-service';
 
 const accounting = new Hono<{ Bindings: Env }>();
 
@@ -1002,17 +1003,30 @@ accounting.post('/closing-entries', requirePermissions(['manage_purchasing']), a
 });
 
 // ══════════════════════════════════════════════════════════
-// DASHBOARD SUMMARY
 // ══════════════════════════════════════════════════════════
+// DASHBOARD SUMMARY & GL RECONCILIATION
+// ══════════════════════════════════════════════════════════
+accounting.post('/reconcile-journals', requirePermissions(['manage_purchasing']), async (c) => {
+  const count = await reconcileMissingSalesJournalEntries(c);
+  return c.json({ success: true, reconciled_entries: count });
+});
+
 accounting.get('/dashboard', requirePermissions(['view_reports']), async (c) => {
-  const periodId = c.req.query('period_id') || null;
+  // Auto-reconcile any sales that completed before GL entries were created
+  await reconcileMissingSalesJournalEntries(c).catch(() => 0);
+
+  const rawPeriodId = c.req.query('period_id');
+  const periodId = (rawPeriodId && rawPeriodId !== 'ALL' && rawPeriodId !== 'undefined') ? rawPeriodId : null;
   const params: any[] = [];
   let pf = '';
-  if (periodId) { pf = 'AND je.fiscal_period_id = ?'; params.push(periodId); }
+  if (periodId) {
+    pf = 'AND (je.fiscal_period_id = ? OR je.fiscal_period_id IS NULL)';
+    params.push(periodId);
+  }
 
   const [jeCount, postedCount, revenueRes, expenseRes, periods, accounts] = await Promise.all([
-    c.env.DB.prepare(`SELECT COUNT(*) AS cnt FROM journal_entries WHERE 1=1 ${periodId ? 'AND fiscal_period_id = ?' : ''}`).bind(...(periodId ? [periodId] : [])).first(),
-    c.env.DB.prepare(`SELECT COUNT(*) AS cnt FROM journal_entries WHERE status = 'POSTED' ${periodId ? 'AND fiscal_period_id = ?' : ''}`).bind(...(periodId ? [periodId] : [])).first(),
+    c.env.DB.prepare(`SELECT COUNT(*) AS cnt FROM journal_entries WHERE 1=1 ${periodId ? 'AND (fiscal_period_id = ? OR fiscal_period_id IS NULL)' : ''}`).bind(...(periodId ? [periodId] : [])).first(),
+    c.env.DB.prepare(`SELECT COUNT(*) AS cnt FROM journal_entries WHERE status = 'POSTED' ${periodId ? 'AND (fiscal_period_id = ? OR fiscal_period_id IS NULL)' : ''}`).bind(...(periodId ? [periodId] : [])).first(),
     c.env.DB.prepare(`
       SELECT COALESCE(SUM(jel.credit_amount - jel.debit_amount), 0) AS total
       FROM chart_of_accounts coa
