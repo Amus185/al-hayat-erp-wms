@@ -487,7 +487,7 @@ sales.post('/orders/:id/pay', requirePermissions(['manage_sales']), async (c) =>
     if (remaining > 0) {
       stmts.push(c.env.DB.prepare(`
         INSERT INTO invoice_payments (id, invoice_id, amount, payment_method, payment_date, notes, recorded_by)
-        VALUES (?, ?, ?, 'CASH', date('now'), 'Full payment via Mark as Paid', ?)
+        VALUES (?, ?, ?, 'CASH', CURRENT_TIMESTAMP, 'Full payment via Mark as Paid', ?)
       `).bind(uuidv4(), invoice.id, remaining, userId));
     }
 
@@ -548,7 +548,7 @@ sales.post('/orders/:id/complete', requirePermissions(['manage_sales']), async (
     if (remaining > 0) {
       stmts.push(c.env.DB.prepare(`
         INSERT INTO invoice_payments (id, invoice_id, amount, payment_method, payment_date, notes, recorded_by)
-        VALUES (?, ?, ?, 'CASH', date('now'), 'Full payment via Complete Sale', ?)
+        VALUES (?, ?, ?, 'CASH', CURRENT_TIMESTAMP, 'Full payment via Complete Sale', ?)
       `).bind(uuidv4(), invoice.id, remaining, userId));
     }
     stmts.push(c.env.DB.prepare("UPDATE invoices SET status = 'PAID', paid_at = CURRENT_TIMESTAMP WHERE id = ?").bind(invoice.id));
@@ -654,7 +654,7 @@ sales.post('/orders/:id/complete', requirePermissions(['manage_sales']), async (
     // Insert a full payment record
     stmts.push(c.env.DB.prepare(`
       INSERT INTO invoice_payments (id, invoice_id, amount, payment_method, payment_date, notes, recorded_by)
-      VALUES (?, ?, ?, 'CASH', date('now'), 'Full payment via Complete Sale', ?)
+      VALUES (?, ?, ?, 'CASH', CURRENT_TIMESTAMP, 'Full payment via Complete Sale', ?)
     `).bind(uuidv4(), invoiceId, total > 0 ? total : 0, userId));
 
     // Copy lines

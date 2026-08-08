@@ -24,8 +24,8 @@ export function convertSqliteToPg(sql: string): string {
     // SQLite datetime/date ('now', offset) → Postgres TIMESTAMP / DATE interval math
     .replace(/datetime\('now',\s*([^)]+)\)/gi, (_, arg) => `(CURRENT_TIMESTAMP + CAST(${arg} AS INTERVAL))`)
     .replace(/date\('now',\s*([^)]+)\)/gi, (_, arg) => `(CURRENT_DATE + CAST(${arg} AS INTERVAL))`)
-    // SQLite date() → Postgres CURRENT_DATE (returns text for compatibility)
-    .replace(/date\('now'\)/gi, 'CURRENT_DATE::text')
+    // SQLite date() → Postgres CURRENT_TIMESTAMP (compatible with timestamptz and date columns)
+    .replace(/date\('now'\)/gi, 'CURRENT_TIMESTAMP')
     // SQLite UUID idiom → Postgres built-in
     .replace(/lower\(hex\(randomblob\(16\)\)\)/gi, 'gen_random_uuid()::text')
     // SQLite GROUP_CONCAT → Postgres STRING_AGG

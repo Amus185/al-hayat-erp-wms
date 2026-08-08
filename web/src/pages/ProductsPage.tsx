@@ -25,7 +25,9 @@ interface Brand {
 interface Product {
   id: string;
   sku: string;
+  barcode?: string;
   name: string;
+  description?: string;
   category_id: string | null;
   brand_id: string | null;
   cost_price: number;
