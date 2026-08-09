@@ -244,7 +244,42 @@ export async function ensurePostgresInit(pool: Pool) {
         created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
       );
+
+      CREATE TABLE IF NOT EXISTS inventory_period_counts (
+        id TEXT PRIMARY KEY,
+        fiscal_period_id TEXT NOT NULL REFERENCES fiscal_periods(id),
+        branch_id TEXT REFERENCES branches(id),
+        warehouse_id TEXT REFERENCES warehouses(id),
+        count_date DATE NOT NULL,
+        total_value DOUBLE PRECISION NOT NULL DEFAULT 0,
+        notes TEXT,
+        counted_by TEXT REFERENCES users(id),
+        approved_by TEXT REFERENCES users(id),
+        status TEXT NOT NULL DEFAULT 'DRAFT',
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE TABLE IF NOT EXISTS depreciation_schedules (
+        id TEXT PRIMARY KEY,
+        asset_name TEXT NOT NULL,
+        asset_account_id TEXT REFERENCES chart_of_accounts(id),
+        accum_dep_account_id TEXT REFERENCES chart_of_accounts(id),
+        dep_expense_account_id TEXT REFERENCES chart_of_accounts(id),
+        acquisition_date DATE NOT NULL,
+        cost DOUBLE PRECISION NOT NULL,
+        salvage_value DOUBLE PRECISION NOT NULL DEFAULT 0,
+        useful_life_years INTEGER NOT NULL,
+        method TEXT NOT NULL DEFAULT 'STRAIGHT_LINE',
+        fiscal_period_id TEXT REFERENCES fiscal_periods(id),
+        period_depreciation DOUBLE PRECISION NOT NULL DEFAULT 0,
+        notes TEXT,
+        created_by TEXT REFERENCES users(id),
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
     `);
+
 
     // 2. Populate auth & permissions data from D1 Backup
     //    ORDER MATTERS: branches/warehouses must exist before users (FK constraint)
@@ -333,17 +368,29 @@ export async function ensurePostgresInit(pool: Pool) {
 
     // Standard Chart of Accounts (always ensure all required accounts exist)
     const coaAccounts = [
-      { id: 'coa-1010', code: '1010', name: 'Cash & Cash Equivalents', account_type: 'ASSET', normal_balance: 'DEBIT' },
-      { id: 'coa-1020', code: '1020', name: 'Accounts Receivable', account_type: 'ASSET', normal_balance: 'DEBIT' },
-      { id: 'coa-1030', code: '1030', name: 'Inventory Asset', account_type: 'ASSET', normal_balance: 'DEBIT' },
-      { id: 'coa-2010', code: '2010', name: 'Accounts Payable', account_type: 'LIABILITY', normal_balance: 'CREDIT' },
-      { id: 'coa-4010', code: '4010', name: 'Sales Revenue', account_type: 'REVENUE', normal_balance: 'CREDIT' },
-      { id: 'coa-5010', code: '5010', name: 'Cost of Goods Sold', account_type: 'EXPENSE', normal_balance: 'DEBIT' },
-      { id: 'coa-5020', code: '5020', name: 'Inventory Loss / Shrinkage', account_type: 'EXPENSE', normal_balance: 'DEBIT' },
-      { id: 'coa-5030', code: '5030', name: 'Inventory Gain', account_type: 'REVENUE', normal_balance: 'CREDIT' },
-      { id: 'coa-6010', code: '6010', name: 'Operating Expenses', account_type: 'EXPENSE', normal_balance: 'DEBIT' },
+      // Assets
+      { id: 'coa-1010', code: '1010', name: 'Cash & Cash Equivalents',       account_type: 'ASSET',     normal_balance: 'DEBIT'  },
+      { id: 'coa-1020', code: '1020', name: 'Accounts Receivable',            account_type: 'ASSET',     normal_balance: 'DEBIT'  },
+      { id: 'coa-1030', code: '1030', name: 'Inventory Asset',                account_type: 'ASSET',     normal_balance: 'DEBIT'  },
+      { id: 'coa-1500', code: '1500', name: 'Fixed Assets',                   account_type: 'ASSET',     normal_balance: 'DEBIT'  },
+      { id: 'coa-1501', code: '1501', name: 'Accumulated Depreciation',       account_type: 'ASSET',     normal_balance: 'CREDIT' },
+      // Liabilities
+      { id: 'coa-2010', code: '2010', name: 'Accounts Payable',               account_type: 'LIABILITY', normal_balance: 'CREDIT' },
+      // Equity
+      { id: 'coa-3010', code: '3010', name: "Owner's Capital",                account_type: 'EQUITY',    normal_balance: 'CREDIT' },
+      { id: 'coa-3020', code: '3020', name: 'Retained Earnings',              account_type: 'EQUITY',    normal_balance: 'CREDIT' },
+      { id: 'coa-3040', code: '3040', name: "Owner's Drawings",               account_type: 'EQUITY',    normal_balance: 'DEBIT'  },
+      // Revenue
+      { id: 'coa-4010', code: '4010', name: 'Sales Revenue',                  account_type: 'REVENUE',   normal_balance: 'CREDIT' },
+      { id: 'coa-5030', code: '5030', name: 'Inventory Gain',                 account_type: 'REVENUE',   normal_balance: 'CREDIT' },
+      // Expenses / COGS
+      { id: 'coa-5010', code: '5010', name: 'Cost of Goods Sold',             account_type: 'EXPENSE',   normal_balance: 'DEBIT'  },
+      { id: 'coa-5020', code: '5020', name: 'Inventory Loss / Shrinkage',     account_type: 'EXPENSE',   normal_balance: 'DEBIT'  },
+      { id: 'coa-6010', code: '6010', name: 'Operating Expenses',             account_type: 'EXPENSE',   normal_balance: 'DEBIT'  },
       { id: 'coa-6050', code: '6050', name: 'General & Administrative Expenses', account_type: 'EXPENSE', normal_balance: 'DEBIT' },
+      { id: 'coa-6060', code: '6060', name: 'Depreciation Expense',           account_type: 'EXPENSE',   normal_balance: 'DEBIT'  },
     ];
+
 
     for (const acc of coaAccounts) {
       await client.query(`
