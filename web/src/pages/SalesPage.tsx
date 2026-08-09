@@ -5,6 +5,7 @@ import {
   DollarSign, Zap, Printer, CreditCard, History, ChevronDown, ChevronUp, Loader2, Trash2,
 } from 'lucide-react';
 import { apiGet, apiPost, apiDelete } from '../api/client';
+import { getCached, setCached } from '../api/cache';
 import { DataTable, type Column } from '../components/DataTable';
 import { KanbanBoard, type KanbanColumnDef } from '../components/KanbanBoard';
 import { ViewSwitcher } from '../components/ViewSwitcher';
@@ -173,13 +174,23 @@ export function SalesPage() {
   const [showHistory, setShowHistory] = useState(false);
 
   const loadData = async () => {
+    // Show cached data instantly, then refresh silently in background
+    const cachedOrders = getCached<SalesOrder[]>('sales:orders');
+    const cachedCustomers = getCached<Customer[]>('customers:list');
+    if (cachedOrders) { setOrders(cachedOrders); setLoading(false); }
+    if (cachedCustomers) { setCustomers(cachedCustomers); }
+    if (!cachedOrders) setLoading(true);
     try {
       const [salesOrders, custs] = await Promise.all([
         apiGet<SalesOrder[]>('/sales/orders'),
         apiGet<Customer[]>('/sales/customers'),
       ]);
-      setCustomers(custs || []);
-      setOrders(salesOrders || []);
+      const ordRows = salesOrders || [];
+      const custRows = custs || [];
+      setCached('sales:orders', ordRows);
+      setCached('customers:list', custRows);
+      setCustomers(custRows);
+      setOrders(ordRows);
     } catch (err: any) {
       addToast('error', err?.message || 'Failed to load sales orders data');
     } finally {

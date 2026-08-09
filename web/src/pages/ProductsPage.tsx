@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { PackageSearch, Plus, Trash2, List, Settings, PlusCircle, Loader2, Upload, Download, FileSpreadsheet, CheckCircle, AlertCircle } from 'lucide-react';
 import { apiGet, apiPost, apiPatch, apiDelete, apiDownload } from '../api/client';
+import { getCached, setCached } from '../api/cache';
 import { DataTable, type Column } from '../components/DataTable';
 import { SearchInput } from '../components/SearchInput';
 import { FilterBar } from '../components/FilterBar';
@@ -237,10 +238,18 @@ export function ProductsPage() {
   };
 
   const loadData = async () => {
-    try {
+    const cached = getCached<Product[]>('products:list');
+    if (cached) {
+      setProducts(cached);
+      setLoading(false);
+    } else {
       setLoading(true);
+    }
+    try {
       const prs = await apiGet<Product[]>('/products');
-      setProducts(prs || []);
+      const rows = prs || [];
+      setCached('products:list', rows);
+      setProducts(rows);
     } catch (err: any) {
       addToast('error', err?.message || 'Failed to fetch products');
     } finally {

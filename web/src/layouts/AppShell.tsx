@@ -36,7 +36,7 @@ const navItems = [
   { label: 'Expenses', path: '/expenses', icon: Receipt, permission: 'manage_purchasing' },
   { label: 'Reports', path: '/reports', icon: BarChart3, permission: 'view_reports' },
   { label: 'Accounting', path: '/accounting', icon: BookOpen, permission: 'view_reports', adminOnly: true },
-  { label: 'Audit Log', path: '/audit', icon: FileClock, permission: 'view_reports' },
+  { label: 'Audit Log', path: '/audit', icon: FileClock, permission: 'view_reports', adminOnly: true },
   { label: 'Users', path: '/users', icon: Users, permission: 'manage_users', adminOnly: true },
 ];
 

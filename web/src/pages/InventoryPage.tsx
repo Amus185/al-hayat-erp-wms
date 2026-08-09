@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { ClipboardCheck, Plus, History } from 'lucide-react';
 import { apiGet, apiPost } from '../api/client';
+import { getCached, setCached } from '../api/cache';
 import { DataTable, type Column } from '../components/DataTable';
 import { FilterBar } from '../components/FilterBar';
 import { Modal } from '../components/Modal';
@@ -82,10 +83,13 @@ export function InventoryPage() {
   });
 
   const loadStock = async () => {
+    const cached = getCached<InventoryStock[]>('inventory:stock');
+    if (cached) { setStocks(cached); setLoading(false); } else { setLoading(true); }
     try {
-      setLoading(true);
       const data = await apiGet<InventoryStock[]>('/inventory/stock');
-      setStocks(data || []);
+      const rows = data || [];
+      setCached('inventory:stock', rows);
+      setStocks(rows);
     } catch (err: any) {
       addToast('error', err?.message || 'Failed to fetch inventory stock');
     } finally {
@@ -94,10 +98,13 @@ export function InventoryPage() {
   };
 
   const loadTransactions = async () => {
+    const cached = getCached<InventoryTransaction[]>('inventory:transactions');
+    if (cached) { setTransactions(cached); setLoading(false); } else { setLoading(true); }
     try {
-      setLoading(true);
       const data = await apiGet<InventoryTransaction[]>('/inventory/transactions');
-      setTransactions(data || []);
+      const rows = data || [];
+      setCached('inventory:transactions', rows);
+      setTransactions(rows);
     } catch (err: any) {
       addToast('error', err?.message || 'Failed to fetch inventory transactions');
     } finally {

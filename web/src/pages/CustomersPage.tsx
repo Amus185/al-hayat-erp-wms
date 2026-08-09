@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Users, Phone, Mail, MapPin, Plus, Search, ShoppingBag, DollarSign, X, Edit2, Trash2, ChevronDown, ChevronUp } from 'lucide-react';
 import { apiGet, apiPost, apiPatch, apiDelete } from '../api/client';
+import { getCached, setCached } from '../api/cache';
 
 interface Customer {
   id: string;
@@ -47,10 +48,20 @@ export function CustomersPage() {
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    setLoading(true);
+    const cacheKey = 'customers:list';
+    const cached = getCached<Customer[]>(cacheKey);
+    if (cached) {
+      // Show stale data instantly, refresh silently in background
+      setCustomers(cached);
+      setLoading(false);
+    } else {
+      setLoading(true);
+    }
     try {
       const data = await apiGet<Customer[]>('/sales/customers');
-      setCustomers(Array.isArray(data) ? data : []);
+      const rows = Array.isArray(data) ? data : [];
+      setCached(cacheKey, rows);
+      setCustomers(rows);
     } finally {
       setLoading(false);
     }

@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { Receipt, Plus, Search, X, Edit2, Trash2, DollarSign, TrendingDown, Filter } from 'lucide-react';
 import { apiGet, apiPost, apiPatch, apiDelete } from '../api/client';
 import { useAuth } from '../contexts/AuthContext';
+import { getCached, setCached } from '../api/cache';
 
 interface Expense {
   id: string;
@@ -56,7 +57,15 @@ export function ExpensesPage() {
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    setLoading(true);
+    const cacheKey = `expenses:${filterCategory}:${filterBranch}:${dateFrom}:${dateTo}`;
+    const cached = getCached<Expense[]>(cacheKey);
+    if (cached) {
+      // Show stale data instantly, then refresh silently in background
+      setExpenses(cached);
+      setLoading(false);
+    } else {
+      setLoading(true);
+    }
     try {
       const params = new URLSearchParams();
       if (filterCategory !== 'ALL') params.set('category', filterCategory);
@@ -64,7 +73,9 @@ export function ExpensesPage() {
       if (dateFrom) params.set('dateFrom', dateFrom);
       if (dateTo) params.set('dateTo', dateTo);
       const data = await apiGet<Expense[]>(`/expenses?${params.toString()}`);
-      setExpenses(Array.isArray(data) ? data : []);
+      const rows = Array.isArray(data) ? data : [];
+      setCached(cacheKey, rows);
+      setExpenses(rows);
     } finally {
       setLoading(false);
     }
