@@ -247,37 +247,79 @@ export async function ensurePostgresInit(pool: Pool) {
     `);
 
     // 2. Populate auth & permissions data from D1 Backup
+    //    ORDER MATTERS: branches/warehouses must exist before users (FK constraint)
+
+    // 2a. Branches first
+    for (const row of D1_AUTH_BACKUP.branches) {
+      await client.query(
+        `INSERT INTO branches (id, code, name, city, address, phone, is_active)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)
+         ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, city = EXCLUDED.city, is_active = EXCLUDED.is_active`,
+        [row.id, row.code, row.name, row.city, row.address, row.phone, row.is_active]
+      );
+    }
+
+    // 2b. Warehouses
+    for (const row of D1_AUTH_BACKUP.warehouses) {
+      await client.query(
+        `INSERT INTO warehouses (id, code, name, city, address, phone, is_active)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)
+         ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, city = EXCLUDED.city, is_active = EXCLUDED.is_active`,
+        [row.id, row.code, row.name, row.city, row.address, row.phone, row.is_active]
+      );
+    }
+
+    // 2c. Permissions
     for (const row of D1_AUTH_BACKUP.permissions) {
       await client.query(
         `INSERT INTO permissions (id, code, description) VALUES ($1,$2,$3) ON CONFLICT (id) DO NOTHING`,
         [row.id, row.code, row.description]
       );
     }
+
+    // 2d. Roles
     for (const row of D1_AUTH_BACKUP.roles) {
       await client.query(
         `INSERT INTO roles (id, code, name, description) VALUES ($1,$2,$3,$4) ON CONFLICT (id) DO NOTHING`,
         [row.id, row.code, row.name, row.description]
       );
     }
+
+    // 2e. Role permissions
     for (const row of D1_AUTH_BACKUP.role_permissions) {
       await client.query(
         `INSERT INTO role_permissions (role_id, permission_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`,
         [row.role_id, row.permission_id]
       );
     }
+
+    // 2f. Users — insert with null branch_id first to avoid FK issues, then update hash
     for (const row of D1_AUTH_BACKUP.users) {
+      // Validate branch_id exists before using it
+      let safeBranchId = row.branch_id;
+      if (safeBranchId) {
+        const branchExists = await client.query(`SELECT id FROM branches WHERE id = $1`, [safeBranchId]);
+        if (!branchExists.rows.length) safeBranchId = null;
+      }
       await client.query(
-        `INSERT INTO users (id, email, password_hash, full_name, branch_id, is_active, password_version) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (email) DO UPDATE SET password_hash = EXCLUDED.password_hash, password_version = EXCLUDED.password_version`,
-        [row.id, row.email, row.password_hash, row.full_name, row.branch_id, row.is_active, row.password_version]
+        `INSERT INTO users (id, email, password_hash, full_name, branch_id, is_active, password_version)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)
+         ON CONFLICT (email) DO UPDATE SET
+           password_hash = EXCLUDED.password_hash,
+           password_version = EXCLUDED.password_version,
+           is_active = EXCLUDED.is_active`,
+        [row.id, row.email, row.password_hash, row.full_name, safeBranchId, row.is_active, row.password_version]
       );
-      await client.query(`UPDATE users SET password_hash = $1 WHERE email = $2`, [row.password_hash, row.email]);
     }
+
+    // 2g. User roles
     for (const row of D1_AUTH_BACKUP.user_roles) {
       await client.query(
         `INSERT INTO user_roles (user_id, role_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`,
         [row.user_id, row.role_id]
       );
     }
+
     // Default Fiscal Periods (always ensure current year exists and is OPEN)
     const currentYear = new Date().getFullYear();
     await client.query(`
