@@ -106,7 +106,7 @@ export class PgPreparedStatement {
 // ─── Adapter ─────────────────────────────────────────────────────────────────
 
 export class PgAdapter {
-  private pool: Pool;
+  public pool: Pool;
 
   constructor(connectionString: string) {
     const isLocal =

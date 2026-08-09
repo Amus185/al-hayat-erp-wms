@@ -183,9 +183,19 @@ export async function createAndPostJournalEntry(
       "SELECT id FROM journal_entries WHERE reference_type = ? AND reference_id = ? AND status = 'POSTED' LIMIT 1"
     ).bind(params.referenceType, params.referenceId).first().catch(() => null);
     if (existing?.id) {
-      return existing.id as string;
+      // Verify it actually has lines (not an orphan from a previous failed batch)
+      const lineCount = await db.prepare(
+        'SELECT COUNT(*) AS cnt FROM journal_entry_lines WHERE journal_entry_id = ?'
+      ).bind(existing.id).first().catch(() => null);
+      const hasLines = Number((lineCount as any)?.cnt || 0) > 0;
+      if (hasLines) {
+        return existing.id as string; // Genuine duplicate — skip
+      }
+      // Orphan header (no lines) — delete it and re-post
+      await db.prepare('DELETE FROM journal_entries WHERE id = ?').bind(existing.id).run().catch(() => {});
     }
   }
+
 
   const entryDate = params.entryDate || new Date().toISOString().split('T')[0];
   const now = new Date().toISOString();
@@ -244,32 +254,39 @@ export async function createAndPostJournalEntry(
 
   if (resolvedLines.length === 0) return null;
 
-  // ── Task 2: Batch running_balance reads in a single IN(?) query ─────────────
-  // Within a single journal entry, no two lines touch the same account,
-  // so a single pre-fetch of all account balances is safe and correct.
-  // (Cross-entry ordering correctness is handled by the caller: the second
-  //  createAndPostJournalEntry runs after the first batch is committed.)
+  // ── Running balance pre-fetch ─────────────────────────────────────────────
+  // Fetch the latest running_balance for each account in this entry.
+  // Uses DISTINCT ON (PostgreSQL) to safely get one row per account.
+  // Falls back to 0 if no prior GL entry exists for an account (i.e., first posting).
   const accountIds = resolvedLines.map((l) => l.accountId);
-  const glPlaceholders = accountIds.map(() => '?').join(', ');
-
-  const { results: glRows } = await db
-    .prepare(
-      `SELECT account_id, running_balance FROM general_ledger
-       WHERE account_id IN (${glPlaceholders})
-       AND id IN (
-         SELECT id FROM general_ledger g2
-         WHERE g2.account_id = general_ledger.account_id
-         ORDER BY g2.created_at DESC LIMIT 1
-       )`
-    )
-    .bind(...accountIds)
-    .all()
-    .catch(() => ({ results: [] as any[] }));
-
-  // Build a map: accountId → latest running_balance
   const glBalanceMap = new Map<string, number>();
-  for (const row of (glRows || []) as any[]) {
-    glBalanceMap.set(row.account_id as string, Number(row.running_balance || 0));
+
+  try {
+    const glPlaceholders = accountIds.map((_, i) => `$${i + 1}`).join(', ');
+    const rawDb = (db as any).pool ?? null;
+    if (rawDb) {
+      // Direct PostgreSQL query for DISTINCT ON support
+      const res = await rawDb.query(
+        `SELECT DISTINCT ON (account_id) account_id, running_balance
+         FROM general_ledger
+         WHERE account_id IN (${glPlaceholders})
+         ORDER BY account_id, created_at DESC`,
+        accountIds
+      );
+      for (const row of (res.rows || []) as any[]) {
+        glBalanceMap.set(row.account_id as string, Number(row.running_balance || 0));
+      }
+    } else {
+      // D1 fallback — simple per-account subquery
+      for (const accountId of accountIds) {
+        const row = await db.prepare(
+          `SELECT running_balance FROM general_ledger WHERE account_id = ? ORDER BY created_at DESC LIMIT 1`
+        ).bind(accountId).first().catch(() => null);
+        if (row) glBalanceMap.set(accountId, Number((row as any).running_balance || 0));
+      }
+    }
+  } catch (_) {
+    // Non-fatal: running_balance defaults to 0 for first-time entries
   }
 
   const stmts: any[] = [];
@@ -359,6 +376,7 @@ export async function createAndPostJournalEntry(
   await db.batch(stmts);
   return entryId;
 }
+
 
 /**
  * Journal Entry for Purchase Order Approval / Receipt
