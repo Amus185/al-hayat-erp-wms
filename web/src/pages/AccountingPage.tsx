@@ -319,13 +319,21 @@ export function AccountingPage() {
   }
 
   // ── Reverse JE ───────────────────────────────────────────────────
-  async function reverseEntry(id: string) {
-    setJournalEntries((rows) => rows.map((row) => row.id === id ? { ...row, status: 'REVERSED' } : row));
-    addToast('info', 'Creating reversal…');
+  async function reverseEntry(id: string, currentStatus: string) {
+    if (currentStatus === 'REVERSED') {
+      addToast('info', 'This journal entry has already been reversed — a counter-entry exists in the ledger.');
+      return;
+    }
+    if (currentStatus !== 'POSTED') {
+      addToast('error', `Cannot reverse a ${currentStatus} entry. Only POSTED entries can be reversed.`);
+      return;
+    }
+    addToast('info', 'Creating reversal entry…');
     try {
       await apiPost(`/accounting/journal-entries/${id}/reverse`, {});
-      addToast('success', 'Reversal entry created');
+      addToast('success', 'Reversal entry created — debits and credits have been swapped and posted.');
       loadTabData('journal', selectedPeriod);
+      loadTabData('dashboard', selectedPeriod);
     } catch (e: any) {
       addToast('error', e?.message || 'Failed to reverse entry');
     }
@@ -484,9 +492,16 @@ export function AccountingPage() {
             </button>
           )}
           {r.status === 'POSTED' && (
-            <button onClick={() => reverseEntry(r.id)} style={{ background: AMBER + '18', border: 'none', color: AMBER, borderRadius: '6px', padding: '4px 10px', cursor: 'pointer', fontSize: '12px', fontWeight: 600 }}>
+            <button
+              onClick={() => reverseEntry(r.id, r.status)}
+              title="Reverse: Creates a counter-entry that cancels this posting (swaps debits and credits)"
+              style={{ background: AMBER + '18', border: 'none', color: AMBER, borderRadius: '6px', padding: '4px 10px', cursor: 'pointer', fontSize: '12px', fontWeight: 600 }}
+            >
               <RotateCcw size={11} style={{ marginRight: '4px' }} />Reverse
             </button>
+          )}
+          {r.status === 'REVERSED' && (
+            <span style={{ fontSize: '11px', color: '#9ca3af', fontStyle: 'italic' }}>Already reversed</span>
           )}
         </div>
       )
@@ -729,8 +744,9 @@ export function AccountingPage() {
             <div>
               <PeriodBar />
 
-              {/* 4 High-Impact KPI Summary Cards (Expenses design system) */}
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px', marginBottom: '24px' }}>
+              {/* KPI Summary Cards */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '14px', marginBottom: '24px' }}>
+                {/* Revenue */}
                 <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: '12px', padding: '18px 20px', display: 'flex', alignItems: 'center', gap: '14px', boxShadow: '0 2px 4px rgba(0,0,0,0.02)' }}>
                   <div style={{ background: '#f0fdf4', borderRadius: '10px', padding: '10px', display: 'flex' }}><TrendingUp size={22} color="#0b8f08" /></div>
                   <div>
@@ -738,13 +754,25 @@ export function AccountingPage() {
                     <div style={{ fontSize: '12px', color: '#6b7280', fontWeight: 500 }}>Total Revenue</div>
                   </div>
                 </div>
+                {/* COGS */}
+                <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: '12px', padding: '18px 20px', display: 'flex', alignItems: 'center', gap: '14px', boxShadow: '0 2px 4px rgba(0,0,0,0.02)' }}>
+                  <div style={{ background: '#fff7ed', borderRadius: '10px', padding: '10px', display: 'flex' }}><Package size={22} color="#c2410c" /></div>
+                  <div>
+                    <div style={{ fontSize: '20px', fontWeight: 700, color: '#111827' }}>{fmt(dashboard?.total_cogs || 0)}</div>
+                    <div style={{ fontSize: '12px', color: '#6b7280', fontWeight: 500 }}>Cost of Goods Sold</div>
+                    <div style={{ fontSize: '10px', color: '#9ca3af', marginTop: '2px' }}>Auto-posted from sales</div>
+                  </div>
+                </div>
+                {/* Operating Expenses */}
                 <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: '12px', padding: '18px 20px', display: 'flex', alignItems: 'center', gap: '14px', boxShadow: '0 2px 4px rgba(0,0,0,0.02)' }}>
                   <div style={{ background: '#fef2f2', borderRadius: '10px', padding: '10px', display: 'flex' }}><Receipt size={22} color="#dc2626" /></div>
                   <div>
-                    <div style={{ fontSize: '20px', fontWeight: 700, color: '#111827' }}>{fmt(dashboard?.total_expenses || 0)}</div>
-                    <div style={{ fontSize: '12px', color: '#6b7280', fontWeight: 500 }}>Total Expenses</div>
+                    <div style={{ fontSize: '20px', fontWeight: 700, color: '#111827' }}>{fmt(dashboard?.total_operating_expenses || 0)}</div>
+                    <div style={{ fontSize: '12px', color: '#6b7280', fontWeight: 500 }}>Operating Expenses</div>
+                    <div style={{ fontSize: '10px', color: '#9ca3af', marginTop: '2px' }}>Rent, salaries, overhead</div>
                   </div>
                 </div>
+                {/* Net Income */}
                 <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: '12px', padding: '18px 20px', display: 'flex', alignItems: 'center', gap: '14px', boxShadow: '0 2px 4px rgba(0,0,0,0.02)' }}>
                   <div style={{ background: (dashboard?.net_income || 0) >= 0 ? '#f0fdf4' : '#fef2f2', borderRadius: '10px', padding: '10px', display: 'flex' }}>
                     <DollarSign size={22} color={(dashboard?.net_income || 0) >= 0 ? '#0b8f08' : '#dc2626'} />
@@ -752,8 +780,10 @@ export function AccountingPage() {
                   <div>
                     <div style={{ fontSize: '20px', fontWeight: 700, color: (dashboard?.net_income || 0) >= 0 ? '#065f46' : '#dc2626' }}>{fmt(dashboard?.net_income || 0)}</div>
                     <div style={{ fontSize: '12px', color: '#6b7280', fontWeight: 500 }}>Net Income</div>
+                    <div style={{ fontSize: '10px', color: '#9ca3af', marginTop: '2px' }}>Revenue − COGS − Expenses</div>
                   </div>
                 </div>
+                {/* Journal Entries */}
                 <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: '12px', padding: '18px 20px', display: 'flex', alignItems: 'center', gap: '14px', boxShadow: '0 2px 4px rgba(0,0,0,0.02)' }}>
                   <div style={{ background: '#f0fdfa', borderRadius: '10px', padding: '10px', display: 'flex' }}><FileText size={22} color="#0d9488" /></div>
                   <div>

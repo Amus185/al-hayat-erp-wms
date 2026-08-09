@@ -324,7 +324,8 @@ accounting.post('/journal-entries/:id/reverse', requirePermissions(['manage_purc
   const { id } = c.req.param();
   const entry = await c.env.DB.prepare('SELECT * FROM journal_entries WHERE id = ?').bind(id).first() as any;
   if (!entry) return c.json({ error: 'Entry not found' }, 404);
-  if (entry.status !== 'POSTED') return c.json({ error: 'Only POSTED entries can be reversed' }, 409);
+  if (entry.status === 'REVERSED') return c.json({ error: 'This entry has already been reversed. A reversal entry was created when it was first reversed.' }, 409);
+  if (entry.status !== 'POSTED') return c.json({ error: `Cannot reverse an entry with status "${entry.status}". Only POSTED entries can be reversed.` }, 409);
 
   const { results: lines } = await c.env.DB.prepare(
     'SELECT * FROM journal_entry_lines WHERE journal_entry_id = ? ORDER BY line_order ASC'
@@ -337,15 +338,15 @@ accounting.post('/journal-entries/:id/reverse', requirePermissions(['manage_purc
   const revId = generateId();
   const today = new Date().toISOString().split('T')[0];
 
+  // Insert the reversal journal entry header (no 'notes' column — not in schema)
   await c.env.DB.prepare(`
     INSERT INTO journal_entries
       (id, entry_number, fiscal_period_id, entry_date, description, reference_type, reference_id,
-       branch_id, status, total_debit, total_credit, notes, created_by)
-    VALUES (?, ?, ?, ?, ?, 'MANUAL', ?, ?, 'POSTED', ?, ?, ?, ?)
+       branch_id, status, total_debit, total_credit, created_by)
+    VALUES (?, ?, ?, ?, ?, 'MANUAL', ?, ?, 'POSTED', ?, ?, ?)
   `).bind(revId, revEntryNumber, entry.fiscal_period_id || null, today,
     `REVERSAL of ${entry.entry_number}: ${entry.description}`,
-    id, entry.branch_id || null, entry.total_credit, entry.total_debit,
-    `Auto-reversal of entry ${entry.entry_number}`, userId).run();
+    id, entry.branch_id || null, entry.total_credit, entry.total_debit, userId).run();
 
   const lineStmts = (lines || []).map((line: any, idx: number) => {
     const lineId = generateId();
@@ -1024,7 +1025,7 @@ accounting.get('/dashboard', requirePermissions(['view_reports']), async (c) => 
     params.push(periodId);
   }
 
-  const [jeCount, postedCount, revenueRes, expenseRes, periods, accounts] = await Promise.all([
+  const [jeCount, postedCount, revenueRes, expenseRes, periods, accounts, opExpRes] = await Promise.all([
     c.env.DB.prepare(`SELECT COUNT(*) AS cnt FROM journal_entries WHERE 1=1 ${periodId ? 'AND (fiscal_period_id = ? OR fiscal_period_id IS NULL)' : ''}`).bind(...(periodId ? [periodId] : [])).first(),
     c.env.DB.prepare(`SELECT COUNT(*) AS cnt FROM journal_entries WHERE status = 'POSTED' ${periodId ? 'AND (fiscal_period_id = ? OR fiscal_period_id IS NULL)' : ''}`).bind(...(periodId ? [periodId] : [])).first(),
     c.env.DB.prepare(`
@@ -1034,25 +1035,38 @@ accounting.get('/dashboard', requirePermissions(['view_reports']), async (c) => 
       JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status = 'POSTED' ${pf}
       WHERE coa.account_type = 'REVENUE'
     `).bind(...params).first(),
+    // COGS (account code 5xxx) — product cost from sales
     c.env.DB.prepare(`
       SELECT COALESCE(SUM(jel.debit_amount - jel.credit_amount), 0) AS total
       FROM chart_of_accounts coa
       JOIN journal_entry_lines jel ON jel.account_id = coa.id
       JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status = 'POSTED' ${pf}
-      WHERE coa.account_type IN ('EXPENSE', 'COGS')
+      WHERE coa.account_type IN ('EXPENSE', 'COGS') AND (coa.code LIKE '5%')
     `).bind(...params).first(),
     c.env.DB.prepare('SELECT COUNT(*) AS cnt FROM fiscal_periods').first(),
     c.env.DB.prepare('SELECT COUNT(*) AS cnt FROM chart_of_accounts WHERE is_active = 1').first(),
+    // Operating expenses (account code 6xxx) — rent, salaries, overhead
+    c.env.DB.prepare(`
+      SELECT COALESCE(SUM(jel.debit_amount - jel.credit_amount), 0) AS total
+      FROM chart_of_accounts coa
+      JOIN journal_entry_lines jel ON jel.account_id = coa.id
+      JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status = 'POSTED' ${pf}
+      WHERE coa.account_type IN ('EXPENSE', 'COGS') AND (coa.code LIKE '6%')
+    `).bind(...params).first(),
   ]);
 
   const totalRevenue = Number((revenueRes as any)?.total || 0);
-  const totalExpenses = Number((expenseRes as any)?.total || 0);
+  const totalCogs = Number((expenseRes as any)?.total || 0);
+  const totalOpExpenses = Number((opExpRes as any)?.total || 0);
+  const totalExpenses = totalCogs + totalOpExpenses;
   const netIncome = totalRevenue - totalExpenses;
 
   return c.json({
     journal_entries: Number((jeCount as any)?.cnt || 0),
     posted_entries: Number((postedCount as any)?.cnt || 0),
     total_revenue: totalRevenue,
+    total_cogs: totalCogs,
+    total_operating_expenses: totalOpExpenses,
     total_expenses: totalExpenses,
     net_income: netIncome,
     fiscal_periods: Number((periods as any)?.cnt || 0),
