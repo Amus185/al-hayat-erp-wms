@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { PackageSearch, Plus, Trash2, List, Settings, PlusCircle, Loader2, Upload, Download, FileSpreadsheet, CheckCircle, AlertCircle } from 'lucide-react';
+import { PackageSearch, Plus, Trash2, List, Settings, PlusCircle, Loader2, Upload, Download, FileSpreadsheet, CheckCircle, AlertCircle, X, RefreshCw } from 'lucide-react';
 import { apiGet, apiPost, apiPatch, apiDelete, apiDownload } from '../api/client';
 import { getCached, setCached } from '../api/cache';
 import { DataTable, type Column } from '../components/DataTable';
@@ -77,6 +77,15 @@ export function ProductsPage() {
   const [bulkRows, setBulkRows] = useState<any[]>([]);
   const [bulkFileName, setBulkFileName] = useState('');
   const [bulkSubmitting, setBulkSubmitting] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const resetBulkUpload = () => {
+    setBulkRows([]);
+    setBulkFileName('');
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
   
   const [newProduct, setNewProduct] = useState({
     sku: '',
@@ -379,10 +388,13 @@ export function ProductsPage() {
     try {
       setBulkSubmitting(true);
       const res: any = await apiPost('/products/bulk', { products: bulkRows });
-      addToast('success', `🎉 Successfully imported ${res.count || bulkRows.length} products!`);
+      if (res?.skipped && res.skipped.length > 0) {
+        addToast('warning', `Imported ${res.created || 0} products. ${res.skipped.length} product(s) skipped due to duplicate barcodes/SKUs.`);
+      } else {
+        addToast('success', `🎉 Successfully imported ${res?.created || res?.count || bulkRows.length} products!`);
+      }
       setIsBulkModalOpen(false);
-      setBulkRows([]);
-      setBulkFileName('');
+      resetBulkUpload();
       loadData();
       fetchFilters();
     } catch (err: any) {
@@ -659,7 +671,15 @@ export function ProductsPage() {
             </button>
           )}
           {hasPermission('manage_inventory') && (
-            <button type="button" className="btn btn-secondary" onClick={() => setIsBulkModalOpen(true)} style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => {
+                resetBulkUpload();
+                setIsBulkModalOpen(true);
+              }}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+            >
               <Upload size={16} /> Bulk Import
             </button>
           )}
@@ -1327,7 +1347,15 @@ export function ProductsPage() {
       </Modal>
 
       {/* Bulk Product Import Modal */}
-      <Modal isOpen={isBulkModalOpen} onClose={() => setIsBulkModalOpen(false)} title="Bulk Import Products (CSV / Excel)" width="lg">
+      <Modal
+        isOpen={isBulkModalOpen}
+        onClose={() => {
+          setIsBulkModalOpen(false);
+          resetBulkUpload();
+        }}
+        title="Bulk Import Products (CSV / Excel)"
+        width="lg"
+      >
         <div style={{ display: 'grid', gap: '16px' }}>
           <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '10px', padding: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
             <div>
@@ -1339,12 +1367,51 @@ export function ProductsPage() {
             </button>
           </div>
 
-          <div style={{ background: '#fff', border: '2px dashed #cbd5e1', borderRadius: '10px', padding: '20px', textAlign: 'center' }}>
+          <div style={{ background: '#fff', border: '2px dashed #cbd5e1', borderRadius: '10px', padding: '20px', textAlign: 'center', position: 'relative' }}>
             <FileSpreadsheet size={32} color="#065f46" style={{ marginBottom: '8px' }} />
             <p style={{ margin: 0, fontWeight: 700, fontSize: '14px', color: '#334155' }}>2. Upload CSV File</p>
             <p style={{ margin: '4px 0 12px', fontSize: '12px', color: '#64748b' }}>Select your CSV file to preview products before importing.</p>
-            <input type="file" accept=".csv" onChange={handleFileUpload} style={{ fontSize: '13px' }} />
-            {bulkFileName && <p style={{ margin: '8px 0 0', fontSize: '12px', fontWeight: 600, color: '#066006' }}>File: {bulkFileName}</p>}
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".csv"
+              onChange={handleFileUpload}
+              style={{ fontSize: '13px' }}
+            />
+            {bulkFileName && (
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', marginTop: '10px' }}>
+                <span style={{ fontSize: '12px', fontWeight: 600, color: '#066006', background: '#f0fdf4', border: '1px solid #bbf7d0', padding: '4px 10px', borderRadius: '6px', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                  📄 {bulkFileName}
+                  <button
+                    type="button"
+                    onClick={resetBulkUpload}
+                    style={{ background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', padding: '2px', marginLeft: '4px' }}
+                    title="Remove file"
+                  >
+                    <X size={14} />
+                  </button>
+                </span>
+                <button
+                  type="button"
+                  onClick={resetBulkUpload}
+                  style={{
+                    background: '#fef2f2',
+                    border: '1px solid #fecaca',
+                    color: '#dc2626',
+                    fontSize: '11px',
+                    fontWeight: 600,
+                    padding: '4px 8px',
+                    borderRadius: '6px',
+                    cursor: 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '4px'
+                  }}
+                >
+                  <Trash2 size={12} /> Clear File
+                </button>
+              </div>
+            )}
           </div>
 
           {bulkRows.length > 0 && (
@@ -1353,6 +1420,26 @@ export function ProductsPage() {
                 <span style={{ fontSize: '13px', fontWeight: 700, color: '#065f46' }}>
                   🟢 Preview Products Ready ({bulkRows.length} items)
                 </span>
+                <button
+                  type="button"
+                  onClick={resetBulkUpload}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                    background: '#fef2f2',
+                    border: '1px solid #fecaca',
+                    color: '#dc2626',
+                    fontSize: '12px',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    padding: '4px 10px',
+                    borderRadius: '6px'
+                  }}
+                  title="Clear previewed products"
+                >
+                  <Trash2 size={13} /> Clear Preview
+                </button>
               </div>
               <div style={{ maxHeight: '200px', overflowY: 'auto', border: '1px solid #e2e8f0', borderRadius: '8px' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
@@ -1384,8 +1471,24 @@ export function ProductsPage() {
           )}
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '10px' }}>
-            <button type="button" className="btn btn-secondary" onClick={() => setIsBulkModalOpen(false)} disabled={bulkSubmitting}>Cancel</button>
-            <button type="button" className="btn btn-primary" onClick={handleBulkSubmit} disabled={bulkSubmitting || bulkRows.length === 0} style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => {
+                setIsBulkModalOpen(false);
+                resetBulkUpload();
+              }}
+              disabled={bulkSubmitting}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={handleBulkSubmit}
+              disabled={bulkSubmitting || bulkRows.length === 0}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+            >
               {bulkSubmitting ? <><Loader2 size={14} className="spin-icon" /> Importing…</> : `Import ${bulkRows.length} Product(s)`}
             </button>
           </div>
