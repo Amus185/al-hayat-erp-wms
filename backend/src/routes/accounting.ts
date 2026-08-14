@@ -47,10 +47,12 @@ accounting.post('/fiscal-periods', requirePermissions(['manage_purchasing']), as
   const id = generateId();
   const userId = (c as any).get('userId') || null;
 
+  // Write BOTH name and period_name — schema has period_name NOT NULL
+  // and a separate nullable 'name' column was added via migration.
   await c.env.DB.prepare(`
-    INSERT INTO fiscal_periods (id, name, period_type, start_date, end_date, status, created_by)
-    VALUES (?, ?, ?, ?, ?, 'OPEN', ?)
-  `).bind(id, body.name, body.period_type || 'ANNUAL', body.start_date, body.end_date, userId).run();
+    INSERT INTO fiscal_periods (id, name, period_name, period_type, start_date, end_date, status, created_by)
+    VALUES (?, ?, ?, ?, ?, ?, 'OPEN', ?)
+  `).bind(id, body.name, body.name, body.period_type || 'ANNUAL', body.start_date, body.end_date, userId).run();
 
   const row = await c.env.DB.prepare('SELECT * FROM fiscal_periods WHERE id = ?').bind(id).first();
   return c.json(row, 201);
@@ -235,31 +237,42 @@ accounting.post('/journal-entries', requirePermissions(['manage_purchasing']), a
   const entryId = generateId();
   const userId = (c as any).get('userId') || null;
 
-  await c.env.DB.prepare(`
-    INSERT INTO journal_entries
-      (id, entry_number, fiscal_period_id, entry_date, description, reference_type, reference_id,
-       branch_id, status, total_debit, total_credit, notes, created_by)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'DRAFT', ?, ?, ?, ?)
-  `).bind(entryId, entryNumber,
-    body.fiscal_period_id || null, body.entry_date, body.description,
-    body.reference_type || null, body.reference_id || null,
-    body.branch_id || null, totalDebit, totalCredit, body.notes || null, userId).run();
+  try {
+    await c.env.DB.prepare(`
+      INSERT INTO journal_entries
+        (id, entry_number, fiscal_period_id, entry_date, description, reference_type, reference_id,
+         branch_id, status, total_debit, total_credit, notes, created_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'DRAFT', ?, ?, ?, ?)
+    `).bind(entryId, entryNumber,
+      body.fiscal_period_id || null, body.entry_date, body.description,
+      body.reference_type || null, body.reference_id || null,
+      body.branch_id || null, totalDebit, totalCredit, body.notes || null, userId).run();
 
-  // Insert lines
-  const lineStmts = body.lines.map((line, idx) => {
-    const lineId = generateId();
-    return c.env.DB.prepare(`
-      INSERT INTO journal_entry_lines
-        (id, journal_entry_id, account_id, description, debit_amount, credit_amount, branch_id, line_order)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).bind(lineId, entryId, line.account_id, line.description || null,
-      line.debit_amount || 0, line.credit_amount || 0, line.branch_id || null, idx);
-  });
+    // Insert lines
+    const lineStmts = body.lines.map((line, idx) => {
+      const lineId = generateId();
+      return c.env.DB.prepare(`
+        INSERT INTO journal_entry_lines
+          (id, journal_entry_id, account_id, description, debit_amount, credit_amount, branch_id, line_order)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).bind(lineId, entryId, line.account_id, line.description || null,
+        line.debit_amount || 0, line.credit_amount || 0, line.branch_id || null, idx);
+    });
 
-  await c.env.DB.batch(lineStmts);
+    await c.env.DB.batch(lineStmts);
 
-  const row = await c.env.DB.prepare('SELECT * FROM journal_entries WHERE id = ?').bind(entryId).first();
-  return c.json(row, 201);
+    const row = await c.env.DB.prepare('SELECT * FROM journal_entries WHERE id = ?').bind(entryId).first();
+    return c.json(row, 201);
+  } catch (err: any) {
+    const msg = err?.message || String(err);
+    if (msg.includes('does not exist') || msg.includes('column')) {
+      return c.json({ error: `Database schema error: ${msg}. Please contact your system administrator.` }, 422);
+    }
+    if (msg.includes('foreign key') || msg.includes('FOREIGN KEY')) {
+      return c.json({ error: 'One or more account IDs are invalid. Please check your Chart of Accounts.' }, 422);
+    }
+    throw err;
+  }
 });
 
 accounting.post('/journal-entries/:id/post', requirePermissions(['manage_purchasing']), async (c) => {
@@ -877,6 +890,22 @@ accounting.post('/closing-entries', requirePermissions(['manage_purchasing']), a
   if (!period) return c.json({ error: 'Fiscal period not found' }, 404);
 
   const userId = (c as any).get('userId') || null;
+
+  // Pre-flight: verify required closing accounts exist in chart_of_accounts
+  const [incomeSummaryAcc, retainedEarningsAcc] = await Promise.all([
+    c.env.DB.prepare("SELECT id FROM chart_of_accounts WHERE id = 'coa-3030' AND is_active = 1").first(),
+    c.env.DB.prepare("SELECT id FROM chart_of_accounts WHERE id = 'coa-3020' AND is_active = 1").first(),
+  ]);
+  if (!incomeSummaryAcc) {
+    return c.json({
+      error: 'Income Summary account (code 3030) is missing from your Chart of Accounts. Please add it before running closing entries.',
+    }, 400);
+  }
+  if (!retainedEarningsAcc) {
+    return c.json({
+      error: 'Retained Earnings account (code 3020) is missing from your Chart of Accounts. Please add it before running closing entries.',
+    }, 400);
+  }
 
   // Get all revenue account balances for this period
   const { results: revenues } = await c.env.DB.prepare(`

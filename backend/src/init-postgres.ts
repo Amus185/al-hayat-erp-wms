@@ -220,6 +220,7 @@ export async function ensurePostgresInit(pool: Pool) {
       ALTER TABLE inventory_transactions ADD COLUMN IF NOT EXISTS source_location_id TEXT REFERENCES warehouse_locations(id);
       ALTER TABLE inventory_transactions ADD COLUMN IF NOT EXISTS notes TEXT;
       ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS user_agent TEXT;
+      ALTER TABLE journal_entries ADD COLUMN IF NOT EXISTS notes TEXT;
       ALTER TABLE inventory_transactions ADD COLUMN IF NOT EXISTS dest_owner_type TEXT;
       ALTER TABLE inventory_transactions ADD COLUMN IF NOT EXISTS dest_warehouse_id TEXT REFERENCES warehouses(id);
       ALTER TABLE inventory_transactions ADD COLUMN IF NOT EXISTS dest_branch_id TEXT REFERENCES branches(id);
@@ -379,6 +380,7 @@ export async function ensurePostgresInit(pool: Pool) {
       // Equity
       { id: 'coa-3010', code: '3010', name: "Owner's Capital",                account_type: 'EQUITY',    normal_balance: 'CREDIT' },
       { id: 'coa-3020', code: '3020', name: 'Retained Earnings',              account_type: 'EQUITY',    normal_balance: 'CREDIT' },
+      { id: 'coa-3030', code: '3030', name: 'Income Summary',                 account_type: 'EQUITY',    normal_balance: 'CREDIT' },
       { id: 'coa-3040', code: '3040', name: "Owner's Drawings",               account_type: 'EQUITY',    normal_balance: 'DEBIT'  },
       // Revenue
       { id: 'coa-4010', code: '4010', name: 'Sales Revenue',                  account_type: 'REVENUE',   normal_balance: 'CREDIT' },

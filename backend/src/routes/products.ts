@@ -140,13 +140,55 @@ products.post('/bulk', requirePermissions(['manage_inventory']), async (c) => {
   const defaultWhId = (existingWhs.results?.[0]?.id as string) || null;
   const defaultBrId = (existingBrs.results?.[0]?.id as string) || null;
 
+  // ── Pre-flight: detect barcode conflicts ─────────────────────────
+  // Collect all non-null barcodes from the batch
+  const batchBarcodes = items
+    .map(i => i.barcode ? String(i.barcode).trim() : null)
+    .filter(Boolean) as string[];
+
+  // Check for within-batch duplicates
+  const seenBarcodes = new Set<string>();
+  const withinBatchDuplicates = new Set<string>();
+  for (const bc of batchBarcodes) {
+    if (seenBarcodes.has(bc)) withinBatchDuplicates.add(bc);
+    else seenBarcodes.add(bc);
+  }
+
+  // Check for existing DB barcodes
+  const existingBarcodesInDB = new Set<string>();
+  if (batchBarcodes.length > 0) {
+    const placeholders = batchBarcodes.map(() => '?').join(',');
+    const { results: existingRows } = await c.env.DB.prepare(
+      `SELECT barcode FROM products WHERE barcode IN (${placeholders})`
+    ).bind(...batchBarcodes).all() as { results: any[] };
+    for (const row of existingRows || []) {
+      if (row.barcode) existingBarcodesInDB.add(String(row.barcode));
+    }
+  }
+
   const stmts: any[] = [];
   let createdCount = 0;
+  const skipped: Array<{ sku: string; barcode: string | null; reason: string }> = [];
 
   for (const item of items) {
     if (!item.sku || !item.name) continue;
     const sku = String(item.sku).trim();
     const name = String(item.name).trim();
+    const barcode = item.barcode ? String(item.barcode).trim() : null;
+
+    // Skip rows with duplicate barcodes
+    if (barcode) {
+      if (withinBatchDuplicates.has(barcode)) {
+        skipped.push({ sku, barcode, reason: `Barcode "${barcode}" appears more than once in this import batch` });
+        continue;
+      }
+      if (existingBarcodesInDB.has(barcode)) {
+        skipped.push({ sku, barcode, reason: `Barcode "${barcode}" already exists in the database` });
+        continue;
+      }
+      // Mark as seen so subsequent duplicates in the batch get skipped too
+      existingBarcodesInDB.add(barcode);
+    }
 
     // Ensure Category
     let categoryId: string | null = null;
@@ -180,12 +222,13 @@ products.post('/bulk', requirePermissions(['manage_inventory']), async (c) => {
     const cost = Math.max(0, Number(item.costPrice || 0));
     const sell = Math.max(cost, Number(item.sellingPrice || 0));
 
+    // ON CONFLICT on both sku and barcode as safety nets
     stmts.push(c.env.DB.prepare(`
       INSERT INTO products (id, sku, barcode, name, description, category_id, brand_id, cost_price, selling_price, reorder_level)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT (sku) DO NOTHING
     `).bind(
-      productId, sku, item.barcode || null, name, item.description || null,
+      productId, sku, barcode, name, item.description || null,
       categoryId, brandId, cost, sell, Number(item.reorderLevel || 5)
     ));
 
@@ -233,7 +276,11 @@ products.post('/bulk', requirePermissions(['manage_inventory']), async (c) => {
     await c.env.DB.batch(stmts);
   }
 
-  return c.json({ success: true, count: createdCount }, 201);
+  const hasSkipped = skipped.length > 0;
+  return c.json(
+    { success: true, created: createdCount, skipped },
+    hasSkipped ? 207 : 201
+  );
 });
 
 products.get('/categories', async (c) => {
