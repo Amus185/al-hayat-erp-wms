@@ -88,13 +88,13 @@ export function CreateSalesOrderPage() {
       try {
         const custs = await apiGet<Customer[]>('/sales/customers');
         const brs = await apiGet<Branch[]>('/branches');
-        const productsList = await apiGet<any[]>('/products');
+        const productsList = await apiGet<any[]>('/products?status=active');
         
         setCustomers(custs || []);
         setBranches(brs || []);
 
         const flatList: ProductLine[] = [];
-        productsList?.forEach((p) => {
+        (productsList || []).filter((p) => p.is_active !== 0).forEach((p) => {
           flatList.push({
             id: p.id,
             sku: p.sku,

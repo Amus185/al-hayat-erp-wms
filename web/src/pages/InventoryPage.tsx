@@ -120,6 +120,20 @@ export function InventoryPage() {
     }
   }, [activeTab]);
 
+  const [categories, setCategories] = useState<any[]>([]);
+
+  useEffect(() => {
+    Promise.all([
+      apiGet<any[]>('/products/categories'),
+      apiGet<any[]>('/warehouses'),
+      apiGet<any[]>('/branches'),
+    ]).then(([cats, whs, brs]) => {
+      setCategories(cats || []);
+      setWarehouses(whs || []);
+      setBranches(brs || []);
+    }).catch(console.error);
+  }, []);
+        
   // Load selection helper data on modal open
   useEffect(() => {
     async function loadHelperData() {
@@ -217,32 +231,55 @@ export function InventoryPage() {
     }
   };
 
-  const stockColumns: Column<InventoryStock>[] = [
-    { key: 'sku', label: 'Product ID' },
-    { key: 'name', label: 'Product' },
+  const stockColumns: Column<any>[] = [
+    { key: 'sku', label: 'Product ID', sortable: true },
+    { key: 'name', label: 'Product', sortable: true },
+    { key: 'category_name', label: 'Category', render: (row) => row.category_name || 'N/A' },
     {
       key: 'location',
       label: 'Location',
       render: (row) => {
         if (row.owner_type === 'WAREHOUSE') {
-          return `${row.warehouse || 'Warehouse'} (${row.aisle || 'A'}-${row.rack || 'R'}-${row.shelf || 'S'}-${row.bin || 'B'})`;
+          const bin = [row.aisle, row.rack, row.shelf, row.bin].filter(Boolean).join('-');
+          return `${row.warehouse || 'Warehouse'} ${bin ? `(${bin})` : ''}`;
         } else {
           return row.branch || 'Branch';
         }
       },
     },
-    { key: 'quantity_on_hand', label: 'On Hand' },
-    { key: 'quantity_reserved', label: 'Reserved' },
+    { key: 'quantity_on_hand', label: 'On Hand', sortable: true },
+    { key: 'quantity_reserved', label: 'Reserved', sortable: true },
     {
       key: 'available',
       label: 'Available',
-      render: (row) => row.quantity_on_hand - row.quantity_reserved,
+      render: (row) => Number(row.quantity_on_hand || 0) - Number(row.quantity_reserved || 0),
+    },
+    {
+      key: 'status',
+      label: 'Status',
+      render: (row) => (
+        <span
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            padding: '2px 8px',
+            borderRadius: '12px',
+            fontSize: '11px',
+            fontWeight: 700,
+            background: row.is_active !== 0 ? '#ecfdf5' : '#f3f4f6',
+            color: row.is_active !== 0 ? '#065f46' : '#6b7280',
+            border: `1px solid ${row.is_active !== 0 ? '#a7f3d0' : '#d1d5db'}`,
+          }}
+        >
+          {row.is_active !== 0 ? '● Active' : '○ Inactive'}
+        </span>
+      ),
     },
   ];
 
   const transactionColumns: Column<InventoryTransaction>[] = [
-    { key: 'sku', label: 'Product ID' },
-    { key: 'name', label: 'Product' },
+    { key: 'sku', label: 'Product ID', sortable: true },
+    { key: 'name', label: 'Product', sortable: true },
     {
       key: 'transaction_type',
       label: 'Type',
@@ -286,18 +323,32 @@ export function InventoryPage() {
     },
   ];
 
-  const filteredStocks = stocks.filter((s) => {
+  const filteredStocks = stocks.filter((s: any) => {
     const q = stockSearch.trim().toLowerCase();
-    if (q && !String(s.name || '').toLowerCase().includes(q) && !String(s.sku || '').toLowerCase().includes(q)) return false;
+    if (q) {
+      const locName = s.owner_type === 'WAREHOUSE' ? (s.warehouse || '') : (s.branch || '');
+      const binStr = `${s.aisle || ''} ${s.rack || ''} ${s.shelf || ''} ${s.bin || ''}`;
+      const matches =
+        String(s.name || '').toLowerCase().includes(q) ||
+        String(s.sku || '').toLowerCase().includes(q) ||
+        String(s.barcode || '').toLowerCase().includes(q) ||
+        String(s.category_name || '').toLowerCase().includes(q) ||
+        locName.toLowerCase().includes(q) ||
+        binStr.toLowerCase().includes(q);
+      if (!matches) return false;
+    }
     if (stockFilters.locType && s.owner_type !== stockFilters.locType) return false;
     if (stockFilters.warehouse && s.warehouse_id !== stockFilters.warehouse) return false;
     if (stockFilters.branch && s.branch_id !== stockFilters.branch) return false;
+    if (stockFilters.category && s.category_id !== stockFilters.category) return false;
+    if (stockFilters.status === 'active' && s.is_active === 0) return false;
+    if (stockFilters.status === 'inactive' && s.is_active !== 0) return false;
     return true;
   });
 
   const filteredTransactions = transactions.filter((t) => {
     const q = txSearch.trim().toLowerCase();
-    if (q && !String(t.name || '').toLowerCase().includes(q) && !String(t.sku || '').toLowerCase().includes(q)) return false;
+    if (q && !String(t.name || '').toLowerCase().includes(q) && !String(t.sku || '').toLowerCase().includes(q) && !String((t as any).barcode || '').toLowerCase().includes(q)) return false;
     if (txFilters.txType && t.transaction_type !== txFilters.txType) return false;
     return true;
   });
@@ -334,7 +385,7 @@ export function InventoryPage() {
             <FilterBar
               searchValue={stockSearch}
               onSearchChange={setStockSearch}
-              searchPlaceholder="Search by product name or SKU…"
+              searchPlaceholder="Search by name, SKU, barcode, category, location…"
               filters={[
                 {
                   key: 'locType',
@@ -353,6 +404,19 @@ export function InventoryPage() {
                   key: 'branch',
                   label: 'All Branches',
                   options: branches.map((b: any) => ({ value: b.id, label: b.name })),
+                },
+                {
+                  key: 'category',
+                  label: 'All Categories',
+                  options: categories.map((c: any) => ({ value: c.id, label: c.name })),
+                },
+                {
+                  key: 'status',
+                  label: 'All Statuses',
+                  options: [
+                    { value: 'active', label: 'Active' },
+                    { value: 'inactive', label: 'Inactive' },
+                  ],
                 },
               ]}
               filterValues={stockFilters}

@@ -34,7 +34,7 @@ async function getPurchaseInvoicePaymentSummary(
 // SUPPLIERS
 // ──────────────────────────────────────────────────────────────────────
 purchasing.get('/suppliers', async (c) => {
-  const { results } = await c.env.DB.prepare('SELECT id, name, phone, email, address, is_active FROM suppliers ORDER BY name').all();
+  const { results } = await c.env.DB.prepare('SELECT id, name, contact_person, contact_person AS contact_name, phone, email, address, COALESCE(is_active, 1) AS is_active FROM suppliers ORDER BY name').all();
   return c.json(results);
 });
 
@@ -44,13 +44,52 @@ purchasing.post('/suppliers', requirePermissions(['manage_purchasing']), async (
     return c.json({ message: 'Supplier name is required.' }, 400);
   }
   const id = uuidv4();
+  const contact = body.contactPerson || body.contact_person || body.contactName || body.contact_name || null;
   await c.env.DB.prepare(`
-    INSERT INTO suppliers (id, name, contact_name, phone, email, address)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `).bind(id, body.name.trim(), body.contactName || null, body.phone || null, body.email || null, body.address || null).run();
-  const { results } = await c.env.DB.prepare('SELECT * FROM suppliers WHERE id = ?').bind(id).all();
+    INSERT INTO suppliers (id, name, contact_person, phone, email, address, is_active)
+    VALUES (?, ?, ?, ?, ?, ?, 1)
+  `).bind(id, body.name.trim(), contact, body.phone || null, body.email || null, body.address || null).run();
+  const { results } = await c.env.DB.prepare('SELECT id, name, contact_person, contact_person AS contact_name, phone, email, address, COALESCE(is_active, 1) AS is_active FROM suppliers WHERE id = ?').bind(id).all();
   await logAudit(c, 'SUPPLIER_CREATE', 'suppliers', id, null, body);
   return c.json(results[0], 201);
+});
+
+purchasing.patch('/suppliers/:id', requirePermissions(['manage_purchasing']), async (c) => {
+  const id = c.req.param('id');
+  const body = await c.req.json();
+  const existing = await c.env.DB.prepare('SELECT * FROM suppliers WHERE id = ?').bind(id).first() as any;
+  if (!existing) return c.json({ message: 'Supplier not found.' }, 404);
+
+  const fields: string[] = [];
+  const vals: any[] = [];
+  if (body.name !== undefined && body.name.trim()) { fields.push('name = ?'); vals.push(body.name.trim()); }
+  if (body.contactPerson !== undefined || body.contact_person !== undefined || body.contactName !== undefined) {
+    fields.push('contact_person = ?');
+    vals.push(body.contactPerson ?? body.contact_person ?? body.contactName ?? null);
+  }
+  if (body.phone !== undefined) { fields.push('phone = ?'); vals.push(body.phone || null); }
+  if (body.email !== undefined) { fields.push('email = ?'); vals.push(body.email || null); }
+  if (body.address !== undefined) { fields.push('address = ?'); vals.push(body.address || null); }
+  if (body.isActive !== undefined || body.is_active !== undefined) {
+    fields.push('is_active = ?');
+    vals.push((body.isActive ?? body.is_active) ? 1 : 0);
+  }
+  if (fields.length === 0) return c.json({ message: 'No valid fields provided to update.' }, 400);
+
+  vals.push(id);
+  await c.env.DB.prepare(`UPDATE suppliers SET ${fields.join(', ')} WHERE id = ?`).bind(...vals).run();
+  const updated = await c.env.DB.prepare('SELECT id, name, contact_person, contact_person AS contact_name, phone, email, address, COALESCE(is_active, 1) AS is_active FROM suppliers WHERE id = ?').bind(id).first();
+  await logAudit(c, 'SUPPLIER_UPDATE', 'suppliers', id, existing, updated);
+  return c.json(updated);
+});
+
+purchasing.delete('/suppliers/:id', requirePermissions(['manage_purchasing']), async (c) => {
+  const id = c.req.param('id');
+  const activePO = await c.env.DB.prepare('SELECT id FROM purchase_orders WHERE supplier_id = ? LIMIT 1').bind(id).first();
+  if (activePO) return c.json({ message: 'Cannot delete: supplier is linked to purchase orders.' }, 400);
+  await c.env.DB.prepare('DELETE FROM suppliers WHERE id = ?').bind(id).run();
+  await logAudit(c, 'SUPPLIER_DELETE', 'suppliers', id, null, null);
+  return c.json({ success: true });
 });
 
 // ──────────────────────────────────────────────────────────────────────

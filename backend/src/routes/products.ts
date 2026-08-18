@@ -8,14 +8,23 @@ const products = new Hono<{ Bindings: Env; Variables: { jwtPayload: any } }>();
 products.use('/*', authMiddleware);
 
 products.get('/', async (c) => {
-  const { results } = await c.env.DB.prepare(`
-    SELECT p.*, c.name as category_name, b.name as brand_name
+  const status = c.req.query('status'); // 'active' | 'inactive' | 'all'
+  let query = `
+    SELECT p.*, COALESCE(p.is_active, 1) AS is_active, c.name as category_name, b.name as brand_name
     FROM products p
     LEFT JOIN categories c ON p.category_id = c.id
     LEFT JOIN brands b ON p.brand_id = b.id
-    ORDER BY p.name ASC
-    LIMIT 100
-  `).all();
+    WHERE 1=1
+  `;
+  const params: any[] = [];
+  if (status === 'active') {
+    query += ` AND COALESCE(p.is_active, 1) = 1`;
+  } else if (status === 'inactive') {
+    query += ` AND COALESCE(p.is_active, 1) = 0`;
+  }
+  query += ` ORDER BY p.name ASC LIMIT 500`;
+  const stmt = c.env.DB.prepare(query);
+  const { results } = params.length > 0 ? await stmt.bind(...params).all() : await stmt.all();
   return c.json(results);
 });
 
@@ -324,7 +333,7 @@ products.delete('/categories/:id', requirePermissions(['manage_inventory']), asy
 products.get('/:id', async (c) => {
   const id = c.req.param('id');
   const product = await c.env.DB.prepare(`
-    SELECT p.*, c.name as category_name, b.name as brand_name
+    SELECT p.*, COALESCE(p.is_active, 1) AS is_active, c.name as category_name, b.name as brand_name
     FROM products p
     LEFT JOIN categories c ON p.category_id = c.id
     LEFT JOIN brands b ON p.brand_id = b.id
@@ -332,6 +341,109 @@ products.get('/:id', async (c) => {
   `).bind(id).first();
   if (!product) return c.json({ message: 'Product not found' }, 404);
   return c.json(product);
+});
+
+products.patch('/:id', requirePermissions(['manage_inventory']), async (c) => {
+  const id = c.req.param('id');
+  const body = await c.req.json();
+
+  const existing = await c.env.DB.prepare('SELECT * FROM products WHERE id = ?').bind(id).first() as any;
+  if (!existing) return c.json({ message: 'Product not found' }, 404);
+
+  const fields: string[] = [];
+  const vals: any[] = [];
+
+  if (body.sku !== undefined && String(body.sku).trim()) {
+    const sku = String(body.sku).trim();
+    if (sku !== existing.sku) {
+      const dup = await c.env.DB.prepare('SELECT id FROM products WHERE sku = ? AND id != ?').bind(sku, id).first();
+      if (dup) return c.json({ message: 'A product with this SKU already exists.' }, 409);
+    }
+    fields.push('sku = ?'); vals.push(sku);
+  }
+
+  if (body.barcode !== undefined) {
+    const barcode = body.barcode ? String(body.barcode).trim() : null;
+    if (barcode && barcode !== existing.barcode) {
+      const dup = await c.env.DB.prepare('SELECT id FROM products WHERE barcode = ? AND id != ?').bind(barcode, id).first();
+      if (dup) return c.json({ message: 'A product with this barcode already exists.' }, 409);
+    }
+    fields.push('barcode = ?'); vals.push(barcode);
+  }
+
+  if (body.name !== undefined && String(body.name).trim()) {
+    fields.push('name = ?'); vals.push(String(body.name).trim());
+  }
+
+  if (body.description !== undefined) {
+    fields.push('description = ?'); vals.push(body.description || null);
+  }
+
+  if (body.categoryId !== undefined || body.category_id !== undefined) {
+    const catId = body.categoryId ?? body.category_id ?? null;
+    fields.push('category_id = ?'); vals.push(catId || null);
+  }
+
+  if (body.brandId !== undefined || body.brand_id !== undefined) {
+    const brId = body.brandId ?? body.brand_id ?? null;
+    fields.push('brand_id = ?'); vals.push(brId || null);
+  }
+
+  if (body.costPrice !== undefined || body.cost_price !== undefined) {
+    const cost = Number(body.costPrice ?? body.cost_price ?? 0);
+    if (cost < 0) return c.json({ message: 'Cost price cannot be negative.' }, 400);
+    fields.push('cost_price = ?'); vals.push(cost);
+  }
+
+  if (body.sellingPrice !== undefined || body.selling_price !== undefined) {
+    const sell = Number(body.sellingPrice ?? body.selling_price ?? 0);
+    if (sell < 0) return c.json({ message: 'Selling price cannot be negative.' }, 400);
+    fields.push('selling_price = ?'); vals.push(sell);
+  }
+
+  if (body.reorderLevel !== undefined || body.reorder_level !== undefined) {
+    const reorder = Number(body.reorderLevel ?? body.reorder_level ?? 5);
+    fields.push('reorder_level = ?'); vals.push(reorder);
+  }
+
+  if (body.isActive !== undefined || body.is_active !== undefined) {
+    const active = (body.isActive ?? body.is_active) ? 1 : 0;
+    fields.push('is_active = ?'); vals.push(active);
+  }
+
+  if (fields.length === 0) {
+    return c.json({ message: 'No valid fields provided for update.' }, 400);
+  }
+
+  fields.push('updated_at = CURRENT_TIMESTAMP');
+  vals.push(id);
+
+  await c.env.DB.prepare(`UPDATE products SET ${fields.join(', ')} WHERE id = ?`).bind(...vals).run();
+
+  const updated = await c.env.DB.prepare(`
+    SELECT p.*, COALESCE(p.is_active, 1) AS is_active, c.name as category_name, b.name as brand_name
+    FROM products p
+    LEFT JOIN categories c ON p.category_id = c.id
+    LEFT JOIN brands b ON p.brand_id = b.id
+    WHERE p.id = ?
+  `).bind(id).first();
+
+  await logAudit(c, 'PRODUCT_UPDATE', 'products', id, existing, updated);
+  return c.json(updated);
+});
+
+products.patch('/:id/status', requirePermissions(['manage_inventory']), async (c) => {
+  const id = c.req.param('id');
+  const body = await c.req.json();
+  const isActive = body.is_active !== undefined ? (body.is_active ? 1 : 0) : (body.isActive ? 1 : 0);
+
+  const existing = await c.env.DB.prepare('SELECT id, is_active FROM products WHERE id = ?').bind(id).first() as any;
+  if (!existing) return c.json({ message: 'Product not found' }, 404);
+
+  await c.env.DB.prepare('UPDATE products SET is_active = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').bind(isActive, id).run();
+  await logAudit(c, 'PRODUCT_STATUS_CHANGE', 'products', id, { is_active: existing.is_active }, { is_active: isActive });
+
+  return c.json({ success: true, is_active: isActive });
 });
 
 products.delete('/:id', requirePermissions(['manage_inventory']), async (c) => {

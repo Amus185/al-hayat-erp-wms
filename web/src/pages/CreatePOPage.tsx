@@ -5,6 +5,7 @@ import { apiGet, apiPost } from '../api/client';
 import { FormField, InputField, TextareaField } from '../components/FormField';
 import { SearchInput } from '../components/SearchInput';
 import { SearchableSelect } from '../components/SearchableSelect';
+import { Modal } from '../components/Modal';
 import { useToast } from '../contexts/ToastContext';
 
 interface Supplier {
@@ -39,6 +40,15 @@ export function CreatePOPage() {
   const [expectedDate, setExpectedDate] = useState('');
   const [notes, setNotes] = useState('');
 
+  // Inline supplier modal state
+  const [isInlineSupplierOpen, setIsInlineSupplierOpen] = useState(false);
+  const [newSupplierName, setNewSupplierName] = useState('');
+  const [newSupplierContact, setNewSupplierContact] = useState('');
+  const [newSupplierPhone, setNewSupplierPhone] = useState('');
+  const [newSupplierEmail, setNewSupplierEmail] = useState('');
+  const [newSupplierAddress, setNewSupplierAddress] = useState('');
+  const [supplierSubmitting, setSupplierSubmitting] = useState(false);
+
   // Searching variants
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<ProductSearchItem[]>([]);
@@ -46,34 +56,63 @@ export function CreatePOPage() {
   // Selected lines
   const [lines, setLines] = useState<{ productId: string; sku: string; name: string; quantity: number; unitCost: number; discount: number }[]>([]);
 
-  useEffect(() => {
-    async function loadData() {
-      try {
-        const sups = await apiGet<Supplier[]>('/purchasing/suppliers');
-        const whs = await apiGet<Warehouse[]>('/warehouses');
-        const products = await apiGet<any[]>('/products');
-        
-        setSuppliers(sups || []);
-        setWarehouses(whs || []);
+  const loadData = async () => {
+    try {
+      const sups = await apiGet<Supplier[]>('/purchasing/suppliers');
+      const whs = await apiGet<Warehouse[]>('/warehouses');
+      const products = await apiGet<any[]>('/products');
+      
+      setSuppliers(sups || []);
+      setWarehouses(whs || []);
 
-        // Build product search list
-        const flatList: ProductSearchItem[] = [];
-        products?.forEach((p) => {
-          flatList.push({
-            id: p.id,
-            sku: p.sku,
-            barcode: p.barcode || '',
-            productName: p.name,
-            costPrice: p.cost_price,
-          });
+      // Build product search list
+      const flatList: ProductSearchItem[] = [];
+      products?.forEach((p) => {
+        flatList.push({
+          id: p.id,
+          sku: p.sku,
+          barcode: p.barcode || '',
+          productName: p.name,
+          costPrice: p.cost_price,
         });
-        setProductsList(flatList);
-      } catch (err) {
-        console.error('Failed to load PO creation metadata', err);
-      }
+      });
+      setProductsList(flatList);
+    } catch (err) {
+      console.error('Failed to load PO creation metadata', err);
     }
+  };
+
+  useEffect(() => {
     loadData();
   }, []);
+
+  const handleCreateSupplier = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newSupplierName.trim()) return;
+    try {
+      setSupplierSubmitting(true);
+      const created = await apiPost<any>('/purchasing/suppliers', {
+        name: newSupplierName.trim(),
+        contactPerson: newSupplierContact.trim() || undefined,
+        phone: newSupplierPhone.trim() || undefined,
+        email: newSupplierEmail.trim() || undefined,
+        address: newSupplierAddress.trim() || undefined,
+      });
+      addToast('success', `Supplier "${created.name}" created`);
+      setSuppliers((prev) => [...prev, created]);
+      setSupplierId(created.id);
+      setIsInlineSupplierOpen(false);
+      setNewSupplierName('');
+      setNewSupplierContact('');
+      setNewSupplierPhone('');
+      setNewSupplierEmail('');
+      setNewSupplierAddress('');
+    } catch (err: any) {
+      addToast('error', err?.message || 'Failed to create supplier');
+    } finally {
+      setSupplierSubmitting(false);
+    }
+  };
 
   // Search filter
   useEffect(() => {
@@ -191,12 +230,37 @@ export function CreatePOPage() {
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
             <FormField label="Supplier *">
-              <SearchableSelect
-                options={suppliers.map((s) => ({ value: s.id, label: s.name }))}
-                value={supplierId}
-                onChange={setSupplierId}
-                placeholder="Search Supplier..."
-              />
+              <div style={{ display: 'flex', gap: '6px' }}>
+                <div style={{ flex: 1 }}>
+                  <SearchableSelect
+                    options={suppliers.map((s) => ({ value: s.id, label: s.name }))}
+                    value={supplierId}
+                    onChange={setSupplierId}
+                    placeholder="Search Supplier..."
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsInlineSupplierOpen(true)}
+                  style={{
+                    padding: '0 10px',
+                    background: '#ecfdf5',
+                    border: '1px solid #a7f3d0',
+                    color: '#065f46',
+                    borderRadius: '8px',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                    fontSize: '12px',
+                    fontWeight: 700,
+                    whiteSpace: 'nowrap'
+                  }}
+                  title="Add New Supplier"
+                >
+                  <Plus size={14} /> New
+                </button>
+              </div>
             </FormField>
 
             <FormField label="Receiving Warehouse *">
@@ -381,6 +445,58 @@ export function CreatePOPage() {
           </button>
         </div>
       </form>
+
+      {/* Inline Add Supplier Modal */}
+      <Modal isOpen={isInlineSupplierOpen} onClose={() => setIsInlineSupplierOpen(false)} title="Register New Supplier">
+        <form onSubmit={handleCreateSupplier} style={{ display: 'grid', gap: '14px' }}>
+          <InputField
+            label="Supplier Company Name *"
+            id="supplierName"
+            value={newSupplierName}
+            onChange={setNewSupplierName}
+            placeholder="e.g. Al-Madina Trading LLC"
+            required
+          />
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+            <InputField
+              label="Contact Person"
+              id="supplierContact"
+              value={newSupplierContact}
+              onChange={setNewSupplierContact}
+              placeholder="e.g. John Doe"
+            />
+            <InputField
+              label="Phone Number"
+              id="supplierPhone"
+              value={newSupplierPhone}
+              onChange={setNewSupplierPhone}
+              placeholder="e.g. +1 555-0199"
+            />
+          </div>
+          <InputField
+            label="Email Address"
+            id="supplierEmail"
+            type="email"
+            value={newSupplierEmail}
+            onChange={setNewSupplierEmail}
+            placeholder="e.g. sales@supplier.com"
+          />
+          <TextareaField
+            label="Physical Address"
+            id="supplierAddress"
+            value={newSupplierAddress}
+            onChange={setNewSupplierAddress}
+            placeholder="Warehouse / office address..."
+            rows={2}
+          />
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '10px' }}>
+            <button type="button" className="btn btn-secondary" onClick={() => setIsInlineSupplierOpen(false)}>Cancel</button>
+            <button type="submit" className="btn btn-primary" disabled={supplierSubmitting}>
+              {supplierSubmitting ? 'Saving...' : 'Register & Select Supplier'}
+            </button>
+          </div>
+        </form>
+      </Modal>
     </div>
   );
 }

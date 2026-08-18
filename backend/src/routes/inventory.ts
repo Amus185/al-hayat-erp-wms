@@ -13,10 +13,14 @@ inventory.get('/stock', async (c) => {
   const scopedBranchId = isAdminUser(payload) ? null : payload.branch_id;
 
   let query = `
-    SELECT s.id, p.name, p.sku, p.barcode, s.product_id, s.owner_type, s.quantity_on_hand, s.quantity_reserved,
+    SELECT s.id, p.name, p.sku, p.barcode, p.category_id, COALESCE(c.name, 'Uncategorized') AS category_name,
+           COALESCE(p.is_active, 1) AS is_active,
+           s.product_id, s.owner_type, s.warehouse_id, s.branch_id, s.warehouse_location_id,
+           s.quantity_on_hand, s.quantity_reserved,
            w.name AS warehouse, b.name AS branch, l.aisle, l.rack, l.shelf, l.bin
     FROM inventory_stock s
     JOIN products p ON p.id = s.product_id
+    LEFT JOIN categories c ON c.id = p.category_id
     LEFT JOIN warehouses w ON w.id = s.warehouse_id
     LEFT JOIN branches b ON b.id = s.branch_id
     LEFT JOIN warehouse_locations l ON l.id = s.warehouse_location_id

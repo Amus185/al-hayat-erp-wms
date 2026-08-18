@@ -153,7 +153,7 @@ export function PurchasingPage() {
 
   // Supplier modal
   const [isSupplierOpen, setIsSupplierOpen] = useState(false);
-  const [supplierForm, setSupplierForm] = useState({ name: '', email: '', phone: '', address: '' });
+  const [supplierForm, setSupplierForm] = useState({ name: '', contactPerson: '', email: '', phone: '', address: '' });
 
   // PO details modal
   const [selectedPO, setSelectedPO] = useState<any | null>(null);
@@ -233,7 +233,7 @@ export function PurchasingPage() {
       await apiPost('/purchasing/suppliers', supplierForm);
       addToast('success', 'Supplier registered successfully');
       setIsSupplierOpen(false);
-      setSupplierForm({ name: '', email: '', phone: '', address: '' });
+      setSupplierForm({ name: '', contactPerson: '', email: '', phone: '', address: '' });
       loadData();
     } catch (err: any) {
       addToast('error', err?.message || 'Failed to register supplier');
@@ -699,7 +699,8 @@ export function PurchasingPage() {
       <Modal isOpen={isSupplierOpen} onClose={() => setIsSupplierOpen(false)} title="Register New Supplier" width="sm">
         <form onSubmit={handleSupplierSubmit}>
           <div style={{ display: 'grid', gap: '14px' }}>
-            <InputField label="Supplier Name" id="supName" value={supplierForm.name} onChange={(val) => setSupplierForm((prev) => ({ ...prev, name: val }))} required />
+            <InputField label="Supplier Name *" id="supName" value={supplierForm.name} onChange={(val) => setSupplierForm((prev) => ({ ...prev, name: val }))} required />
+            <InputField label="Contact Person" id="supContact" value={supplierForm.contactPerson} onChange={(val) => setSupplierForm((prev) => ({ ...prev, contactPerson: val }))} placeholder="e.g. John Doe" />
             <InputField label="Email Address" id="supEmail" type="email" value={supplierForm.email} onChange={(val) => setSupplierForm((prev) => ({ ...prev, email: val }))} />
             <InputField label="Phone Number" id="supPhone" value={supplierForm.phone} onChange={(val) => setSupplierForm((prev) => ({ ...prev, phone: val }))} />
             <TextareaField label="Business Address" id="supAddress" value={supplierForm.address} onChange={(val) => setSupplierForm((prev) => ({ ...prev, address: val }))} />

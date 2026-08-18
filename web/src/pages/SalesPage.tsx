@@ -419,9 +419,9 @@ export function SalesPage() {
         <table><thead><tr><th>Product</th><th>SKU</th><th>Qty</th><th>Unit Price</th><th style="text-align:right">Subtotal</th></tr></thead>
         <tbody>${data.lines.map((l: any) => '<tr><td>' + l.product_name + '</td><td>' + l.product_sku + '</td><td>' + l.quantity + '</td><td>$' + Number(l.unit_price).toFixed(2) + '</td><td style="text-align:right;font-weight:600">$' + Number(l.subtotal).toFixed(2) + '</td></tr>').join('')}</tbody></table>
         <div class="summary"><div class="summary-inner">
-          <div class="summary-row"><span>Subtotal</span><span>$${(Number(inv.net_total ?? inv.total_amount) + Number(inv.discount_amount ?? 0)).toFixed(2)}</span></div>
+          <div class="summary-row"><span>Subtotal</span><span>$${Number(inv.total_amount ?? (inv.net_total + inv.discount_amount)).toFixed(2)}</span></div>
           ${Number(inv.discount_amount) > 0 ? '<div class="summary-row" style="color:#b45309"><span>Discount</span><span>-$' + Number(inv.discount_amount).toFixed(2) + '</span></div>' : ''}
-          <div class="summary-row total"><span>Total</span><span style="color:#066006">$${Number(inv.net_total ?? inv.total_amount).toFixed(2)}</span></div>
+          <div class="summary-row total"><span>Net Total</span><span style="color:#066006">$${Number(inv.net_total ?? (inv.total_amount - inv.discount_amount)).toFixed(2)}</span></div>
           <div class="summary-row paid-row"><span>Amount Paid</span><span>$${Number(inv.amount_paid ?? 0).toFixed(2)}</span></div>
           ${Number(inv.balance) > 0 ? '<div class="summary-row balance"><span>Remaining Balance</span><span>$' + Number(inv.balance).toFixed(2) + '</span></div>' : ''}
         </div></div>

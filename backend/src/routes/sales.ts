@@ -241,8 +241,11 @@ sales.post('/orders', requirePermissions(['manage_sales']), async (c) => {
     }
     seenProducts.add(line.productId);
 
-    const product = await c.env.DB.prepare('SELECT id, selling_price FROM products WHERE id = ?').bind(line.productId).first();
+    const product = await c.env.DB.prepare('SELECT id, name, selling_price, COALESCE(is_active, 1) AS is_active FROM products WHERE id = ?').bind(line.productId).first() as any;
     if (!product) return c.json({ message: `Line ${i + 1}: product does not exist.` }, 400);
+    if (product.is_active === 0) {
+      return c.json({ message: `Cannot sell inactive product "${product.name}". Please activate the product before creating new sales orders.` }, 400);
+    }
 
     // Override client's unitPrice with the actual selling price from DB to prevent price manipulation
     line.unitPrice = product.selling_price;
@@ -388,11 +391,11 @@ sales.post('/orders/:id/invoice', requirePermissions(['manage_sales']), async (c
     const invoiceId = uuidv4();
     const stmts: any[] = [];
 
-    // Create invoice — store discount so it's always available on the invoice
+    // Create invoice — total_amount is gross subtotal, discount_amount is discount
     stmts.push(c.env.DB.prepare(`
       INSERT INTO invoices (id, invoice_number, sales_order_id, total_amount, discount_amount)
       VALUES (?, ?, ?, ?, ?)
-    `).bind(invoiceId, `INV-${Date.now()}`, orderId, total, discountAmount));
+    `).bind(invoiceId, `INV-${Date.now()}`, orderId, subtotal, discountAmount));
 
     // Copy lines to invoice_lines
     stmts.push(c.env.DB.prepare(`
@@ -645,11 +648,11 @@ sales.post('/orders/:id/complete', requirePermissions(['manage_sales']), async (
     const invoiceId = uuidv4();
     const stmts: any[] = [];
 
-    // Create invoice (directly as PAID)
+    // Create invoice (directly as PAID) — total_amount is gross subtotal, discount_amount is discount
     stmts.push(c.env.DB.prepare(`
       INSERT INTO invoices (id, invoice_number, sales_order_id, total_amount, discount_amount, status, paid_at)
       VALUES (?, ?, ?, ?, ?, 'PAID', CURRENT_TIMESTAMP)
-    `).bind(invoiceId, `INV-${Date.now()}`, orderId, total, discountAmount));
+    `).bind(invoiceId, `INV-${Date.now()}`, orderId, subtotal, discountAmount));
 
     // Insert a full payment record
     stmts.push(c.env.DB.prepare(`

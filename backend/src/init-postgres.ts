@@ -221,6 +221,16 @@ export async function ensurePostgresInit(pool: Pool) {
       ALTER TABLE inventory_transactions ADD COLUMN IF NOT EXISTS notes TEXT;
       ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS user_agent TEXT;
       ALTER TABLE journal_entries ADD COLUMN IF NOT EXISTS notes TEXT;
+      ALTER TABLE products ADD COLUMN IF NOT EXISTS is_active INTEGER NOT NULL DEFAULT 1;
+      ALTER TABLE transfers ADD COLUMN IF NOT EXISTS approved_by TEXT REFERENCES users(id);
+      ALTER TABLE transfers ADD COLUMN IF NOT EXISTS approved_at TIMESTAMP WITH TIME ZONE;
+      ALTER TABLE transfers ADD COLUMN IF NOT EXISTS dispatched_by TEXT REFERENCES users(id);
+      ALTER TABLE transfers ADD COLUMN IF NOT EXISTS dispatched_at TIMESTAMP WITH TIME ZONE;
+      ALTER TABLE transfers ADD COLUMN IF NOT EXISTS received_by TEXT REFERENCES users(id);
+      ALTER TABLE transfers ADD COLUMN IF NOT EXISTS received_at TIMESTAMP WITH TIME ZONE;
+      ALTER TABLE transfers ADD COLUMN IF NOT EXISTS rejected_by TEXT REFERENCES users(id);
+      ALTER TABLE transfers ADD COLUMN IF NOT EXISTS rejected_at TIMESTAMP WITH TIME ZONE;
+      ALTER TABLE transfers ADD COLUMN IF NOT EXISTS rejection_reason TEXT;
       ALTER TABLE inventory_transactions ADD COLUMN IF NOT EXISTS dest_owner_type TEXT;
       ALTER TABLE inventory_transactions ADD COLUMN IF NOT EXISTS dest_warehouse_id TEXT REFERENCES warehouses(id);
       ALTER TABLE inventory_transactions ADD COLUMN IF NOT EXISTS dest_branch_id TEXT REFERENCES branches(id);
