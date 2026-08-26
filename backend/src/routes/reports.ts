@@ -90,16 +90,19 @@ reports.get('/branch-performance', async (c) => {
       b.name,
       b.city,
       COUNT(DISTINCT so.id) AS order_count,
-      COALESCE(SUM(i.total_amount), 0) AS total_revenue,
-      COALESCE(SUM(
-        (SELECT COALESCE(SUM(il.quantity * (il.unit_price - p.cost_price)), 0)
-         FROM invoice_lines il 
-         JOIN products p ON p.id = il.product_id 
-         WHERE il.invoice_id = i.id)
-      ), 0) AS gross_profit
+      COALESCE(SUM((
+        SELECT COALESCE(SUM(sol.line_total), SUM(sol.quantity * sol.unit_price - sol.discount_amount), 0)
+        FROM sales_order_lines sol
+        WHERE sol.sales_order_id = so.id
+      )), 0) AS total_revenue,
+      COALESCE(SUM((
+        SELECT COALESCE(SUM(sol.quantity * (sol.unit_price - p.cost_price) - sol.discount_amount), 0)
+        FROM sales_order_lines sol
+        JOIN products p ON p.id = sol.product_id
+        WHERE sol.sales_order_id = so.id
+      )), 0) AS gross_profit
     FROM branches b
-    LEFT JOIN sales_orders so ON so.branch_id = b.id AND so.created_at >= DATE('now', ?) AND so.status IN ('CONFIRMED', 'PAID')
-    LEFT JOIN invoices i ON i.sales_order_id = so.id AND i.status = 'PAID'
+    LEFT JOIN sales_orders so ON so.branch_id = b.id AND so.created_at >= DATE('now', ?) AND so.status IN ('CONFIRMED', 'INVOICED', 'PAID')
     WHERE 1=1
   `;
   const params: any[] = [daysModifier];
@@ -197,7 +200,7 @@ reports.get('/inventory-valuation', async (c) => {
       SELECT DISTINCT sol.product_id
       FROM sales_order_lines sol
       JOIN sales_orders so ON so.id = sol.sales_order_id
-      WHERE so.created_at >= DATE('now', '-90 days') AND so.status IN ('CONFIRMED', 'PAID')
+      WHERE so.created_at >= DATE('now', '-90 days') AND so.status IN ('CONFIRMED', 'INVOICED', 'PAID')
   `;
   const deadParams: any[] = [];
   if (scopedBranchId) {
@@ -248,7 +251,7 @@ reports.get('/sales-profit', async (c) => {
     FROM sales_orders so
     JOIN sales_order_lines sol ON sol.sales_order_id = so.id
     JOIN products p ON p.id = sol.product_id
-    WHERE so.created_at >= DATE('now', ?) AND so.status IN ('CONFIRMED', 'PAID')
+    WHERE so.created_at >= DATE('now', ?) AND so.status IN ('CONFIRMED', 'INVOICED', 'PAID')
   `;
   const trendParams: any[] = [daysModifier];
   if (scopedBranchId) {
@@ -275,7 +278,7 @@ reports.get('/sales-profit', async (c) => {
     JOIN products p ON p.id = sol.product_id
     LEFT JOIN brands b ON b.id = p.brand_id
     LEFT JOIN categories c ON c.id = p.category_id
-    WHERE so.created_at >= DATE('now', ?) AND so.status IN ('CONFIRMED', 'PAID')
+    WHERE so.created_at >= DATE('now', ?) AND so.status IN ('CONFIRMED', 'INVOICED', 'PAID')
   `;
   const topProdParams: any[] = [daysModifier];
   if (scopedBranchId) {
@@ -308,7 +311,7 @@ reports.get('/sales-profit', async (c) => {
     FROM customers cust
     JOIN sales_orders so ON so.customer_id = cust.id
     JOIN sales_order_lines sol ON sol.sales_order_id = so.id
-    WHERE so.created_at >= DATE('now', ?) AND so.status IN ('CONFIRMED', 'PAID')
+    WHERE so.created_at >= DATE('now', ?) AND so.status IN ('CONFIRMED', 'INVOICED', 'PAID')
   `;
   const topCustParams: any[] = [daysModifier];
   if (scopedBranchId) {
