@@ -241,6 +241,10 @@ export async function ensurePostgresInit(pool: Pool) {
       ALTER TABLE transfer_lines ADD COLUMN IF NOT EXISTS quantity_dispatched INTEGER;
       ALTER TABLE transfer_lines ADD COLUMN IF NOT EXISTS quantity_received INTEGER;
       ALTER TABLE transfer_lines ADD COLUMN IF NOT EXISTS quantity INTEGER;
+      ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS expected_date TIMESTAMP WITH TIME ZONE;
+      ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS warehouse_id TEXT REFERENCES warehouses(id);
+      ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS contact_name TEXT;
+      ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS contact_person TEXT;
 
       CREATE TABLE IF NOT EXISTS expenses (
         id TEXT PRIMARY KEY,

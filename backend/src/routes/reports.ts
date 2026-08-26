@@ -435,7 +435,7 @@ reports.get('/supplier-performance', async (c) => {
       COUNT(DISTINCT po.id) AS po_count,
       COUNT(DISTINCT po.supplier_id) AS active_suppliers,
       COALESCE(SUM(pol.quantity * pol.unit_cost), 0) AS total_spend,
-      SUM(CASE WHEN gr.id IS NOT NULL AND DATE(gr.received_at) <= DATE(po.expected_date) THEN 1 ELSE 0 END) AS on_time_count,
+      SUM(CASE WHEN gr.id IS NOT NULL AND po.expected_date IS NOT NULL AND DATE(gr.received_at) <= DATE(po.expected_date) THEN 1 ELSE 0 END) AS on_time_count,
       COUNT(DISTINCT gr.id) AS total_received_gr
     FROM purchase_orders po
     LEFT JOIN purchase_order_lines pol ON pol.purchase_order_id = po.id
@@ -460,7 +460,7 @@ reports.get('/supplier-performance', async (c) => {
     SELECT 
       s.id,
       s.name AS supplier_name,
-      s.contact_name,
+      COALESCE(s.contact_person, s.contact_name, '—') AS contact_name,
       s.phone,
       s.email,
       COUNT(DISTINCT po.id) AS total_pos,
@@ -471,7 +471,7 @@ reports.get('/supplier-performance', async (c) => {
     LEFT JOIN purchase_orders po ON po.supplier_id = s.id AND po.created_at >= DATE('now', ?)
     LEFT JOIN purchase_order_lines pol ON pol.purchase_order_id = po.id
     LEFT JOIN goods_receipts gr ON gr.purchase_order_id = po.id
-    GROUP BY s.id, s.name, s.contact_name, s.phone, s.email
+    GROUP BY s.id, s.name, s.contact_name, s.contact_person, s.phone, s.email
     ORDER BY total_spend DESC
   `).bind(daysModifier).all();
 

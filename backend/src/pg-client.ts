@@ -26,6 +26,10 @@ export function convertSqliteToPg(sql: string): string {
     .replace(/date\('now',\s*([^)]+)\)/gi, (_, arg) => `(CURRENT_DATE + CAST(${arg} AS INTERVAL))`)
     // SQLite date() → Postgres CURRENT_TIMESTAMP (compatible with timestamptz and date columns)
     .replace(/date\('now'\)/gi, 'CURRENT_TIMESTAMP')
+    // SQLite JULIANDAY('now') → Postgres epoch day calculation
+    .replace(/julianday\('now'\)/gi, '(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) / 86400.0)')
+    // SQLite JULIANDAY(x) → Postgres epoch day calculation
+    .replace(/julianday\(([^)]+)\)/gi, '(EXTRACT(EPOCH FROM ($1)::timestamp) / 86400.0)')
     // SQLite UUID idiom → Postgres built-in
     .replace(/lower\(hex\(randomblob\(16\)\)\)/gi, 'gen_random_uuid()::text')
     // SQLite GROUP_CONCAT → Postgres STRING_AGG
