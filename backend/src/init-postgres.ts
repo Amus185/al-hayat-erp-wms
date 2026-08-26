@@ -245,6 +245,7 @@ export async function ensurePostgresInit(pool: Pool) {
       ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS warehouse_id TEXT REFERENCES warehouses(id);
       ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS contact_name TEXT;
       ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS contact_person TEXT;
+      ALTER TABLE sales_orders ADD COLUMN IF NOT EXISTS quotation_id TEXT REFERENCES quotations(id);
 
       CREATE TABLE IF NOT EXISTS expenses (
         id TEXT PRIMARY KEY,

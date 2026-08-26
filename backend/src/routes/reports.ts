@@ -355,12 +355,13 @@ reports.get('/quote-conversion', async (c) => {
 
   let summaryQuery = `
     SELECT 
-      COUNT(*) AS total_quotes,
-      SUM(CASE WHEN q.status IN ('ACCEPTED', 'CONVERTED') OR q.id IN (SELECT DISTINCT quotation_id FROM sales_orders WHERE quotation_id IS NOT NULL) THEN 1 ELSE 0 END) AS converted_quotes,
-      AVG(CASE WHEN q.id IN (SELECT DISTINCT quotation_id FROM sales_orders WHERE quotation_id IS NOT NULL) THEN 
-        (JULIANDAY((SELECT created_at FROM sales_orders WHERE quotation_id = q.id LIMIT 1)) - JULIANDAY(q.created_at))
+      COUNT(DISTINCT q.id) AS total_quotes,
+      COUNT(DISTINCT CASE WHEN q.status IN ('ACCEPTED', 'CONVERTED') OR so.id IS NOT NULL THEN q.id END) AS converted_quotes,
+      AVG(CASE WHEN so.id IS NOT NULL THEN 
+        EXTRACT(EPOCH FROM (so.created_at - q.created_at)) / 86400.0
       ELSE NULL END) AS avg_days_to_convert
     FROM quotations q
+    LEFT JOIN sales_orders so ON so.quotation_id = q.id
     WHERE q.created_at >= DATE('now', ?)
   `;
   const summaryParams: any[] = [daysModifier];
@@ -376,9 +377,10 @@ reports.get('/quote-conversion', async (c) => {
   let trendQuery = `
     SELECT 
       DATE(q.created_at) AS day,
-      COUNT(*) AS total_created,
-      SUM(CASE WHEN q.status IN ('ACCEPTED', 'CONVERTED') OR q.id IN (SELECT DISTINCT quotation_id FROM sales_orders WHERE quotation_id IS NOT NULL) THEN 1 ELSE 0 END) AS total_converted
+      COUNT(DISTINCT q.id) AS total_created,
+      COUNT(DISTINCT CASE WHEN q.status IN ('ACCEPTED', 'CONVERTED') OR so.id IS NOT NULL THEN q.id END) AS total_converted
     FROM quotations q
+    LEFT JOIN sales_orders so ON so.quotation_id = q.id
     WHERE q.created_at >= DATE('now', ?)
   `;
   const trendParams: any[] = [daysModifier];
@@ -400,7 +402,11 @@ reports.get('/quote-conversion', async (c) => {
       so.id AS sales_order_id,
       so.order_number AS sales_order_number,
       so.created_at AS order_created_at,
-      ROUND(JULIANDAY(so.created_at) - JULIANDAY(q.created_at), 1) AS days_to_convert
+      CASE 
+        WHEN so.created_at IS NOT NULL THEN 
+          ROUND(CAST((EXTRACT(EPOCH FROM (so.created_at - q.created_at)) / 86400.0) AS NUMERIC), 1)
+        ELSE NULL 
+      END AS days_to_convert
     FROM quotations q
     LEFT JOIN customers c ON c.id = q.customer_id
     LEFT JOIN branches b ON b.id = q.branch_id
@@ -521,7 +527,7 @@ reports.get('/receivables', async (c) => {
       CAST(
         CASE 
           WHEN i.status = 'PAID' THEN 0
-          ELSE (JULIANDAY('now') - JULIANDAY(i.issued_at))
+          ELSE (EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - i.issued_at)) / 86400.0)
         END AS INTEGER
       ) AS days_outstanding
     FROM invoices i

@@ -19,10 +19,10 @@ export function MetricCard({ label, value, trend, icon, onClick, id }: MetricCar
       tabIndex={onClick ? 0 : undefined}
     >
       <div className="metric-card__icon">{icon}</div>
-      <div>
-        <p>{label}</p>
-        <strong>{value}</strong>
-        {trend && <span>{trend}</span>}
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <p title={label}>{label}</p>
+        <strong title={value}>{value}</strong>
+        {trend && <span title={trend}>{trend}</span>}
       </div>
     </section>
   );
