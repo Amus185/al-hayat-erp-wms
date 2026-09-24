@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Users, UserPlus, Shield, Landmark, Warehouse, Pencil, Trash2, KeyRound, Loader2 } from 'lucide-react';
-import { apiGet, apiPost, apiDelete } from '../api/client';
+import { apiGet, apiPost, apiPatch, apiDelete } from '../api/client';
 import { DataTable, type Column } from '../components/DataTable';
 import { Modal } from '../components/Modal';
 import { ConfirmModal } from '../components/ConfirmModal';
@@ -171,23 +171,15 @@ export function UsersPage() {
     if (!editUser || submitting) return;
     try {
       setSubmitting(true);
-      // Use fetch directly with PATCH since apiPatch is available in client
-      const token = localStorage.getItem('access_token');
-      const base = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:3000/api/v1';
-      const res = await fetch(`${base}/users/${editUser.id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({
-          fullName: editForm.fullName,
-          email: editForm.email,
-          phone: editForm.phone || null,
-          branchId: editForm.branchId || null,
-          warehouseId: editForm.warehouseId || null,
-          isActive: editForm.isActive,
-          roleIds: editForm.roleIds,
-        }),
+      await apiPatch(`/users/${editUser.id}`, {
+        fullName: editForm.fullName,
+        email: editForm.email,
+        phone: editForm.phone || null,
+        branchId: editForm.branchId || null,
+        warehouseId: editForm.warehouseId || null,
+        isActive: editForm.isActive,
+        roleIds: editForm.roleIds,
       });
-      if (!res.ok) throw new Error('Failed to update user');
       addToast('success', 'User updated successfully');
       setEditUser(null);
       loadData();
