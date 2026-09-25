@@ -54,6 +54,7 @@ const pageTitles: Record<string, { section: string; title: string }> = {
   '/sales':      { section: 'Revenue',                title: 'Sales' },
   '/customers':  { section: 'Sales',                  title: 'Customers' },
   '/expenses':   { section: 'Finance',                title: 'Expenses' },
+  '/assets':     { section: 'Owner Investments',      title: "Owner's Assets & Investments" },
   '/reports':    { section: 'Analytics',              title: 'Reports' },
   '/accounting': { section: 'Finance',                title: 'Accounting' },
   '/audit':      { section: 'Compliance',             title: 'Audit Log' },

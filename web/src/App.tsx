@@ -51,12 +51,12 @@ function ProtectedRoute({ permission }: { permission?: string }) {
 }
 
 // Guards routes to admin-only access (redirects branch/warehouse managers to dashboard)
-function AdminRoute() {
+function AdminRoute({ children }: { children?: React.ReactNode }) {
   const { isAdmin, isLoading, isAuthenticated } = useAuth();
   if (isLoading) return null;
   if (!isAuthenticated) return <Navigate to="/login" replace />;
   if (!isAdmin) return <Navigate to="/" replace />;
-  return <Outlet />;
+  return children ? <>{children}</> : <Outlet />;
 }
 
 function AppShellLayout() {
@@ -108,9 +108,10 @@ export function App() {
             {/* Reports */}
             <Route path="/reports" element={<ReportsPage />} />
             
-            {/* Audit Logs — admin only, redirects branch/warehouse managers to dashboard */}
+            {/* Admin-only routes */}
             <Route element={<AdminRoute />}>
               <Route path="/audit" element={<AuditPage />} />
+              <Route path="/assets" element={<AssetsPage />} />
             </Route>
             
             {/* Identity & Access Management */}
@@ -124,9 +125,6 @@ export function App() {
 
             {/* Expenses */}
             <Route path="/expenses" element={<ExpensesPage />} />
-
-            {/* Assets */}
-            <Route path="/assets" element={<AdminRoute><AssetsPage /></AdminRoute>} />
           </Route>
         </Route>
 
