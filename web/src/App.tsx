@@ -23,6 +23,7 @@ import { UsersPage } from './pages/UsersPage';
 import { AccountingPage } from './pages/AccountingPage';
 import { CustomersPage } from './pages/CustomersPage';
 import { ExpensesPage } from './pages/ExpensesPage';
+import { AssetsPage } from './pages/AssetsPage';
 
 function ProtectedRoute({ permission }: { permission?: string }) {
   const { isAuthenticated, hasPermission, isLoading } = useAuth();
@@ -123,6 +124,9 @@ export function App() {
 
             {/* Expenses */}
             <Route path="/expenses" element={<ExpensesPage />} />
+
+            {/* Assets */}
+            <Route path="/assets" element={<AdminRoute><AssetsPage /></AdminRoute>} />
           </Route>
         </Route>
 

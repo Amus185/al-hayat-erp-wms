@@ -588,3 +588,127 @@ export interface PurchasingFinancialSummary {
   deposits_total: number;
   awaiting_payment: number;
 }
+
+// ── Owner's Assets & Investments ─────────────────────────────
+export interface Property {
+  id: string;
+  name: string;
+  propertyType: string;
+  address: string | null;
+  city: string;
+  areaSqm: number | null;
+  purchasePrice: number | null;
+  purchaseDate: string | null;
+  currentValue: number | null;
+  status: string;
+  notes: string | null;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+  monthlyRent?: number;
+  tenantName?: string;
+}
+
+export interface Tenant {
+  id: string;
+  name: string;
+  phone: string | null;
+  email: string | null;
+  idNumber: string | null;
+  address: string | null;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface LeaseAgreement {
+  id: string;
+  propertyId: string;
+  tenantId: string;
+  monthlyRent: number;
+  startDate: string;
+  endDate: string;
+  paymentDay: number;
+  depositAmount: number | null;
+  status: string;
+  notes: string | null;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+  propertyName?: string;
+  tenantName?: string;
+}
+
+export interface RentalPayment {
+  id: string;
+  leaseAgreementId: string;
+  amount: number;
+  paymentMethod: string;
+  paymentDate: string;
+  periodMonth: number;
+  periodYear: number;
+  notes: string | null;
+  recordedBy: string;
+  createdAt: string;
+  propertyName?: string;
+  tenantName?: string;
+}
+
+export interface PropertyExpense {
+  id: string;
+  propertyId: string;
+  title: string;
+  amount: number;
+  category: string;
+  expenseDate: string;
+  paymentMethod: string;
+  notes: string | null;
+  recordedBy: string;
+  createdAt: string;
+  propertyName?: string;
+}
+
+export interface Livestock {
+  id: string;
+  animalType: string;
+  breed: string | null;
+  tagNumber: string | null;
+  name: string | null;
+  quantity: number;
+  unitCost: number | null;
+  totalValue: number | null;
+  purchaseDate: string | null;
+  status: string;
+  notes: string | null;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface LivestockTransaction {
+  id: string;
+  livestockId: string;
+  transactionType: string;
+  quantity: number;
+  unitPrice: number | null;
+  totalAmount: number | null;
+  buyerSellerName: string | null;
+  transactionDate: string;
+  notes: string | null;
+  recordedBy: string;
+  createdAt: string;
+}
+
+export interface LivestockExpense {
+  id: string;
+  livestockId: string;
+  title: string;
+  amount: number;
+  category: string;
+  expenseDate: string;
+  paymentMethod: string;
+  notes: string | null;
+  recordedBy: string;
+  createdAt: string;
+  livestockName?: string;
+}

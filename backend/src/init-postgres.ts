@@ -294,6 +294,15 @@ export async function ensurePostgresInit(pool: Pool) {
         created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
       );
+
+      CREATE TABLE IF NOT EXISTS properties (id TEXT PRIMARY KEY, name TEXT, property_type TEXT CHECK (property_type IN ('HOUSE','LAND','BUILDING','APARTMENT')), address TEXT, city TEXT, area_sqm DOUBLE PRECISION, purchase_price DOUBLE PRECISION, purchase_date TEXT, current_value DOUBLE PRECISION, status TEXT DEFAULT 'VACANT' CHECK (status IN ('OWNED','RENTED','VACANT','SOLD')), notes TEXT, created_by TEXT REFERENCES users(id), created_at TIMESTAMP WITH TIME ZONE, updated_at TIMESTAMP WITH TIME ZONE);
+      CREATE TABLE IF NOT EXISTS tenants (id TEXT PRIMARY KEY, name TEXT, phone TEXT, email TEXT, id_number TEXT, address TEXT, is_active INTEGER DEFAULT 1, created_at TIMESTAMP WITH TIME ZONE, updated_at TIMESTAMP WITH TIME ZONE);
+      CREATE TABLE IF NOT EXISTS lease_agreements (id TEXT PRIMARY KEY, property_id TEXT REFERENCES properties(id), tenant_id TEXT REFERENCES tenants(id), monthly_rent DOUBLE PRECISION, start_date TEXT, end_date TEXT, payment_day INTEGER DEFAULT 1, deposit_amount DOUBLE PRECISION DEFAULT 0, status TEXT DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE','EXPIRED','TERMINATED')), notes TEXT, created_by TEXT REFERENCES users(id), created_at TIMESTAMP WITH TIME ZONE, updated_at TIMESTAMP WITH TIME ZONE);
+      CREATE TABLE IF NOT EXISTS rental_payments (id TEXT PRIMARY KEY, lease_agreement_id TEXT REFERENCES lease_agreements(id), amount DOUBLE PRECISION CHECK (amount > 0), payment_method TEXT DEFAULT 'CASH', payment_date TEXT, period_month INTEGER, period_year INTEGER, notes TEXT, recorded_by TEXT REFERENCES users(id), created_at TIMESTAMP WITH TIME ZONE);
+      CREATE TABLE IF NOT EXISTS property_expenses (id TEXT PRIMARY KEY, property_id TEXT REFERENCES properties(id), title TEXT, amount DOUBLE PRECISION CHECK (amount > 0), category TEXT DEFAULT 'MAINTENANCE' CHECK (category IN ('MAINTENANCE','TAX','INSURANCE','UTILITIES','RENOVATION','OTHER')), expense_date TEXT, payment_method TEXT DEFAULT 'CASH', notes TEXT, recorded_by TEXT REFERENCES users(id), created_at TIMESTAMP WITH TIME ZONE);
+      CREATE TABLE IF NOT EXISTS livestock (id TEXT PRIMARY KEY, animal_type TEXT, breed TEXT, tag_number TEXT UNIQUE, name TEXT, quantity INTEGER DEFAULT 1, unit_cost DOUBLE PRECISION DEFAULT 0, total_value DOUBLE PRECISION DEFAULT 0, purchase_date TEXT, status TEXT DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE','SOLD','DECEASED')), notes TEXT, created_by TEXT REFERENCES users(id), created_at TIMESTAMP WITH TIME ZONE, updated_at TIMESTAMP WITH TIME ZONE);
+      CREATE TABLE IF NOT EXISTS livestock_transactions (id TEXT PRIMARY KEY, livestock_id TEXT REFERENCES livestock(id), transaction_type TEXT CHECK (transaction_type IN ('PURCHASE','SALE','BIRTH','DEATH','TRANSFER')), quantity INTEGER, unit_price DOUBLE PRECISION DEFAULT 0, total_amount DOUBLE PRECISION DEFAULT 0, buyer_seller_name TEXT, transaction_date TEXT, notes TEXT, recorded_by TEXT REFERENCES users(id), created_at TIMESTAMP WITH TIME ZONE);
+      CREATE TABLE IF NOT EXISTS livestock_expenses (id TEXT PRIMARY KEY, livestock_id TEXT REFERENCES livestock(id), title TEXT, amount DOUBLE PRECISION CHECK (amount > 0), category TEXT DEFAULT 'FEED' CHECK (category IN ('FEED','VETERINARY','SHELTER','TRANSPORT','LABOR','OTHER')), expense_date TEXT, payment_method TEXT DEFAULT 'CASH', notes TEXT, recorded_by TEXT REFERENCES users(id), created_at TIMESTAMP WITH TIME ZONE);
     `);
 
 
@@ -406,6 +415,14 @@ export async function ensurePostgresInit(pool: Pool) {
       { id: 'coa-6010', code: '6010', name: 'Operating Expenses',             account_type: 'EXPENSE',   normal_balance: 'DEBIT'  },
       { id: 'coa-6050', code: '6050', name: 'General & Administrative Expenses', account_type: 'EXPENSE', normal_balance: 'DEBIT' },
       { id: 'coa-6060', code: '6060', name: 'Depreciation Expense',           account_type: 'EXPENSE',   normal_balance: 'DEBIT'  },
+      { id: 'coa-1040', code: '1040', name: 'Real Estate Properties',         account_type: 'ASSET',     normal_balance: 'DEBIT'  },
+      { id: 'coa-1050', code: '1050', name: 'Livestock Assets',               account_type: 'ASSET',     normal_balance: 'DEBIT'  },
+      { id: 'coa-1060', code: '1060', name: 'Tenant Security Deposits',       account_type: 'LIABILITY', normal_balance: 'CREDIT' },
+      { id: 'coa-4020', code: '4020', name: 'Rental Income',                  account_type: 'REVENUE',   normal_balance: 'CREDIT' },
+      { id: 'coa-4030', code: '4030', name: 'Livestock Sales Revenue',        account_type: 'REVENUE',   normal_balance: 'CREDIT' },
+      { id: 'coa-5040', code: '5040', name: 'Livestock Cost of Sales',        account_type: 'EXPENSE',      normal_balance: 'DEBIT'  },
+      { id: 'coa-6070', code: '6070', name: 'Property Expenses',              account_type: 'EXPENSE',   normal_balance: 'DEBIT'  },
+      { id: 'coa-6080', code: '6080', name: 'Livestock Expenses',             account_type: 'EXPENSE',   normal_balance: 'DEBIT'  },
     ];
 
 

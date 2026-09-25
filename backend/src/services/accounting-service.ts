@@ -677,6 +677,162 @@ export async function reconcileMissingSalesJournalEntries(c: any): Promise<numbe
   return count;
 }
 
+// ─── ASSETS & INVESTMENTS GL POSTING FUNCTIONS ──────────────────────────
+
+export async function postPropertyPurchaseJournalEntry(c: any, amount: number, propertyName: string, propertyId: string, userId?: string) {
+  return createAndPostJournalEntry(c, {
+    description: `Purchase of Property: ${propertyName}`,
+    referenceType: 'MANUAL',
+    referenceId: propertyId,
+    userId,
+    lines: [
+      { accountCode: '1040', debitAmount: amount, creditAmount: 0 },
+      { accountCode: '1010', debitAmount: 0, creditAmount: amount },
+    ],
+  });
+}
+
+export async function postRentalPaymentJournalEntry(c: any, amount: number, tenantName: string, paymentId: string, userId?: string) {
+  return createAndPostJournalEntry(c, {
+    description: `Rental Payment Received from ${tenantName}`,
+    referenceType: 'MANUAL',
+    referenceId: paymentId,
+    userId,
+    lines: [
+      { accountCode: '1010', debitAmount: amount, creditAmount: 0 },
+      { accountCode: '4020', debitAmount: 0, creditAmount: amount },
+    ],
+  });
+}
+
+export async function postPropertyExpenseJournalEntry(c: any, amount: number, title: string, expenseId: string, userId?: string) {
+  return createAndPostJournalEntry(c, {
+    description: `Property Expense Paid: ${title}`,
+    referenceType: 'MANUAL',
+    referenceId: expenseId,
+    userId,
+    lines: [
+      { accountCode: '6070', debitAmount: amount, creditAmount: 0 },
+      { accountCode: '1010', debitAmount: 0, creditAmount: amount },
+    ],
+  });
+}
+
+export async function postSecurityDepositReceivedJournalEntry(c: any, amount: number, tenantName: string, leaseId: string, userId?: string) {
+  return createAndPostJournalEntry(c, {
+    description: `Security Deposit Received from ${tenantName}`,
+    referenceType: 'MANUAL',
+    referenceId: leaseId,
+    userId,
+    lines: [
+      { accountCode: '1010', debitAmount: amount, creditAmount: 0 },
+      { accountCode: '1060', debitAmount: 0, creditAmount: amount },
+    ],
+  });
+}
+
+export async function postSecurityDepositReturnedJournalEntry(c: any, amount: number, tenantName: string, leaseId: string, userId?: string) {
+  return createAndPostJournalEntry(c, {
+    description: `Security Deposit Returned to ${tenantName}`,
+    referenceType: 'MANUAL',
+    referenceId: leaseId,
+    userId,
+    lines: [
+      { accountCode: '1060', debitAmount: amount, creditAmount: 0 },
+      { accountCode: '1010', debitAmount: 0, creditAmount: amount },
+    ],
+  });
+}
+
+export async function postLivestockPurchaseJournalEntry(c: any, amount: number, description: string, livestockId: string, userId?: string) {
+  return createAndPostJournalEntry(c, {
+    description: `Purchase of Livestock: ${description}`,
+    referenceType: 'MANUAL',
+    referenceId: livestockId,
+    userId,
+    lines: [
+      { accountCode: '1050', debitAmount: amount, creditAmount: 0 },
+      { accountCode: '1010', debitAmount: 0, creditAmount: amount },
+    ],
+  });
+}
+
+export async function postLivestockSaleJournalEntry(c: any, revenue: number, cost: number, description: string, transactionId: string, userId?: string) {
+  return createAndPostJournalEntry(c, {
+    description: `Sale of Livestock: ${description}`,
+    referenceType: 'MANUAL',
+    referenceId: transactionId,
+    userId,
+    lines: [
+      { accountCode: '1010', debitAmount: revenue, creditAmount: 0 },
+      { accountCode: '4030', debitAmount: 0, creditAmount: revenue },
+      { accountCode: '5040', debitAmount: cost, creditAmount: 0 },
+      { accountCode: '1050', debitAmount: 0, creditAmount: cost },
+    ],
+  });
+}
+
+export async function postLivestockExpenseJournalEntry(c: any, amount: number, title: string, expenseId: string, userId?: string) {
+  return createAndPostJournalEntry(c, {
+    description: `Livestock Expense Paid: ${title}`,
+    referenceType: 'MANUAL',
+    referenceId: expenseId,
+    userId,
+    lines: [
+      { accountCode: '6080', debitAmount: amount, creditAmount: 0 },
+      { accountCode: '1010', debitAmount: 0, creditAmount: amount },
+    ],
+  });
+}
+
+export async function postLivestockDeathJournalEntry(c: any, costValue: number, description: string, transactionId: string, userId?: string) {
+  return createAndPostJournalEntry(c, {
+    description: `Livestock Loss/Death: ${description}`,
+    referenceType: 'MANUAL',
+    referenceId: transactionId,
+    userId,
+    lines: [
+      { accountCode: '5040', debitAmount: costValue, creditAmount: 0 },
+      { accountCode: '1050', debitAmount: 0, creditAmount: costValue },
+    ],
+  });
+}
+
+export async function postLivestockBirthJournalEntry(c: any, estimatedValue: number, description: string, transactionId: string, userId?: string) {
+  return createAndPostJournalEntry(c, {
+    description: `Livestock Birth: ${description}`,
+    referenceType: 'MANUAL',
+    referenceId: transactionId,
+    userId,
+    lines: [
+      { accountCode: '1050', debitAmount: estimatedValue, creditAmount: 0 },
+      { accountCode: '4030', debitAmount: 0, creditAmount: estimatedValue },
+    ],
+  });
+}
+
+export async function postPropertySaleJournalEntry(c: any, salePrice: number, bookValue: number, propertyName: string, propertyId: string, userId?: string) {
+  const diff = salePrice - bookValue;
+  const lines: JournalLineInput[] = [
+    { accountCode: '1010', debitAmount: salePrice, creditAmount: 0 },
+    { accountCode: '1040', debitAmount: 0, creditAmount: bookValue },
+  ];
+  if (diff > 0) {
+    // Gain on sale
+    lines.push({ accountCode: '4020', debitAmount: 0, creditAmount: diff });
+  } else if (diff < 0) {
+    // Loss on sale
+    lines.push({ accountCode: '6070', debitAmount: Math.abs(diff), creditAmount: 0 });
+  }
+  return createAndPostJournalEntry(c, {
+    description: `Sale of Property: ${propertyName}`,
+    referenceType: 'MANUAL',
+    referenceId: propertyId,
+    userId,
+    lines,
+  });
+}
+
 // ─── NOTE: Why fiscal_period is not cached here ────────────────────────────────
 // Posting to a closed or stale fiscal period silently corrupts financial reports.
 // Unlike chart_of_accounts (which is essentially static config), fiscal periods

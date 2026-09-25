@@ -19,6 +19,7 @@ import {
   MapPin,
   UserCheck,
   Receipt,
+  Landmark,
 } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { useAuth } from '../contexts/AuthContext';
@@ -34,6 +35,7 @@ const navItems = [
   { label: 'Sales', path: '/sales', icon: ShoppingCart, permission: 'manage_sales' },
   { label: 'Customers', path: '/customers', icon: UserCheck, permission: 'manage_sales' },
   { label: 'Expenses', path: '/expenses', icon: Receipt, permission: 'manage_purchasing' },
+  { label: 'Owner\'s Assets', path: '/assets', icon: Landmark, permission: '', adminOnly: true },
   { label: 'Reports', path: '/reports', icon: BarChart3, permission: 'view_reports' },
   { label: 'Accounting', path: '/accounting', icon: BookOpen, permission: 'view_reports', adminOnly: true },
   { label: 'Audit Log', path: '/audit', icon: FileClock, permission: 'view_reports', adminOnly: true },
