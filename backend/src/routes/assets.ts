@@ -92,7 +92,7 @@ assets.patch('/properties/:id', requirePermissions(['manage_purchasing']), async
 
     const updates = [];
     const vals = [];
-    const allowed = ['name', 'property_type', 'address', 'city', 'area_sqm', 'current_value', 'status', 'notes'];
+    const allowed = ['name', 'property_type', 'address', 'city', 'area_sqm', 'purchase_price', 'purchase_date', 'current_value', 'status', 'notes'];
     
     for (const key of allowed) {
       if (body[key] !== undefined) {
@@ -131,6 +131,25 @@ assets.post('/properties/:id/sell', requirePermissions(['manage_purchasing']), a
     await postPropertySaleJournalEntry(c, salePrice, bookValue, String(property.name), id, userId);
     
     return c.json({ success: true });
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500);
+  }
+});
+
+assets.delete('/properties/:id', requirePermissions(['manage_purchasing']), async (c) => {
+  try {
+    const { id } = c.req.param();
+    const existing = await c.env.DB.prepare('SELECT * FROM properties WHERE id = ?').bind(id).first();
+    if (!existing) return c.json({ error: 'Property not found' }, 404);
+
+    const stmts = [
+      c.env.DB.prepare('DELETE FROM rental_payments WHERE lease_agreement_id IN (SELECT id FROM lease_agreements WHERE property_id = ?)').bind(id),
+      c.env.DB.prepare('DELETE FROM lease_agreements WHERE property_id = ?').bind(id),
+      c.env.DB.prepare('DELETE FROM property_expenses WHERE property_id = ?').bind(id),
+      c.env.DB.prepare('DELETE FROM properties WHERE id = ?').bind(id),
+    ];
+    await c.env.DB.batch(stmts);
+    return c.json({ success: true, message: 'Property deleted successfully' });
   } catch (err: any) {
     return c.json({ error: err.message }, 500);
   }
@@ -186,6 +205,46 @@ assets.patch('/tenants/:id', requirePermissions(['manage_purchasing']), async (c
     }
     const tenant = await c.env.DB.prepare('SELECT * FROM tenants WHERE id = ?').bind(id).first();
     return c.json(tenant);
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500);
+  }
+});
+
+assets.get('/tenants/:id', requirePermissions(['view_reports']), async (c) => {
+  const { id } = c.req.param();
+  const tenant = await c.env.DB.prepare('SELECT * FROM tenants WHERE id = ?').bind(id).first();
+  if (!tenant) return c.json({ error: 'Tenant not found' }, 404);
+
+  const { results: leases } = await c.env.DB.prepare(`
+    SELECT l.*, p.name as property_name
+    FROM lease_agreements l
+    JOIN properties p ON p.id = l.property_id
+    WHERE l.tenant_id = ?
+    ORDER BY l.created_at DESC
+  `).bind(id).all();
+
+  return c.json({ ...tenant, leases: leases || [] });
+});
+
+assets.delete('/tenants/:id', requirePermissions(['manage_purchasing']), async (c) => {
+  try {
+    const { id } = c.req.param();
+    const existing = await c.env.DB.prepare('SELECT * FROM tenants WHERE id = ?').bind(id).first();
+    if (!existing) return c.json({ error: 'Tenant not found' }, 404);
+
+    const { results: activeLeases } = await c.env.DB.prepare('SELECT property_id FROM lease_agreements WHERE tenant_id = ?').bind(id).all();
+    const stmts = [
+      c.env.DB.prepare('DELETE FROM rental_payments WHERE lease_agreement_id IN (SELECT id FROM lease_agreements WHERE tenant_id = ?)').bind(id),
+      c.env.DB.prepare('DELETE FROM lease_agreements WHERE tenant_id = ?').bind(id),
+      c.env.DB.prepare('DELETE FROM tenants WHERE id = ?').bind(id),
+    ];
+    for (const l of (activeLeases || []) as any[]) {
+      if (l.property_id) {
+        stmts.push(c.env.DB.prepare("UPDATE properties SET status = 'VACANT', updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(l.property_id));
+      }
+    }
+    await c.env.DB.batch(stmts);
+    return c.json({ success: true, message: 'Tenant deleted successfully' });
   } catch (err: any) {
     return c.json({ error: err.message }, 500);
   }
@@ -270,6 +329,32 @@ assets.patch('/lease-agreements/:id', requirePermissions(['manage_purchasing']),
 
     const updated = await c.env.DB.prepare('SELECT * FROM lease_agreements WHERE id = ?').bind(id).first();
     return c.json(updated);
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500);
+  }
+});
+
+assets.delete('/lease-agreements/:id', requirePermissions(['manage_purchasing']), async (c) => {
+  try {
+    const { id } = c.req.param();
+    const existing: any = await c.env.DB.prepare('SELECT * FROM lease_agreements WHERE id = ?').bind(id).first();
+    if (!existing) return c.json({ error: 'Lease agreement not found' }, 404);
+
+    const stmts = [
+      c.env.DB.prepare('DELETE FROM rental_payments WHERE lease_agreement_id = ?').bind(id),
+      c.env.DB.prepare('DELETE FROM lease_agreements WHERE id = ?').bind(id),
+    ];
+
+    const otherActive: any = await c.env.DB.prepare(
+      "SELECT COUNT(*) as count FROM lease_agreements WHERE property_id = ? AND id != ? AND status = 'ACTIVE'"
+    ).bind(existing.property_id, id).first();
+
+    if (!otherActive || Number(otherActive.count) === 0) {
+      stmts.push(c.env.DB.prepare("UPDATE properties SET status = 'VACANT', updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(existing.property_id));
+    }
+
+    await c.env.DB.batch(stmts);
+    return c.json({ success: true, message: 'Lease agreement deleted successfully' });
   } catch (err: any) {
     return c.json({ error: err.message }, 500);
   }
@@ -386,6 +471,16 @@ assets.get('/property-expenses', requirePermissions(['view_reports']), async (c)
   const bound = params.length ? stmt.bind(...params) : stmt;
   const { results } = await bound.all();
   return c.json(results || []);
+});
+
+assets.delete('/property-expenses/:id', requirePermissions(['manage_purchasing']), async (c) => {
+  try {
+    const { id } = c.req.param();
+    await c.env.DB.prepare('DELETE FROM property_expenses WHERE id = ?').bind(id).run();
+    return c.json({ success: true, message: 'Expense deleted successfully' });
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500);
+  }
 });
 
 // ==========================================
@@ -576,6 +671,24 @@ assets.post('/livestock/:id/death', requirePermissions(['manage_purchasing']), a
   }
 });
 
+assets.delete('/livestock/:id', requirePermissions(['manage_purchasing']), async (c) => {
+  try {
+    const { id } = c.req.param();
+    const existing = await c.env.DB.prepare('SELECT * FROM livestock WHERE id = ?').bind(id).first();
+    if (!existing) return c.json({ error: 'Livestock not found' }, 404);
+
+    const stmts = [
+      c.env.DB.prepare('DELETE FROM livestock_transactions WHERE livestock_id = ?').bind(id),
+      c.env.DB.prepare('DELETE FROM livestock_expenses WHERE livestock_id = ?').bind(id),
+      c.env.DB.prepare('DELETE FROM livestock WHERE id = ?').bind(id),
+    ];
+    await c.env.DB.batch(stmts);
+    return c.json({ success: true, message: 'Livestock deleted successfully' });
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500);
+  }
+});
+
 // ==========================================
 // LIVESTOCK EXPENSES
 // ==========================================
@@ -611,6 +724,16 @@ assets.get('/livestock-expenses', requirePermissions(['view_reports']), async (c
     ORDER BY e.expense_date DESC, e.created_at DESC
   `).all();
   return c.json(results || []);
+});
+
+assets.delete('/livestock-expenses/:id', requirePermissions(['manage_purchasing']), async (c) => {
+  try {
+    const { id } = c.req.param();
+    await c.env.DB.prepare('DELETE FROM livestock_expenses WHERE id = ?').bind(id).run();
+    return c.json({ success: true, message: 'Livestock expense deleted successfully' });
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500);
+  }
 });
 
 // ==========================================

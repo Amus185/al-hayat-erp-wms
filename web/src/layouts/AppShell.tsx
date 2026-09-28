@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { NavLink, useNavigate, useLocation } from 'react-router-dom';
 import {
   BarChart3,
@@ -22,9 +22,12 @@ import {
   Landmark,
   Factory,
   ArrowLeftRight,
+  CheckCheck,
+  Clock,
 } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { useAuth } from '../contexts/AuthContext';
+import { apiGet, apiPost } from '../api/client';
 
 const navItems = [
   { label: 'Dashboard', path: '/', icon: Home, permission: '' },
@@ -86,6 +89,79 @@ export function AppShell({ children }: AppShellProps) {
   const navigate = useNavigate();
   const [isMobileOpen, setIsMobileOpen] = useState(false);
   const pageTitle = usePageTitle();
+
+  // Notification states
+  const [notifications, setNotifications] = useState<any[]>([]);
+  const [showNotifications, setShowNotifications] = useState(false);
+  const [readIds, setReadIds] = useState<string[]>(() => {
+    try {
+      const stored = localStorage.getItem('alhayat_read_notifications');
+      return stored ? JSON.parse(stored) : [];
+    } catch {
+      return [];
+    }
+  });
+  const popoverRef = useRef<HTMLDivElement>(null);
+
+  const loadNotifications = useCallback(async () => {
+    try {
+      const data = await apiGet<any[]>('/notifications');
+      if (Array.isArray(data)) {
+        setNotifications(data);
+      }
+    } catch (err) {
+      console.warn('Failed to load notifications:', err);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadNotifications();
+    const interval = setInterval(loadNotifications, 30000);
+    return () => clearInterval(interval);
+  }, [loadNotifications]);
+
+  // Click outside to close notifications popover
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (popoverRef.current && !popoverRef.current.contains(event.target as Node)) {
+        setShowNotifications(false);
+      }
+    };
+    if (showNotifications) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [showNotifications]);
+
+  const unreadCount = notifications.filter(
+    (n) => !readIds.includes(n.id) && !n.read_at
+  ).length;
+
+  const handleNotificationClick = (item: any) => {
+    if (!readIds.includes(item.id)) {
+      const updated = [...readIds, item.id];
+      setReadIds(updated);
+      try {
+        localStorage.setItem('alhayat_read_notifications', JSON.stringify(updated));
+      } catch { /* */ }
+    }
+    setShowNotifications(false);
+    if (item.link) {
+      navigate(item.link);
+    }
+  };
+
+  const handleMarkAllAsRead = async () => {
+    const allIds = notifications.map((n) => n.id);
+    const merged = Array.from(new Set([...readIds, ...allIds]));
+    setReadIds(merged);
+    try {
+      localStorage.setItem('alhayat_read_notifications', JSON.stringify(merged));
+      await apiPost('/notifications/read');
+    } catch { /* */ }
+  };
 
   const handleLogout = () => {
     setIsMobileOpen(false);
@@ -195,9 +271,91 @@ export function AppShell({ children }: AppShellProps) {
             </div>
           </div>
           <div className="topbar__actions">
-            <button type="button" title="Notifications">
-              <Bell size={18} />
-            </button>
+            <div className="notification-btn-wrapper" ref={popoverRef}>
+              <button
+                type="button"
+                title="Notifications"
+                onClick={() => setShowNotifications((prev) => !prev)}
+                aria-expanded={showNotifications}
+              >
+                <Bell size={18} />
+                {unreadCount > 0 && (
+                  <span className="notification-badge">
+                    {unreadCount > 99 ? '99+' : unreadCount}
+                  </span>
+                )}
+              </button>
+
+              {showNotifications && (
+                <div className="notification-popover">
+                  <div className="notification-popover__header">
+                    <h3>
+                      Notifications
+                      <span className={`notification-popover__count ${unreadCount > 0 ? 'notification-popover__count--active' : ''}`}>
+                        {unreadCount} new
+                      </span>
+                    </h3>
+                    {unreadCount > 0 && (
+                      <button
+                        type="button"
+                        className="notification-popover__mark-btn"
+                        onClick={handleMarkAllAsRead}
+                      >
+                        <CheckCheck size={14} style={{ display: 'inline', marginRight: 4 }} />
+                        Mark all as read
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="notification-popover__list">
+                    {notifications.length === 0 ? (
+                      <div className="notification-popover__empty">
+                        No pending delivery or transfer alerts.
+                      </div>
+                    ) : (
+                      notifications.map((item) => {
+                        const isUnread = !readIds.includes(item.id) && !item.read_at;
+                        return (
+                          <div
+                            key={item.id}
+                            className={`notification-popover__item ${isUnread ? 'unread' : ''}`}
+                            onClick={() => handleNotificationClick(item)}
+                          >
+                            <div className={`notification-item__icon notification-item__icon--${(item.type || 'system').toLowerCase()}`}>
+                              {item.type === 'DELIVERY' ? (
+                                <Truck size={16} />
+                              ) : item.type === 'TRANSFER' ? (
+                                <ArrowLeftRight size={16} />
+                              ) : (
+                                <Bell size={16} />
+                              )}
+                            </div>
+                            <div className="notification-item__content">
+                              <div className="notification-item__title">
+                                <span>{item.title}</span>
+                                {item.status && (
+                                  <span style={{ fontSize: 10, padding: '1px 5px', borderRadius: 4, background: '#f1f5f9', fontWeight: 600 }}>
+                                    {item.status}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="notification-item__message">
+                                {item.message}
+                              </div>
+                              <div className="notification-item__date">
+                                <Clock size={11} style={{ display: 'inline', marginRight: 4 }} />
+                                <span>{item.date ? new Date(item.date).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : 'Recent'}</span>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
             <div className="user-chip">
               {user?.fullName || 'Guest User'}
             </div>
