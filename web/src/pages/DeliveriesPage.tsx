@@ -390,7 +390,8 @@ export function DeliveriesPage() {
   };
 
   // Filtered deliveries
-  const filtered = deliveries.filter((d) => {
+  const deliveryList = Array.isArray(deliveries) ? deliveries : [];
+  const filtered = deliveryList.filter((d) => {
     if (activeTab !== 'ALL' && d.status !== activeTab) return false;
     const q = searchQuery.toLowerCase().trim();
     if (q) {
@@ -405,11 +406,11 @@ export function DeliveriesPage() {
   });
 
   const tabItems = [
-    { key: 'ALL', label: 'All Deliveries', count: deliveries.length },
-    { key: 'PENDING', label: 'Pending', count: deliveries.filter((d) => d.status === 'PENDING').length },
-    { key: 'SCHEDULED', label: 'Scheduled', count: deliveries.filter((d) => d.status === 'SCHEDULED').length },
-    { key: 'DISPATCHED', label: 'In Transit', count: deliveries.filter((d) => d.status === 'DISPATCHED').length },
-    { key: 'DELIVERED', label: 'Delivered', count: deliveries.filter((d) => d.status === 'DELIVERED').length },
+    { key: 'ALL', label: 'All Deliveries', count: deliveryList.length },
+    { key: 'PENDING', label: 'Pending', count: deliveryList.filter((d) => d.status === 'PENDING').length },
+    { key: 'SCHEDULED', label: 'Scheduled', count: deliveryList.filter((d) => d.status === 'SCHEDULED').length },
+    { key: 'DISPATCHED', label: 'In Transit', count: deliveryList.filter((d) => d.status === 'DISPATCHED').length },
+    { key: 'DELIVERED', label: 'Delivered', count: deliveryList.filter((d) => d.status === 'DELIVERED').length },
   ];
 
   const columns: Column<Delivery>[] = [
@@ -625,7 +626,7 @@ export function DeliveriesPage() {
 
       {/* Tabs & Search */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px', marginBottom: '14px' }}>
-        <Tabs items={tabItems} activeKey={activeTab} onChange={setActiveTab} />
+        <Tabs tabs={tabItems} activeTab={activeTab} onTabChange={setActiveTab} />
         <div style={{ position: 'relative', width: '280px' }}>
           <Search size={16} style={{ position: 'absolute', left: '10px', top: '10px', color: '#94a3b8' }} />
           <input
@@ -647,7 +648,7 @@ export function DeliveriesPage() {
           <DataTable
             data={filtered}
             columns={columns}
-            keyField="id"
+            keyExtractor={(row) => row.id}
             emptyMessage="No delivery records found matching current criteria."
           />
         )}
@@ -664,7 +665,7 @@ export function DeliveriesPage() {
             <SearchableSelect
               options={[
                 { value: '', label: '— No Sales Order (Direct Delivery) —' },
-                ...salesOrders.map((s) => ({
+                ...(Array.isArray(salesOrders) ? salesOrders : []).map((s) => ({
                   value: s.id,
                   label: `${s.order_number} (${s.customer_name || 'Walk-in'} - ${s.status})`,
                 })),
@@ -726,7 +727,7 @@ export function DeliveriesPage() {
                 onChange={(e) => setCreateForm((p) => ({ ...p, sourceWarehouseId: e.target.value }))}
               >
                 <option value="">Central Dispatch Hub</option>
-                {warehouses.map((w) => (
+                {(Array.isArray(warehouses) ? warehouses : []).map((w) => (
                   <option key={w.id} value={w.id}>{w.name}</option>
                 ))}
               </select>

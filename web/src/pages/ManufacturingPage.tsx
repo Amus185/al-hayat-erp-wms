@@ -727,16 +727,16 @@ export function ManufacturingPage() {
           <div style={{ padding: '40px' }}><LoadingSpinner message="Loading manufacturing lines..." /></div>
         ) : topTab === 'WORK_ORDERS' ? (
           <DataTable
-            data={filteredWo}
+            data={Array.isArray(filteredWo) ? filteredWo : []}
             columns={woColumns}
-            keyField="id"
+            keyExtractor={(row) => row.id}
             emptyMessage="No manufacturing work orders recorded yet. Click 'New Work Order' to start production."
           />
         ) : (
           <DataTable
-            data={boms}
+            data={Array.isArray(boms) ? boms : []}
             columns={bomColumns}
-            keyField="id"
+            keyExtractor={(row) => row.id}
             emptyMessage="No Bill of Materials (BOM) recipes defined yet. Click 'New BOM Recipe' to add furniture blueprints."
           />
         )}
