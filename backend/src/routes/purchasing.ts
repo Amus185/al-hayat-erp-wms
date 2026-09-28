@@ -141,7 +141,8 @@ purchasing.get('/orders', async (c) => {
     const orderTotal = Number(row.order_total || row.total_amount || 0);
     const invoiceTotal = row.invoice_total != null ? Number(row.invoice_total) : orderTotal;
     const invoiceDiscount = Number(row.invoice_discount || 0);
-    const netTotal = Math.max(0, invoiceTotal - invoiceDiscount) || orderTotal;
+    const computedNet = invoiceTotal > invoiceDiscount ? (invoiceTotal - invoiceDiscount) : orderTotal;
+    const netTotal = orderTotal > 0 ? orderTotal : computedNet;
     const paid = Number(row.amount_paid || 0);
     const balance = Math.max(0, netTotal - paid);
     let payment_status = 'UNPAID';
@@ -225,14 +226,14 @@ purchasing.get('/orders/:id', async (c) => {
   if (!invoice) {
     const invId = `pi-${id}`;
     const invNum = `PI-${(po as any).po_number || Date.now()}`;
-    const tot = Number((po as any).total_amount || 0);
+    const grossTot = enrichedLines.reduce((acc: number, l: any) => acc + (Number(l.quantity_ordered || l.quantity) * Number(l.unit_cost)), 0);
     const disc = enrichedLines.reduce((acc: number, l: any) => acc + Number(l.discount_amount || 0), 0);
     try {
       await c.env.DB.prepare(`
         INSERT INTO purchase_invoices (id, invoice_number, purchase_order_id, total_amount, discount_amount, status)
         VALUES (?, ?, ?, ?, ?, 'UNPAID')
         ON CONFLICT (id) DO NOTHING
-      `).bind(invId, invNum, id, tot, disc).run();
+      `).bind(invId, invNum, id, grossTot || Number((po as any).total_amount || 0), disc).run();
       invoice = await c.env.DB.prepare('SELECT * FROM purchase_invoices WHERE id = ?').bind(invId).first();
     } catch {
       // Ignore conflict
@@ -353,14 +354,14 @@ purchasing.post('/orders', requirePermissions(['manage_purchasing']), async (c) 
   const id = uuidv4();
   const poNumber = `PO-${Date.now()}`;
 
-  let totalAmount = 0;
+  let grossAmount = 0;
   let totalDiscount = 0;
   for (const line of body.lines) {
     const discountAmount = Number(line.discountAmount || 0);
     totalDiscount += discountAmount;
-    const lineTotal = (line.quantity * line.unitCost) - discountAmount;
-    totalAmount += lineTotal;
+    grossAmount += (line.quantity * line.unitCost);
   }
+  const totalAmount = grossAmount - totalDiscount;
 
   const stmts = [];
   stmts.push(c.env.DB.prepare(`
@@ -382,7 +383,7 @@ purchasing.post('/orders', requirePermissions(['manage_purchasing']), async (c) 
   stmts.push(c.env.DB.prepare(`
     INSERT INTO purchase_invoices (id, invoice_number, purchase_order_id, total_amount, discount_amount, status)
     VALUES (?, ?, ?, ?, ?, 'UNPAID')
-  `).bind(invoiceId, invoiceNumber, id, totalAmount, totalDiscount));
+  `).bind(invoiceId, invoiceNumber, id, grossAmount, totalDiscount));
 
   stmts.push(createAuditLogStmt(c, 'PURCHASE_ORDER_CREATE', 'purchase_orders', id, null, { poNumber, supplierId: body.supplierId, lines: body.lines }));
   await c.env.DB.batch(stmts);

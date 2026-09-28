@@ -272,12 +272,25 @@ export async function ensurePostgresInit(pool: Pool) {
         'pi-' || po.id,
         'PI-' || po.po_number,
         po.id,
-        COALESCE(NULLIF(po.total_amount, 0), (SELECT COALESCE(SUM(line_total), 0) FROM purchase_order_lines WHERE purchase_order_id = po.id), 0),
-        COALESCE((SELECT COALESCE(SUM(discount_amount), 0) FROM purchase_order_lines WHERE purchase_order_id = po.id), 0),
+        COALESCE((SELECT SUM(quantity * unit_cost) FROM purchase_order_lines WHERE purchase_order_id = po.id), po.total_amount, 0),
+        COALESCE((SELECT SUM(discount_amount) FROM purchase_order_lines WHERE purchase_order_id = po.id), 0),
         'UNPAID',
         po.created_at
       FROM purchase_orders po
       WHERE NOT EXISTS (SELECT 1 FROM purchase_invoices pi WHERE pi.purchase_order_id = po.id);
+
+      -- Reconcile existing purchase_invoices total_amount to gross line sum
+      UPDATE purchase_invoices pi
+      SET total_amount = COALESCE((
+        SELECT SUM(pol.quantity * pol.unit_cost)
+        FROM purchase_order_lines pol
+        WHERE pol.purchase_order_id = pi.purchase_order_id
+      ), pi.total_amount),
+      discount_amount = COALESCE((
+        SELECT SUM(pol.discount_amount)
+        FROM purchase_order_lines pol
+        WHERE pol.purchase_order_id = pi.purchase_order_id
+      ), pi.discount_amount);
 
       -- Reconcile purchase order statuses based on actual received quantities
       UPDATE purchase_orders po
