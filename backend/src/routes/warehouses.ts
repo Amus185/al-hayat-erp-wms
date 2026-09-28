@@ -8,7 +8,15 @@ const warehouses = new Hono<{ Bindings: Env }>();
 warehouses.use('/*', authMiddleware);
 
 warehouses.get('/', async (c) => {
-  const { results } = await c.env.DB.prepare('SELECT * FROM warehouses ORDER BY name').all();
+  const { results } = await c.env.DB.prepare(`
+    SELECT w.*,
+      (SELECT COUNT(*) FROM warehouse_locations wl WHERE wl.warehouse_id = w.id) AS location_count,
+      (SELECT COALESCE(SUM(quantity_on_hand), 0) FROM inventory_stock s WHERE s.warehouse_id = w.id AND s.owner_type = 'WAREHOUSE' AND s.quantity_on_hand > 0) AS total_units,
+      (SELECT COUNT(DISTINCT product_id) FROM inventory_stock s WHERE s.warehouse_id = w.id AND s.owner_type = 'WAREHOUSE' AND s.quantity_on_hand > 0) AS total_skus,
+      (SELECT COALESCE(SUM(s.quantity_on_hand * p.cost_price), 0) FROM inventory_stock s JOIN products p ON p.id = s.product_id WHERE s.warehouse_id = w.id AND s.owner_type = 'WAREHOUSE' AND s.quantity_on_hand > 0) AS inventory_value
+    FROM warehouses w
+    ORDER BY w.name ASC
+  `).all();
   return c.json(results);
 });
 
@@ -69,7 +77,7 @@ warehouses.post('/:id/locations', requirePermissions(['manage_inventory']), asyn
 warehouses.get('/:id/inventory', async (c) => {
   const id = c.req.param('id');
   const { results } = await c.env.DB.prepare(`
-    SELECT i.*, p.name, p.sku, p.barcode
+    SELECT i.*, p.name, p.sku, p.barcode, COALESCE(p.cost_price, 0) AS cost_price, COALESCE(p.selling_price, 0) AS selling_price
     FROM inventory_stock i
     JOIN products p ON p.id = i.product_id
     WHERE i.warehouse_id = ? AND i.owner_type = 'WAREHOUSE' AND i.quantity_on_hand > 0
@@ -96,12 +104,12 @@ warehouses.get('/:id/summary', async (c) => {
   ).bind(id).first();
 
   const receiptsCount = await c.env.DB.prepare(
-    'SELECT COUNT(*) as count FROM goods_receipts WHERE destination_warehouse_id = ?'
-  ).bind(id).first();
+    'SELECT COUNT(*) as count FROM goods_receipts WHERE warehouse_id = ? OR destination_warehouse_id = ?'
+  ).bind(id, id).first();
 
   const transfersIn = await c.env.DB.prepare(
-    "SELECT COUNT(*) as count FROM transfers WHERE destination_warehouse_id = ? AND status = 'COMPLETED'"
-  ).bind(id).first();
+    "SELECT COUNT(*) as count FROM transfers WHERE (destination_warehouse_id = ? OR dest_warehouse_id = ?) AND status = 'COMPLETED'"
+  ).bind(id, id).first();
 
   const transfersOut = await c.env.DB.prepare(
     "SELECT COUNT(*) as count FROM transfers WHERE source_warehouse_id = ? AND status = 'COMPLETED'"
