@@ -100,8 +100,12 @@ purchasing.get('/orders', async (c) => {
 
   let query = `
     SELECT po.*, s.name AS supplier_name,
-           pi.id AS purchase_invoice_id, pi.total_amount AS invoice_total,
-           COALESCE(pi.discount_amount, 0) AS invoice_discount,
+           COALESCE(NULLIF(po.total_amount, 0), (SELECT COALESCE(SUM(line_total), 0) FROM purchase_order_lines WHERE purchase_order_id = po.id), 0) AS order_total,
+           (SELECT COALESCE(SUM(quantity), 0) FROM purchase_order_lines WHERE purchase_order_id = po.id) AS total_qty_ordered,
+           (SELECT COALESCE(SUM(quantity_received), 0) FROM purchase_order_lines WHERE purchase_order_id = po.id) AS total_qty_received,
+           pi.id AS purchase_invoice_id,
+           COALESCE(pi.total_amount, po.total_amount, (SELECT COALESCE(SUM(line_total), 0) FROM purchase_order_lines WHERE purchase_order_id = po.id)) AS invoice_total,
+           COALESCE(pi.discount_amount, (SELECT COALESCE(SUM(discount_amount), 0) FROM purchase_order_lines WHERE purchase_order_id = po.id), 0) AS invoice_discount,
            COALESCE((SELECT SUM(pip.amount) FROM purchase_invoice_payments pip WHERE pip.purchase_invoice_id = pi.id), 0) AS amount_paid
     FROM purchase_orders po
     JOIN suppliers s ON s.id = po.supplier_id
@@ -132,16 +136,28 @@ purchasing.get('/orders', async (c) => {
   const stmt = c.env.DB.prepare(query);
   const { results } = params.length > 0 ? await stmt.bind(...params).all() : await stmt.all();
 
-  // Compute payment_status and balance for each row
+  // Compute net_total, payment_status, balance and remaining items for each row
   const enriched = (results || []).map((row: any) => {
-    if (!row.purchase_invoice_id) return { ...row, payment_status: null, balance: null };
-    const netTotal = Math.max(0, Number(row.invoice_total || 0) - Number(row.invoice_discount || 0));
+    const orderTotal = Number(row.order_total || row.total_amount || 0);
+    const invoiceTotal = row.invoice_total != null ? Number(row.invoice_total) : orderTotal;
+    const invoiceDiscount = Number(row.invoice_discount || 0);
+    const netTotal = Math.max(0, invoiceTotal - invoiceDiscount) || orderTotal;
     const paid = Number(row.amount_paid || 0);
     const balance = Math.max(0, netTotal - paid);
     let payment_status = 'UNPAID';
     if (paid >= netTotal && netTotal > 0) payment_status = 'PAID';
     else if (paid > 0) payment_status = 'PARTIALLY_PAID';
-    return { ...row, net_total: netTotal, balance, payment_status };
+
+    return {
+      ...row,
+      total_amount: orderTotal,
+      net_total: netTotal,
+      balance,
+      payment_status,
+      total_qty_ordered: Number(row.total_qty_ordered || 0),
+      total_qty_received: Number(row.total_qty_received || 0),
+      total_qty_remaining: Math.max(0, Number(row.total_qty_ordered || 0) - Number(row.total_qty_received || 0))
+    };
   });
 
   // Filter by computed payment status if requested
@@ -155,7 +171,8 @@ purchasing.get('/orders', async (c) => {
 purchasing.get('/orders/:id', async (c) => {
   const id = c.req.param('id');
   const po = await c.env.DB.prepare(`
-    SELECT po.*, s.name AS supplier_name
+    SELECT po.*, s.name AS supplier_name,
+      COALESCE(NULLIF(po.total_amount, 0), (SELECT COALESCE(SUM(line_total), 0) FROM purchase_order_lines WHERE purchase_order_id = po.id), 0) AS total_amount
     FROM purchase_orders po
     JOIN suppliers s ON s.id = po.supplier_id
     WHERE po.id = ?
@@ -165,20 +182,65 @@ purchasing.get('/orders/:id', async (c) => {
 
   const { results: lines } = await c.env.DB.prepare(`
     SELECT pol.*, pol.quantity AS quantity_ordered, p.name as product_name, p.sku as variant_sku,
-      (SELECT COALESCE(SUM(quantity_received), 0) FROM goods_receipt_lines grl 
-       JOIN goods_receipts gr ON gr.id = grl.goods_receipt_id 
-       WHERE gr.purchase_order_id = ? AND grl.product_id = pol.product_id) as quantity_received
+      COALESCE(pol.quantity_received, (
+        SELECT COALESCE(SUM(grl.quantity_received), 0) 
+        FROM goods_receipt_lines grl 
+        JOIN goods_receipts gr ON gr.id = grl.goods_receipt_id 
+        WHERE gr.purchase_order_id = pol.purchase_order_id AND grl.product_id = pol.product_id
+      ), 0) as quantity_received
     FROM purchase_order_lines pol
     JOIN products p ON p.id = pol.product_id
     WHERE pol.purchase_order_id = ?
-  `).bind(id, id).all();
+    ORDER BY pol.id ASC
+  `).bind(id).all();
 
-  const invoice = await c.env.DB.prepare(
+  const enrichedLines = (lines || []).map((l: any) => {
+    const ordered = Number(l.quantity_ordered || l.quantity || 0);
+    const received = Number(l.quantity_received || 0);
+    return {
+      ...l,
+      quantity_ordered: ordered,
+      quantity_received: received,
+      quantity_remaining: Math.max(0, ordered - received),
+    };
+  });
+
+  // Fetch all Goods Receipts history for this PO
+  const { results: receipts } = await c.env.DB.prepare(`
+    SELECT gr.id, gr.receipt_number, gr.received_at, gr.status, gr.notes,
+           w.name AS warehouse_name, u.full_name AS received_by_name,
+           (SELECT COALESCE(SUM(quantity_received), 0) FROM goods_receipt_lines WHERE goods_receipt_id = gr.id) AS total_items_received
+    FROM goods_receipts gr
+    LEFT JOIN warehouses w ON w.id = gr.warehouse_id
+    LEFT JOIN users u ON u.id = gr.received_by
+    WHERE gr.purchase_order_id = ?
+    ORDER BY gr.received_at DESC
+  `).bind(id).all();
+
+  // Ensure invoice exists or auto-backfill for existing PO
+  let invoice = await c.env.DB.prepare(
     'SELECT * FROM purchase_invoices WHERE purchase_order_id = ?'
   ).bind(id).first().catch(() => null);
 
-  // Enrich invoice with payment summary and history if invoice exists
-  let invoiceWithPayments = invoice || null;
+  if (!invoice) {
+    const invId = `pi-${id}`;
+    const invNum = `PI-${(po as any).po_number || Date.now()}`;
+    const tot = Number((po as any).total_amount || 0);
+    const disc = enrichedLines.reduce((acc: number, l: any) => acc + Number(l.discount_amount || 0), 0);
+    try {
+      await c.env.DB.prepare(`
+        INSERT INTO purchase_invoices (id, invoice_number, purchase_order_id, total_amount, discount_amount, status)
+        VALUES (?, ?, ?, ?, ?, 'UNPAID')
+        ON CONFLICT (id) DO NOTHING
+      `).bind(invId, invNum, id, tot, disc).run();
+      invoice = await c.env.DB.prepare('SELECT * FROM purchase_invoices WHERE id = ?').bind(invId).first();
+    } catch {
+      // Ignore conflict
+    }
+  }
+
+  // Enrich invoice with payment summary and history
+  let invoiceWithPayments = null;
   if (invoice) {
     const piSummary = await getPurchaseInvoicePaymentSummary(
       c.env.DB,
@@ -196,7 +258,7 @@ purchasing.get('/orders/:id', async (c) => {
     invoiceWithPayments = { ...invoice, ...piSummary, payments: payments || [] };
   }
 
-  return c.json({ ...po, lines, invoice: invoiceWithPayments });
+  return c.json({ ...po, lines: enrichedLines, receipts: receipts || [], invoice: invoiceWithPayments });
 });
 
 purchasing.get('/orders/:id/print-invoice', async (c) => {
@@ -292,8 +354,10 @@ purchasing.post('/orders', requirePermissions(['manage_purchasing']), async (c) 
   const poNumber = `PO-${Date.now()}`;
 
   let totalAmount = 0;
+  let totalDiscount = 0;
   for (const line of body.lines) {
     const discountAmount = Number(line.discountAmount || 0);
+    totalDiscount += discountAmount;
     const lineTotal = (line.quantity * line.unitCost) - discountAmount;
     totalAmount += lineTotal;
   }
@@ -308,9 +372,17 @@ purchasing.post('/orders', requirePermissions(['manage_purchasing']), async (c) 
     const discountAmount = Number(line.discountAmount || 0);
     const lineTotal = (line.quantity * line.unitCost) - discountAmount;
     stmts.push(c.env.DB.prepare(`
-      INSERT INTO purchase_order_lines (id, purchase_order_id, product_id, quantity, unit_cost, discount_amount, line_total) VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO purchase_order_lines (id, purchase_order_id, product_id, quantity, unit_cost, discount_amount, line_total, quantity_received) VALUES (?, ?, ?, ?, ?, ?, ?, 0)
     `).bind(uuidv4(), id, line.productId, line.quantity, line.unitCost, discountAmount, lineTotal));
   }
+
+  // Create corresponding purchase invoice immediately so payments and AP balance can be tracked from inception
+  const invoiceId = `pi-${id}`;
+  const invoiceNumber = `PI-${poNumber}`;
+  stmts.push(c.env.DB.prepare(`
+    INSERT INTO purchase_invoices (id, invoice_number, purchase_order_id, total_amount, discount_amount, status)
+    VALUES (?, ?, ?, ?, ?, 'UNPAID')
+  `).bind(invoiceId, invoiceNumber, id, totalAmount, totalDiscount));
 
   stmts.push(createAuditLogStmt(c, 'PURCHASE_ORDER_CREATE', 'purchase_orders', id, null, { poNumber, supplierId: body.supplierId, lines: body.lines }));
   await c.env.DB.batch(stmts);
@@ -326,134 +398,34 @@ purchasing.post('/orders', requirePermissions(['manage_purchasing']), async (c) 
 purchasing.post('/orders/:id/approve', requirePermissions(['manage_purchasing']), async (c) => {
   const id = c.req.param('id');
   const userId = c.get('jwtPayload').sub;
-  const body = await c.req.json().catch(() => ({})) as any;
 
-  // Fetch PO and validate
   const po = await c.env.DB.prepare(`
     SELECT po.*, s.name AS supplier_name
     FROM purchase_orders po
     JOIN suppliers s ON s.id = po.supplier_id
     WHERE po.id = ?
-  `).bind(id).first();
+  `).bind(id).first() as any;
+
   if (!po) return c.json({ message: 'Purchase order not found.' }, 404);
   if (po.status !== 'SUBMITTED') {
-    return c.json({ message: `Cannot approve: PO is currently '${po.status}'. Only SUBMITTED POs can be approved.` }, 400);
+    return c.json({ message: `Cannot approve: PO status is already '${po.status}'.` }, 400);
   }
 
-  // Resolve receiving warehouse: body.warehouseId > PO's stored warehouse_id > first warehouse
-  let warehouseId = body.warehouseId || po.warehouse_id;
-  if (!warehouseId) {
-    const firstWH = await c.env.DB.prepare('SELECT id FROM warehouses LIMIT 1').first();
-    warehouseId = firstWH?.id;
-  }
-  if (!warehouseId) return c.json({ message: 'No warehouse available to receive goods.' }, 400);
+  await c.env.DB.prepare(
+    "UPDATE purchase_orders SET status = 'APPROVED', approved_by = ?, approved_at = CURRENT_TIMESTAMP WHERE id = ?"
+  ).bind(userId, id).run();
 
-  // Fetch all PO lines
-  const { results: poLines } = await c.env.DB.prepare(`
-    SELECT pol.*, pol.quantity AS quantity_ordered, p.name AS product_name, p.sku AS variant_sku
-    FROM purchase_order_lines pol
-    JOIN products p ON p.id = pol.product_id
-    WHERE pol.purchase_order_id = ?
-  `).bind(id).all();
+  await logAudit(c, 'PURCHASE_ORDER_APPROVE', 'purchase_orders', id, { status: 'SUBMITTED' }, { status: 'APPROVED' });
 
-  if (!poLines || poLines.length === 0) {
-    return c.json({ message: 'PO has no line items.' }, 400);
-  }
+  const updated = await c.env.DB.prepare(
+    'SELECT po.*, s.name AS supplier_name FROM purchase_orders po JOIN suppliers s ON s.id = po.supplier_id WHERE po.id = ?'
+  ).bind(id).first();
 
-  // Pre-flight: gather existing inventory_stock rows
-  const stockLookups = new Map<string, string | null>();
-  await Promise.all(
-    poLines.map(async (line: any) => {
-      const existing = await c.env.DB.prepare(`
-        SELECT id FROM inventory_stock
-        WHERE product_id = ? AND owner_type = 'WAREHOUSE' AND warehouse_id = ? AND branch_id IS NULL
-      `).bind(line.product_id, warehouseId).first();
-      stockLookups.set(line.product_id, (existing?.id as string) || null);
-    })
-  );
-
-  // Build atomic batch
-  const receiptId = uuidv4();
-  const receiptNumber = `GR-${Date.now()}`;
-  const invoiceId = uuidv4();
-  const invoiceNumber = `PI-${Date.now()}`;
-  const approved_by = userId;
-
-  const stmts: any[] = [];
-
-  // 1. Approve PO → RECEIVED
-  stmts.push(c.env.DB.prepare(
-    "UPDATE purchase_orders SET status = 'RECEIVED', approved_by = ?, warehouse_id = ? WHERE id = ?"
-  ).bind(approved_by, warehouseId, id));
-
-  // 2. Create Goods Receipt header
-  stmts.push(c.env.DB.prepare(`
-    INSERT INTO goods_receipts (id, receipt_number, purchase_order_id, warehouse_id, received_by)
-    VALUES (?, ?, ?, ?, ?)
-  `).bind(receiptId, receiptNumber, id, warehouseId, userId));
-
-  // 3. Per-line: GR line + inventory transaction + UPSERT stock
-  let grandTotal = 0;
-  let totalDiscount = 0;
-  for (const line of poLines as any[]) {
-    const qty = Number(line.quantity_ordered);
-    const lineDiscount = Number(line.discount_amount || 0);
-    const lineTotal = Number(line.line_total) || (qty * Number(line.unit_cost)) - lineDiscount;
-    grandTotal += lineTotal;
-    totalDiscount += lineDiscount;
-
-    stmts.push(c.env.DB.prepare(`
-      INSERT INTO goods_receipt_lines (id, goods_receipt_id, product_id, warehouse_location_id, quantity_received)
-      VALUES (?, ?, ?, NULL, ?)
-    `).bind(uuidv4(), receiptId, line.product_id, qty));
-
-    stmts.push(c.env.DB.prepare(`
-      INSERT INTO inventory_transactions (id, product_id, transaction_type, quantity, destination_owner_type, destination_warehouse_id, destination_location_id, reference_type, reference_id, created_by)
-      VALUES (?, ?, 'PURCHASE_RECEIPT', ?, 'WAREHOUSE', ?, NULL, 'GOODS_RECEIPT', ?, ?)
-    `).bind(uuidv4(), line.product_id, qty, warehouseId, receiptId, userId));
-
-    const existingStockId = stockLookups.get(line.product_id);
-    if (existingStockId) {
-      stmts.push(c.env.DB.prepare(
-        'UPDATE inventory_stock SET quantity_on_hand = quantity_on_hand + ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?'
-      ).bind(qty, existingStockId));
-    } else {
-      stmts.push(c.env.DB.prepare(`
-        INSERT INTO inventory_stock (id, product_id, owner_type, warehouse_id, warehouse_location_id, quantity_on_hand)
-        VALUES (?, ?, 'WAREHOUSE', ?, NULL, ?)
-      `).bind(uuidv4(), line.product_id, warehouseId, qty));
-    }
-  }
-
-  // 4. Create Purchase Invoice — status UNPAID so payments can be tracked
-  stmts.push(c.env.DB.prepare(`
-    INSERT INTO purchase_invoices (id, invoice_number, purchase_order_id, total_amount, discount_amount, status)
-    VALUES (?, ?, ?, ?, ?, 'UNPAID')
-  `).bind(invoiceId, invoiceNumber, id, grandTotal, totalDiscount));
-
-  // 5. Audit log
-  stmts.push(createAuditLogStmt(c, 'PURCHASE_ORDER_APPROVE', 'purchase_orders', id,
-    { status: 'SUBMITTED' },
-    { status: 'RECEIVED', warehouseId, receiptNumber, invoiceNumber }
-  ));
-
-  await c.env.DB.batch(stmts);
-
-  // Automatically post double-entry GL journal entry for Purchase Approval & Receipt (Must succeed)
-  await postPurchaseApprovalJournalEntry(c, { id: po.id as string, po_number: (po as any).po_number || po.id, branch_id: (po as any).branch_id }, grandTotal, userId);
-
-  // Return full PO details
-  const updated = await c.env.DB.prepare(`SELECT po.*, s.name AS supplier_name FROM purchase_orders po JOIN suppliers s ON s.id = po.supplier_id WHERE po.id = ?`).bind(id).first();
-  const invoice = await c.env.DB.prepare('SELECT * FROM purchase_invoices WHERE purchase_order_id = ?').bind(id).first();
-  const piSummary = invoice
-    ? await getPurchaseInvoicePaymentSummary(c.env.DB, invoice.id as string, Number(invoice.total_amount), Number((invoice as any).discount_amount || 0))
-    : null;
-
-  return c.json({ ...updated, invoice: invoice ? { ...invoice, ...piSummary, payments: [] } : null });
+  return c.json(updated);
 });
 
 // ──────────────────────────────────────────────────────────────────────
-// GOODS RECEIPT — with validation and pre-flight stock lookups
+// GOODS RECEIPT — Partial or full receipt with inventory & GL updates
 // ──────────────────────────────────────────────────────────────────────
 purchasing.post('/receipts', requirePermissions(['manage_purchasing']), async (c) => {
   const body = await c.req.json();
@@ -461,61 +433,86 @@ purchasing.post('/receipts', requirePermissions(['manage_purchasing']), async (c
 
   // Validate PO exists and is in receivable state
   if (!body.purchaseOrderId) return c.json({ message: 'Purchase order ID is required.' }, 400);
-  const po = await c.env.DB.prepare('SELECT id, status FROM purchase_orders WHERE id = ?').bind(body.purchaseOrderId).first();
+  const po = await c.env.DB.prepare('SELECT * FROM purchase_orders WHERE id = ?').bind(body.purchaseOrderId).first() as any;
   if (!po) return c.json({ message: 'Purchase order not found.' }, 404);
-  if (po.status !== 'APPROVED' && po.status !== 'PARTIALLY_RECEIVED') {
-    return c.json({ message: `Cannot receive goods: PO is '${po.status}'. Must be APPROVED or PARTIALLY_RECEIVED.` }, 400);
+  if (po.status !== 'SUBMITTED' && po.status !== 'APPROVED' && po.status !== 'PARTIALLY_RECEIVED') {
+    return c.json({ message: `Cannot receive goods: PO is '${po.status}'. Must be SUBMITTED, APPROVED, or PARTIALLY_RECEIVED.` }, 400);
   }
 
-  // Validate warehouse
-  if (!body.warehouseId) return c.json({ message: 'Warehouse is required.' }, 400);
-  const wh = await c.env.DB.prepare('SELECT id FROM warehouses WHERE id = ?').bind(body.warehouseId).first();
-  if (!wh) return c.json({ message: 'Warehouse does not exist.' }, 400);
+  // Resolve warehouse
+  let warehouseId = body.warehouseId || po.warehouse_id;
+  if (!warehouseId) {
+    const firstWH = await c.env.DB.prepare('SELECT id FROM warehouses LIMIT 1').first();
+    warehouseId = firstWH?.id;
+  }
+  if (!warehouseId) return c.json({ message: 'No receiving warehouse specified.' }, 400);
 
   // Validate lines
   if (!Array.isArray(body.lines) || body.lines.length === 0) {
     return c.json({ message: 'At least one receipt line is required.' }, 400);
   }
 
+  // Fetch all PO lines with current received counts
+  const { results: poLines } = await c.env.DB.prepare(`
+    SELECT pol.*, p.name AS product_name,
+      COALESCE(pol.quantity_received, (
+        SELECT COALESCE(SUM(grl.quantity_received), 0)
+        FROM goods_receipt_lines grl
+        JOIN goods_receipts gr ON gr.id = grl.goods_receipt_id
+        WHERE gr.purchase_order_id = pol.purchase_order_id AND grl.product_id = pol.product_id
+      ), 0) AS current_received
+    FROM purchase_order_lines pol
+    JOIN products p ON p.id = pol.product_id
+    WHERE pol.purchase_order_id = ?
+  `).bind(body.purchaseOrderId).all();
+
+  const poLineMap = new Map<string, any>();
+  for (const pol of (poLines || []) as any[]) {
+    poLineMap.set(pol.product_id, pol);
+  }
+
+  let totalReceivedThisBatch = 0;
+  let batchValue = 0;
+
   for (let i = 0; i < body.lines.length; i++) {
     const line = body.lines[i];
     if (!line.productId) return c.json({ message: `Line ${i + 1}: productId is required.` }, 400);
-    if (!line.quantityReceived || !Number.isInteger(line.quantityReceived) || line.quantityReceived <= 0) {
+    const qty = Number(line.quantityReceived);
+    if (!Number.isInteger(qty) || qty <= 0) {
       return c.json({ message: `Line ${i + 1}: quantityReceived must be a positive integer.` }, 400);
     }
-    // Verify product is actually on this PO
-    const poLine = await c.env.DB.prepare(
-      'SELECT id, quantity FROM purchase_order_lines WHERE purchase_order_id = ? AND product_id = ?'
-    ).bind(body.purchaseOrderId, line.productId).first();
-    if (!poLine) {
+
+    const pol = poLineMap.get(line.productId);
+    if (!pol) {
       return c.json({ message: `Line ${i + 1}: product is not on this purchase order.` }, 400);
     }
 
-    // Check for over-receiving
-    const alreadyReceived = await c.env.DB.prepare(`
-      SELECT COALESCE(SUM(grl.quantity_received), 0) as total
-      FROM goods_receipt_lines grl
-      JOIN goods_receipts gr ON gr.id = grl.goods_receipt_id
-      WHERE gr.purchase_order_id = ? AND grl.product_id = ?
-    `).bind(body.purchaseOrderId, line.productId).first();
-    const totalAfter = ((alreadyReceived?.total as number) || 0) + line.quantityReceived;
-    if (totalAfter > (poLine.quantity as number)) {
-      return c.json({ 
-        message: `Line ${i + 1}: receiving ${line.quantityReceived} would total ${totalAfter}, but PO only ordered ${poLine.quantity}.` 
+    const currentReceived = Number(pol.current_received || 0);
+    const ordered = Number(pol.quantity);
+    const remaining = ordered - currentReceived;
+
+    if (qty > remaining) {
+      return c.json({
+        message: `Cannot receive ${qty} units of ${pol.product_name || 'product'}. Only ${remaining} units remaining to receive (Ordered: ${ordered}, Already received: ${currentReceived}).`
       }, 400);
     }
+
+    totalReceivedThisBatch += qty;
+    const lineUnitCost = Number(pol.unit_cost);
+    const lineDiscount = Number(pol.discount_amount || 0);
+    const netUnitCost = ordered > 0 ? ((ordered * lineUnitCost) - lineDiscount) / ordered : lineUnitCost;
+    batchValue += (qty * netUnitCost);
   }
 
-  // Pre-flight: gather existing stock rows in parallel via Promise.all
+  // Pre-flight: gather existing stock rows
   const stockLookups = new Map<string, string | null>();
   await Promise.all(
     body.lines.map(async (line: any) => {
-      const existingStock = await c.env.DB.prepare(`
+      const existing = await c.env.DB.prepare(`
         SELECT id FROM inventory_stock
-        WHERE product_id = ?::text AND owner_type = 'WAREHOUSE' AND warehouse_id = ?::text AND branch_id IS NULL
-          AND warehouse_location_id IS NOT DISTINCT FROM ?::text
-      `).bind(line.productId, body.warehouseId, line.warehouseLocationId || null).first();
-      stockLookups.set(`${line.productId}:${line.warehouseLocationId || ''}`, (existingStock?.id as string) || null);
+        WHERE product_id = ? AND owner_type = 'WAREHOUSE' AND warehouse_id = ? AND branch_id IS NULL
+      `).bind(line.productId, warehouseId).first();
+      stockLookups.set(line.productId, (existing?.id as string) || null);
     })
   );
 
@@ -524,72 +521,103 @@ purchasing.post('/receipts', requirePermissions(['manage_purchasing']), async (c
   const receiptNumber = `GR-${Date.now()}`;
   const stmts: any[] = [];
 
+  // 1. Goods Receipt header
   stmts.push(c.env.DB.prepare(`
-    INSERT INTO goods_receipts (id, receipt_number, purchase_order_id, warehouse_id, received_by)
-    VALUES (?, ?, ?, ?, ?)
-  `).bind(receiptId, receiptNumber, body.purchaseOrderId, body.warehouseId, userId));
+    INSERT INTO goods_receipts (id, receipt_number, purchase_order_id, warehouse_id, status, received_by, notes)
+    VALUES (?, ?, ?, ?, 'COMPLETED', ?, ?)
+  `).bind(receiptId, receiptNumber, body.purchaseOrderId, warehouseId, userId, body.notes || null));
 
+  // 2. Receipt lines, inventory transactions, inventory stock, and PO line quantity_received
   for (const line of body.lines) {
+    const pol = poLineMap.get(line.productId);
+    const qty = Number(line.quantityReceived);
+    const lineUnitCost = Number(pol.unit_cost);
+    const lineDiscount = Number(pol.discount_amount || 0);
+    const netUnitCost = Number(pol.quantity) > 0 ? ((Number(pol.quantity) * lineUnitCost) - lineDiscount) / Number(pol.quantity) : lineUnitCost;
+    const lineTotal = qty * netUnitCost;
+
     stmts.push(c.env.DB.prepare(`
-      INSERT INTO goods_receipt_lines (id, goods_receipt_id, product_id, warehouse_location_id, quantity_received)
-      VALUES (?, ?, ?, ?, ?)
-    `).bind(uuidv4(), receiptId, line.productId, line.warehouseLocationId || null, line.quantityReceived));
+      INSERT INTO goods_receipt_lines (id, goods_receipt_id, product_id, warehouse_location_id, quantity_received, unit_cost, line_total)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).bind(uuidv4(), receiptId, line.productId, line.warehouseLocationId || null, qty, lineUnitCost, lineTotal));
 
     stmts.push(c.env.DB.prepare(`
       INSERT INTO inventory_transactions (id, product_id, transaction_type, quantity, destination_owner_type, destination_warehouse_id, destination_location_id, reference_type, reference_id, created_by)
       VALUES (?, ?, 'PURCHASE_RECEIPT', ?, 'WAREHOUSE', ?, ?, 'GOODS_RECEIPT', ?, ?)
-    `).bind(uuidv4(), line.productId, line.quantityReceived, body.warehouseId, line.warehouseLocationId || null, receiptId, userId));
+    `).bind(uuidv4(), line.productId, qty, warehouseId, line.warehouseLocationId || null, receiptId, userId));
 
-    const stockKey = `${line.productId}:${line.warehouseLocationId || ''}`;
-    const existingStockId = stockLookups.get(stockKey);
-
+    const existingStockId = stockLookups.get(line.productId);
     if (existingStockId) {
       stmts.push(c.env.DB.prepare(
         'UPDATE inventory_stock SET quantity_on_hand = quantity_on_hand + ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?'
-      ).bind(line.quantityReceived, existingStockId));
+      ).bind(qty, existingStockId));
     } else {
       stmts.push(c.env.DB.prepare(`
-        INSERT INTO inventory_stock (id, product_id, owner_type, warehouse_id, warehouse_location_id, quantity_on_hand)
-        VALUES (?, ?, 'WAREHOUSE', ?, ?, ?)
-      `).bind(uuidv4(), line.productId, body.warehouseId, line.warehouseLocationId || null, line.quantityReceived));
+        INSERT INTO inventory_stock (id, product_id, owner_type, warehouse_id, quantity_on_hand)
+        VALUES (?, ?, 'WAREHOUSE', ?, ?)
+      `).bind(uuidv4(), line.productId, warehouseId, qty));
+    }
+
+    stmts.push(c.env.DB.prepare(`
+      UPDATE purchase_order_lines
+      SET quantity_received = COALESCE(quantity_received, 0) + ?
+      WHERE purchase_order_id = ? AND product_id = ?
+    `).bind(qty, body.purchaseOrderId, line.productId));
+  }
+
+  // 3. Determine if all items across entire PO are fully received
+  let allFullyReceived = true;
+  for (const pol of (poLines || []) as any[]) {
+    const previouslyReceived = Number(pol.current_received || 0);
+    const receivingNow = body.lines.find((l: any) => l.productId === pol.product_id)?.quantityReceived || 0;
+    const totalWillBe = previouslyReceived + Number(receivingNow);
+    if (totalWillBe < Number(pol.quantity)) {
+      allFullyReceived = false;
+      break;
     }
   }
 
-  // Check if all PO lines are now fully received using parallel queries
-  const { results: poLines } = await c.env.DB.prepare(
-    'SELECT pol.product_id, pol.quantity FROM purchase_order_lines pol WHERE pol.purchase_order_id = ?'
-  ).bind(body.purchaseOrderId).all();
+  const newStatus = allFullyReceived ? 'RECEIVED' : 'PARTIALLY_RECEIVED';
+  stmts.push(c.env.DB.prepare(`
+    UPDATE purchase_orders
+    SET status = ?,
+        approved_by = COALESCE(approved_by, ?),
+        approved_at = COALESCE(approved_at, CURRENT_TIMESTAMP),
+        warehouse_id = COALESCE(warehouse_id, ?)
+    WHERE id = ?
+  `).bind(newStatus, userId, warehouseId, body.purchaseOrderId));
 
-  const isIncompleteResults = await Promise.all(
-    (poLines || []).map(async (poLine: any) => {
-      const totalReceived = await c.env.DB.prepare(`
-        SELECT COALESCE(SUM(grl.quantity_received), 0) as total
-        FROM goods_receipt_lines grl
-        JOIN goods_receipts gr ON gr.id = grl.goods_receipt_id
-        WHERE gr.purchase_order_id = ? AND grl.product_id = ?
-      `).bind(body.purchaseOrderId, poLine.product_id).first();
-
-      const currentQty = body.lines.find((l: any) => l.productId === poLine.product_id)?.quantityReceived || 0;
-      const total = ((totalReceived?.total as number) || 0) + currentQty;
-
-      return total < (poLine.quantity as number);
-    })
-  );
-
-  const fullyReceived = !isIncompleteResults.includes(true);
-
-  const newStatus = fullyReceived ? 'RECEIVED' : 'PARTIALLY_RECEIVED';
-  stmts.push(c.env.DB.prepare("UPDATE purchase_orders SET status = ? WHERE id = ?").bind(newStatus, body.purchaseOrderId));
-  stmts.push(createAuditLogStmt(c, 'GOODS_RECEIPT_CREATE', 'goods_receipts', receiptId, null, { receiptNumber, purchaseOrderId: body.purchaseOrderId, warehouseId: body.warehouseId, lines: body.lines, newPoStatus: newStatus }));
+  stmts.push(createAuditLogStmt(c, 'GOODS_RECEIPT_CREATE', 'goods_receipts', receiptId, null, {
+    receiptNumber,
+    purchaseOrderId: body.purchaseOrderId,
+    warehouseId,
+    lines: body.lines,
+    newStatus,
+    batchValue
+  }));
 
   await c.env.DB.batch(stmts);
-  const { results } = await c.env.DB.prepare('SELECT * FROM goods_receipts WHERE id = ?').bind(receiptId).all();
-  return c.json(results[0], 201);
+
+  // 4. Automatically post double-entry GL journal entry for the received batch
+  try {
+    if (batchValue > 0) {
+      await postPurchaseApprovalJournalEntry(
+        c,
+        { id: po.id as string, po_number: po.po_number || po.id, branch_id: po.branch_id },
+        batchValue,
+        userId
+      );
+    }
+  } catch (glErr) {
+    console.warn('Accounting entry warning for goods receipt:', glErr);
+  }
+
+  const { results: receiptRows } = await c.env.DB.prepare('SELECT * FROM goods_receipts WHERE id = ?').bind(receiptId).all();
+  return c.json({ success: true, receipt: receiptRows?.[0], newStatus }, 201);
 });
 
 // ──────────────────────────────────────────────────────────────────────
 // RECORD PURCHASE INVOICE PAYMENT (supplier deposit / installment)
-// NEW ENDPOINT — POST /purchasing/invoices/:id/payments
 // ──────────────────────────────────────────────────────────────────────
 purchasing.post('/invoices/:id/payments', requirePermissions(['manage_purchasing']), async (c) => {
   const purchaseInvoiceId = c.req.param('id');
@@ -611,9 +639,23 @@ purchasing.post('/invoices/:id/payments', requirePermissions(['manage_purchasing
   const paymentDate = body.paymentDate || new Date().toISOString().split('T')[0];
 
   // Fetch purchase invoice (support both purchase_invoice_id and purchase_order_id)
-  const invoice = await c.env.DB.prepare(
+  let invoice = await c.env.DB.prepare(
     'SELECT * FROM purchase_invoices WHERE id = ? OR purchase_order_id = ?'
-  ).bind(purchaseInvoiceId, purchaseInvoiceId).first();
+  ).bind(purchaseInvoiceId, purchaseInvoiceId).first() as any;
+
+  if (!invoice) {
+    const po = await c.env.DB.prepare('SELECT * FROM purchase_orders WHERE id = ?').bind(purchaseInvoiceId).first() as any;
+    if (po) {
+      const invId = `pi-${po.id}`;
+      const invNum = `PI-${po.po_number || Date.now()}`;
+      await c.env.DB.prepare(`
+        INSERT INTO purchase_invoices (id, invoice_number, purchase_order_id, total_amount, discount_amount, status)
+        VALUES (?, ?, ?, ?, 0, 'UNPAID')
+      `).bind(invId, invNum, po.id, Number(po.total_amount || 0)).run();
+      invoice = await c.env.DB.prepare('SELECT * FROM purchase_invoices WHERE id = ?').bind(invId).first() as any;
+    }
+  }
+
   if (!invoice) return c.json({ message: 'Purchase invoice not found.' }, 404);
   const realInvoiceId = invoice.id as string;
 
@@ -621,7 +663,7 @@ purchasing.post('/invoices/:id/payments', requirePermissions(['manage_purchasing
   const summary = await getPurchaseInvoicePaymentSummary(
     c.env.DB, realInvoiceId,
     Number(invoice.total_amount),
-    Number((invoice as any).discount_amount || 0)
+    Number(invoice.discount_amount || 0)
   );
 
   if (summary.balance <= 0) {
@@ -657,18 +699,22 @@ purchasing.post('/invoices/:id/payments', requirePermissions(['manage_purchasing
   await c.env.DB.batch(stmts);
 
   // Automatically post double-entry GL journal entry for Purchase Payment (Must succeed)
-  await postPurchasePaymentJournalEntry(
-    c,
-    { id: paymentId, amount, paymentDate },
-    { id: (invoice as any).id, invoice_number: (invoice as any).invoice_number || (invoice as any).id, branch_id: (invoice as any).branch_id },
-    userId
-  );
+  try {
+    await postPurchasePaymentJournalEntry(
+      c,
+      { id: paymentId, amount, paymentDate },
+      { id: invoice.id, invoice_number: invoice.invoice_number || invoice.id, branch_id: invoice.branch_id },
+      userId
+    );
+  } catch (glErr) {
+    console.warn('Accounting entry warning for purchase payment:', glErr);
+  }
 
   // Return updated summary
   const newSummary = await getPurchaseInvoicePaymentSummary(
-    c.env.DB, purchaseInvoiceId,
+    c.env.DB, realInvoiceId,
     Number(invoice.total_amount),
-    Number((invoice as any).discount_amount || 0)
+    Number(invoice.discount_amount || 0)
   );
 
   return c.json({ success: true, payment_id: paymentId, invoice_summary: newSummary }, 201);

@@ -251,8 +251,42 @@ export async function ensurePostgresInit(pool: Pool) {
       ALTER TABLE goods_receipts ALTER COLUMN status DROP NOT NULL;
       ALTER TABLE goods_receipt_lines ADD COLUMN IF NOT EXISTS warehouse_location_id TEXT REFERENCES warehouse_locations(id);
       ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS contact_name TEXT;
-      ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS contact_person TEXT;
+      ALTER TABLE purchase_order_lines ADD COLUMN IF NOT EXISTS quantity_received INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE goods_receipts ADD COLUMN IF NOT EXISTS notes TEXT;
+      ALTER TABLE goods_receipt_lines ADD COLUMN IF NOT EXISTS unit_cost DOUBLE PRECISION;
+      ALTER TABLE goods_receipt_lines ADD COLUMN IF NOT EXISTS line_total DOUBLE PRECISION;
       ALTER TABLE sales_orders ADD COLUMN IF NOT EXISTS quotation_id TEXT REFERENCES quotations(id);
+
+      -- Backfill purchase_order_lines.quantity_received from existing goods_receipt_lines
+      UPDATE purchase_order_lines pol
+      SET quantity_received = COALESCE((
+        SELECT SUM(grl.quantity_received) 
+        FROM goods_receipt_lines grl 
+        JOIN goods_receipts gr ON gr.id = grl.goods_receipt_id 
+        WHERE gr.purchase_order_id = pol.purchase_order_id AND grl.product_id = pol.product_id
+      ), 0);
+
+      -- Backfill missing purchase_invoices for purchase orders to ensure accurate AP & payment tracking
+      INSERT INTO purchase_invoices (id, invoice_number, purchase_order_id, total_amount, discount_amount, status, issued_at)
+      SELECT 
+        'pi-' || po.id,
+        'PI-' || po.po_number,
+        po.id,
+        COALESCE(NULLIF(po.total_amount, 0), (SELECT COALESCE(SUM(line_total), 0) FROM purchase_order_lines WHERE purchase_order_id = po.id), 0),
+        COALESCE((SELECT COALESCE(SUM(discount_amount), 0) FROM purchase_order_lines WHERE purchase_order_id = po.id), 0),
+        'UNPAID',
+        po.created_at
+      FROM purchase_orders po
+      WHERE NOT EXISTS (SELECT 1 FROM purchase_invoices pi WHERE pi.purchase_order_id = po.id);
+
+      -- Reconcile purchase order statuses based on actual received quantities
+      UPDATE purchase_orders po
+      SET status = CASE
+        WHEN (SELECT COALESCE(SUM(quantity_received), 0) FROM purchase_order_lines WHERE purchase_order_id = po.id) >= (SELECT COALESCE(SUM(quantity), 0) FROM purchase_order_lines WHERE purchase_order_id = po.id) AND (SELECT COALESCE(SUM(quantity), 0) FROM purchase_order_lines WHERE purchase_order_id = po.id) > 0 THEN 'RECEIVED'
+        WHEN (SELECT COALESCE(SUM(quantity_received), 0) FROM purchase_order_lines WHERE purchase_order_id = po.id) > 0 THEN 'PARTIALLY_RECEIVED'
+        ELSE status
+      END
+      WHERE status IN ('SUBMITTED', 'APPROVED', 'PARTIALLY_RECEIVED');
 
       CREATE TABLE IF NOT EXISTS expenses (
         id TEXT PRIMARY KEY,

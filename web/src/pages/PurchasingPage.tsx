@@ -201,15 +201,16 @@ export function PurchasingPage() {
 
   useEffect(() => {
     async function loadWHs() {
-      if (isReceiptOpen) {
-        try {
-          const whs = await apiGet<any[]>('/warehouses');
-          setWarehouses(whs || []);
-        } catch {}
-      }
+      try {
+        const whs = await apiGet<any[]>('/warehouses');
+        setWarehouses(whs || []);
+        if (whs && whs.length > 0) {
+          setSelectedWHId(prev => prev || whs[0].id);
+        }
+      } catch {}
     }
     loadWHs();
-  }, [isReceiptOpen]);
+  }, []);
 
   useEffect(() => {
     async function loadLocations() {
@@ -245,7 +246,7 @@ export function PurchasingPage() {
     try {
       setPoDetailsLoading(true);
       await apiPost<any>(`/purchasing/orders/${poId}/approve`, {});
-      addToast('success', '✅ PO Approved! Inventory updated and Purchase Invoice generated.');
+      addToast('success', '✅ PO Approved successfully!');
       await viewPoDetails({ id: poId } as any);
       loadData();
     } catch (err: any) {
@@ -256,34 +257,38 @@ export function PurchasingPage() {
   };
 
   // ── Goods receipt ────────────────────────────────────────────────
-  const handleCreateReceipt = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!selectedWHId) { addToast('error', 'Please select a receiving warehouse'); return; }
+  const handleCreateReceipt = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!selectedPO) return;
+    const targetWHId = selectedWHId || selectedPO.warehouse_id || (warehouses[0]?.id);
+    if (!targetWHId) { addToast('error', 'Please select a receiving warehouse'); return; }
 
-    const payload = {
-      purchaseOrderId: selectedPO.id,
-      warehouseId: selectedWHId,
-      lines: selectedPO.lines.map((l: any) => ({
+    const linesToReceive = (selectedPO.lines || [])
+      .map((l: any) => ({
         productId: l.product_id,
         quantityReceived: Number(receiptLines[l.product_id] || 0),
         warehouseLocationId: receiptLocations[l.product_id] || undefined,
-      })).filter((l: any) => l.quantityReceived > 0),
-    };
+      }))
+      .filter((l: any) => l.quantityReceived > 0);
 
-    if (payload.lines.length === 0) {
-      addToast('error', 'At least one line item must receive units (Qty > 0)');
+    if (linesToReceive.length === 0) {
+      addToast('error', 'Please enter a quantity (> 0) to receive for at least one item.');
       return;
     }
 
     try {
       setPoDetailsLoading(true);
-      await apiPost('/purchasing/receipts', payload);
-      addToast('success', 'Goods Receipt generated and inventory updated');
-      setIsReceiptOpen(false);
-      setSelectedPO(null);
+      await apiPost('/purchasing/receipts', {
+        purchaseOrderId: selectedPO.id,
+        warehouseId: targetWHId,
+        lines: linesToReceive,
+      });
+      const totalUnits = linesToReceive.reduce((sum: number, l: any) => sum + l.quantityReceived, 0);
+      addToast('success', `✅ Goods Receipt recorded! Received ${totalUnits} items into warehouse.`);
+      await viewPoDetails({ id: selectedPO.id } as any);
       loadData();
     } catch (err: any) {
-      addToast('error', err?.message || 'Failed to create Goods Receipt');
+      addToast('error', err?.message || 'Failed to record Goods Receipt');
     } finally {
       setPoDetailsLoading(false);
     }
@@ -547,7 +552,7 @@ export function PurchasingPage() {
       label: 'Total Amount',
       render: (row) => (
         <span style={{ fontWeight: 600 }}>
-          {row.net_total != null ? fmt(row.net_total) : (row.invoice_total != null ? fmt(row.invoice_total) : '—')}
+          {fmt(row.net_total ?? row.total_amount ?? row.invoice_total ?? 0)}
         </span>
       ),
     },
@@ -566,8 +571,8 @@ export function PurchasingPage() {
       key: 'payment_status',
       label: 'Payment',
       render: (row) => {
-        if (!row.payment_status) return <span style={{ color: '#94a3b8', fontSize: '12px' }}>—</span>;
-        return <StatusBadge label={row.payment_status.replace('_', ' ')} tone={paymentStatusTone(row.payment_status)} />;
+        const status = row.payment_status || 'UNPAID';
+        return <StatusBadge label={status.replace('_', ' ')} tone={paymentStatusTone(status)} />;
       },
     },
     {
@@ -582,7 +587,7 @@ export function PurchasingPage() {
           >
             <Eye size={14} style={{ marginRight: '4px', inlineSize: 'auto' }} /> Details
           </button>
-          {(row.status === 'APPROVED' || row.status === 'PARTIALLY_RECEIVED') && hasPermission('manage_purchasing') && (
+          {(row.status === 'SUBMITTED' || row.status === 'APPROVED' || row.status === 'PARTIALLY_RECEIVED') && hasPermission('manage_purchasing') && (
             <button
               type="button"
               className="btn btn-primary btn-sm"
@@ -609,7 +614,7 @@ export function PurchasingPage() {
     },
   ];
 
-  // Derive invoice summary from selectedPO
+  // Derive invoice summary from selectedPO (or fallback to PO total)
   const poInvoice = selectedPO?.invoice;
   const invoiceSummary: { summary: PaymentSummary; discount: number } | null = poInvoice
     ? {
@@ -621,11 +626,20 @@ export function PurchasingPage() {
         },
         discount: Number(poInvoice.discount_amount ?? 0),
       }
+    : selectedPO
+    ? {
+        summary: {
+          amount_paid: Number(selectedPO.amount_paid ?? 0),
+          net_total: Number(selectedPO.net_total ?? selectedPO.total_amount ?? 0),
+          balance: Math.max(0, Number(selectedPO.net_total ?? selectedPO.total_amount ?? 0) - Number(selectedPO.amount_paid ?? 0)),
+          payment_status: selectedPO.payment_status ?? 'UNPAID',
+        },
+        discount: 0,
+      }
     : null;
 
   const canRecordPayment =
     hasPermission('manage_purchasing') &&
-    poInvoice?.id &&
     invoiceSummary &&
     invoiceSummary.summary.balance > 0.001;
 
@@ -721,191 +735,322 @@ export function PurchasingPage() {
         title={selectedPO ? `Purchase Order: ${selectedPO.po_number}` : 'PO Details'}
         width="lg"
       >
-        {selectedPO && (
-          <div style={{ display: 'grid', gap: '18px' }}>
-            {/* Metadata */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px', fontSize: '13px', background: '#f7f9f7', padding: '12px', borderRadius: '8px' }}>
-              <div>
-                <span style={{ color: '#667066' }}>Supplier:</span>
-                <p style={{ margin: '2px 0 0', fontWeight: '700' }}>{selectedPO.supplier_name || 'N/A'}</p>
-              </div>
-              <div>
-                <span style={{ color: '#667066' }}>Current Status:</span>
-                <div style={{ marginTop: '2px', display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                  <StatusBadge label={selectedPO.status.replace(/_/g, ' ')} tone={selectedPO.status === 'RECEIVED' || selectedPO.status === 'FULLY_RECEIVED' ? 'green' : 'neutral'} />
-                  {invoiceSummary && (
-                    <StatusBadge label={invoiceSummary.summary.payment_status.replace('_', ' ')} tone={paymentStatusTone(invoiceSummary.summary.payment_status)} />
+        {selectedPO && (() => {
+          const totalOrderedQty = selectedPO.lines?.reduce((sum: number, l: any) => sum + Number(l.quantity_ordered || l.quantity || 0), 0) || 0;
+          const totalReceivedQty = selectedPO.lines?.reduce((sum: number, l: any) => sum + Number(l.quantity_received || 0), 0) || 0;
+          const totalRemainingQty = Math.max(0, totalOrderedQty - totalReceivedQty);
+          const isReceivable = (selectedPO.status === 'SUBMITTED' || selectedPO.status === 'APPROVED' || selectedPO.status === 'PARTIALLY_RECEIVED') && totalRemainingQty > 0;
+          const totalReceivingNow = Object.values(receiptLines).reduce((sum, v) => sum + (Number(v) || 0), 0);
+
+          return (
+            <div style={{ display: 'grid', gap: '18px' }}>
+              {/* Metadata */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px', fontSize: '13px', background: '#f7f9f7', padding: '14px', borderRadius: '8px', border: '1px solid #e2e8e2' }}>
+                <div>
+                  <span style={{ color: '#667066', fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Supplier:</span>
+                  <p style={{ margin: '2px 0 0', fontWeight: '700', fontSize: '15px' }}>{selectedPO.supplier_name || 'N/A'}</p>
+                  {selectedPO.expected_date && (
+                    <p style={{ margin: '4px 0 0', fontSize: '12px', color: '#64748b' }}>
+                      Expected Delivery: {new Date(selectedPO.expected_date).toLocaleDateString()}
+                    </p>
                   )}
                 </div>
-              </div>
-            </div>
-
-            {/* Invoice Payment Summary */}
-            {invoiceSummary && (
-              <div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
-                  <FileText size={16} style={{ color: '#066006' }} />
-                  <h4 style={{ margin: 0, color: '#066006' }}>Purchase Invoice</h4>
-                  <span style={{ fontSize: '13px', color: '#667066' }}>{poInvoice?.invoice_number}</span>
-                </div>
-                <PurchaseInvoiceSummaryBox summary={invoiceSummary.summary} discountAmount={invoiceSummary.discount} />
-              </div>
-            )}
-
-            {/* PO Line Items */}
-            <div>
-              <h4 style={{ margin: '0 0 8px', color: '#066006' }}>Ordered Items</h4>
-              {poDetailsLoading ? (
-                <LoadingSpinner message="Fetching lines..." />
-              ) : (
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Product</th>
-                      <th>Ordered Qty</th>
-                      <th>Received Qty</th>
-                      <th>Unit Cost</th>
-                      <th style={{ textAlign: 'right' }}>Discount</th>
-                      <th style={{ textAlign: 'right' }}>Line Total</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {selectedPO.lines?.map((line: any) => {
-                      const lineTotal = line.line_total ?? ((line.quantity_ordered * line.unit_cost) - (line.discount_amount || 0));
-                      return (
-                        <tr key={line.id}>
-                          <td><strong>{line.product_name}</strong><br /><span style={{ color: '#667066', fontSize: '12px' }}>{line.variant_sku}</span></td>
-                          <td>{line.quantity_ordered}</td>
-                          <td>{line.quantity_received || 0}</td>
-                          <td>${Number(line.unit_cost).toLocaleString()}</td>
-                          <td style={{ textAlign: 'right', color: '#b45309' }}>
-                            {Number(line.discount_amount || 0) > 0 ? `-$${Number(line.discount_amount).toFixed(2)}` : '—'}
-                          </td>
-                          <td style={{ textAlign: 'right', fontWeight: 600 }}>${Number(lineTotal).toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              )}
-            </div>
-
-            {/* Goods Receipt Section */}
-            {isReceiptOpen ? (
-              <form onSubmit={handleCreateReceipt} style={{ borderTop: '1px solid #edf1ed', paddingTop: '16px' }}>
-                <h4 style={{ margin: '0 0 12px', color: '#b45309' }}>Record Goods Receipt</h4>
-                <div style={{ display: 'grid', gap: '14px' }}>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
-                    <InputField label="Select Warehouse" id="recWarehouse" type="text" disabled
-                      value={warehouses[0]?.name || 'Central Warehouse'} onChange={() => {}} />
-                    <div className="form-field">
-                      <label className="form-field__label">Target Location</label>
-                      <select className="form-select" value={selectedWHId}
-                        onChange={(e) => setSelectedWHId(e.target.value)} required>
-                        <option value="">Choose Warehouse...</option>
-                        {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
-                      </select>
-                    </div>
+                <div>
+                  <span style={{ color: '#667066', fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Current Status:</span>
+                  <div style={{ marginTop: '4px', display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+                    <StatusBadge
+                      label={selectedPO.status.replace(/_/g, ' ')}
+                      tone={selectedPO.status === 'RECEIVED' || selectedPO.status === 'FULLY_RECEIVED' ? 'green' : selectedPO.status === 'PARTIALLY_RECEIVED' ? 'yellow' : selectedPO.status === 'SUBMITTED' ? 'blue' : 'neutral'}
+                    />
+                    {invoiceSummary && (
+                      <StatusBadge
+                        label={invoiceSummary.summary.payment_status.replace('_', ' ')}
+                        tone={paymentStatusTone(invoiceSummary.summary.payment_status)}
+                      />
+                    )}
                   </div>
-                  <h5 style={{ margin: '10px 0 6px' }}>Verify Received Quantities</h5>
-                  <table>
-                    <thead>
-                      <tr><th>Variant</th><th>Qty to Receive</th><th>Bin Location</th></tr>
-                    </thead>
-                    <tbody>
-                      {selectedPO.lines?.map((l: any) => (
-                        <tr key={l.product_id}>
-                          <td>{l.variant_sku}</td>
-                          <td>
-                            <input type="number" className="form-input" style={{ width: '80px', minHeight: '32px' }}
-                              value={receiptLines[l.product_id] ?? 0} min={0}
-                              max={l.quantity_ordered - (l.quantity_received || 0)}
-                              onChange={(e) => setReceiptLines(prev => ({ ...prev, [l.product_id]: Number(e.target.value) }))} />
-                          </td>
-                          <td>
-                            <select className="form-select" style={{ minHeight: '32px' }}
-                              value={receiptLocations[l.product_id] || ''}
-                              onChange={(e) => setReceiptLocations(prev => ({ ...prev, [l.product_id]: e.target.value }))}>
-                              <option value="">Default/System</option>
-                              {locationsList.map(loc => (
-                                <option key={loc.id} value={loc.id}>{loc.aisle}-{loc.rack}-{loc.shelf}-{loc.bin}</option>
-                              ))}
-                            </select>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
                 </div>
-                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '20px' }}>
-                  <button type="button" className="btn btn-secondary" onClick={() => setIsReceiptOpen(false)}>Back</button>
-                  <button type="submit" className="btn btn-primary">Post Goods Receipt</button>
-                </div>
-              </form>
-            ) : null}
+              </div>
 
-            {/* Payment History (collapsible) */}
-            {poInvoice?.id && (
-              <div style={{ borderTop: '1px solid #edf1ed', paddingTop: '12px' }}>
-                <button type="button"
-                  style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'none', border: 'none', cursor: 'pointer', color: '#066006', fontWeight: 600, fontSize: '13px', padding: 0 }}
-                  onClick={() => setShowHistory(h => !h)}>
-                  <History size={15} />
-                  Supplier Payment History ({(poInvoice.payments || []).length} record{(poInvoice.payments || []).length !== 1 ? 's' : ''})
-                  {showHistory ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-                </button>
-                {showHistory && (
-                  <div style={{ marginTop: '10px' }}>
-                    <PaymentHistoryTable payments={poInvoice.payments || []} />
+              {/* Invoice Payment Summary */}
+              {invoiceSummary && (
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <FileText size={16} style={{ color: '#066006' }} />
+                      <h4 style={{ margin: 0, color: '#066006' }}>Purchase Invoice &amp; Payment</h4>
+                      <span style={{ fontSize: '13px', color: '#667066' }}>{poInvoice?.invoice_number || `PI-${selectedPO.po_number}`}</span>
+                    </div>
+                    {canRecordPayment && (
+                      <button
+                        type="button"
+                        className="btn btn-primary btn-sm"
+                        onClick={() => openPaymentModal(selectedPO)}
+                        style={{ background: 'linear-gradient(135deg, #0b8f08, #066006)', display: 'flex', alignItems: 'center', gap: '4px' }}
+                      >
+                        <CreditCard size={14} /> Pay Supplier ({fmt(invoiceSummary.summary.balance)} due)
+                      </button>
+                    )}
+                  </div>
+                  <PurchaseInvoiceSummaryBox summary={invoiceSummary.summary} discountAmount={invoiceSummary.discount} />
+                </div>
+              )}
+
+              {/* PO Line Items */}
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px', flexWrap: 'wrap', gap: '8px' }}>
+                  <h4 style={{ margin: 0, color: '#066006' }}>Ordered Items</h4>
+                  <div style={{ fontSize: '12px', color: '#475569' }}>
+                    Total: <strong>{totalOrderedQty} ordered</strong> &bull; <strong style={{ color: '#16a34a' }}>{totalReceivedQty} received</strong> &bull; <strong style={{ color: totalRemainingQty > 0 ? '#d97706' : '#16a34a' }}>{totalRemainingQty} remaining</strong>
+                  </div>
+                </div>
+
+                {poDetailsLoading ? (
+                  <LoadingSpinner message="Fetching lines..." />
+                ) : (
+                  <div style={{ overflowX: 'auto', border: '1px solid #e2e8e2', borderRadius: '8px' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                      <thead>
+                        <tr style={{ background: '#f8faf8', borderBottom: '1px solid #e2e8e2' }}>
+                          <th style={{ padding: '8px 12px', textAlign: 'left' }}>Product</th>
+                          <th style={{ padding: '8px 12px', textAlign: 'center' }}>Ordered</th>
+                          <th style={{ padding: '8px 12px', textAlign: 'center' }}>Received</th>
+                          <th style={{ padding: '8px 12px', textAlign: 'center' }}>Remaining</th>
+                          {isReceivable && <th style={{ padding: '8px 12px', textAlign: 'center', background: '#ecfdf5', color: '#065f46' }}>Receive Now</th>}
+                          <th style={{ padding: '8px 12px', textAlign: 'right' }}>Unit Cost</th>
+                          <th style={{ padding: '8px 12px', textAlign: 'right' }}>Discount</th>
+                          <th style={{ padding: '8px 12px', textAlign: 'right' }}>Line Total</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {selectedPO.lines?.map((line: any) => {
+                          const ordered = Number(line.quantity_ordered || line.quantity || 0);
+                          const received = Number(line.quantity_received || 0);
+                          const remaining = Math.max(0, ordered - received);
+                          const lineTotal = line.line_total ?? ((ordered * Number(line.unit_cost)) - Number(line.discount_amount || 0));
+
+                          return (
+                            <tr key={line.id} style={{ borderBottom: '1px solid #edf1ed' }}>
+                              <td style={{ padding: '10px 12px' }}>
+                                <strong>{line.product_name}</strong>
+                                <br />
+                                <span style={{ color: '#667066', fontSize: '11px', fontFamily: 'monospace' }}>{line.variant_sku}</span>
+                              </td>
+                              <td style={{ padding: '10px 12px', textAlign: 'center', fontWeight: 600 }}>{ordered}</td>
+                              <td style={{ padding: '10px 12px', textAlign: 'center', color: received > 0 ? '#16a34a' : '#64748b', fontWeight: 600 }}>
+                                {received}
+                              </td>
+                              <td style={{ padding: '10px 12px', textAlign: 'center', fontWeight: 700, color: remaining > 0 ? '#d97706' : '#16a34a' }}>
+                                {remaining}
+                              </td>
+                              {isReceivable && (
+                                <td style={{ padding: '10px 12px', textAlign: 'center', background: '#f0fdf4' }}>
+                                  <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                                    <input
+                                      type="number"
+                                      className="form-input"
+                                      style={{ width: '70px', padding: '4px 6px', fontWeight: 700, textAlign: 'center', minHeight: '32px' }}
+                                      min={0}
+                                      max={remaining}
+                                      value={receiptLines[line.product_id] ?? 0}
+                                      onChange={(e) => {
+                                        const val = Math.max(0, Math.min(remaining, Number(e.target.value) || 0));
+                                        setReceiptLines(prev => ({ ...prev, [line.product_id]: val }));
+                                      }}
+                                    />
+                                    <button
+                                      type="button"
+                                      className="btn btn-secondary btn-sm"
+                                      style={{ padding: '2px 8px', fontSize: '11px', height: '28px' }}
+                                      onClick={() => setReceiptLines(prev => ({ ...prev, [line.product_id]: remaining }))}
+                                      title="Receive all remaining for this item"
+                                    >
+                                      All
+                                    </button>
+                                  </div>
+                                </td>
+                              )}
+                              <td style={{ padding: '10px 12px', textAlign: 'right' }}>${Number(line.unit_cost).toLocaleString()}</td>
+                              <td style={{ padding: '10px 12px', textAlign: 'right', color: '#b45309' }}>
+                                {Number(line.discount_amount || 0) > 0 ? `-$${Number(line.discount_amount).toFixed(2)}` : '—'}
+                              </td>
+                              <td style={{ padding: '10px 12px', textAlign: 'right', fontWeight: 600 }}>
+                                ${Number(lineTotal).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
                   </div>
                 )}
               </div>
-            )}
 
-            {/* Action Buttons */}
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', borderTop: '1px solid #edf1ed', paddingTop: '16px', flexWrap: 'wrap' }}>
-              <button type="button" className="btn btn-secondary" onClick={() => setSelectedPO(null)}>Close</button>
+              {/* Partial Receiving Controls */}
+              {isReceivable && (
+                <div style={{ background: '#f8fafc', border: '1px solid #cbd5e1', borderRadius: '8px', padding: '14px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                      <Truck size={18} style={{ color: '#0284c7' }} />
+                      <span style={{ fontWeight: 700, fontSize: '14px', color: '#0f172a' }}>Goods Receipt / Partial Receiving</span>
+                    </div>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-sm"
+                        onClick={() => {
+                          const allRemaining: Record<string, number> = {};
+                          selectedPO.lines?.forEach((l: any) => {
+                            const rem = Math.max(0, Number(l.quantity_ordered || l.quantity || 0) - Number(l.quantity_received || 0));
+                            allRemaining[l.product_id] = rem;
+                          });
+                          setReceiptLines(allRemaining);
+                        }}
+                      >
+                        Fill All Remaining ({totalRemainingQty})
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-sm"
+                        onClick={() => {
+                          const zeros: Record<string, number> = {};
+                          selectedPO.lines?.forEach((l: any) => { zeros[l.product_id] = 0; });
+                          setReceiptLines(zeros);
+                        }}
+                      >
+                        Clear
+                      </button>
+                    </div>
+                  </div>
 
-              {poInvoice && (
-                <button type="button" className="btn btn-secondary"
-                  onClick={() => handlePrintPurchaseInvoice(selectedPO.id)}
-                  style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                  <Printer size={14} /> Print Invoice
-                </button>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '12px', alignItems: 'center' }}>
+                    <div className="form-field" style={{ margin: 0 }}>
+                      <label className="form-field__label" style={{ fontSize: '12px' }}>Receiving Warehouse</label>
+                      <select
+                        className="form-select"
+                        style={{ minHeight: '34px', fontSize: '13px' }}
+                        value={selectedWHId}
+                        onChange={(e) => setSelectedWHId(e.target.value)}
+                      >
+                        {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
+                      </select>
+                    </div>
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      <span style={{ fontSize: '12px', color: '#64748b' }}>Receipt Action</span>
+                      <button
+                        type="button"
+                        className="btn btn-primary"
+                        disabled={totalReceivingNow <= 0 || poDetailsLoading}
+                        onClick={() => handleCreateReceipt()}
+                        style={{ minHeight: '34px', background: totalReceivingNow > 0 ? 'linear-gradient(135deg, #0b8f08, #066006)' : undefined, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}
+                      >
+                        <Truck size={15} />
+                        {totalReceivingNow > 0
+                          ? `Post Receipt (${totalReceivingNow} unit${totalReceivingNow > 1 ? 's' : ''})`
+                          : 'Enter Qty to Receive'}
+                      </button>
+                    </div>
+
+                    {selectedPO.status === 'SUBMITTED' && hasPermission('manage_purchasing') && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                        <span style={{ fontSize: '12px', color: '#64748b' }}>PO Approval</span>
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          disabled={poDetailsLoading}
+                          onClick={() => handleApprovePO(selectedPO.id)}
+                          style={{ minHeight: '34px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}
+                        >
+                          <CheckCircle size={15} />
+                          Approve PO Only
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  {totalReceivingNow > 0 && (
+                    <div style={{ fontSize: '12px', color: '#0369a1', background: '#e0f2fe', padding: '8px 12px', borderRadius: '6px', lineHeight: 1.5 }}>
+                      ℹ️ Receiving <strong>{totalReceivingNow}</strong> units now. <strong>{Math.max(0, totalRemainingQty - totalReceivingNow)}</strong> units will remain on this PO. Status will be <strong>{totalReceivingNow >= totalRemainingQty ? 'RECEIVED' : 'PARTIALLY_RECEIVED'}</strong>.
+                    </div>
+                  )}
+                </div>
               )}
 
-              {selectedPO.status === 'SUBMITTED' && hasPermission('manage_purchasing') && (
-                <button type="button" className="btn btn-primary"
-                  onClick={() => handleApprovePO(selectedPO.id)} disabled={poDetailsLoading}>
-                  <CheckCircle size={14} style={{ marginRight: '4px', inlineSize: 'auto' }} /> Approve &amp; Receive
-                </button>
+              {/* Fully Received Banner */}
+              {!isReceivable && totalOrderedQty > 0 && totalRemainingQty === 0 && (
+                <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '8px', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '8px', color: '#166534', fontWeight: 600 }}>
+                  <CheckCircle size={18} style={{ color: '#16a34a' }} />
+                  All {totalOrderedQty} ordered units have been fully received into stock.
+                </div>
               )}
 
-              {(selectedPO.status === 'APPROVED' || selectedPO.status === 'PARTIALLY_RECEIVED') && hasPermission('manage_purchasing') && !isReceiptOpen && (
-                <button type="button" className="btn btn-primary"
-                  onClick={() => setIsReceiptOpen(true)}
-                  style={{ background: 'linear-gradient(135deg, #b45309, #92400e)' }}>
-                  <Truck size={14} style={{ marginRight: '4px', inlineSize: 'auto' }} /> Record Receipt
-                </button>
+              {/* Goods Receipt History */}
+              {selectedPO.receipts && selectedPO.receipts.length > 0 && (
+                <div style={{ borderTop: '1px solid #edf1ed', paddingTop: '12px' }}>
+                  <h4 style={{ margin: '0 0 10px', color: '#066006', fontSize: '14px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <History size={15} /> Goods Receipt History ({selectedPO.receipts.length} shipment{selectedPO.receipts.length !== 1 ? 's' : ''})
+                  </h4>
+                  <div style={{ display: 'grid', gap: '8px' }}>
+                    {selectedPO.receipts.map((gr: any) => (
+                      <div key={gr.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#f8faf8', padding: '10px 14px', borderRadius: '6px', border: '1px solid #e2e8e2', fontSize: '13px' }}>
+                        <div>
+                          <span style={{ fontWeight: 700, color: '#066006', fontFamily: 'monospace' }}>{gr.receipt_number}</span>
+                          <span style={{ color: '#64748b', marginLeft: '10px' }}>{new Date(gr.received_at).toLocaleString()}</span>
+                          <div style={{ fontSize: '12px', color: '#475569', marginTop: '2px' }}>
+                            Received by: <strong>{gr.received_by_name || 'Staff'}</strong> &bull; Location: <strong>{gr.warehouse_name || 'Central Warehouse'}</strong>
+                          </div>
+                        </div>
+                        <div>
+                          <span style={{ fontWeight: 700, padding: '4px 10px', borderRadius: '4px', background: '#dcfce7', color: '#166534', fontSize: '12px' }}>
+                            +{gr.total_items_received} units received
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
               )}
 
-              {canRecordPayment && (
-                <button type="button" className="btn btn-primary"
-                  onClick={() => openPaymentModal(selectedPO)}
-                  style={{ background: 'linear-gradient(135deg, #0b8f08, #066006)' }}>
-                  <CreditCard size={14} style={{ marginRight: '4px', inlineSize: 'auto' }} />
-                  Pay Supplier{invoiceSummary && ` (${fmt(invoiceSummary.summary.balance)} due)`}
-                </button>
+              {/* Payment History (collapsible) */}
+              {poInvoice?.payments && poInvoice.payments.length > 0 && (
+                <div style={{ borderTop: '1px solid #edf1ed', paddingTop: '12px' }}>
+                  <button type="button"
+                    style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'none', border: 'none', cursor: 'pointer', color: '#066006', fontWeight: 600, fontSize: '13px', padding: 0 }}
+                    onClick={() => setShowHistory(h => !h)}>
+                    <History size={15} />
+                    Supplier Payment History ({poInvoice.payments.length} record{poInvoice.payments.length !== 1 ? 's' : ''})
+                    {showHistory ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                  </button>
+                  {showHistory && (
+                    <div style={{ marginTop: '10px' }}>
+                      <PaymentHistoryTable payments={poInvoice.payments || []} />
+                    </div>
+                  )}
+                </div>
               )}
 
-              {invoiceSummary?.summary.payment_status === 'PAID' && (
-                <span style={{ color: '#0b8f08', fontWeight: '600', fontSize: '14px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <CheckCircle size={16} /> Supplier Paid
-                </span>
-              )}
+              {/* Action Buttons */}
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', borderTop: '1px solid #edf1ed', paddingTop: '16px', flexWrap: 'wrap' }}>
+                <button type="button" className="btn btn-secondary" onClick={() => setSelectedPO(null)}>Close</button>
+
+                {poInvoice && (
+                  <button type="button" className="btn btn-secondary"
+                    onClick={() => handlePrintPurchaseInvoice(selectedPO.id)}
+                    style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    <Printer size={14} /> Print Invoice
+                  </button>
+                )}
+
+                {invoiceSummary?.summary.payment_status === 'PAID' && (
+                  <span style={{ color: '#0b8f08', fontWeight: '600', fontSize: '14px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <CheckCircle size={16} /> Supplier Paid
+                  </span>
+                )}
+              </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
       </Modal>
 
       {/* ── Record Supplier Payment Modal ── */}
