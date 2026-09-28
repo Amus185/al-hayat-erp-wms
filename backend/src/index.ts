@@ -30,7 +30,7 @@ let globalPgAdapter: PgAdapter | null = null;
 // ⚡ LIGHTWEIGHT HEALTH CHECK ROUTE (Must run BEFORE any middleware/DB init for instant 200 OK!)
 app.get('/', (c) => c.json({
   service: 'Al Hayat ERP & WMS Backend API',
-  version: '1.0.0',
+  version: '1.2.0',
   status: 'active',
   environment: 'production',
   healthCheck: '/api/v1/health',
