@@ -291,11 +291,18 @@ purchasing.post('/orders', requirePermissions(['manage_purchasing']), async (c) 
   const id = uuidv4();
   const poNumber = `PO-${Date.now()}`;
 
+  let totalAmount = 0;
+  for (const line of body.lines) {
+    const discountAmount = Number(line.discountAmount || 0);
+    const lineTotal = (line.quantity * line.unitCost) - discountAmount;
+    totalAmount += lineTotal;
+  }
+
   const stmts = [];
   stmts.push(c.env.DB.prepare(`
-    INSERT INTO purchase_orders (id, po_number, supplier_id, warehouse_id, status, expected_date, created_by)
-    VALUES (?, ?, ?, ?, 'SUBMITTED', ?, ?)
-  `).bind(id, poNumber, body.supplierId, body.warehouseId || null, body.expectedDate || null, userId));
+    INSERT INTO purchase_orders (id, po_number, supplier_id, warehouse_id, status, total_amount, notes, expected_date, created_by)
+    VALUES (?, ?, ?, ?, 'SUBMITTED', ?, ?, ?, ?)
+  `).bind(id, poNumber, body.supplierId, body.warehouseId || null, totalAmount, body.notes || null, body.expectedDate || null, userId));
 
   for (const line of body.lines) {
     const discountAmount = Number(line.discountAmount || 0);

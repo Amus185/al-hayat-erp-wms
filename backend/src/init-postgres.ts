@@ -150,13 +150,13 @@ export async function ensurePostgresInit(pool: Pool) {
         id TEXT PRIMARY KEY, po_number TEXT UNIQUE NOT NULL, supplier_id TEXT NOT NULL REFERENCES suppliers(id), branch_id TEXT REFERENCES branches(id), status TEXT NOT NULL DEFAULT 'DRAFT', total_amount DOUBLE PRECISION NOT NULL DEFAULT 0, notes TEXT, created_by TEXT REFERENCES users(id), approved_by TEXT REFERENCES users(id), approved_at TIMESTAMP WITH TIME ZONE, created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
       );
       CREATE TABLE IF NOT EXISTS purchase_order_lines (
-        id TEXT PRIMARY KEY, purchase_order_id TEXT NOT NULL REFERENCES purchase_orders(id) ON DELETE CASCADE, product_id TEXT NOT NULL REFERENCES products(id), quantity INTEGER NOT NULL, unit_cost DOUBLE PRECISION NOT NULL, line_total DOUBLE PRECISION NOT NULL DEFAULT 0
+        id TEXT PRIMARY KEY, purchase_order_id TEXT NOT NULL REFERENCES purchase_orders(id) ON DELETE CASCADE, product_id TEXT NOT NULL REFERENCES products(id), quantity INTEGER NOT NULL, unit_cost DOUBLE PRECISION NOT NULL, discount_amount DOUBLE PRECISION NOT NULL DEFAULT 0, line_total DOUBLE PRECISION NOT NULL DEFAULT 0
       );
       CREATE TABLE IF NOT EXISTS goods_receipts (
-        id TEXT PRIMARY KEY, receipt_number TEXT UNIQUE NOT NULL, purchase_order_id TEXT NOT NULL REFERENCES purchase_orders(id), destination_owner_type TEXT NOT NULL CHECK (destination_owner_type IN ('WAREHOUSE', 'BRANCH')), destination_warehouse_id TEXT REFERENCES warehouses(id), destination_branch_id TEXT REFERENCES branches(id), status TEXT NOT NULL DEFAULT 'DRAFT', received_by TEXT REFERENCES users(id), received_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+        id TEXT PRIMARY KEY, receipt_number TEXT UNIQUE NOT NULL, purchase_order_id TEXT NOT NULL REFERENCES purchase_orders(id), warehouse_id TEXT REFERENCES warehouses(id), destination_owner_type TEXT CHECK (destination_owner_type IN ('WAREHOUSE', 'BRANCH')), destination_warehouse_id TEXT REFERENCES warehouses(id), destination_branch_id TEXT REFERENCES branches(id), status TEXT DEFAULT 'DRAFT', received_by TEXT REFERENCES users(id), received_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
       );
       CREATE TABLE IF NOT EXISTS goods_receipt_lines (
-        id TEXT PRIMARY KEY, goods_receipt_id TEXT NOT NULL REFERENCES goods_receipts(id) ON DELETE CASCADE, product_id TEXT NOT NULL REFERENCES products(id), quantity_received INTEGER NOT NULL
+        id TEXT PRIMARY KEY, goods_receipt_id TEXT NOT NULL REFERENCES goods_receipts(id) ON DELETE CASCADE, product_id TEXT NOT NULL REFERENCES products(id), warehouse_location_id TEXT REFERENCES warehouse_locations(id), quantity_received INTEGER NOT NULL
       );
       CREATE TABLE IF NOT EXISTS purchase_invoices (
         id TEXT PRIMARY KEY, invoice_number TEXT UNIQUE NOT NULL, purchase_order_id TEXT NOT NULL REFERENCES purchase_orders(id), total_amount DOUBLE PRECISION NOT NULL, discount_amount DOUBLE PRECISION NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'UNPAID', issued_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP, paid_at TIMESTAMP WITH TIME ZONE
@@ -243,6 +243,13 @@ export async function ensurePostgresInit(pool: Pool) {
       ALTER TABLE transfer_lines ADD COLUMN IF NOT EXISTS quantity INTEGER;
       ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS expected_date TIMESTAMP WITH TIME ZONE;
       ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS warehouse_id TEXT REFERENCES warehouses(id);
+      ALTER TABLE purchase_order_lines ADD COLUMN IF NOT EXISTS discount_amount DOUBLE PRECISION NOT NULL DEFAULT 0;
+      ALTER TABLE goods_receipts ADD COLUMN IF NOT EXISTS warehouse_id TEXT REFERENCES warehouses(id);
+      ALTER TABLE goods_receipts ALTER COLUMN destination_owner_type DROP NOT NULL;
+      ALTER TABLE goods_receipts ALTER COLUMN destination_warehouse_id DROP NOT NULL;
+      ALTER TABLE goods_receipts ALTER COLUMN destination_branch_id DROP NOT NULL;
+      ALTER TABLE goods_receipts ALTER COLUMN status DROP NOT NULL;
+      ALTER TABLE goods_receipt_lines ADD COLUMN IF NOT EXISTS warehouse_location_id TEXT REFERENCES warehouse_locations(id);
       ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS contact_name TEXT;
       ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS contact_person TEXT;
       ALTER TABLE sales_orders ADD COLUMN IF NOT EXISTS quotation_id TEXT REFERENCES quotations(id);
