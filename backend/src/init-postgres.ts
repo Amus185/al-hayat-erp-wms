@@ -256,6 +256,120 @@ export async function ensurePostgresInit(pool: Pool) {
       ALTER TABLE goods_receipt_lines ADD COLUMN IF NOT EXISTS unit_cost DOUBLE PRECISION;
       ALTER TABLE goods_receipt_lines ADD COLUMN IF NOT EXISTS line_total DOUBLE PRECISION;
       ALTER TABLE sales_orders ADD COLUMN IF NOT EXISTS quotation_id TEXT REFERENCES quotations(id);
+      ALTER TABLE sales_orders ADD COLUMN IF NOT EXISTS installation_fee DOUBLE PRECISION NOT NULL DEFAULT 0;
+      ALTER TABLE sales_orders ADD COLUMN IF NOT EXISTS installer_name TEXT;
+      ALTER TABLE sales_orders ADD COLUMN IF NOT EXISTS installation_status TEXT DEFAULT 'NONE';
+      ALTER TABLE sales_orders ADD COLUMN IF NOT EXISTS installer_notes TEXT;
+      ALTER TABLE invoices ADD COLUMN IF NOT EXISTS installation_fee DOUBLE PRECISION NOT NULL DEFAULT 0;
+
+      -- Deliveries System Tables
+      CREATE TABLE IF NOT EXISTS deliveries (
+        id TEXT PRIMARY KEY,
+        delivery_number TEXT UNIQUE NOT NULL,
+        sales_order_id TEXT REFERENCES sales_orders(id),
+        customer_name TEXT NOT NULL,
+        customer_phone TEXT NOT NULL,
+        delivery_address TEXT NOT NULL,
+        city TEXT NOT NULL DEFAULT 'Hargeisa',
+        source_warehouse_id TEXT REFERENCES warehouses(id),
+        driver_name TEXT,
+        driver_phone TEXT,
+        vehicle_plate TEXT,
+        status TEXT NOT NULL DEFAULT 'PENDING',
+        scheduled_date TIMESTAMP WITH TIME ZONE,
+        dispatched_at TIMESTAMP WITH TIME ZONE,
+        delivered_at TIMESTAMP WITH TIME ZONE,
+        installation_required INTEGER NOT NULL DEFAULT 0,
+        installer_name TEXT,
+        installation_fee DOUBLE PRECISION NOT NULL DEFAULT 0,
+        notes TEXT,
+        recipient_signature_name TEXT,
+        created_by TEXT REFERENCES users(id),
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE TABLE IF NOT EXISTS delivery_items (
+        id TEXT PRIMARY KEY,
+        delivery_id TEXT NOT NULL REFERENCES deliveries(id) ON DELETE CASCADE,
+        product_id TEXT NOT NULL REFERENCES products(id),
+        quantity INTEGER NOT NULL CHECK (quantity > 0),
+        notes TEXT
+      );
+
+      -- Manufacturing Module Tables (BOM, Work Orders, Stages, Material Consumption)
+      CREATE TABLE IF NOT EXISTS bill_of_materials (
+        id TEXT PRIMARY KEY,
+        bom_code TEXT UNIQUE NOT NULL,
+        name TEXT NOT NULL,
+        product_id TEXT NOT NULL REFERENCES products(id),
+        quantity DOUBLE PRECISION NOT NULL DEFAULT 1,
+        unit_of_measure TEXT NOT NULL DEFAULT 'UNIT',
+        labor_cost DOUBLE PRECISION NOT NULL DEFAULT 0,
+        overhead_cost DOUBLE PRECISION NOT NULL DEFAULT 0,
+        estimated_hours DOUBLE PRECISION DEFAULT 0,
+        notes TEXT,
+        is_active INTEGER NOT NULL DEFAULT 1,
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE TABLE IF NOT EXISTS bom_items (
+        id TEXT PRIMARY KEY,
+        bom_id TEXT NOT NULL REFERENCES bill_of_materials(id) ON DELETE CASCADE,
+        material_product_id TEXT NOT NULL REFERENCES products(id),
+        quantity_required DOUBLE PRECISION NOT NULL CHECK (quantity_required > 0),
+        unit_cost DOUBLE PRECISION NOT NULL DEFAULT 0,
+        scrap_percentage DOUBLE PRECISION DEFAULT 0,
+        notes TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS work_orders (
+        id TEXT PRIMARY KEY,
+        wo_number TEXT UNIQUE NOT NULL,
+        product_id TEXT NOT NULL REFERENCES products(id),
+        bom_id TEXT REFERENCES bill_of_materials(id),
+        warehouse_id TEXT NOT NULL REFERENCES warehouses(id),
+        target_quantity INTEGER NOT NULL CHECK (target_quantity > 0),
+        completed_quantity INTEGER NOT NULL DEFAULT 0,
+        rejected_quantity INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'PLANNED',
+        current_stage TEXT NOT NULL DEFAULT 'CUTTING_PREP',
+        estimated_start_date DATE,
+        actual_start_date TIMESTAMP WITH TIME ZONE,
+        target_completion_date DATE,
+        completed_at TIMESTAMP WITH TIME ZONE,
+        material_cost DOUBLE PRECISION NOT NULL DEFAULT 0,
+        labor_cost DOUBLE PRECISION NOT NULL DEFAULT 0,
+        total_production_cost DOUBLE PRECISION NOT NULL DEFAULT 0,
+        supervisor_id TEXT REFERENCES users(id),
+        notes TEXT,
+        created_by TEXT REFERENCES users(id),
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE TABLE IF NOT EXISTS work_order_materials (
+        id TEXT PRIMARY KEY,
+        work_order_id TEXT NOT NULL REFERENCES work_orders(id) ON DELETE CASCADE,
+        material_product_id TEXT NOT NULL REFERENCES products(id),
+        planned_quantity DOUBLE PRECISION NOT NULL,
+        consumed_quantity DOUBLE PRECISION NOT NULL DEFAULT 0,
+        unit_cost DOUBLE PRECISION NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'PENDING'
+      );
+
+      CREATE TABLE IF NOT EXISTS work_order_stages (
+        id TEXT PRIMARY KEY,
+        work_order_id TEXT NOT NULL REFERENCES work_orders(id) ON DELETE CASCADE,
+        stage_name TEXT NOT NULL,
+        sequence_order INTEGER NOT NULL,
+        status TEXT NOT NULL DEFAULT 'PENDING',
+        started_at TIMESTAMP WITH TIME ZONE,
+        completed_at TIMESTAMP WITH TIME ZONE,
+        technician_name TEXT,
+        notes TEXT
+      );
 
       -- Backfill purchase_order_lines.quantity_received from existing goods_receipt_lines
       UPDATE purchase_order_lines pol
@@ -477,6 +591,8 @@ export async function ensurePostgresInit(pool: Pool) {
       { id: 'coa-5040', code: '5040', name: 'Livestock Cost of Sales',        account_type: 'EXPENSE',      normal_balance: 'DEBIT'  },
       { id: 'coa-6070', code: '6070', name: 'Property Expenses',              account_type: 'EXPENSE',   normal_balance: 'DEBIT'  },
       { id: 'coa-6080', code: '6080', name: 'Livestock Expenses',             account_type: 'EXPENSE',   normal_balance: 'DEBIT'  },
+      { id: 'coa-2050', code: '2050', name: 'Technician Installation Fees Payable', account_type: 'LIABILITY', normal_balance: 'CREDIT' },
+      { id: 'coa-1070', code: '1070', name: 'Work in Progress (WIP Manufacturing)', account_type: 'ASSET', normal_balance: 'DEBIT'  },
     ];
 
 

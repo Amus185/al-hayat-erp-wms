@@ -10,7 +10,7 @@ export interface JournalLineInput {
 
 export interface PostJournalParams {
   description: string;
-  referenceType: 'PURCHASE' | 'SALE' | 'TRANSFER' | 'EXPENSE' | 'DEPRECIATION' | 'CLOSING' | 'INVENTORY_ADJUSTMENT' | 'MANUAL';
+  referenceType: 'PURCHASE' | 'SALE' | 'TRANSFER' | 'EXPENSE' | 'DEPRECIATION' | 'CLOSING' | 'INVENTORY_ADJUSTMENT' | 'MANUAL' | 'MANUFACTURING';
   referenceId?: string | null;
   branchId?: string | null;
   entryDate?: string;
@@ -440,12 +440,21 @@ export async function postSaleJournalEntry(
   cogsAmount: number = 0,
   userId?: string,
   prefetchedFiscalPeriodId?: string | null,
-  prefetchedCoaMap?: Map<string, { id: string; normal_balance: string }>
+  prefetchedCoaMap?: Map<string, { id: string; normal_balance: string }>,
+  installationFee: number = 0
 ) {
+  const installFee = Number(installationFee || 0);
+  const totalReceivable = totalAmount + installFee;
+
   const lines: JournalLineInput[] = [
-    { accountCode: '1020', debitAmount: totalAmount, creditAmount: 0 },
+    { accountCode: '1020', debitAmount: totalReceivable, creditAmount: 0 },
     { accountCode: '4010', debitAmount: 0, creditAmount: totalAmount },
   ];
+
+  if (installFee > 0) {
+    // Pass-through liability: technician installation fee does NOT count as company revenue
+    lines.push({ accountCode: '2050', debitAmount: 0, creditAmount: installFee });
+  }
 
   if (cogsAmount > 0) {
     lines.push({ accountCode: '5010', debitAmount: cogsAmount, creditAmount: 0 });
@@ -461,6 +470,81 @@ export async function postSaleJournalEntry(
     prefetchedFiscalPeriodId,
     prefetchedCoaMap,
     lines,
+  });
+}
+
+/**
+ * Journal Entry for Manufacturing Material Consumption
+ * DR: Work in Progress (1070)
+ * CR: Raw Materials Inventory Asset (1030)
+ */
+export async function postManufacturingConsumptionJournalEntry(
+  c: any,
+  workOrder: { id: string; wo_number: string; warehouse_id?: string },
+  materialCost: number,
+  userId?: string
+) {
+  if (materialCost <= 0) return null;
+  return createAndPostJournalEntry(c, {
+    description: `Manufacturing Material Consumption for WO #${workOrder.wo_number}`,
+    referenceType: 'MANUFACTURING',
+    referenceId: workOrder.id,
+    branchId: null,
+    userId,
+    lines: [
+      { accountCode: '1070', debitAmount: materialCost, creditAmount: 0 },
+      { accountCode: '1030', debitAmount: 0, creditAmount: materialCost },
+    ],
+  });
+}
+
+/**
+ * Journal Entry for Manufacturing Completion
+ * DR: Finished Goods Inventory Asset (1030)
+ * CR: Work in Progress (1070)
+ */
+export async function postManufacturingCompletionJournalEntry(
+  c: any,
+  workOrder: { id: string; wo_number: string; warehouse_id?: string },
+  totalCost: number,
+  userId?: string
+) {
+  if (totalCost <= 0) return null;
+  return createAndPostJournalEntry(c, {
+    description: `Finished Goods Produced for WO #${workOrder.wo_number}`,
+    referenceType: 'MANUFACTURING',
+    referenceId: workOrder.id,
+    branchId: null,
+    userId,
+    lines: [
+      { accountCode: '1030', debitAmount: totalCost, creditAmount: 0 },
+      { accountCode: '1070', debitAmount: 0, creditAmount: totalCost },
+    ],
+  });
+}
+
+/**
+ * Journal Entry for Installation Fee Paid to Technician
+ * DR: Technician Installation Fees Payable (2050)
+ * CR: Cash & Cash Equivalents (1010)
+ */
+export async function postInstallationPayoutJournalEntry(
+  c: any,
+  order: { id: string; order_number: string; branch_id?: string },
+  amount: number,
+  userId?: string
+) {
+  if (amount <= 0) return null;
+  return createAndPostJournalEntry(c, {
+    description: `Technician Installation Fee Payout for Order #${order.order_number}`,
+    referenceType: 'SALE',
+    referenceId: `${order.id}-install-pay`,
+    branchId: order.branch_id || null,
+    userId,
+    lines: [
+      { accountCode: '2050', debitAmount: amount, creditAmount: 0 },
+      { accountCode: '1010', debitAmount: 0, creditAmount: amount },
+    ],
   });
 }
 

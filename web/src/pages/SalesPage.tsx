@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   ShoppingCart, Plus, UserPlus, Eye, CheckCircle,
   DollarSign, Zap, Printer, CreditCard, History, ChevronDown, ChevronUp, Loader2, Trash2,
+  Truck, Wrench, ShieldCheck,
 } from 'lucide-react';
 import { apiGet, apiPost, apiDelete } from '../api/client';
 import { getCached, setCached } from '../api/cache';
@@ -45,6 +46,10 @@ interface SalesOrder {
   amount_paid?: number;
   balance?: number;
   payment_status?: string | null;
+  installation_fee?: number;
+  installer_name?: string | null;
+  installation_status?: string | null;
+  installer_notes?: string | null;
 }
 
 // ── Shared helpers ──────────────────────────────────────────────────
@@ -363,6 +368,28 @@ export function SalesPage() {
     }
   };
 
+  const handlePayoutInstaller = async (orderId: string, installerName?: string) => {
+    const confirmed = await confirmAction(
+      'Disburse Installation Fee?',
+      `Confirm immediate payout of installation fee to ${installerName || 'technician'}? This posts DR 2050 (Installation Payable) and CR 1010 (Cash).`,
+      'Yes, Disburse Payout',
+      'info'
+    );
+    if (!confirmed) return;
+    try {
+      setActionProcessing('payout');
+      await apiPost(`/sales/orders/${orderId}/installation-payout`, { installer_name: installerName });
+      addToast('success', 'Installation fee payout recorded and posted to GL.');
+      const updated = await apiGet<any>(`/sales/orders/${orderId}`);
+      setSelectedOrder(updated);
+      loadData();
+    } catch (err: any) {
+      addToast('error', err?.message || 'Failed to disburse installation fee');
+    } finally {
+      setActionProcessing(null);
+    }
+  };
+
   const handlePrintInvoice = async (orderId: string) => {
     try {
       const orderData = await apiGet<any>(`/sales/orders/${orderId}`);
@@ -495,9 +522,30 @@ export function SalesPage() {
       key: 'total',
       label: 'Total Amount',
       render: (row) => (
-        <span style={{ fontWeight: 600 }}>
-          {row.net_total != null ? fmt(row.net_total) : (row.invoice_total != null ? fmt(row.invoice_total) : '—')}
-        </span>
+        <div>
+          <div style={{ fontWeight: 600 }}>
+            {row.net_total != null ? fmt(row.net_total) : (row.invoice_total != null ? fmt(row.invoice_total) : '—')}
+          </div>
+          {Number(row.installation_fee || 0) > 0 && (
+            <div
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '3px',
+                fontSize: '11px',
+                color: row.installation_status === 'PAID_OUT' ? '#166534' : '#b45309',
+                background: row.installation_status === 'PAID_OUT' ? '#dcfce7' : '#fef3c7',
+                padding: '1px 6px',
+                borderRadius: '4px',
+                fontWeight: 600,
+                marginTop: '2px',
+              }}
+              title={row.installation_status === 'PAID_OUT' ? 'Installation fee paid to technician' : 'Installation fee pending technician payout'}
+            >
+              <Wrench size={10} /> +${Number(row.installation_fee).toFixed(2)} Install {row.installation_status === 'PAID_OUT' ? '✓' : ''}
+            </div>
+          )}
+        </div>
       ),
     },
     {
@@ -528,6 +576,20 @@ export function SalesPage() {
           <button type="button" className="btn btn-secondary btn-sm" onClick={() => viewOrderDetails(row)}>
             <Eye size={14} style={{ marginRight: '4px', inlineSize: 'auto' }} /> Details
           </button>
+          {['CONFIRMED', 'INVOICED', 'PAID'].includes(row.status) && (
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={(e) => {
+                e.stopPropagation();
+                navigate(`/deliveries?orderId=${row.id}`);
+              }}
+              title="Schedule Delivery for this Sale"
+              style={{ color: '#0284c7', borderColor: '#bae6fd', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+            >
+              <Truck size={14} /> Deliver
+            </button>
+          )}
           {hasPermission('manage_sales') && (
             <button
               type="button"
@@ -692,6 +754,65 @@ export function SalesPage() {
               </div>
             )}
 
+            {/* Service Installation Fee & Technician Card */}
+            {Number(selectedOrder.installation_fee || 0) > 0 && (
+              <div style={{
+                background: selectedOrder.installation_status === 'PAID_OUT' ? '#f0fdf4' : '#fffbeb',
+                border: `1.5px solid ${selectedOrder.installation_status === 'PAID_OUT' ? '#86efac' : '#fde68a'}`,
+                borderRadius: '8px',
+                padding: '14px',
+              }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <Wrench size={18} color={selectedOrder.installation_status === 'PAID_OUT' ? '#166534' : '#b45309'} />
+                    <span style={{ fontWeight: 700, fontSize: '14px', color: selectedOrder.installation_status === 'PAID_OUT' ? '#166534' : '#92400e' }}>
+                      Service Installation: {fmt(selectedOrder.installation_fee)}
+                    </span>
+                    <span style={{
+                      fontSize: '11px',
+                      fontWeight: 700,
+                      padding: '2px 8px',
+                      borderRadius: '12px',
+                      background: selectedOrder.installation_status === 'PAID_OUT' ? '#22c55e' : '#f59e0b',
+                      color: '#ffffff'
+                    }}>
+                      {selectedOrder.installation_status === 'PAID_OUT' ? 'DISBURSED TO TECHNICIAN' : 'PENDING DISBURSEMENT'}
+                    </span>
+                  </div>
+
+                  {selectedOrder.installation_status !== 'PAID_OUT' && hasPermission('manage_sales') && (
+                    <button
+                      type="button"
+                      className="btn btn-sm"
+                      onClick={() => handlePayoutInstaller(selectedOrder.id, selectedOrder.installer_name)}
+                      disabled={actionProcessing === 'payout'}
+                      style={{
+                        background: '#d97706',
+                        color: '#fff',
+                        border: 'none',
+                        fontWeight: 600,
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      {actionProcessing === 'payout' ? <><Loader2 size={12} className="spin-icon" /> Processing…</> : <>💸 Disburse to Technician</>}
+                    </button>
+                  )}
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginTop: '10px', fontSize: '12px', color: '#475569' }}>
+                  <div>
+                    <span style={{ color: '#64748b' }}>Assigned Installer:</span> <strong>{selectedOrder.installer_name || 'Technician'}</strong>
+                  </div>
+                  <div>
+                    <span style={{ color: '#64748b' }}>Notes:</span> <span>{selectedOrder.installer_notes || 'Pass-through fee payable upon job completion'}</span>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Order Lines */}
             <div>
               <h4 style={{ margin: '0 0 8px', color: '#066006' }}>Order Lines</h4>
@@ -746,6 +867,18 @@ export function SalesPage() {
               <button type="button" className="btn btn-secondary" onClick={() => setSelectedOrder(null)}>
                 Close
               </button>
+
+              {/* Schedule Delivery for this Order */}
+              {['CONFIRMED', 'INVOICED', 'PAID'].includes(selectedOrder.status) && (
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => navigate(`/deliveries?orderId=${selectedOrder.id}`)}
+                  style={{ display: 'flex', alignItems: 'center', gap: '4px', color: '#0284c7', borderColor: '#bae6fd' }}
+                >
+                  <Truck size={14} /> Schedule Delivery
+                </button>
+              )}
 
               {/* Print — available once invoice exists */}
               {selectedOrder.invoice_id && (

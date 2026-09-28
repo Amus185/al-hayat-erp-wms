@@ -17,6 +17,8 @@ import files from './routes/files';
 import accounting from './routes/accounting';
 import expenses from './routes/expenses';
 import assets from './routes/assets';
+import deliveries from './routes/deliveries';
+import manufacturing from './routes/manufacturing';
 
 // Global router instances...
 
@@ -97,6 +99,8 @@ app.route('/api/v1/files', files);
 app.route('/api/v1/accounting', accounting);
 app.route('/api/v1/expenses', expenses);
 app.route('/api/v1/assets', assets);
+app.route('/api/v1/deliveries', deliveries);
+app.route('/api/v1/manufacturing', manufacturing);
 
 // Global Error Handler - Structured JSON Logging for Cloudflare Workers Observability
 app.onError((err, c) => {

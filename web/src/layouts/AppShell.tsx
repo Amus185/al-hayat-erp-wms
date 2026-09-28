@@ -20,6 +20,8 @@ import {
   UserCheck,
   Receipt,
   Landmark,
+  Factory,
+  ArrowLeftRight,
 } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { useAuth } from '../contexts/AuthContext';
@@ -29,10 +31,12 @@ const navItems = [
   { label: 'Products', path: '/products', icon: PackageSearch, permission: 'manage_inventory' },
   { label: 'Warehouses', path: '/warehouses', icon: Boxes, permission: 'manage_inventory', adminOnly: true },
   { label: 'Inventory', path: '/inventory', icon: ClipboardList, permission: 'manage_inventory' },
+  { label: 'Manufacturing', path: '/manufacturing', icon: Factory, permission: 'manage_inventory' },
   { label: 'Branches', path: '/branches', icon: Building2, permission: 'manage_users', adminOnly: true },
-  { label: 'Transfers', path: '/transfers', icon: Truck, permission: 'manage_transfers' },
+  { label: 'Transfers', path: '/transfers', icon: ArrowLeftRight, permission: 'manage_transfers' },
   { label: 'Purchasing', path: '/purchasing', icon: ClipboardList, permission: 'manage_purchasing' },
   { label: 'Sales', path: '/sales', icon: ShoppingCart, permission: 'manage_sales' },
+  { label: 'Deliveries', path: '/deliveries', icon: Truck, permission: 'manage_sales' },
   { label: 'Customers', path: '/customers', icon: UserCheck, permission: 'manage_sales' },
   { label: 'Expenses', path: '/expenses', icon: Receipt, permission: 'manage_purchasing' },
   { label: 'Owner\'s Assets', path: '/assets', icon: Landmark, permission: '', adminOnly: true },
@@ -44,21 +48,23 @@ const navItems = [
 
 // Map route prefixes → { section, title } for the topbar heading
 const pageTitles: Record<string, { section: string; title: string }> = {
-  '/':           { section: 'Operations Dashboard',   title: 'Inventory, purchasing, transfers, and sales' },
-  '/products':   { section: 'Catalog',                title: 'Products' },
-  '/warehouses': { section: 'Inventory',              title: 'Warehouses' },
-  '/inventory':  { section: 'Stock Control',          title: 'Inventory' },
-  '/branches':   { section: 'Organization',           title: 'Branches' },
-  '/transfers':  { section: 'Movement',               title: 'Stock Transfers' },
-  '/purchasing': { section: 'Procurement',            title: 'Purchasing' },
-  '/sales':      { section: 'Revenue',                title: 'Sales' },
-  '/customers':  { section: 'Sales',                  title: 'Customers' },
-  '/expenses':   { section: 'Finance',                title: 'Expenses' },
-  '/assets':     { section: 'Owner Investments',      title: "Owner's Assets & Investments" },
-  '/reports':    { section: 'Analytics',              title: 'Reports' },
-  '/accounting': { section: 'Finance',                title: 'Accounting' },
-  '/audit':      { section: 'Compliance',             title: 'Audit Log' },
-  '/users':      { section: 'Administration',         title: 'Users & Permissions' },
+  '/':              { section: 'Operations Dashboard',   title: 'Inventory, purchasing, transfers, and sales' },
+  '/products':      { section: 'Catalog',                title: 'Products' },
+  '/warehouses':    { section: 'Inventory',              title: 'Warehouses' },
+  '/inventory':     { section: 'Stock Control',          title: 'Inventory' },
+  '/manufacturing': { section: 'Production',             title: 'Manufacturing & Work Orders' },
+  '/branches':      { section: 'Organization',           title: 'Branches' },
+  '/transfers':     { section: 'Movement',               title: 'Stock Transfers' },
+  '/purchasing':    { section: 'Procurement',            title: 'Purchasing' },
+  '/sales':         { section: 'Revenue',                title: 'Sales' },
+  '/deliveries':    { section: 'Logistics',              title: 'Product Deliveries & Fleet' },
+  '/customers':     { section: 'Sales',                  title: 'Customers' },
+  '/expenses':      { section: 'Finance',                title: 'Expenses' },
+  '/assets':        { section: 'Owner Investments',      title: "Owner's Assets & Investments" },
+  '/reports':       { section: 'Analytics',              title: 'Reports' },
+  '/accounting':    { section: 'Finance',                title: 'Accounting' },
+  '/audit':         { section: 'Compliance',             title: 'Audit Log' },
+  '/users':         { section: 'Administration',         title: 'Users & Permissions' },
 };
 
 function usePageTitle() {

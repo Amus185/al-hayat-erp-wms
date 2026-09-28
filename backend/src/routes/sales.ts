@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { Env, uuidv4 } from '../db';
 import { authMiddleware, requirePermissions, isAdminUser } from '../middleware/auth';
 import { logAudit, createAuditLogStmt } from '../services/audit';
-import { postSaleJournalEntry, postCustomerPaymentJournalEntry, fetchOpenFiscalPeriodId, fetchCoaMapForCodes, calculateOrderCogs } from '../services/accounting-service';
+import { postSaleJournalEntry, postCustomerPaymentJournalEntry, fetchOpenFiscalPeriodId, fetchCoaMapForCodes, calculateOrderCogs, postInstallationPayoutJournalEntry } from '../services/accounting-service';
 
 const sales = new Hono<{ Bindings: Env; Variables: { jwtPayload: any } }>();
 
@@ -127,14 +127,34 @@ sales.get('/orders', async (c) => {
 
   // Compute payment_status and balance for each row that has an invoice
   const enriched = (results || []).map((row: any) => {
-    if (!row.invoice_id) return { ...row, payment_status: null, balance: null };
-    const netTotal = Math.max(0, Number(row.invoice_total || 0) - Number(row.invoice_discount || 0));
+    const installFee = Number(row.installation_fee || 0);
+    if (!row.invoice_id) {
+      return {
+        ...row,
+        installation_fee: installFee,
+        installer_name: row.installer_name || null,
+        installation_status: row.installation_status || 'NONE',
+        payment_status: null,
+        balance: null,
+      };
+    }
+    const merchandiseNet = Math.max(0, Number(row.invoice_total || 0) - Number(row.invoice_discount || 0));
+    const netTotal = merchandiseNet + installFee;
     const amountPaid = Number(row.amount_paid || 0);
     const balance = Math.max(0, netTotal - amountPaid);
     let payment_status = 'UNPAID';
     if (amountPaid >= netTotal && netTotal > 0) payment_status = 'PAID';
     else if (amountPaid > 0) payment_status = 'PARTIALLY_PAID';
-    return { ...row, net_total: netTotal, balance, payment_status };
+    return {
+      ...row,
+      installation_fee: installFee,
+      installer_name: row.installer_name || null,
+      installation_status: row.installation_status || 'NONE',
+      merchandise_total: merchandiseNet,
+      net_total: netTotal,
+      balance,
+      payment_status,
+    };
   });
 
   // Client-side filter by payment status (computed field — cannot be done in SQL easily)
@@ -253,12 +273,16 @@ sales.post('/orders', requirePermissions(['manage_sales']), async (c) => {
 
   const id = uuidv4();
   const orderNumber = `SO-${Date.now()}`;
+  const installFee = Math.max(0, Number(body.installationFee || 0));
+  const installerName = body.installerName ? String(body.installerName).trim() : null;
+  const installerNotes = body.installerNotes ? String(body.installerNotes).trim() : null;
+  const installStatus = installFee > 0 ? 'PENDING' : 'NONE';
 
   const stmts = [];
   stmts.push(c.env.DB.prepare(`
-    INSERT INTO sales_orders (id, order_number, customer_id, branch_id, status, created_by)
-    VALUES (?, ?, ?, ?, 'DRAFT', ?)
-  `).bind(id, orderNumber, body.customerId || null, body.branchId, userId));
+    INSERT INTO sales_orders (id, order_number, customer_id, branch_id, status, created_by, installation_fee, installer_name, installation_status, installer_notes)
+    VALUES (?, ?, ?, ?, 'DRAFT', ?, ?, ?, ?, ?)
+  `).bind(id, orderNumber, body.customerId || null, body.branchId, userId, installFee, installerName, installStatus, installerNotes));
 
   for (const line of body.lines) {
     const discountAmount = Number(line.discountAmount || 0);
@@ -392,10 +416,11 @@ sales.post('/orders/:id/invoice', requirePermissions(['manage_sales']), async (c
     const stmts: any[] = [];
 
     // Create invoice — total_amount is gross subtotal, discount_amount is discount
+    const installFee = Number((order as any)?.installation_fee || 0);
     stmts.push(c.env.DB.prepare(`
-      INSERT INTO invoices (id, invoice_number, sales_order_id, total_amount, discount_amount)
-      VALUES (?, ?, ?, ?, ?)
-    `).bind(invoiceId, `INV-${Date.now()}`, orderId, subtotal, discountAmount));
+      INSERT INTO invoices (id, invoice_number, sales_order_id, total_amount, discount_amount, installation_fee)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).bind(invoiceId, `INV-${Date.now()}`, orderId, subtotal, discountAmount, installFee));
 
     // Copy lines to invoice_lines
     stmts.push(c.env.DB.prepare(`
@@ -648,17 +673,20 @@ sales.post('/orders/:id/complete', requirePermissions(['manage_sales']), async (
     const invoiceId = uuidv4();
     const stmts: any[] = [];
 
-    // Create invoice (directly as PAID) — total_amount is gross subtotal, discount_amount is discount
-    stmts.push(c.env.DB.prepare(`
-      INSERT INTO invoices (id, invoice_number, sales_order_id, total_amount, discount_amount, status, paid_at)
-      VALUES (?, ?, ?, ?, ?, 'PAID', CURRENT_TIMESTAMP)
-    `).bind(invoiceId, `INV-${Date.now()}`, orderId, subtotal, discountAmount));
+    const installFee = Number((order as any)?.installation_fee || 0);
+    const grandTotal = total + installFee;
 
-    // Insert a full payment record
+    // Create invoice (directly as PAID) — total_amount is gross subtotal, discount_amount is discount, installation_fee is pass-through
+    stmts.push(c.env.DB.prepare(`
+      INSERT INTO invoices (id, invoice_number, sales_order_id, total_amount, discount_amount, status, paid_at, installation_fee)
+      VALUES (?, ?, ?, ?, ?, 'PAID', CURRENT_TIMESTAMP, ?)
+    `).bind(invoiceId, `INV-${Date.now()}`, orderId, subtotal, discountAmount, installFee));
+
+    // Insert a full payment record for grandTotal
     stmts.push(c.env.DB.prepare(`
       INSERT INTO invoice_payments (id, invoice_id, amount, payment_method, payment_date, notes, recorded_by)
       VALUES (?, ?, ?, 'CASH', CURRENT_TIMESTAMP, 'Full payment via Complete Sale', ?)
-    `).bind(uuidv4(), invoiceId, total > 0 ? total : 0, userId));
+    `).bind(uuidv4(), invoiceId, grandTotal > 0 ? grandTotal : 0, userId));
 
     // Copy lines
     stmts.push(c.env.DB.prepare(`
@@ -682,27 +710,22 @@ sales.post('/orders/:id/complete', requirePermissions(['manage_sales']), async (
 
     // Finalize order as PAID
     stmts.push(c.env.DB.prepare("UPDATE sales_orders SET status = 'PAID' WHERE id = ?").bind(orderId));
-    stmts.push(createAuditLogStmt(c, 'SALES_ORDER_COMPLETE', 'sales_orders', orderId, { status: validSource }, { status: 'PAID', invoiceId, total }));
+    stmts.push(createAuditLogStmt(c, 'SALES_ORDER_COMPLETE', 'sales_orders', orderId, { status: validSource }, { status: 'PAID', invoiceId, total: grandTotal }));
 
     const tBatch0 = Date.now();
     await c.env.DB.batch(stmts);
     console.log(`[WATERFALL] +${Date.now() - reqStart}ms | Main sale write batch (${stmts.length} stmts) completed (${Date.now() - tBatch0}ms)`);
 
     // Automatically post double-entry GL journal entries for Sale Completion & Payment
-    // Task 1: Pre-fetch shared context ONCE for both journal entries.
-    //   - Fiscal period: same date for both entries → fetch once, pass in.
-    //   - CoA codes: Sale needs {1020,4010}, Payment needs {1010,1020} → union {1010,1020,4010} → single IN() query.
-    //   - GL running_balance: NOT pre-fetched here — account 1020 is written by the
-    //     first entry and read by the second, so the reads must be sequential (see Task 2 analysis).
     try {
       const entryDate = new Date().toISOString().split('T')[0];
 
       const tGlPre0 = Date.now();
       const [sharedFiscalPeriodId, sharedCoaMap] = await Promise.all([
         fetchOpenFiscalPeriodId(c.env.DB, entryDate),
-        fetchCoaMapForCodes(c.env.DB, ['1010', '1020', '4010']),
+        fetchCoaMapForCodes(c.env.DB, ['1010', '1020', '2050', '4010']),
       ]);
-      console.log(`[WATERFALL] +${Date.now() - reqStart}ms | GL pre-fetch (fiscal period + 3 CoA codes) completed (${Date.now() - tGlPre0}ms)`);
+      console.log(`[WATERFALL] +${Date.now() - reqStart}ms | GL pre-fetch (fiscal period + 4 CoA codes) completed (${Date.now() - tGlPre0}ms)`);
 
       const tGl1_0 = Date.now();
       const cogsAmount = await calculateOrderCogs(c.env.DB, order.id as string);
@@ -713,21 +736,19 @@ sales.post('/orders/:id/complete', requirePermissions(['manage_sales']), async (
         cogsAmount,
         userId,
         sharedFiscalPeriodId || undefined,
-        sharedCoaMap
+        sharedCoaMap,
+        installFee
       );
       console.log(`[WATERFALL] +${Date.now() - reqStart}ms | postSaleJournalEntry completed (${Date.now() - tGl1_0}ms)`);
 
-      // NOTE: postCustomerPaymentJournalEntry runs AFTER the first batch commits.
-      // Account 1020 was debited by the sale entry; the payment entry reads its
-      // updated running_balance. The GL read inside is therefore intentionally live.
       const tGl2_0 = Date.now();
       await postCustomerPaymentJournalEntry(
         c,
-        { id: invoiceId, amount: total },
+        { id: invoiceId, amount: grandTotal },
         { id: order.id as string, order_number: (order as any).order_number as string || (order.id as string), branch_id: (order as any).branch_id as string },
         userId,
-        sharedFiscalPeriodId,  // fiscal period is the same — safe to reuse
-        sharedCoaMap           // CoA codes are static config — safe to reuse
+        sharedFiscalPeriodId,
+        sharedCoaMap
       );
       console.log(`[WATERFALL] +${Date.now() - reqStart}ms | postCustomerPaymentJournalEntry completed (${Date.now() - tGl2_0}ms)`);
     } catch (glErr) {
@@ -1002,6 +1023,55 @@ sales.get('/invoices/:id/print', async (c) => {
       unit_price: l.unit_price,
       subtotal: (l.quantity as number) * (l.unit_price as number),
     })),
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────
+// INSTALLATION FEE PAYOUT — Record payout to technician for installation service
+// DR: 2050 (Installation Payable), CR: 1010 (Cash)
+// ──────────────────────────────────────────────────────────────────────
+sales.post('/orders/:id/installation-payout', requirePermissions(['manage_sales']), async (c) => {
+  const orderId = c.req.param('id');
+  const userId = c.get('jwtPayload').sub;
+  const body = await c.req.json().catch(() => ({}));
+
+  const order = await c.env.DB.prepare('SELECT * FROM sales_orders WHERE id = ?').bind(orderId).first();
+  if (!order) return c.json({ message: 'Sales order not found' }, 404);
+
+  const fee = Number((order as any).installation_fee || 0);
+  if (fee <= 0) {
+    return c.json({ message: 'This order has no installation fee recorded.' }, 400);
+  }
+
+  if ((order as any).installation_status === 'PAID_OUT') {
+    return c.json({ message: 'Installation fee has already been paid out to the installer.' }, 400);
+  }
+
+  const installerName = body.installer_name || (order as any).installer_name || 'Technician';
+  const payoutNotes = body.notes || `Paid out to ${installerName} on ${new Date().toLocaleDateString()}`;
+
+  // Post Double-Entry Journal: DR 2050 (Installation Payable), CR 1010 (Cash)
+  await postInstallationPayoutJournalEntry(
+    c,
+    { id: (order as any).id, order_number: (order as any).order_number, branch_id: (order as any).branch_id },
+    fee,
+    userId
+  );
+
+  await c.env.DB.prepare(`
+    UPDATE sales_orders
+    SET installation_status = 'PAID_OUT',
+        installer_name = ?,
+        installer_notes = ?
+    WHERE id = ?
+  `).bind(installerName, payoutNotes, orderId).run();
+
+  await logAudit(c, 'INSTALLATION_FEE_PAYOUT', 'sales_orders', orderId, { status: (order as any).installation_status }, { status: 'PAID_OUT', fee, installerName });
+
+  return c.json({
+    success: true,
+    message: `Installation fee of $${fee.toFixed(2)} successfully disbursed to ${installerName}.`,
+    installation_status: 'PAID_OUT'
   });
 });
 

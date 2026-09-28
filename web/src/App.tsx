@@ -24,6 +24,8 @@ import { AccountingPage } from './pages/AccountingPage';
 import { CustomersPage } from './pages/CustomersPage';
 import { ExpensesPage } from './pages/ExpensesPage';
 import { AssetsPage } from './pages/AssetsPage';
+import { DeliveriesPage } from './pages/DeliveriesPage';
+import { ManufacturingPage } from './pages/ManufacturingPage';
 
 function ProtectedRoute({ permission }: { permission?: string }) {
   const { isAuthenticated, hasPermission, isLoading } = useAuth();
@@ -105,6 +107,12 @@ export function App() {
             <Route path="/sales" element={<SalesPage />} />
             <Route path="/sales/new" element={<CreateSalesOrderPage />} />
             
+            {/* Delivery Management & Fulfillment */}
+            <Route path="/deliveries" element={<DeliveriesPage />} />
+
+            {/* Manufacturing & Factory Production */}
+            <Route path="/manufacturing" element={<ManufacturingPage />} />
+
             {/* Reports */}
             <Route path="/reports" element={<ReportsPage />} />
             

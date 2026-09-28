@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ShoppingCart, ArrowLeft, Plus, Trash2, Loader2 } from 'lucide-react';
+import { ShoppingCart, ArrowLeft, Plus, Trash2, Loader2, Wrench, Info, ShieldCheck } from 'lucide-react';
 import { apiGet, apiPost } from '../api/client';
 import { FormField, InputField, TextareaField } from '../components/FormField';
 import { SearchInput } from '../components/SearchInput';
@@ -38,6 +38,12 @@ export function CreateSalesOrderPage() {
   const [customerId, setCustomerId] = useState('');
   const [branchId, setBranchId] = useState('');
   const [notes, setNotes] = useState('');
+
+  // Service Installation Fee states (Technician pass-through)
+  const [hasInstallationFee, setHasInstallationFee] = useState(false);
+  const [installationFee, setInstallationFee] = useState<number>(40);
+  const [installerName, setInstallerName] = useState('');
+  const [installerNotes, setInstallerNotes] = useState('');
 
   // Inline Customer Modal state
   const [isInlineCustomerOpen, setIsInlineCustomerOpen] = useState(false);
@@ -177,6 +183,10 @@ export function CreateSalesOrderPage() {
     const payload = {
       customerId,
       branchId,
+      notes: notes.trim() || undefined,
+      installationFee: hasInstallationFee ? Number(installationFee || 0) : 0,
+      installerName: hasInstallationFee ? installerName.trim() : null,
+      installerNotes: hasInstallationFee ? installerNotes.trim() : null,
       lines: lines.map((l) => ({
         productId: l.productId,
         quantity: Number(l.quantity),
@@ -210,7 +220,9 @@ export function CreateSalesOrderPage() {
 
   const subtotalOrder = lines.reduce((acc, curr) => acc + (curr.quantity * curr.unitPrice), 0);
   const totalDiscount = lines.reduce((acc, curr) => acc + (curr.discount || 0), 0);
-  const grandTotalOrder = subtotalOrder - totalDiscount;
+  const merchandiseNet = Math.max(0, subtotalOrder - totalDiscount);
+  const effectiveInstallFee = hasInstallationFee ? Math.max(0, Number(installationFee || 0)) : 0;
+  const grandTotalOrder = merchandiseNet + effectiveInstallFee;
 
   return (
     <div className="module-page">
@@ -416,17 +428,31 @@ export function CreateSalesOrderPage() {
 
                 {/* Summary Panel */}
                 <div style={{ display: 'flex', justifyContent: 'flex-end', borderTop: '2px solid #edf1ed', paddingTop: '16px', marginTop: '16px' }}>
-                  <div style={{ minWidth: '300px', display: 'grid', gap: '6px' }}>
+                  <div style={{ minWidth: '340px', display: 'grid', gap: '8px' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '14px', color: '#444' }}>
-                      <span>Subtotal</span>
+                      <span>Merchandise Subtotal</span>
                       <span>${subtotalOrder.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
                     </div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '14px', color: '#b45309' }}>
-                      <span>Total Discount</span>
-                      <span>-${totalDiscount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                    {totalDiscount > 0 && (
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '14px', color: '#b45309' }}>
+                        <span>Total Discount</span>
+                        <span>-${totalDiscount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                      </div>
+                    )}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '14px', fontWeight: 600, color: '#166534', borderTop: '1px dashed #e2e8f0', paddingTop: '6px' }}>
+                      <span>Company Sales Revenue</span>
+                      <span>${merchandiseNet.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
                     </div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '17px', fontWeight: 700, color: '#066006', borderTop: '1px solid #d1e8d1', paddingTop: '8px', marginTop: '4px' }}>
-                      <span>Grand Total</span>
+                    {hasInstallationFee && (
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '14px', color: '#d97706', fontWeight: 600, background: '#fffbeb', padding: '6px 8px', borderRadius: '6px', border: '1px solid #fde68a' }}>
+                        <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                          <Wrench size={13} /> Installation Service Fee
+                        </span>
+                        <span>+${effectiveInstallFee.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                      </div>
+                    )}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '18px', fontWeight: 800, color: '#066006', borderTop: '2px solid #bbf7d0', paddingTop: '8px', marginTop: '4px' }}>
+                      <span>Customer Total Due</span>
                       <span>${grandTotalOrder.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
                     </div>
                   </div>
@@ -434,6 +460,77 @@ export function CreateSalesOrderPage() {
               </div>
             )}
           </div>
+        </div>
+
+        {/* Service Installation Fee Panel */}
+        <div className="panel" style={{ padding: '20px', border: hasInstallationFee ? '1.5px solid #ca8a04' : '1px solid #e2e8f0', background: hasInstallationFee ? '#fefce8' : '#ffffff', transition: 'all 0.2s ease' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: hasInstallationFee ? '16px' : '0' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <div style={{
+                width: '36px',
+                height: '36px',
+                borderRadius: '8px',
+                background: hasInstallationFee ? '#fef08a' : '#f1f5f9',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: hasInstallationFee ? '#854d0e' : '#64748b'
+              }}>
+                <Wrench size={20} />
+              </div>
+              <div>
+                <h3 style={{ margin: 0, fontSize: '16px', color: '#1e293b', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  Service Installation Fee
+                  {hasInstallationFee && <span style={{ fontSize: '11px', background: '#eab308', color: '#fff', padding: '2px 8px', borderRadius: '12px', fontWeight: 700 }}>Pass-Through Liability</span>}
+                </h3>
+                <p style={{ margin: '2px 0 0', fontSize: '13px', color: '#64748b' }}>
+                  Collected from customer and paid directly to technician. Does not count as company revenue.
+                </p>
+              </div>
+            </div>
+
+            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontWeight: 600, fontSize: '14px', color: '#1e293b' }}>
+              <input
+                type="checkbox"
+                checked={hasInstallationFee}
+                onChange={(e) => setHasInstallationFee(e.target.checked)}
+                style={{ width: '18px', height: '18px', accentColor: '#0b8f08', cursor: 'pointer' }}
+              />
+              Include Installation Fee
+            </label>
+          </div>
+
+          {hasInstallationFee && (
+            <div style={{ display: 'grid', gridTemplateColumns: '180px 1fr 1fr', gap: '14px', paddingTop: '12px', borderTop: '1px solid #fef08a' }}>
+              <InputField
+                label="Fee Amount ($) *"
+                id="installFeeAmount"
+                type="number"
+                min="0"
+                step="0.01"
+                value={String(installationFee)}
+                onChange={(val) => setInstallationFee(Math.max(0, Number(val) || 0))}
+                placeholder="40.00"
+                required
+              />
+
+              <InputField
+                label="Technician / Installer Name"
+                id="installerName"
+                value={installerName}
+                onChange={setInstallerName}
+                placeholder="e.g. Jamaal Installer, Hassan Electrician..."
+              />
+
+              <InputField
+                label="Installation Work Notes"
+                id="installerNotes"
+                value={installerNotes}
+                onChange={setInstallerNotes}
+                placeholder="e.g. Assemble dining table & 6 chairs on delivery"
+              />
+            </div>
+          )}
         </div>
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
