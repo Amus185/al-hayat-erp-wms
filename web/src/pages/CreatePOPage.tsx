@@ -5,6 +5,7 @@ import { apiGet, apiPost } from '../api/client';
 import { FormField, InputField, TextareaField } from '../components/FormField';
 import { SearchInput } from '../components/SearchInput';
 import { SearchableSelect } from '../components/SearchableSelect';
+import { ProductItemSelect, type SelectableProduct } from '../components/ProductItemSelect';
 import { Modal } from '../components/Modal';
 import { useToast } from '../contexts/ToastContext';
 
@@ -130,16 +131,24 @@ export function CreatePOPage() {
     setSearchResults(filtered.slice(0, 5));
   }, [searchQuery, productsList]);
 
-  const addLine = (v: ProductSearchItem) => {
-    if (lines.some((l) => l.productId === v.id)) {
-      addToast('warning', 'Product already added to the order');
+  const addLine = (v: ProductSearchItem | SelectableProduct) => {
+    const name = (v as any).productName || v.name;
+    const cost = (v as any).costPrice ?? (v as any).price ?? 0;
+    const existingIndex = lines.findIndex((l) => l.productId === v.id);
+    if (existingIndex !== -1) {
+      setLines((prev) =>
+        prev.map((l, i) =>
+          i === existingIndex ? { ...l, quantity: l.quantity + 1 } : l
+        )
+      );
+      addToast('info', `Incremented "${name}" quantity to ${lines[existingIndex].quantity + 1}`);
       return;
     }
     setLines((prev) => [
       ...prev,
-      { productId: v.id, sku: v.sku, name: v.productName, quantity: 1, unitCost: v.costPrice || 0, discount: 0 },
+      { productId: v.id, sku: v.sku, name, quantity: 1, unitCost: cost, discount: 0 },
     ]);
-    setSearchQuery('');
+    addToast('success', `Added "${name}" to PO`);
   };
 
   const removeLine = (productId: string) => {
@@ -295,46 +304,20 @@ export function CreatePOPage() {
         <div className="panel" style={{ padding: '20px' }}>
           <h3 style={{ margin: '0 0 14px', color: '#066006' }}>Line Items</h3>
 
-          <div style={{ position: 'relative' }}>
-            <SearchInput
-              value={searchQuery}
-              onChange={setSearchQuery}
-              placeholder="Search / Scan variant to add to PO..."
-            />
-            {/* Search autocomplete dropdown */}
-            {searchResults.length > 0 && (
-              <div style={{
-                position: 'absolute',
-                top: '100%',
-                left: '0',
-                right: '0',
-                background: '#fff',
-                border: '1px solid #d9e2d9',
-                borderRadius: '8px',
-                boxShadow: '0 6px 20px rgba(0,0,0,0.1)',
-                zIndex: '10',
-                marginTop: '4px',
-                overflow: 'hidden'
-              }}>
-                {searchResults.map((v) => (
-                  <div
-                    key={v.id}
-                    onClick={() => addLine(v)}
-                    style={{
-                      padding: '10px 14px',
-                      borderBottom: '1px solid #edf1ed',
-                      cursor: 'pointer',
-                      fontSize: '13px'
-                    }}
-                    onMouseEnter={(e) => (e.currentTarget.style.background = '#e9f6e8')}
-                    onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
-                  >
-                    <strong>{v.productName}</strong> <span style={{ color: '#667066' }}>({v.sku} - {v.barcode})</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+          <ProductItemSelect
+            products={productsList.map((p) => ({
+              id: p.id,
+              name: p.productName,
+              sku: p.sku,
+              barcode: p.barcode,
+              price: p.costPrice,
+              priceLabel: 'Cost',
+            }))}
+            onSelect={addLine}
+            placeholder="Search / click to select variant to add to PO..."
+            priceLabel="Cost"
+            existingLines={lines.map((l) => ({ productId: l.productId, quantity: l.quantity }))}
+          />
 
           {/* Table of selected lines */}
           <div style={{ marginTop: '20px' }}>
