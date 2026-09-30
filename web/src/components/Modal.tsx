@@ -1,5 +1,7 @@
-import { useEffect, useCallback, type ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import { X } from 'lucide-react';
+
+let activeModalCount = 0;
 
 interface ModalProps {
   isOpen: boolean;
@@ -22,28 +24,50 @@ export function Modal({
   id = 'modal',
   zIndex,
 }: ModalProps) {
-  const handleKeyDown = useCallback(
-    (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    },
-    [onClose]
-  );
+  const levelRef = useRef<number>(0);
+
+  if (isOpen && levelRef.current === 0) {
+    activeModalCount += 1;
+    levelRef.current = activeModalCount;
+  }
 
   useEffect(() => {
     if (isOpen) {
-      document.addEventListener('keydown', handleKeyDown);
       document.body.style.overflow = 'hidden';
+      const myLevel = levelRef.current;
+
+      const handleKeyDown = (e: KeyboardEvent) => {
+        // Only the topmost open modal closes on Escape
+        if (e.key === 'Escape' && activeModalCount === myLevel) {
+          onClose();
+        }
+      };
+
+      document.addEventListener('keydown', handleKeyDown);
+      return () => {
+        document.removeEventListener('keydown', handleKeyDown);
+        activeModalCount = Math.max(0, activeModalCount - 1);
+        levelRef.current = 0;
+        if (activeModalCount === 0) {
+          document.body.style.overflow = '';
+        }
+      };
+    } else {
+      levelRef.current = 0;
     }
-    return () => {
-      document.removeEventListener('keydown', handleKeyDown);
-      document.body.style.overflow = '';
-    };
-  }, [isOpen, handleKeyDown]);
+  }, [isOpen, onClose]);
 
   if (!isOpen) return null;
 
+  const effectiveZIndex = zIndex !== undefined ? zIndex : 1000 + (levelRef.current || 1) * 100;
+
   return (
-    <div className="modal-backdrop" onClick={onClose} id={`${id}-backdrop`} style={zIndex !== undefined ? { zIndex } : undefined}>
+    <div
+      className="modal-backdrop"
+      onClick={onClose}
+      id={`${id}-backdrop`}
+      style={{ zIndex: effectiveZIndex }}
+    >
       <div
         className={`modal-panel modal-panel--${width}`}
         onClick={(e) => e.stopPropagation()}
@@ -79,6 +103,7 @@ interface SlideOverProps {
   children: ReactNode;
   footer?: ReactNode;
   id?: string;
+  zIndex?: number;
 }
 
 export function SlideOver({
@@ -88,29 +113,51 @@ export function SlideOver({
   children,
   footer,
   id = 'slide-over',
+  zIndex,
 }: SlideOverProps) {
-  const handleKeyDown = useCallback(
-    (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    },
-    [onClose]
-  );
+  const levelRef = useRef<number>(0);
+
+  if (isOpen && levelRef.current === 0) {
+    activeModalCount += 1;
+    levelRef.current = activeModalCount;
+  }
 
   useEffect(() => {
     if (isOpen) {
-      document.addEventListener('keydown', handleKeyDown);
       document.body.style.overflow = 'hidden';
+      const myLevel = levelRef.current;
+
+      const handleKeyDown = (e: KeyboardEvent) => {
+        if (e.key === 'Escape' && activeModalCount === myLevel) {
+          onClose();
+        }
+      };
+
+      document.addEventListener('keydown', handleKeyDown);
+      return () => {
+        document.removeEventListener('keydown', handleKeyDown);
+        activeModalCount = Math.max(0, activeModalCount - 1);
+        levelRef.current = 0;
+        if (activeModalCount === 0) {
+          document.body.style.overflow = '';
+        }
+      };
+    } else {
+      levelRef.current = 0;
     }
-    return () => {
-      document.removeEventListener('keydown', handleKeyDown);
-      document.body.style.overflow = '';
-    };
-  }, [isOpen, handleKeyDown]);
+  }, [isOpen, onClose]);
 
   if (!isOpen) return null;
 
+  const effectiveZIndex = zIndex !== undefined ? zIndex : 1000 + (levelRef.current || 1) * 100;
+
   return (
-    <div className="slide-over-backdrop" onClick={onClose} id={`${id}-backdrop`}>
+    <div
+      className="slide-over-backdrop"
+      onClick={onClose}
+      id={`${id}-backdrop`}
+      style={{ zIndex: effectiveZIndex }}
+    >
       <div
         className="slide-over-panel"
         onClick={(e) => e.stopPropagation()}
@@ -137,3 +184,4 @@ export function SlideOver({
     </div>
   );
 }
+

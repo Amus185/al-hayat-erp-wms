@@ -12,7 +12,8 @@ import { Modal } from '../components/Modal';
 import { InputField, TextareaField } from '../components/FormField';
 import { SearchableSelect } from '../components/SearchableSelect';
 import { StatusBadge } from '../components/StatusBadge';
-import { LoadingSpinner } from '../components/LoadingSpinner';
+import { LoadingSpinner, PageSkeleton } from '../components/LoadingSpinner';
+import { MetricCard } from '../components/MetricCard';
 import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
 import { confirmAction } from '../utils/swal';
@@ -565,24 +566,28 @@ export function DeliveriesPage() {
     },
   ];
 
+  if (loading) {
+    return <PageSkeleton />;
+  }
+
   return (
     <div className="module-page">
-      {/* Header */}
-      <section className="module-header" style={{ marginBottom: '16px' }}>
-        <div className="module-header__icon" style={{ background: 'linear-gradient(135deg, #0284c7, #0369a1)', color: '#fff' }}>
+      {/* Module Header */}
+      <section className="module-header">
+        <div className="module-header__icon" style={{ background: '#e9f6e8', color: '#066006' }}>
           <Truck size={24} />
         </div>
-        <div>
-          <p style={{ color: '#0369a1', fontWeight: 600 }}>Logistics & Fulfillment</p>
-          <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 800 }}>Product Deliveries & Fleet Management</h2>
+        <div className="module-header__info">
+          <p>Logistics & Fulfillment</p>
+          <h2>Product Deliveries & Fleet Management</h2>
         </div>
-        <div style={{ marginLeft: 'auto' }}>
+        <div className="module-header__actions">
           {hasPermission('manage_sales') && (
             <button
               type="button"
               className="btn btn-primary"
               onClick={() => setIsCreateOpen(true)}
-              style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', background: 'linear-gradient(135deg, #0284c7, #0369a1)' }}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}
             >
               <Plus size={16} /> Schedule Delivery
             </button>
@@ -590,48 +595,33 @@ export function DeliveriesPage() {
         </div>
       </section>
 
-      {/* KPI Cards */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '16px', marginBottom: '20px' }}>
-        <div className="panel" style={{ padding: '16px', display: 'flex', alignItems: 'center', gap: '14px', borderLeft: '4px solid #0284c7' }}>
-          <div style={{ width: '44px', height: '44px', borderRadius: '10px', background: '#e0f2fe', color: '#0284c7', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <Truck size={22} />
-          </div>
-          <div>
-            <div style={{ fontSize: '12px', color: '#64748b', fontWeight: 600 }}>Total Deliveries</div>
-            <div style={{ fontSize: '24px', fontWeight: 800, color: '#0f172a' }}>{stats.total}</div>
-          </div>
-        </div>
-
-        <div className="panel" style={{ padding: '16px', display: 'flex', alignItems: 'center', gap: '14px', borderLeft: '4px solid #f59e0b' }}>
-          <div style={{ width: '44px', height: '44px', borderRadius: '10px', background: '#fef3c7', color: '#d97706', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <Clock size={22} />
-          </div>
-          <div>
-            <div style={{ fontSize: '12px', color: '#64748b', fontWeight: 600 }}>Pending / Scheduled</div>
-            <div style={{ fontSize: '24px', fontWeight: 800, color: '#0f172a' }}>{stats.pending}</div>
-          </div>
-        </div>
-
-        <div className="panel" style={{ padding: '16px', display: 'flex', alignItems: 'center', gap: '14px', borderLeft: '4px solid #3b82f6' }}>
-          <div style={{ width: '44px', height: '44px', borderRadius: '10px', background: '#dbeafe', color: '#2563eb', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <Send size={22} />
-          </div>
-          <div>
-            <div style={{ fontSize: '12px', color: '#64748b', fontWeight: 600 }}>Out for Delivery (Transit)</div>
-            <div style={{ fontSize: '24px', fontWeight: 800, color: '#0f172a' }}>{stats.dispatched}</div>
-          </div>
-        </div>
-
-        <div className="panel" style={{ padding: '16px', display: 'flex', alignItems: 'center', gap: '14px', borderLeft: '4px solid #10b981' }}>
-          <div style={{ width: '44px', height: '44px', borderRadius: '10px', background: '#d1fae5', color: '#059669', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <CheckCircle2 size={22} />
-          </div>
-          <div>
-            <div style={{ fontSize: '12px', color: '#64748b', fontWeight: 600 }}>Delivered Today</div>
-            <div style={{ fontSize: '24px', fontWeight: 800, color: '#0f172a' }}>{stats.deliveredToday}</div>
-          </div>
-        </div>
-      </div>
+      {/* KPI Stats Grid */}
+      <section className="metric-grid">
+        <MetricCard
+          label="Total Deliveries"
+          value={String(stats.total)}
+          trend="Total delivery waybills"
+          icon={<Truck size={20} />}
+        />
+        <MetricCard
+          label="Pending / Scheduled"
+          value={String(stats.pending)}
+          trend="Awaiting fleet dispatch"
+          icon={<Clock size={20} />}
+        />
+        <MetricCard
+          label="Out for Delivery"
+          value={String(stats.dispatched)}
+          trend="Active transit shipments"
+          icon={<Send size={20} />}
+        />
+        <MetricCard
+          label="Delivered Today"
+          value={String(stats.deliveredToday)}
+          trend="Successfully completed"
+          icon={<CheckCircle2 size={20} />}
+        />
+      </section>
 
       {/* Tabs & Search */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px', marginBottom: '14px' }}>
@@ -651,16 +641,12 @@ export function DeliveriesPage() {
 
       {/* Table */}
       <div className="panel" style={{ padding: '0', overflow: 'hidden' }}>
-        {loading ? (
-          <div style={{ padding: '40px' }}><LoadingSpinner message="Loading delivery shipments..." /></div>
-        ) : (
-          <DataTable
-            data={filtered}
-            columns={columns}
-            keyExtractor={(row) => row.id}
-            emptyMessage="No delivery records found matching current criteria."
-          />
-        )}
+        <DataTable
+          data={filtered}
+          columns={columns}
+          keyExtractor={(row) => row.id}
+          emptyMessage="No delivery records found matching current criteria."
+        />
       </div>
 
       {/* ── CREATE DELIVERY MODAL ── */}

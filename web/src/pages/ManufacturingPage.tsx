@@ -11,7 +11,8 @@ import { Modal } from '../components/Modal';
 import { InputField, TextareaField } from '../components/FormField';
 import { SearchableSelect } from '../components/SearchableSelect';
 import { StatusBadge } from '../components/StatusBadge';
-import { LoadingSpinner } from '../components/LoadingSpinner';
+import { LoadingSpinner, PageSkeleton } from '../components/LoadingSpinner';
+import { MetricCard } from '../components/MetricCard';
 import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
 import { confirmAction } from '../utils/swal';
@@ -684,20 +685,24 @@ export function ManufacturingPage() {
     },
   ];
 
+  if (loading) {
+    return <PageSkeleton />;
+  }
+
   return (
     <div className="module-page">
-      {/* Header */}
-      <section className="module-header" style={{ marginBottom: '16px' }}>
-        <div className="module-header__icon" style={{ background: 'linear-gradient(135deg, #0b8f08, #066006)', color: '#fff' }}>
+      {/* Module Header */}
+      <section className="module-header">
+        <div className="module-header__icon" style={{ background: '#e9f6e8', color: '#066006' }}>
           <Factory size={24} />
         </div>
-        <div>
-          <p style={{ color: '#066006', fontWeight: 600 }}>Manufacturing Plant & Production Line</p>
-          <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 800 }}>Furniture Production & Work Orders</h2>
+        <div className="module-header__info">
+          <p>Manufacturing & Production</p>
+          <h2>Furniture Production & Work Orders</h2>
         </div>
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: '8px' }}>
+        <div className="module-header__actions">
           {hasPermission('manage_inventory') && (
-            <>
+            <div style={{ display: 'flex', gap: '8px' }}>
               <button
                 type="button"
                 className="btn btn-secondary"
@@ -710,57 +715,42 @@ export function ManufacturingPage() {
                 type="button"
                 className="btn btn-primary"
                 onClick={() => setIsCreateWoOpen(true)}
-                style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', background: 'linear-gradient(135deg, #0b8f08, #066006)' }}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}
               >
                 <Plus size={16} /> New Work Order
               </button>
-            </>
+            </div>
           )}
         </div>
       </section>
 
-      {/* KPI Cards */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '16px', marginBottom: '20px' }}>
-        <div className="panel" style={{ padding: '16px', display: 'flex', alignItems: 'center', gap: '14px', borderLeft: '4px solid #0b8f08' }}>
-          <div style={{ width: '44px', height: '44px', borderRadius: '10px', background: '#ecfdf5', color: '#059669', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <Play size={22} />
-          </div>
-          <div>
-            <div style={{ fontSize: '12px', color: '#64748b', fontWeight: 600 }}>Active Production Runs</div>
-            <div style={{ fontSize: '24px', fontWeight: 800, color: '#0f172a' }}>{stats.activeWorkOrders}</div>
-          </div>
-        </div>
-
-        <div className="panel" style={{ padding: '16px', display: 'flex', alignItems: 'center', gap: '14px', borderLeft: '4px solid #0284c7' }}>
-          <div style={{ width: '44px', height: '44px', borderRadius: '10px', background: '#e0f2fe', color: '#0284c7', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <Box size={22} />
-          </div>
-          <div>
-            <div style={{ fontSize: '12px', color: '#64748b', fontWeight: 600 }}>Units in Production</div>
-            <div style={{ fontSize: '24px', fontWeight: 800, color: '#0f172a' }}>{stats.inProductionUnits}</div>
-          </div>
-        </div>
-
-        <div className="panel" style={{ padding: '16px', display: 'flex', alignItems: 'center', gap: '14px', borderLeft: '4px solid #10b981' }}>
-          <div style={{ width: '44px', height: '44px', borderRadius: '10px', background: '#d1fae5', color: '#059669', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <CheckCircle2 size={22} />
-          </div>
-          <div>
-            <div style={{ fontSize: '12px', color: '#64748b', fontWeight: 600 }}>Completed This Month</div>
-            <div style={{ fontSize: '24px', fontWeight: 800, color: '#0f172a' }}>{stats.completedThisMonth}</div>
-          </div>
-        </div>
-
-        <div className="panel" style={{ padding: '16px', display: 'flex', alignItems: 'center', gap: '14px', borderLeft: '4px solid #8b5cf6' }}>
-          <div style={{ width: '44px', height: '44px', borderRadius: '10px', background: '#ede9fe', color: '#7c3aed', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <Layers size={22} />
-          </div>
-          <div>
-            <div style={{ fontSize: '12px', color: '#64748b', fontWeight: 600 }}>BOM Product Recipes</div>
-            <div style={{ fontSize: '24px', fontWeight: 800, color: '#0f172a' }}>{stats.totalBoms}</div>
-          </div>
-        </div>
-      </div>
+      {/* KPI Stats Grid */}
+      <section className="metric-grid">
+        <MetricCard
+          label="Active Production Runs"
+          value={String(stats.activeWorkOrders)}
+          trend="Work orders in progress"
+          icon={<Play size={20} />}
+        />
+        <MetricCard
+          label="Units in Production"
+          value={String(stats.inProductionUnits)}
+          trend="Target manufacturing volume"
+          icon={<Box size={20} />}
+        />
+        <MetricCard
+          label="Completed This Month"
+          value={String(stats.completedThisMonth)}
+          trend="Finished goods output"
+          icon={<CheckCircle2 size={20} />}
+        />
+        <MetricCard
+          label="BOM Product Recipes"
+          value={String(stats.totalBoms)}
+          trend="Active furniture blueprints"
+          icon={<Layers size={20} />}
+        />
+      </section>
 
       {/* Top Toggle: Work Orders vs Bill of Materials */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px', marginBottom: '14px' }}>
@@ -832,9 +822,7 @@ export function ManufacturingPage() {
 
       {/* Main Table */}
       <div className="panel" style={{ padding: '0', overflow: 'hidden' }}>
-        {loading ? (
-          <div style={{ padding: '40px' }}><LoadingSpinner message="Loading manufacturing lines..." /></div>
-        ) : topTab === 'WORK_ORDERS' ? (
+        {topTab === 'WORK_ORDERS' ? (
           <DataTable
             data={Array.isArray(filteredWo) ? filteredWo : []}
             columns={woColumns}

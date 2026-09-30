@@ -872,7 +872,12 @@ export function AssetsPage() {
       </Modal>
 
       {/* 5. Register Tenant Modal */}
-      <Modal isOpen={showTenantModal || showInlineTenantModal} onClose={() => { setShowTenantModal(false); setShowInlineTenantModal(false); }} title="Register Tenant">
+      <Modal
+        isOpen={showTenantModal || showInlineTenantModal}
+        onClose={() => { setShowTenantModal(false); setShowInlineTenantModal(false); }}
+        title="Register Tenant"
+        zIndex={showInlineTenantModal ? 1250 : undefined}
+      >
         <div style={{ display: 'grid', gap: 16 }}>
           <InputField id="ten-name" label="Name" value={tenantForm.name} onChange={(v) => setTenantForm({ ...tenantForm, name: v })} required />
           <InputField id="ten-phone" label="Phone" value={tenantForm.phone} onChange={(v) => setTenantForm({ ...tenantForm, phone: v })} />
