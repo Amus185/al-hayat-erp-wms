@@ -10,6 +10,8 @@ interface Customer {
   email?: string;
   address?: string;
   created_at: string;
+  total_orders?: number;
+  total_spent?: number;
 }
 
 interface SalesOrder {
@@ -131,7 +133,8 @@ export function CustomersPage() {
     load();
   };
 
-  const totalRevenue = customers.reduce((acc, _c) => acc, 0);
+  const totalRevenue = customers.reduce((acc, c) => acc + Number(c.total_spent || 0), 0);
+  const customersWithOrders = customers.filter(c => Number(c.total_orders || 0) > 0).length;
 
   return (
     <div style={{ padding: '24px', maxWidth: '1200px', margin: '0 auto' }}>
@@ -154,7 +157,7 @@ export function CustomersPage() {
         {[
           { label: 'Total Customers', value: customers.length, icon: <Users size={20} color="#0b8f08" /> },
           { label: 'Total Revenue', value: `$${totalRevenue.toLocaleString()}`, icon: <DollarSign size={20} color="#7c3aed" /> },
-          { label: 'With Orders', value: Object.values(orders).filter(o => o.length > 0).length, icon: <ShoppingBag size={20} color="#2563eb" /> },
+          { label: 'With Orders', value: customersWithOrders, icon: <ShoppingBag size={20} color="#2563eb" /> },
         ].map(s => (
           <div key={s.label} style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: '12px', padding: '16px 20px', display: 'flex', alignItems: 'center', gap: '14px' }}>
             <div style={{ background: '#f0fdf4', borderRadius: '8px', padding: '8px' }}>{s.icon}</div>
@@ -190,11 +193,14 @@ export function CustomersPage() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
           {filtered.map(customer => {
             const isExpanded = expandedId === customer.id;
-            const customerOrders = orders[customer.id] || [];
-            const totalSpent = customerOrders.reduce((sum, o) => {
-              const net = Math.max(0, (o.invoice_total || 0) - (o.invoice_discount || 0));
-              return sum + net;
-            }, 0);
+            const customerOrders = orders[customer.id];
+            const orderCount = customerOrders !== undefined ? customerOrders.length : Number(customer.total_orders || 0);
+            const totalSpent = customerOrders !== undefined
+              ? customerOrders.reduce((sum, o) => {
+                  const net = Math.max(0, (o.invoice_total || 0) - (o.invoice_discount || 0));
+                  return sum + net;
+                }, 0)
+              : Number(customer.total_spent || 0);
 
             return (
               <div key={customer.id} style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: '12px', overflow: 'hidden', transition: 'box-shadow 0.2s' }}>
@@ -216,12 +222,10 @@ export function CustomersPage() {
                   </div>
 
                   {/* Stats */}
-                  {orders[customer.id] && (
-                    <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                      <div style={{ fontSize: '15px', fontWeight: 700, color: '#111827' }}>${totalSpent.toLocaleString()}</div>
-                      <div style={{ fontSize: '12px', color: '#6b7280' }}>{customerOrders.length} orders</div>
-                    </div>
-                  )}
+                  <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                    <div style={{ fontSize: '15px', fontWeight: 700, color: '#111827' }}>${totalSpent.toLocaleString()}</div>
+                    <div style={{ fontSize: '12px', color: '#6b7280' }}>{orderCount} {orderCount === 1 ? 'order' : 'orders'}</div>
+                  </div>
 
                   {/* Actions */}
                   <div style={{ display: 'flex', gap: '10px', flexShrink: 0 }} onClick={e => e.stopPropagation()}>
@@ -245,11 +249,11 @@ export function CustomersPage() {
                     <h4 style={{ margin: '0 0 12px', fontSize: '13px', fontWeight: 600, color: '#374151', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Order History</h4>
                     {loadingOrders === customer.id ? (
                       <div style={{ color: '#9ca3af', fontSize: '13px' }}>Loading orders...</div>
-                    ) : customerOrders.length === 0 ? (
+                    ) : (customerOrders || []).length === 0 ? (
                       <div style={{ color: '#9ca3af', fontSize: '13px' }}>No orders yet</div>
                     ) : (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                        {customerOrders.map(order => {
+                        {(customerOrders || []).map(order => {
                           const net = Math.max(0, (order.invoice_total || 0) - (order.invoice_discount || 0));
                           const balance = Math.max(0, net - (order.amount_paid || 0));
                           return (

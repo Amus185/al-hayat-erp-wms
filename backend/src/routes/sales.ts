@@ -30,8 +30,31 @@ async function getInvoicePaymentSummary(db: D1Database, invoiceId: string, total
 // CUSTOMERS
 // ──────────────────────────────────────────────────────────────────────
 sales.get('/customers', async (c) => {
-  const { results } = await c.env.DB.prepare('SELECT * FROM customers ORDER BY created_at DESC LIMIT 100').all();
-  return c.json(results);
+  const query = `
+    SELECT 
+      c.*,
+      COALESCE((
+        SELECT COUNT(*) 
+        FROM sales_orders so 
+        WHERE so.customer_id = c.id AND so.status != 'CANCELLED'
+      ), 0) AS total_orders,
+      COALESCE((
+        SELECT SUM(
+          CASE 
+            WHEN i.id IS NOT NULL THEN (COALESCE(i.total_amount, 0) - COALESCE(i.discount_amount, 0)) + COALESCE(so.installation_fee, 0)
+            ELSE (SELECT COALESCE(SUM(sol.line_total), 0) FROM sales_order_lines sol WHERE sol.sales_order_id = so.id) + COALESCE(so.installation_fee, 0)
+          END
+        )
+        FROM sales_orders so
+        LEFT JOIN invoices i ON i.sales_order_id = so.id
+        WHERE so.customer_id = c.id AND so.status != 'CANCELLED'
+      ), 0) AS total_spent
+    FROM customers c
+    ORDER BY c.created_at DESC
+    LIMIT 200
+  `;
+  const { results } = await c.env.DB.prepare(query).all();
+  return c.json(results || []);
 });
 
 sales.post('/customers', requirePermissions(['manage_sales']), async (c) => {
@@ -81,7 +104,7 @@ sales.delete('/customers/:id', requirePermissions(['manage_sales']), async (c) =
 // ORDERS — LIST & GET
 // ──────────────────────────────────────────────────────────────────────
 sales.get('/orders', async (c) => {
-  const { search, status, paymentStatus, dateFrom, dateTo } = c.req.query();
+  const { search, status, paymentStatus, dateFrom, dateTo, customer_id, customerId } = c.req.query();
   const payload = c.get('jwtPayload');
   const scopedBranchId = isAdminUser(payload) ? null : payload.branch_id;
 
@@ -105,6 +128,13 @@ sales.get('/orders', async (c) => {
   if (scopedBranchId) {
     query += ` AND so.branch_id = ?`;
     params.push(scopedBranchId);
+  }
+
+  // Filter by customer if requested
+  const targetCustomerId = customer_id || customerId;
+  if (targetCustomerId) {
+    query += ` AND so.customer_id = ?`;
+    params.push(targetCustomerId);
   }
 
   if (search) {
