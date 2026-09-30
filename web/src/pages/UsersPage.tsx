@@ -265,7 +265,7 @@ export function UsersPage() {
       key: 'actions',
       label: 'Actions',
       render: (row) => (
-        <div style={{ display: 'flex', gap: '6px' }}>
+        <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
           <button type="button" className="btn btn-secondary btn-sm" onClick={(e) => { e.stopPropagation(); openEdit(row); }}
             title="Edit user">
             <Pencil size={13} />

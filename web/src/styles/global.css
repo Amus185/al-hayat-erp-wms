@@ -923,7 +923,7 @@ tbody tr:hover { background: var(--primary-lighter); }
 .modal-panel__body { padding: 22px; overflow-y: auto; flex: 1; }
 .modal-panel__footer {
   display: flex;
-  gap: 10px;
+  gap: 12px;
   justify-content: flex-end;
   padding: 16px 22px;
   border-top: 1px solid var(--border);
@@ -1350,7 +1350,7 @@ tbody tr:hover { background: var(--primary-lighter); }
 }
 
 .swal2-alhayat-actions {
-  gap: 10px !important;
+  gap: 12px !important;
   margin-top: 24px !important;
 }
 
@@ -1368,6 +1368,23 @@ tbody tr:hover { background: var(--primary-lighter); }
 
 .swal2-alhayat-confirm-btn:hover {
   background: var(--primary-dark, #066006) !important;
+  transform: translateY(-1px) !important;
+}
+
+.swal2-alhayat-danger-btn {
+  background: #dc2626 !important;
+  color: #ffffff !important;
+  border: none !important;
+  border-radius: 10px !important;
+  padding: 10px 20px !important;
+  font-weight: 600 !important;
+  font-size: 0.88rem !important;
+  cursor: pointer !important;
+  transition: all 0.2s ease !important;
+}
+
+.swal2-alhayat-danger-btn:hover {
+  background: #b91c1c !important;
   transform: translateY(-1px) !important;
 }
 

@@ -118,6 +118,7 @@ export function ManufacturingPage() {
   const [boms, setBoms] = useState<BOM[]>([]);
   const [products, setProducts] = useState<any[]>([]);
   const [warehouses, setWarehouses] = useState<any[]>([]);
+  const [categories, setCategories] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
   // Modals
@@ -128,8 +129,27 @@ export function ManufacturingPage() {
   const [selectedWo, setSelectedWo] = useState<WorkOrder | null>(null);
   const [actionProcessing, setActionProcessing] = useState<string | null>(null);
 
-  // New Work Order Form State
-  const [woForm, setWoForm] = useState({
+  // Work Order Form State
+  const [woMode, setWoMode] = useState<'NEW_ITEM' | 'EXISTING_PRODUCT'>('NEW_ITEM');
+  const [woNewItem, setWoNewItem] = useState({
+    name: '',
+    sku: `MFG-${Date.now().toString().slice(-6)}`,
+    categoryId: '',
+    sellingPrice: 0,
+    unitCost: 0,
+    description: '',
+  });
+  const [woForm, setWoForm] = useState<{
+    productId: string;
+    bomId: string;
+    warehouseId: string;
+    targetQuantity: number;
+    laborCost: number;
+    estimatedStartDate: string;
+    targetCompletionDate: string;
+    notes: string;
+    materials: { materialProductId: string; quantityRequired: number; unitCost: number }[];
+  }>({
     productId: '',
     bomId: '',
     warehouseId: '',
@@ -138,6 +158,7 @@ export function ManufacturingPage() {
     estimatedStartDate: new Date().toISOString().split('T')[0],
     targetCompletionDate: '',
     notes: '',
+    materials: [],
   });
 
   // Complete Form State
@@ -148,6 +169,15 @@ export function ManufacturingPage() {
   });
 
   // New BOM Form State
+  const [bomMode, setBomMode] = useState<'NEW_ITEM' | 'EXISTING_PRODUCT'>('NEW_ITEM');
+  const [bomNewItem, setBomNewItem] = useState({
+    name: '',
+    sku: `MFG-${Date.now().toString().slice(-6)}`,
+    categoryId: '',
+    sellingPrice: 0,
+    unitCost: 0,
+    description: '',
+  });
   const [bomForm, setBomForm] = useState<{
     name: string;
     productId: string;
@@ -171,18 +201,20 @@ export function ManufacturingPage() {
   const loadData = async () => {
     try {
       setLoading(true);
-      const [statsRes, woRes, bomRes, prodRes, whRes] = await Promise.all([
+      const [statsRes, woRes, bomRes, prodRes, whRes, catRes] = await Promise.all([
         apiGet<Stats>('/manufacturing/stats'),
         apiGet<WorkOrder[]>('/manufacturing/work-orders'),
         apiGet<BOM[]>('/manufacturing/boms'),
         apiGet<any[]>('/products?status=active'),
         apiGet<any[]>('/warehouses'),
+        apiGet<any[]>('/products/categories').catch(() => []),
       ]);
       setStats(statsRes || { activeWorkOrders: 0, inProductionUnits: 0, completedThisMonth: 0, totalBoms: 0 });
       setWorkOrders(woRes || []);
       setBoms(bomRes || []);
       setProducts(prodRes || []);
       setWarehouses(whRes || []);
+      setCategories(catRes || []);
     } catch (err: any) {
       addToast('error', err?.message || 'Failed to load manufacturing data');
     } finally {
@@ -197,15 +229,52 @@ export function ManufacturingPage() {
   // Handle WO Creation
   const handleCreateWorkOrder = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!woForm.productId || !woForm.warehouseId || woForm.targetQuantity <= 0) {
-      addToast('error', 'Select finished product, production warehouse, and target quantity.');
+    if (woMode === 'NEW_ITEM') {
+      if (!woNewItem.name.trim()) {
+        addToast('error', 'Please enter a name for the new manufactured item.');
+        return;
+      }
+    } else {
+      if (!woForm.productId) {
+        addToast('error', 'Please select a catalog product.');
+        return;
+      }
+    }
+    if (!woForm.warehouseId || woForm.targetQuantity <= 0) {
+      addToast('error', 'Select production warehouse and valid target quantity.');
       return;
     }
+
     try {
       setActionProcessing('create_wo');
-      await apiPost('/manufacturing/work-orders', woForm);
+      const payload: any = {
+        warehouseId: woForm.warehouseId,
+        targetQuantity: woForm.targetQuantity,
+        laborCost: woForm.laborCost,
+        estimatedStartDate: woForm.estimatedStartDate,
+        targetCompletionDate: woForm.targetCompletionDate,
+        notes: woForm.notes,
+        materials: woForm.materials,
+      };
+
+      if (woMode === 'NEW_ITEM') {
+        payload.newProduct = woNewItem;
+      } else {
+        payload.productId = woForm.productId;
+        payload.bomId = woForm.bomId || undefined;
+      }
+
+      await apiPost('/manufacturing/work-orders', payload);
       addToast('success', 'Production Work Order scheduled successfully.');
       setIsCreateWoOpen(false);
+      setWoNewItem({
+        name: '',
+        sku: `MFG-${Date.now().toString().slice(-6)}`,
+        categoryId: '',
+        sellingPrice: 0,
+        unitCost: 0,
+        description: '',
+      });
       loadData();
     } catch (err: any) {
       addToast('error', err?.message || 'Failed to create work order');
@@ -314,18 +383,58 @@ export function ManufacturingPage() {
   // Create BOM Submit
   const handleCreateBom = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!bomForm.name || !bomForm.productId || bomForm.items.length === 0) {
-      addToast('error', 'Specify BOM recipe name, target finished good, and at least 1 raw material.');
+    if (!bomForm.name.trim()) {
+      addToast('error', 'BOM blueprint name is required.');
       return;
     }
+    if (bomMode === 'NEW_ITEM') {
+      if (!bomNewItem.name.trim()) {
+        addToast('error', 'Please specify the name of the new manufactured product.');
+        return;
+      }
+    } else {
+      if (!bomForm.productId) {
+        addToast('error', 'Please select target output product.');
+        return;
+      }
+    }
+    if (bomForm.items.length === 0) {
+      addToast('error', 'Please add at least one raw material component.');
+      return;
+    }
+
     try {
       setActionProcessing('create_bom');
-      await apiPost('/manufacturing/boms', bomForm);
-      addToast('success', 'BOM Recipe created successfully');
+      const payload: any = {
+        name: bomForm.name,
+        bomCode: bomForm.bomCode || undefined,
+        laborCost: bomForm.laborCost,
+        overheadCost: bomForm.overheadCost,
+        estimatedHours: bomForm.estimatedHours,
+        notes: bomForm.notes,
+        items: bomForm.items,
+      };
+
+      if (bomMode === 'NEW_ITEM') {
+        payload.newProduct = bomNewItem;
+      } else {
+        payload.productId = bomForm.productId;
+      }
+
+      await apiPost('/manufacturing/boms', payload);
+      addToast('success', 'BOM Recipe saved successfully.');
       setIsCreateBomOpen(false);
+      setBomNewItem({
+        name: '',
+        sku: `MFG-${Date.now().toString().slice(-6)}`,
+        categoryId: '',
+        sellingPrice: 0,
+        unitCost: 0,
+        description: '',
+      });
       loadData();
     } catch (err: any) {
-      addToast('error', err?.message || 'Failed to create BOM');
+      addToast('error', err?.message || 'Failed to save BOM');
     } finally {
       setActionProcessing(null);
     }
@@ -457,7 +566,7 @@ export function ManufacturingPage() {
       key: 'actions',
       label: 'Actions',
       render: (row) => (
-        <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
           <button
             type="button"
             className="btn btn-secondary btn-sm"
@@ -745,48 +854,171 @@ export function ManufacturingPage() {
       {/* ── CREATE WORK ORDER MODAL ── */}
       <Modal isOpen={isCreateWoOpen} onClose={() => setIsCreateWoOpen(false)} title="Issue Manufacturing Work Order" width="lg">
         <form onSubmit={handleCreateWorkOrder} style={{ display: 'grid', gap: '16px' }}>
-          <div>
-            <label className="form-label" style={{ fontWeight: 600, fontSize: '13px', color: '#1e293b' }}>
-              Target Product to Manufacture *
-            </label>
-            <SearchableSelect
-              options={products.map((p) => ({
-                value: p.id,
-                label: `${p.name} (${p.sku}) - Current Stock: ${p.total_stock || 0}`,
-              }))}
-              value={woForm.productId}
-              onChange={(val) => {
-                const matchedBom = boms.find((b) => b.product_id === val);
-                setWoForm((p) => ({
-                  ...p,
-                  productId: val,
-                  bomId: matchedBom ? matchedBom.id : p.bomId,
-                }));
+          {/* Mode Switcher */}
+          <div style={{ display: 'flex', gap: '8px', padding: '4px', background: '#f1f5f9', borderRadius: '10px' }}>
+            <button
+              type="button"
+              onClick={() => setWoMode('NEW_ITEM')}
+              style={{
+                flex: 1,
+                padding: '8px 14px',
+                borderRadius: '8px',
+                border: 'none',
+                fontWeight: 700,
+                fontSize: '13px',
+                cursor: 'pointer',
+                background: woMode === 'NEW_ITEM' ? '#fff' : 'transparent',
+                color: woMode === 'NEW_ITEM' ? '#066006' : '#64748b',
+                boxShadow: woMode === 'NEW_ITEM' ? '0 2px 4px rgba(0,0,0,0.06)' : 'none',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '6px',
               }}
-              placeholder="Select finished good..."
-            />
+            >
+              <Sparkles size={15} /> ✨ Create New Manufactured Item from Scratch
+            </button>
+            <button
+              type="button"
+              onClick={() => setWoMode('EXISTING_PRODUCT')}
+              style={{
+                flex: 1,
+                padding: '8px 14px',
+                borderRadius: '8px',
+                border: 'none',
+                fontWeight: 600,
+                fontSize: '13px',
+                cursor: 'pointer',
+                background: woMode === 'EXISTING_PRODUCT' ? '#fff' : 'transparent',
+                color: woMode === 'EXISTING_PRODUCT' ? '#0f172a' : '#64748b',
+                boxShadow: woMode === 'EXISTING_PRODUCT' ? '0 2px 4px rgba(0,0,0,0.06)' : 'none',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '6px',
+              }}
+            >
+              <Package size={15} /> 🔗 Link to Existing Catalog Product
+            </button>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
+          {woMode === 'NEW_ITEM' ? (
+            <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '10px', padding: '14px', display: 'grid', gap: '12px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#066006', fontWeight: 700, fontSize: '13px' }}>
+                <Sparkles size={15} /> New Manufactured Item Specifications
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '12px' }}>
+                <InputField
+                  label="Manufactured Item Name *"
+                  id="newWoItemName"
+                  value={woNewItem.name}
+                  onChange={(val) => setWoNewItem((p) => ({ ...p, name: val }))}
+                  placeholder="e.g. Royal 6-Seat Mahogany Dining Table"
+                  required
+                />
+                <InputField
+                  label="Item SKU / Code *"
+                  id="newWoItemSku"
+                  value={woNewItem.sku}
+                  onChange={(val) => setWoNewItem((p) => ({ ...p, sku: val }))}
+                  placeholder="e.g. MFG-TAB-001"
+                  required
+                />
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
+                <div>
+                  <label className="form-label" style={{ fontWeight: 600, fontSize: '13px', color: '#1e293b' }}>
+                    Category
+                  </label>
+                  <select
+                    className="form-input"
+                    value={woNewItem.categoryId}
+                    onChange={(e) => setWoNewItem((p) => ({ ...p, categoryId: e.target.value }))}
+                  >
+                    <option value="">— Select Category —</option>
+                    {categories.map((c) => (
+                      <option key={c.id} value={c.id}>{c.name}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <InputField
+                  label="Target Selling Price ($)"
+                  id="newWoSellPrice"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={String(woNewItem.sellingPrice)}
+                  onChange={(val) => setWoNewItem((p) => ({ ...p, sellingPrice: Number(val) || 0 }))}
+                />
+
+                <InputField
+                  label="Target Estimated Cost ($)"
+                  id="newWoUnitCost"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={String(woNewItem.unitCost)}
+                  onChange={(val) => setWoNewItem((p) => ({ ...p, unitCost: Number(val) || 0 }))}
+                />
+              </div>
+
+              <TextareaField
+                label="Manufacturing Specifications / Description"
+                id="newWoItemDesc"
+                value={woNewItem.description}
+                onChange={(val) => setWoNewItem((p) => ({ ...p, description: val }))}
+                rows={2}
+                placeholder="e.g. Solid mahogany wood, clear lacquer protective coating, brass fasteners..."
+              />
+            </div>
+          ) : (
             <div>
               <label className="form-label" style={{ fontWeight: 600, fontSize: '13px', color: '#1e293b' }}>
-                BOM Recipe / Blueprint
+                Choose Catalog Product (Re-manufacturing) *
               </label>
-              <select
-                className="form-input"
-                value={woForm.bomId}
-                onChange={(e) => setWoForm((p) => ({ ...p, bomId: e.target.value }))}
-              >
-                <option value="">— Select Recipe —</option>
-                {boms
-                  .filter((b) => !woForm.productId || b.product_id === woForm.productId)
-                  .map((b) => (
-                    <option key={b.id} value={b.id}>
-                      {b.name} ({b.bom_code})
-                    </option>
-                  ))}
-              </select>
+              <SearchableSelect
+                options={products.map((p) => ({
+                  value: p.id,
+                  label: `${p.name} (${p.sku}) - Current Stock: ${p.total_stock || 0}`,
+                }))}
+                value={woForm.productId}
+                onChange={(val) => {
+                  const matchedBom = boms.find((b) => b.product_id === val);
+                  setWoForm((p) => ({
+                    ...p,
+                    productId: val,
+                    bomId: matchedBom ? matchedBom.id : p.bomId,
+                  }));
+                }}
+                placeholder="Select finished good..."
+              />
             </div>
+          )}
+
+          <div style={{ display: 'grid', gridTemplateColumns: woMode === 'EXISTING_PRODUCT' ? '1fr 1fr' : '1fr', gap: '14px' }}>
+            {woMode === 'EXISTING_PRODUCT' && (
+              <div>
+                <label className="form-label" style={{ fontWeight: 600, fontSize: '13px', color: '#1e293b' }}>
+                  BOM Recipe / Blueprint
+                </label>
+                <select
+                  className="form-input"
+                  value={woForm.bomId}
+                  onChange={(e) => setWoForm((p) => ({ ...p, bomId: e.target.value }))}
+                >
+                  <option value="">— Select Recipe —</option>
+                  {boms
+                    .filter((b) => !woForm.productId || b.product_id === woForm.productId)
+                    .map((b) => (
+                      <option key={b.id} value={b.id}>
+                        {b.name} ({b.bom_code})
+                      </option>
+                    ))}
+                </select>
+              </div>
+            )}
 
             <div>
               <label className="form-label" style={{ fontWeight: 600, fontSize: '13px', color: '#1e293b' }}>
@@ -844,7 +1076,7 @@ export function ManufacturingPage() {
             placeholder="e.g. Walnut finish, reinforced brackets, urgent priority for retail showroom..."
           />
 
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
             <button type="button" className="btn btn-secondary" onClick={() => setIsCreateWoOpen(false)}>
               Cancel
             </button>
@@ -858,16 +1090,116 @@ export function ManufacturingPage() {
       {/* ── CREATE BOM RECIPE MODAL ── */}
       <Modal isOpen={isCreateBomOpen} onClose={() => setIsCreateBomOpen(false)} title="Create Bill of Materials (BOM Blueprint)" width="lg">
         <form onSubmit={handleCreateBom} style={{ display: 'grid', gap: '16px' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
-            <InputField
-              label="Recipe / Model Name *"
-              id="bomName"
-              value={bomForm.name}
-              onChange={(val) => setBomForm((p) => ({ ...p, name: val }))}
-              placeholder="e.g. Executive Wooden Dining Table 6-Seat"
-              required
-            />
+          {/* Mode Switcher */}
+          <div style={{ display: 'flex', gap: '8px', padding: '4px', background: '#f1f5f9', borderRadius: '10px' }}>
+            <button
+              type="button"
+              onClick={() => setBomMode('NEW_ITEM')}
+              style={{
+                flex: 1,
+                padding: '8px 14px',
+                borderRadius: '8px',
+                border: 'none',
+                fontWeight: 700,
+                fontSize: '13px',
+                cursor: 'pointer',
+                background: bomMode === 'NEW_ITEM' ? '#fff' : 'transparent',
+                color: bomMode === 'NEW_ITEM' ? '#066006' : '#64748b',
+                boxShadow: bomMode === 'NEW_ITEM' ? '0 2px 4px rgba(0,0,0,0.06)' : 'none',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '6px',
+              }}
+            >
+              <Sparkles size={15} /> ✨ Define New Manufactured Item from Scratch
+            </button>
+            <button
+              type="button"
+              onClick={() => setBomMode('EXISTING_PRODUCT')}
+              style={{
+                flex: 1,
+                padding: '8px 14px',
+                borderRadius: '8px',
+                border: 'none',
+                fontWeight: 600,
+                fontSize: '13px',
+                cursor: 'pointer',
+                background: bomMode === 'EXISTING_PRODUCT' ? '#fff' : 'transparent',
+                color: bomMode === 'EXISTING_PRODUCT' ? '#0f172a' : '#64748b',
+                boxShadow: bomMode === 'EXISTING_PRODUCT' ? '0 2px 4px rgba(0,0,0,0.06)' : 'none',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '6px',
+              }}
+            >
+              <Package size={15} /> 🔗 Link to Existing Product
+            </button>
+          </div>
 
+          <InputField
+            label="Recipe / Blueprint Name *"
+            id="bomName"
+            value={bomForm.name}
+            onChange={(val) => setBomForm((p) => ({ ...p, name: val }))}
+            placeholder="e.g. Executive Wooden Dining Table 6-Seat"
+            required
+          />
+
+          {bomMode === 'NEW_ITEM' ? (
+            <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '10px', padding: '14px', display: 'grid', gap: '12px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#066006', fontWeight: 700, fontSize: '13px' }}>
+                <Sparkles size={15} /> Manufactured Item Output
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '12px' }}>
+                <InputField
+                  label="Output Item Name *"
+                  id="newBomItemName"
+                  value={bomNewItem.name}
+                  onChange={(val) => setBomNewItem((p) => ({ ...p, name: val }))}
+                  placeholder="e.g. Executive Wooden Dining Table 6-Seat"
+                  required
+                />
+                <InputField
+                  label="Item SKU / Code *"
+                  id="newBomItemSku"
+                  value={bomNewItem.sku}
+                  onChange={(val) => setBomNewItem((p) => ({ ...p, sku: val }))}
+                  placeholder="e.g. MFG-TAB-001"
+                  required
+                />
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <div>
+                  <label className="form-label" style={{ fontWeight: 600, fontSize: '13px', color: '#1e293b' }}>
+                    Category
+                  </label>
+                  <select
+                    className="form-input"
+                    value={bomNewItem.categoryId}
+                    onChange={(e) => setBomNewItem((p) => ({ ...p, categoryId: e.target.value }))}
+                  >
+                    <option value="">— Select Category —</option>
+                    {categories.map((c) => (
+                      <option key={c.id} value={c.id}>{c.name}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <InputField
+                  label="Target Selling Price ($)"
+                  id="newBomSellPrice"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={String(bomNewItem.sellingPrice)}
+                  onChange={(val) => setBomNewItem((p) => ({ ...p, sellingPrice: Number(val) || 0 }))}
+                />
+              </div>
+            </div>
+          ) : (
             <div>
               <label className="form-label" style={{ fontWeight: 600, fontSize: '13px', color: '#1e293b' }}>
                 Finished Product Output *
@@ -879,7 +1211,7 @@ export function ManufacturingPage() {
                 placeholder="Select output product..."
               />
             </div>
-          </div>
+          )}
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '14px' }}>
             <InputField
@@ -984,7 +1316,7 @@ export function ManufacturingPage() {
             )}
           </div>
 
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '10px' }}>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', marginTop: '10px' }}>
             <button type="button" className="btn btn-secondary" onClick={() => setIsCreateBomOpen(false)}>
               Cancel
             </button>

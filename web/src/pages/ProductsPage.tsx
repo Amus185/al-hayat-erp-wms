@@ -551,7 +551,7 @@ export function ProductsPage() {
       key: 'actions',
       label: 'Actions',
       render: (row) => (
-        <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
           {hasPermission('manage_inventory') && (
             <button
               type="button"

@@ -224,11 +224,11 @@ export function CustomersPage() {
                   )}
 
                   {/* Actions */}
-                  <div style={{ display: 'flex', gap: '8px', flexShrink: 0 }} onClick={e => e.stopPropagation()}>
-                    <button onClick={() => openEdit(customer)} style={{ padding: '6px', border: '1px solid #e5e7eb', borderRadius: '6px', background: '#fff', cursor: 'pointer', color: '#6b7280', display: 'flex', alignItems: 'center' }} title="Edit">
+                  <div style={{ display: 'flex', gap: '10px', flexShrink: 0 }} onClick={e => e.stopPropagation()}>
+                    <button onClick={() => openEdit(customer)} style={{ padding: '6px 8px', border: '1px solid #e5e7eb', borderRadius: '6px', background: '#fff', cursor: 'pointer', color: '#6b7280', display: 'flex', alignItems: 'center' }} title="Edit">
                       <Edit2 size={14} />
                     </button>
-                    <button onClick={() => setDeleteConfirm(customer.id)} style={{ padding: '6px', border: '1px solid #fee2e2', borderRadius: '6px', background: '#fff', cursor: 'pointer', color: '#dc2626', display: 'flex', alignItems: 'center' }} title="Delete">
+                    <button onClick={() => setDeleteConfirm(customer.id)} style={{ padding: '6px 8px', border: '1px solid #fee2e2', borderRadius: '6px', background: '#fff', cursor: 'pointer', color: '#dc2626', display: 'flex', alignItems: 'center' }} title="Delete">
                       <Trash2 size={14} />
                     </button>
                   </div>

@@ -491,6 +491,7 @@ export function SalesPage() {
     { key: 'CONFIRMED', label: 'Confirmed', count: orders.filter((o) => o.status === 'CONFIRMED').length },
     { key: 'INVOICED', label: 'Invoiced', count: orders.filter((o) => o.status === 'INVOICED').length },
     { key: 'PAID', label: 'Paid', count: orders.filter((o) => o.status === 'PAID').length },
+    { key: 'DELIVERED', label: 'Delivered', count: orders.filter((o) => o.status === 'DELIVERED' || o.delivery_status === 'DELIVERED').length },
   ];
 
   const columns: Column<any>[] = [
@@ -556,6 +557,7 @@ export function SalesPage() {
         if (row.status === 'CONFIRMED') tone = 'yellow';
         if (row.status === 'INVOICED') tone = 'blue';
         if (row.status === 'PAID') tone = 'green';
+        if (row.status === 'DELIVERED') tone = 'green';
         if (row.status === 'CANCELLED') tone = 'red';
         return <StatusBadge label={row.status.replace('_', ' ')} tone={tone} />;
       },
@@ -571,41 +573,119 @@ export function SalesPage() {
     {
       key: 'actions',
       label: 'Actions',
-      render: (row) => (
-        <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-          <button type="button" className="btn btn-secondary btn-sm" onClick={() => viewOrderDetails(row)}>
-            <Eye size={14} style={{ marginRight: '4px', inlineSize: 'auto' }} /> Details
-          </button>
-          {['CONFIRMED', 'INVOICED', 'PAID'].includes(row.status) && (
-            <button
-              type="button"
-              className="btn btn-secondary btn-sm"
-              onClick={(e) => {
-                e.stopPropagation();
-                navigate(`/deliveries?orderId=${row.id}`);
-              }}
-              title="Schedule Delivery for this Sale"
-              style={{ color: '#0284c7', borderColor: '#bae6fd', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
-            >
-              <Truck size={14} /> Deliver
+      render: (row) => {
+        const isDelivered = row.status === 'DELIVERED' || row.delivery_status === 'DELIVERED';
+        const isDispatched = row.delivery_status === 'DISPATCHED';
+        const isScheduled = row.delivery_status === 'SCHEDULED' || row.delivery_status === 'PENDING';
+
+        return (
+          <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+            <button type="button" className="btn btn-secondary btn-sm" onClick={() => viewOrderDetails(row)}>
+              <Eye size={14} style={{ marginRight: '4px', inlineSize: 'auto' }} /> Details
             </button>
-          )}
-          {hasPermission('manage_sales') && (
-            <button
-              type="button"
-              className="btn btn-danger btn-sm"
-              onClick={(e) => {
-                e.stopPropagation();
-                handleDeleteOrder(row.id);
-              }}
-              title="Delete Order"
-              style={{ padding: '6px 10px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
-            >
-              <Trash2 size={14} style={{ marginRight: '4px', inlineSize: 'auto' }} /> Delete
-            </button>
-          )}
-        </div>
-      ),
+
+            {/* Delivery State Action Button */}
+            {isDelivered ? (
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  navigate(`/deliveries?search=${row.delivery_number || row.order_number}`);
+                }}
+                title="Delivery Completed - Click to view delivery details"
+                style={{
+                  color: '#15803d',
+                  background: '#f0fdf4',
+                  borderColor: '#86efac',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '5px',
+                  fontWeight: 600,
+                }}
+              >
+                <CheckCircle2 size={14} /> Delivered
+              </button>
+            ) : isDispatched ? (
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  navigate(`/deliveries?search=${row.delivery_number || row.order_number}`);
+                }}
+                title="Delivery In Transit - Click to view tracking"
+                style={{
+                  color: '#0284c7',
+                  background: '#f0f9ff',
+                  borderColor: '#7dd3fc',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '5px',
+                  fontWeight: 600,
+                }}
+              >
+                <Truck size={14} /> In Transit
+              </button>
+            ) : isScheduled ? (
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  navigate(`/deliveries?search=${row.delivery_number || row.order_number}`);
+                }}
+                title="Delivery Scheduled - Click to view"
+                style={{
+                  color: '#b45309',
+                  background: '#fffbeb',
+                  borderColor: '#fde68a',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '5px',
+                  fontWeight: 600,
+                }}
+              >
+                <Clock size={14} /> Scheduled
+              </button>
+            ) : ['CONFIRMED', 'INVOICED', 'PAID'].includes(row.status) ? (
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  navigate(`/deliveries?orderId=${row.id}`);
+                }}
+                title="Schedule Delivery for this Sale"
+                style={{
+                  color: '#0284c7',
+                  borderColor: '#bae6fd',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '5px',
+                }}
+              >
+                <Truck size={14} /> Deliver
+              </button>
+            ) : null}
+
+            {hasPermission('manage_sales') && (
+              <button
+                type="button"
+                className="btn btn-danger btn-sm"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleDeleteOrder(row.id);
+                }}
+                title="Delete Order"
+                style={{ padding: '6px 10px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
+              >
+                <Trash2 size={14} style={{ marginRight: '4px', inlineSize: 'auto' }} /> Delete
+              </button>
+            )}
+          </div>
+        );
+      },
     },
   ];
 
@@ -863,22 +943,49 @@ export function SalesPage() {
             )}
 
             {/* Action Buttons */}
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', borderTop: '1px solid #edf1ed', paddingTop: '16px', flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', borderTop: '1px solid #edf1ed', paddingTop: '16px', flexWrap: 'wrap' }}>
               <button type="button" className="btn btn-secondary" onClick={() => setSelectedOrder(null)}>
                 Close
               </button>
 
-              {/* Schedule Delivery for this Order */}
-              {['CONFIRMED', 'INVOICED', 'PAID'].includes(selectedOrder.status) && (
+              {/* Delivery Status or Action */}
+              {(selectedOrder.status === 'DELIVERED' || selectedOrder.delivery_status === 'DELIVERED') ? (
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => navigate(`/deliveries?search=${selectedOrder.delivery_number || selectedOrder.order_number}`)}
+                  style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#15803d', background: '#f0fdf4', borderColor: '#86efac', fontWeight: 600 }}
+                >
+                  <CheckCircle2 size={15} /> Delivered {selectedOrder.delivery_number ? `(${selectedOrder.delivery_number})` : ''}
+                </button>
+              ) : selectedOrder.delivery_status === 'DISPATCHED' ? (
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => navigate(`/deliveries?search=${selectedOrder.delivery_number || selectedOrder.order_number}`)}
+                  style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#0284c7', background: '#f0f9ff', borderColor: '#7dd3fc', fontWeight: 600 }}
+                >
+                  <Truck size={15} /> In Transit ({selectedOrder.delivery_number})
+                </button>
+              ) : selectedOrder.delivery_status === 'SCHEDULED' ? (
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => navigate(`/deliveries?search=${selectedOrder.delivery_number || selectedOrder.order_number}`)}
+                  style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#b45309', background: '#fffbeb', borderColor: '#fde68a', fontWeight: 600 }}
+                >
+                  <Clock size={15} /> Scheduled ({selectedOrder.delivery_number})
+                </button>
+              ) : ['CONFIRMED', 'INVOICED', 'PAID'].includes(selectedOrder.status) ? (
                 <button
                   type="button"
                   className="btn btn-secondary"
                   onClick={() => navigate(`/deliveries?orderId=${selectedOrder.id}`)}
-                  style={{ display: 'flex', alignItems: 'center', gap: '4px', color: '#0284c7', borderColor: '#bae6fd' }}
+                  style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#0284c7', borderColor: '#bae6fd' }}
                 >
-                  <Truck size={14} /> Schedule Delivery
+                  <Truck size={15} /> Schedule Delivery
                 </button>
-              )}
+              ) : null}
 
               {/* Print — available once invoice exists */}
               {selectedOrder.invoice_id && (

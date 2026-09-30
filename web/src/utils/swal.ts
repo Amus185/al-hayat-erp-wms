@@ -34,6 +34,9 @@ export const confirmDelete = async (
     cancelButtonText: 'Cancel',
     reverseButtons: true,
     focusCancel: true,
+    customClass: {
+      confirmButton: 'swal2-alhayat-danger-btn',
+    },
   });
   return result.isConfirmed;
 };

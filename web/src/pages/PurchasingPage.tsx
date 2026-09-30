@@ -579,7 +579,7 @@ export function PurchasingPage() {
       key: 'actions',
       label: 'Actions',
       render: (row) => (
-        <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
           <button
             type="button"
             className="btn btn-secondary btn-sm"

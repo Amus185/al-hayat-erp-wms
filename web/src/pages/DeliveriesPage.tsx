@@ -144,7 +144,12 @@ export function DeliveriesPage() {
         if (orderIdParam) {
           const matched = (ordersRes || []).find((o) => o.id === orderIdParam);
           if (matched) {
-            handleOpenCreateWithOrder(matched);
+            if (matched.status === 'DELIVERED' || matched.delivery_status === 'DELIVERED') {
+              addToast('info', `Order ${matched.order_number} is already marked as DELIVERED.`);
+              setSearchQuery(matched.delivery_number || matched.order_number || '');
+            } else {
+              handleOpenCreateWithOrder(matched);
+            }
           }
         }
       } catch (err) {
@@ -178,6 +183,10 @@ export function DeliveriesPage() {
     const matched = salesOrders.find((s) => s.id === soId);
     if (!matched) {
       setCreateForm((prev) => ({ ...prev, salesOrderId: soId }));
+      return;
+    }
+    if (matched.status === 'DELIVERED' || matched.delivery_status === 'DELIVERED') {
+      addToast('warning', `Order ${matched.order_number} has already been delivered and cannot be registered again.`);
       return;
     }
     setCreateForm((prev) => ({
@@ -508,7 +517,7 @@ export function DeliveriesPage() {
       key: 'actions',
       label: 'Actions',
       render: (row) => (
-        <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
           <button
             type="button"
             className="btn btn-secondary btn-sm"
@@ -665,17 +674,19 @@ export function DeliveriesPage() {
             <SearchableSelect
               options={[
                 { value: '', label: '— No Sales Order (Direct Delivery) —' },
-                ...(Array.isArray(salesOrders) ? salesOrders : []).map((s) => ({
-                  value: s.id,
-                  label: `${s.order_number} (${s.customer_name || 'Walk-in'} - ${s.status})`,
-                })),
+                ...(Array.isArray(salesOrders) ? salesOrders : [])
+                  .filter((s) => s.status !== 'DELIVERED' && s.delivery_status !== 'DELIVERED')
+                  .map((s) => ({
+                    value: s.id,
+                    label: `${s.order_number} (${s.customer_name || 'Walk-in'} - ${s.status})`,
+                  })),
               ]}
               value={createForm.salesOrderId}
               onChange={handleSelectSalesOrder}
-              placeholder="Search Sales Order..."
+              placeholder="Search Sales Order (undelivered only)..."
             />
             <span style={{ fontSize: '11px', color: '#64748b' }}>
-              Selecting an order automatically imports customer details and ordered items.
+              Only undelivered sales orders are listed. Delivered sales cannot have duplicate delivery registrations.
             </span>
           </div>
 

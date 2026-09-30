@@ -16,20 +16,32 @@ function generateSecurePassword(length = 16): string {
 }
 
 // ── GET all branches ─────────────────────────────────────────────────────────
-// Admin: sees all branches
+// Admin: sees all branches with retail inventory, orders, and revenue metrics
 // Branch user: sees only their own branch
 branches.get('/', async (c) => {
   const payload = c.get('jwtPayload');
 
   if (isAdminUser(payload)) {
-    const { results } = await c.env.DB.prepare('SELECT * FROM branches ORDER BY name').all();
-    return c.json(results);
+    const { results } = await c.env.DB.prepare(`
+      SELECT b.*,
+        COALESCE((SELECT SUM(s.quantity_on_hand) FROM inventory_stock s WHERE s.branch_id = b.id AND s.owner_type = 'BRANCH'), 0) as total_units,
+        COALESCE((SELECT COUNT(*) FROM sales_orders so WHERE so.branch_id = b.id), 0) as order_count,
+        COALESCE((SELECT SUM(so.total_amount) FROM sales_orders so WHERE so.branch_id = b.id AND so.status NOT IN ('CANCELLED', 'VOID')), 0) as total_revenue
+      FROM branches b
+      ORDER BY b.name ASC
+    `).all();
+    return c.json(results || []);
   }
 
   // Branch user — only their own branch
-  const branch = await c.env.DB.prepare(
-    'SELECT * FROM branches WHERE id = ?'
-  ).bind(payload.branch_id).first();
+  const branch = await c.env.DB.prepare(`
+    SELECT b.*,
+      COALESCE((SELECT SUM(s.quantity_on_hand) FROM inventory_stock s WHERE s.branch_id = b.id AND s.owner_type = 'BRANCH'), 0) as total_units,
+      COALESCE((SELECT COUNT(*) FROM sales_orders so WHERE so.branch_id = b.id), 0) as order_count,
+      COALESCE((SELECT SUM(so.total_amount) FROM sales_orders so WHERE so.branch_id = b.id AND so.status NOT IN ('CANCELLED', 'VOID')), 0) as total_revenue
+    FROM branches b
+    WHERE b.id = ?
+  `).bind(payload.branch_id).first();
   return c.json(branch ? [branch] : []);
 });
 
@@ -206,6 +218,85 @@ branches.post('/:id/regenerate-credentials', requireAdmin, async (c) => {
       rawPassword, // ONE-TIME only
     },
   });
+});
+
+// ── UPDATE branch details ──────────────────────────────────────────────────
+// Admin only
+branches.patch('/:id', requirePermissions(['manage_users']), requireAdmin, async (c) => {
+  const id = c.req.param('id');
+  const body = await c.req.json<{ code?: string; name?: string; city?: string; address?: string; phone?: string; is_active?: number | boolean }>();
+
+  const existing = await c.env.DB.prepare('SELECT * FROM branches WHERE id = ?').bind(id).first();
+  if (!existing) return c.json({ message: 'Branch not found' }, 404);
+
+  // If code changed, check uniqueness
+  if (body.code && body.code.trim() !== (existing as any).code) {
+    const duplicate = await c.env.DB.prepare('SELECT id FROM branches WHERE code = ? AND id != ?').bind(body.code.trim(), id).first();
+    if (duplicate) return c.json({ message: 'Another branch with this code already exists.' }, 409);
+  }
+
+  const fields: string[] = [];
+  const vals: any[] = [];
+
+  if (body.code !== undefined && body.code.trim()) { fields.push('code = ?'); vals.push(body.code.trim()); }
+  if (body.name !== undefined && body.name.trim()) { fields.push('name = ?'); vals.push(body.name.trim()); }
+  if (body.city !== undefined && body.city.trim()) { fields.push('city = ?'); vals.push(body.city.trim()); }
+  if (body.address !== undefined) { fields.push('address = ?'); vals.push(body.address?.trim() || null); }
+  if (body.phone !== undefined) { fields.push('phone = ?'); vals.push(body.phone?.trim() || null); }
+  if (body.is_active !== undefined) {
+    const activeVal = Boolean(body.is_active && body.is_active !== 0) ? 1 : 0;
+    fields.push('is_active = ?');
+    vals.push(activeVal);
+  }
+
+  if (fields.length === 0) return c.json({ message: 'No fields to update.' }, 400);
+
+  fields.push('updated_at = CURRENT_TIMESTAMP');
+  vals.push(id);
+
+  await c.env.DB.prepare(`UPDATE branches SET ${fields.join(', ')} WHERE id = ?`).bind(...vals).run();
+
+  const updated = await c.env.DB.prepare('SELECT * FROM branches WHERE id = ?').bind(id).first();
+  await logAudit(c, 'BRANCH_UPDATE', 'branches', id, existing, updated);
+  return c.json(updated);
+});
+
+// ── DELETE branch safely ────────────────────────────────────────────────────
+// Admin only
+branches.delete('/:id', requirePermissions(['manage_users']), requireAdmin, async (c) => {
+  const id = c.req.param('id');
+  const existing = await c.env.DB.prepare('SELECT * FROM branches WHERE id = ?').bind(id).first();
+  if (!existing) return c.json({ message: 'Branch not found' }, 404);
+
+  // Check if branch has active on-hand inventory
+  const stock = await c.env.DB.prepare(
+    "SELECT COALESCE(SUM(quantity_on_hand), 0) as total FROM inventory_stock WHERE branch_id = ? AND quantity_on_hand > 0"
+  ).bind(id).first();
+  if (Number(stock?.total || 0) > 0) {
+    return c.json({
+      message: `Cannot delete branch "${(existing as any).name}": ${stock?.total} units of inventory are currently on hand. Transfer stock or adjust to zero first, or deactivate the branch.`
+    }, 400);
+  }
+
+  // Check if sales orders exist
+  const salesCount = await c.env.DB.prepare(
+    "SELECT COUNT(*) as count FROM sales_orders WHERE branch_id = ?"
+  ).bind(id).first();
+  if (Number(salesCount?.count || 0) > 0) {
+    return c.json({
+      message: `Cannot delete branch "${(existing as any).name}": ${salesCount?.count} sales orders are associated with this branch. Please deactivate the branch to preserve accounting and sales history.`
+    }, 400);
+  }
+
+  // Safe to delete: remove zero stock records, assigned users, and branch
+  await c.env.DB.batch([
+    c.env.DB.prepare('DELETE FROM inventory_stock WHERE branch_id = ?').bind(id),
+    c.env.DB.prepare('UPDATE users SET branch_id = NULL WHERE branch_id = ?').bind(id),
+    c.env.DB.prepare('DELETE FROM branches WHERE id = ?').bind(id),
+  ]);
+
+  await logAudit(c, 'BRANCH_DELETE', 'branches', id, existing, null);
+  return c.json({ success: true, message: `Branch "${(existing as any).name}" deleted successfully.` });
 });
 
 export default branches;

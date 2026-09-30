@@ -574,7 +574,7 @@ export function WarehousesPage() {
                   </button>
 
                   {hasPermission('manage_inventory') && (
-                    <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                    <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
                       <button
                         type="button"
                         onClick={(e) => {

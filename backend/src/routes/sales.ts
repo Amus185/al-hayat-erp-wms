@@ -88,7 +88,11 @@ sales.get('/orders', async (c) => {
   let query = `
     SELECT so.*, c.name AS customer_name, b.name AS branch_name, i.id AS invoice_id,
            i.total_amount AS invoice_total, i.discount_amount AS invoice_discount, i.status AS invoice_status,
-           COALESCE((SELECT SUM(ip.amount) FROM invoice_payments ip WHERE ip.invoice_id = i.id), 0) AS amount_paid
+           COALESCE((SELECT SUM(ip.amount) FROM invoice_payments ip WHERE ip.invoice_id = i.id), 0) AS amount_paid,
+           (SELECT d.status FROM deliveries d WHERE d.sales_order_id = so.id AND d.status != 'CANCELLED' ORDER BY d.created_at DESC LIMIT 1) AS delivery_status,
+           (SELECT d.id FROM deliveries d WHERE d.sales_order_id = so.id AND d.status != 'CANCELLED' ORDER BY d.created_at DESC LIMIT 1) AS delivery_id,
+           (SELECT d.delivery_number FROM deliveries d WHERE d.sales_order_id = so.id AND d.status != 'CANCELLED' ORDER BY d.created_at DESC LIMIT 1) AS delivery_number,
+           (SELECT d.delivered_at FROM deliveries d WHERE d.sales_order_id = so.id AND d.status != 'CANCELLED' ORDER BY d.created_at DESC LIMIT 1) AS delivered_at
     FROM sales_orders so
     LEFT JOIN customers c ON c.id = so.customer_id
     JOIN branches b ON b.id = so.branch_id
@@ -128,9 +132,13 @@ sales.get('/orders', async (c) => {
   // Compute payment_status and balance for each row that has an invoice
   const enriched = (results || []).map((row: any) => {
     const installFee = Number(row.installation_fee || 0);
+    // If delivery is completed, mark order status as DELIVERED
+    const effectiveStatus = row.delivery_status === 'DELIVERED' ? 'DELIVERED' : row.status;
+
     if (!row.invoice_id) {
       return {
         ...row,
+        status: effectiveStatus,
         installation_fee: installFee,
         installer_name: row.installer_name || null,
         installation_status: row.installation_status || 'NONE',
@@ -147,6 +155,7 @@ sales.get('/orders', async (c) => {
     else if (amountPaid > 0) payment_status = 'PARTIALLY_PAID';
     return {
       ...row,
+      status: effectiveStatus,
       installation_fee: installFee,
       installer_name: row.installer_name || null,
       installation_status: row.installation_status || 'NONE',
@@ -214,7 +223,27 @@ sales.get('/orders/:id', async (c) => {
     payments = pmts || [];
   }
 
-  return c.json({ ...order, lines, payment_summary: paymentSummary, payments });
+  // Fetch delivery details for this order
+  const { results: dels } = await c.env.DB.prepare(`
+    SELECT * FROM deliveries WHERE sales_order_id = ? ORDER BY created_at DESC
+  `).bind(id).all();
+  const deliveriesList = dels || [];
+  const activeDelivery: any = deliveriesList.find((d: any) => d.status !== 'CANCELLED');
+  const deliveryStatus = activeDelivery ? activeDelivery.status : null;
+  const effectiveStatus = deliveryStatus === 'DELIVERED' ? 'DELIVERED' : order.status;
+
+  return c.json({
+    ...order,
+    status: effectiveStatus,
+    delivery_status: deliveryStatus,
+    delivery_id: activeDelivery?.id || null,
+    delivery_number: activeDelivery?.delivery_number || null,
+    delivered_at: activeDelivery?.delivered_at || null,
+    deliveries: deliveriesList,
+    lines,
+    payment_summary: paymentSummary,
+    payments,
+  });
 });
 
 // ──────────────────────────────────────────────────────────────────────

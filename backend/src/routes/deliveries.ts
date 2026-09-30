@@ -122,6 +122,24 @@ deliveries.post('/', requirePermissions(['manage_sales']), async (c) => {
     return c.json({ message: 'Delivery address is required.' }, 400);
   }
 
+  // Prevent duplicate deliveries for the same sales order
+  if (body.salesOrderId) {
+    const existingDelivery = await c.env.DB.prepare(
+      "SELECT id, delivery_number, status FROM deliveries WHERE sales_order_id = ? AND status != 'CANCELLED' LIMIT 1"
+    ).bind(body.salesOrderId).first() as any;
+
+    if (existingDelivery) {
+      if (existingDelivery.status === 'DELIVERED') {
+        return c.json({
+          message: `This sales order has already been delivered (${existingDelivery.delivery_number}). Duplicate delivery is not permitted.`
+        }, 400);
+      }
+      return c.json({
+        message: `A delivery is already active for this sales order (${existingDelivery.delivery_number} - Status: ${existingDelivery.status}). Duplicate delivery cannot be created.`
+      }, 400);
+    }
+  }
+
   const id = uuidv4();
   const deliveryNumber = `DEL-${Date.now()}`;
   const status = body.scheduledDate || body.driverName ? 'SCHEDULED' : 'PENDING';
@@ -267,6 +285,12 @@ deliveries.post('/:id/complete', requirePermissions(['manage_sales']), async (c)
         updated_at = CURRENT_TIMESTAMP
     WHERE id = ?
   `).bind(recipientName, deliveryNotes, id).run();
+
+  if (existing.sales_order_id) {
+    await c.env.DB.prepare(
+      "UPDATE sales_orders SET status = 'DELIVERED', updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+    ).bind(existing.sales_order_id).run();
+  }
 
   await logAudit(c, 'DELIVERY_COMPLETE', 'deliveries', id, existing, { status: 'DELIVERED', recipientName });
   const updated = await c.env.DB.prepare('SELECT * FROM deliveries WHERE id = ?').bind(id).first();

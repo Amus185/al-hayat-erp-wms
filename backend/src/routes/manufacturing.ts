@@ -83,9 +83,40 @@ manufacturing.post('/boms', requirePermissions(['manage_inventory']), async (c) 
   const body = await c.req.json();
 
   if (!body.name || !body.name.trim()) return c.json({ message: 'BOM recipe name is required.' }, 400);
-  if (!body.productId) return c.json({ message: 'Target finished product is required.' }, 400);
   if (!Array.isArray(body.items) || body.items.length === 0) {
     return c.json({ message: 'At least one raw material component is required.' }, 400);
+  }
+
+  let targetProductId = body.productId;
+
+  // Support creating a new manufactured item from scratch
+  if (!targetProductId && body.newProduct) {
+    if (!body.newProduct.name || !body.newProduct.name.trim()) {
+      return c.json({ message: 'Manufactured item name is required.' }, 400);
+    }
+    const newProdId = uuidv4();
+    const sku = body.newProduct.sku?.trim() || `MFG-${Date.now().toString().slice(-6)}`;
+    const costPrice = Number(body.newProduct.unitCost || 0);
+    const sellingPrice = Number(body.newProduct.sellingPrice || 0);
+
+    await c.env.DB.prepare(`
+      INSERT INTO products (id, sku, name, description, category_id, cost_price, selling_price, unit_of_measure)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 'UNIT')
+    `).bind(
+      newProdId,
+      sku,
+      body.newProduct.name.trim(),
+      body.newProduct.description?.trim() || `Manufactured item: ${body.newProduct.name.trim()}`,
+      body.newProduct.categoryId || null,
+      costPrice,
+      sellingPrice
+    ).run();
+
+    targetProductId = newProdId;
+  }
+
+  if (!targetProductId) {
+    return c.json({ message: 'Target manufactured product definition is required.' }, 400);
   }
 
   const id = uuidv4();
@@ -102,7 +133,7 @@ manufacturing.post('/boms', requirePermissions(['manage_inventory']), async (c) 
     id,
     bomCode,
     body.name.trim(),
-    body.productId,
+    targetProductId,
     Number(body.quantity || 1),
     body.unitOfMeasure?.trim() || 'UNIT',
     laborCost,
@@ -214,11 +245,42 @@ manufacturing.post('/work-orders', requirePermissions(['manage_inventory']), asy
   const body = await c.req.json();
   const userId = c.get('jwtPayload').sub;
 
-  if (!body.productId) return c.json({ message: 'Target finished product is required.' }, 400);
   if (!body.warehouseId) return c.json({ message: 'Production warehouse facility is required.' }, 400);
   const targetQty = Number(body.targetQuantity || 0);
   if (!Number.isInteger(targetQty) || targetQty <= 0) {
     return c.json({ message: 'Target quantity must be a positive integer.' }, 400);
+  }
+
+  let targetProductId = body.productId;
+
+  // Support creating newly defined manufactured item from scratch
+  if (!targetProductId && body.newProduct) {
+    if (!body.newProduct.name || !body.newProduct.name.trim()) {
+      return c.json({ message: 'Manufactured item name is required.' }, 400);
+    }
+    const newProdId = uuidv4();
+    const sku = body.newProduct.sku?.trim() || `MFG-${Date.now().toString().slice(-6)}`;
+    const costPrice = Number(body.newProduct.unitCost || 0);
+    const sellingPrice = Number(body.newProduct.sellingPrice || 0);
+
+    await c.env.DB.prepare(`
+      INSERT INTO products (id, sku, name, description, category_id, cost_price, selling_price, unit_of_measure)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 'UNIT')
+    `).bind(
+      newProdId,
+      sku,
+      body.newProduct.name.trim(),
+      body.newProduct.description?.trim() || `Manufactured item: ${body.newProduct.name.trim()}`,
+      body.newProduct.categoryId || null,
+      costPrice,
+      sellingPrice
+    ).run();
+
+    targetProductId = newProdId;
+  }
+
+  if (!targetProductId) {
+    return c.json({ message: 'Please specify or define the finished good to manufacture.' }, 400);
   }
 
   const id = uuidv4();
@@ -229,7 +291,7 @@ manufacturing.post('/work-orders', requirePermissions(['manage_inventory']), asy
   if (!bomId) {
     const defaultBom = await c.env.DB.prepare(`
       SELECT id FROM bill_of_materials WHERE product_id = ? AND is_active = 1 ORDER BY created_at DESC LIMIT 1
-    `).bind(body.productId).first();
+    `).bind(targetProductId).first();
     bomId = (defaultBom?.id as string) || null;
   }
 
@@ -243,7 +305,7 @@ manufacturing.post('/work-orders', requirePermissions(['manage_inventory']), asy
   `).bind(
     id,
     woNumber,
-    body.productId,
+    targetProductId,
     bomId,
     body.warehouseId,
     targetQty,
@@ -255,8 +317,18 @@ manufacturing.post('/work-orders', requirePermissions(['manage_inventory']), asy
     userId
   ));
 
-  // Populate materials from BOM (scaled by targetQuantity)
-  if (bomId) {
+  // Populate materials: custom list if supplied, otherwise from BOM scaled by targetQuantity
+  if (Array.isArray(body.materials) && body.materials.length > 0) {
+    for (const m of body.materials) {
+      if (m.materialProductId && Number(m.plannedQuantity || m.quantityRequired) > 0) {
+        const qty = Number(m.plannedQuantity || (Number(m.quantityRequired) * targetQty));
+        stmts.push(c.env.DB.prepare(`
+          INSERT INTO work_order_materials (id, work_order_id, material_product_id, planned_quantity, unit_cost, status)
+          VALUES (?, ?, ?, ?, ?, 'PENDING')
+        `).bind(uuidv4(), id, m.materialProductId, qty, Number(m.unitCost || 0)));
+      }
+    }
+  } else if (bomId) {
     const { results: bomItems } = await c.env.DB.prepare(`
       SELECT * FROM bom_items WHERE bom_id = ?
     `).bind(bomId).all();
@@ -275,10 +347,10 @@ manufacturing.post('/work-orders', requirePermissions(['manage_inventory']), asy
     stmts.push(c.env.DB.prepare(`
       INSERT INTO work_order_stages (id, work_order_id, stage_name, sequence_order, status)
       VALUES (?, ?, ?, ?, ?)
-    `).bind(uuidv4(), id, stageName, idx + 1, idx === 0 ? 'PENDING' : 'PENDING'));
+    `).bind(uuidv4(), id, stageName, idx + 1, 'PENDING'));
   });
 
-  stmts.push(createAuditLogStmt(c, 'WORK_ORDER_CREATE', 'work_orders', id, null, { woNumber, targetQty, productId: body.productId }));
+  stmts.push(createAuditLogStmt(c, 'WORK_ORDER_CREATE', 'work_orders', id, null, { woNumber, targetQty, productId: targetProductId }));
   await c.env.DB.batch(stmts);
 
   const created = await c.env.DB.prepare('SELECT * FROM work_orders WHERE id = ?').bind(id).first();
@@ -446,6 +518,13 @@ manufacturing.post('/work-orders/:id/complete', requirePermissions(['manage_inve
       INSERT INTO inventory_stock (id, product_id, owner_type, warehouse_id, quantity_on_hand)
       VALUES (?, ?, 'WAREHOUSE', ?, ?)
     `).bind(uuidv4(), wo.product_id, wo.warehouse_id, completedQty));
+  }
+
+  // Update newly manufactured product unit cost from actual production run
+  if (unitProductionCost > 0) {
+    stmts.push(c.env.DB.prepare(`
+      UPDATE products SET cost_price = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+    `).bind(unitProductionCost, wo.product_id));
   }
 
   // Inventory transaction for finished product
