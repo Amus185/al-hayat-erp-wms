@@ -1056,7 +1056,7 @@ export function PurchasingPage() {
       {/* ── Record Supplier Payment Modal ── */}
       <Modal
         isOpen={isPaymentOpen}
-        zIndex={1100}
+        zIndex={1250}
         onClose={() => { setIsPaymentOpen(false); setPaymentTargetPO(null); }}
         title={`Pay Supplier — ${paymentTargetPO?.po_number || selectedPO?.po_number || ''}`}
         width="sm"

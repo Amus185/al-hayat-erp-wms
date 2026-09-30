@@ -1,7 +1,91 @@
-import { useEffect, useRef, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { X } from 'lucide-react';
 
-let activeModalCount = 0;
+const activeModalStack: string[] = [];
+const stackListeners = new Set<() => void>();
+
+function notifyStackListeners() {
+  stackListeners.forEach((listener) => listener());
+}
+
+function useModalStack(isOpen: boolean, onClose: () => void, zIndex?: number) {
+  const modalIdRef = useRef<string>('');
+  if (!modalIdRef.current) {
+    modalIdRef.current = `dialog-${Math.random().toString(36).slice(2, 9)}`;
+  }
+  const modalId = modalIdRef.current;
+
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
+  const [, setRerender] = useState(0);
+
+  // Subscribe to changes in activeModalStack across all instances
+  useEffect(() => {
+    const handleStackChange = () => setRerender((v) => v + 1);
+    stackListeners.add(handleStackChange);
+    return () => {
+      stackListeners.delete(handleStackChange);
+    };
+  }, []);
+
+  // Synchronously update stack so initial render immediately has the correct z-index
+  if (isOpen && !activeModalStack.includes(modalId)) {
+    activeModalStack.push(modalId);
+  } else if (!isOpen && activeModalStack.includes(modalId)) {
+    const idx = activeModalStack.indexOf(modalId);
+    if (idx !== -1) {
+      activeModalStack.splice(idx, 1);
+    }
+  }
+
+  useEffect(() => {
+    if (isOpen) {
+      if (!activeModalStack.includes(modalId)) {
+        activeModalStack.push(modalId);
+        notifyStackListeners();
+      }
+      document.body.style.overflow = 'hidden';
+
+      const handleKeyDown = (e: KeyboardEvent) => {
+        // Only the topmost open modal closes on Escape
+        if (e.key === 'Escape' && activeModalStack[activeModalStack.length - 1] === modalId) {
+          onCloseRef.current();
+        }
+      };
+
+      document.addEventListener('keydown', handleKeyDown);
+
+      return () => {
+        document.removeEventListener('keydown', handleKeyDown);
+        const idx = activeModalStack.indexOf(modalId);
+        if (idx !== -1) {
+          activeModalStack.splice(idx, 1);
+          notifyStackListeners();
+        }
+        if (activeModalStack.length === 0) {
+          document.body.style.overflow = '';
+        }
+      };
+    } else {
+      const idx = activeModalStack.indexOf(modalId);
+      if (idx !== -1) {
+        activeModalStack.splice(idx, 1);
+        notifyStackListeners();
+      }
+      if (activeModalStack.length === 0) {
+        document.body.style.overflow = '';
+      }
+    }
+  }, [isOpen, modalId]);
+
+  const stackIndex = activeModalStack.indexOf(modalId);
+  const level = stackIndex !== -1 ? stackIndex + 1 : Math.max(1, activeModalStack.length);
+  const computedZ = 1000 + level * 100;
+  const effectiveZIndex = zIndex !== undefined ? Math.max(zIndex, computedZ) : computedZ;
+
+  return { effectiveZIndex };
+}
 
 interface ModalProps {
   isOpen: boolean;
@@ -24,42 +108,9 @@ export function Modal({
   id = 'modal',
   zIndex,
 }: ModalProps) {
-  const levelRef = useRef<number>(0);
-
-  if (isOpen && levelRef.current === 0) {
-    activeModalCount += 1;
-    levelRef.current = activeModalCount;
-  }
-
-  useEffect(() => {
-    if (isOpen) {
-      document.body.style.overflow = 'hidden';
-      const myLevel = levelRef.current;
-
-      const handleKeyDown = (e: KeyboardEvent) => {
-        // Only the topmost open modal closes on Escape
-        if (e.key === 'Escape' && activeModalCount === myLevel) {
-          onClose();
-        }
-      };
-
-      document.addEventListener('keydown', handleKeyDown);
-      return () => {
-        document.removeEventListener('keydown', handleKeyDown);
-        activeModalCount = Math.max(0, activeModalCount - 1);
-        levelRef.current = 0;
-        if (activeModalCount === 0) {
-          document.body.style.overflow = '';
-        }
-      };
-    } else {
-      levelRef.current = 0;
-    }
-  }, [isOpen, onClose]);
+  const { effectiveZIndex } = useModalStack(isOpen, onClose, zIndex);
 
   if (!isOpen) return null;
-
-  const effectiveZIndex = zIndex !== undefined ? zIndex : 1000 + (levelRef.current || 1) * 100;
 
   return (
     <div
@@ -115,41 +166,9 @@ export function SlideOver({
   id = 'slide-over',
   zIndex,
 }: SlideOverProps) {
-  const levelRef = useRef<number>(0);
-
-  if (isOpen && levelRef.current === 0) {
-    activeModalCount += 1;
-    levelRef.current = activeModalCount;
-  }
-
-  useEffect(() => {
-    if (isOpen) {
-      document.body.style.overflow = 'hidden';
-      const myLevel = levelRef.current;
-
-      const handleKeyDown = (e: KeyboardEvent) => {
-        if (e.key === 'Escape' && activeModalCount === myLevel) {
-          onClose();
-        }
-      };
-
-      document.addEventListener('keydown', handleKeyDown);
-      return () => {
-        document.removeEventListener('keydown', handleKeyDown);
-        activeModalCount = Math.max(0, activeModalCount - 1);
-        levelRef.current = 0;
-        if (activeModalCount === 0) {
-          document.body.style.overflow = '';
-        }
-      };
-    } else {
-      levelRef.current = 0;
-    }
-  }, [isOpen, onClose]);
+  const { effectiveZIndex } = useModalStack(isOpen, onClose, zIndex);
 
   if (!isOpen) return null;
-
-  const effectiveZIndex = zIndex !== undefined ? zIndex : 1000 + (levelRef.current || 1) * 100;
 
   return (
     <div
@@ -184,4 +203,3 @@ export function SlideOver({
     </div>
   );
 }
-

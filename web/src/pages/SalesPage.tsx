@@ -1080,7 +1080,7 @@ export function SalesPage() {
       {/* ── Record Payment Modal ── */}
       <Modal
         isOpen={isPaymentOpen}
-        zIndex={1100}
+        zIndex={1250}
         onClose={() => setIsPaymentOpen(false)}
         title={`Record Payment — ${selectedOrder?.order_number || ''}`}
         width="sm"
