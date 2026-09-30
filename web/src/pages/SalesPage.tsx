@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  ShoppingCart, Plus, UserPlus, Eye, CheckCircle,
+  ShoppingCart, Plus, UserPlus, Eye, CheckCircle, CheckCircle2, Clock,
   DollarSign, Zap, Printer, CreditCard, History, ChevronDown, ChevronUp, Loader2, Trash2,
   Truck, Wrench, ShieldCheck,
 } from 'lucide-react';
