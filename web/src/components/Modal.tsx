@@ -94,6 +94,7 @@ interface ModalProps {
   children: ReactNode;
   footer?: ReactNode;
   width?: 'sm' | 'md' | 'lg' | 'xl';
+  size?: 'sm' | 'md' | 'lg' | 'xl';
   id?: string;
   zIndex?: number;
 }
@@ -105,10 +106,12 @@ export function Modal({
   children,
   footer,
   width = 'md',
+  size,
   id = 'modal',
   zIndex,
 }: ModalProps) {
   const { effectiveZIndex } = useModalStack(isOpen, onClose, zIndex);
+  const panelWidth = size || width;
 
   if (!isOpen) return null;
 
@@ -120,7 +123,7 @@ export function Modal({
       style={{ zIndex: effectiveZIndex }}
     >
       <div
-        className={`modal-panel modal-panel--${width}`}
+        className={`modal-panel modal-panel--${panelWidth}`}
         onClick={(e) => e.stopPropagation()}
         id={id}
         role="dialog"

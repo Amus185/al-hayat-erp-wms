@@ -41,24 +41,52 @@ const lsStatusTone = (s: string) => {
   return 'neutral' as const;
 };
 
+interface AssetsCache {
+  dashboard: any;
+  properties: any[];
+  tenants: any[];
+  leases: any[];
+  rentalPayments: any[];
+  livestockList: any[];
+  timestamp: number;
+}
+
+let assetsMemoryCache: AssetsCache | null = null;
+
+function getInitialAssetsCache(): AssetsCache | null {
+  if (assetsMemoryCache) return assetsMemoryCache;
+  try {
+    const raw = sessionStorage.getItem('alhayat_assets_cache');
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Date.now() - (parsed.timestamp || 0) < 300000) {
+        assetsMemoryCache = parsed;
+        return parsed;
+      }
+    }
+  } catch {}
+  return null;
+}
+
 export function AssetsPage() {
   const { isAdmin } = useAuth();
   const { addToast } = useToast();
 
+  const initialCache = getInitialAssetsCache();
   const [activeTab, setActiveTab] = useState('properties');
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!initialCache);
   const [search, setSearch] = useState('');
   const [saving, setSaving] = useState(false);
 
   // Dashboard
-  const [dashboard, setDashboard] = useState<any>(null);
+  const [dashboard, setDashboard] = useState<any>(initialCache?.dashboard || null);
 
   // Data
-  const [properties, setProperties] = useState<any[]>([]);
-  const [tenants, setTenants] = useState<any[]>([]);
-  const [leases, setLeases] = useState<any[]>([]);
-  const [rentalPayments, setRentalPayments] = useState<any[]>([]);
-  const [livestockList, setLivestockList] = useState<any[]>([]);
+  const [properties, setProperties] = useState<any[]>(initialCache?.properties || []);
+  const [tenants, setTenants] = useState<any[]>(initialCache?.tenants || []);
+  const [leases, setLeases] = useState<any[]>(initialCache?.leases || []);
+  const [rentalPayments, setRentalPayments] = useState<any[]>(initialCache?.rentalPayments || []);
+  const [livestockList, setLivestockList] = useState<any[]>(initialCache?.livestockList || []);
 
   // Modals - Properties
   const [showPropertyModal, setShowPropertyModal] = useState(false);
@@ -106,42 +134,56 @@ export function AssetsPage() {
     name: string;
   } | null>(null);
 
-  // Load
-  const loadDashboard = useCallback(async () => {
+  // Load All Data in parallel
+  const loadAllData = useCallback(async (showSkeleton = true) => {
+    if (showSkeleton && !assetsMemoryCache) {
+      setLoading(true);
+    }
     try {
-      const data = await apiGet('/assets/dashboard');
-      setDashboard(data);
-    } catch { /* api client handles */ }
-  }, []);
+      const [dashRes, propsRes, tenantsRes, leasesRes, rentPayRes, lsRes] = await Promise.all([
+        apiGet<any>('/assets/dashboard').catch(() => null),
+        apiGet<any[]>('/assets/properties').catch(() => []),
+        apiGet<any[]>('/assets/tenants').catch(() => []),
+        apiGet<any[]>('/assets/lease-agreements').catch(() => []),
+        apiGet<any[]>('/assets/rental-payments').catch(() => []),
+        apiGet<any[]>('/assets/livestock').catch(() => []),
+      ]);
 
-  const loadData = useCallback(async () => {
-    setLoading(true);
-    try {
-      await loadDashboard();
-      if (activeTab === 'properties') {
-        const props = await apiGet<any[]>('/assets/properties');
-        setProperties(Array.isArray(props) ? props : []);
-      } else if (activeTab === 'rentals') {
-        const [t, l, r] = await Promise.all([
-          apiGet<any[]>('/assets/tenants'),
-          apiGet<any[]>('/assets/lease-agreements'),
-          apiGet<any[]>('/assets/rental-payments')
-        ]);
-        setTenants(Array.isArray(t) ? t : []);
-        setLeases(Array.isArray(l) ? l : []);
-        setRentalPayments(Array.isArray(r) ? r : []);
-      } else if (activeTab === 'livestock') {
-        const ls = await apiGet<any[]>('/assets/livestock');
-        setLivestockList(Array.isArray(ls) ? ls : []);
-      }
+      const newCache: AssetsCache = {
+        dashboard: dashRes || null,
+        properties: Array.isArray(propsRes) ? propsRes : [],
+        tenants: Array.isArray(tenantsRes) ? tenantsRes : [],
+        leases: Array.isArray(leasesRes) ? leasesRes : [],
+        rentalPayments: Array.isArray(rentPayRes) ? rentPayRes : [],
+        livestockList: Array.isArray(lsRes) ? lsRes : [],
+        timestamp: Date.now(),
+      };
+
+      assetsMemoryCache = newCache;
+      try {
+        sessionStorage.setItem('alhayat_assets_cache', JSON.stringify(newCache));
+      } catch {}
+
+      setDashboard(newCache.dashboard);
+      setProperties(newCache.properties);
+      setTenants(newCache.tenants);
+      setLeases(newCache.leases);
+      setRentalPayments(newCache.rentalPayments);
+      setLivestockList(newCache.livestockList);
     } catch (err) {
-      console.error(err);
+      console.error('Failed to load assets data:', err);
     } finally {
       setLoading(false);
     }
-  }, [activeTab, loadDashboard]);
+  }, []);
 
-  useEffect(() => { loadData(); setSearch(''); }, [loadData]);
+  const loadData = useCallback(() => {
+    return loadAllData(false);
+  }, [loadAllData]);
+
+  useEffect(() => {
+    loadAllData(!assetsMemoryCache);
+  }, [loadAllData]);
 
   // Handlers - Properties
   const handlePropSubmit = async () => {
@@ -398,6 +440,10 @@ export function AssetsPage() {
     return <div style={{ padding: 24, textAlign: 'center' }}>Access Denied</div>;
   }
 
+  if (loading && !dashboard && properties.length === 0) {
+    return <PageSkeleton />;
+  }
+
   // Column definitions
   const propertyCols: Column<any>[] = [
     { key: 'name', label: 'Name' },
@@ -554,117 +600,224 @@ export function AssetsPage() {
   ];
 
   return (
-    <div style={{ padding: '24px', maxWidth: '1400px', margin: '0 auto' }}>
-      <div className="page-header" style={{ marginBottom: 24 }}>
-        <h1 className="page-title">Owner's Assets & Investments</h1>
-      </div>
-
-      <Tabs
-        activeTab={activeTab}
-        onTabChange={setActiveTab}
-        tabs={[
-          { key: 'properties', label: 'Properties' },
-          { key: 'rentals', label: 'Rentals & Leases' },
-          { key: 'livestock', label: 'Livestock' }
-        ]}
-      />
-
-      {loading && !dashboard ? (
-        <PageSkeleton />
-      ) : (
-        <div style={{ marginTop: 24 }}>
-          {/* PROPERTIES TAB */}
+    <div className="module-page">
+      {/* Module Header */}
+      <section className="module-header">
+        <div className="module-header__icon" style={{ background: '#e9f6e8', color: '#066006' }}>
+          <Landmark size={24} />
+        </div>
+        <div className="module-header__info">
+          <p>Owner Investments</p>
+          <h2>Owner's Assets & Investments</h2>
+        </div>
+        <div className="module-header__actions">
           {activeTab === 'properties' && (
-            <>
-              <div className="metric-grid" style={{ marginBottom: 24 }}>
-                <MetricCard label="Total Properties" value={String(properties.length)} icon={<Building2 size={24} />} />
-                <MetricCard label="Total Value" value={fmt(dashboard?.total_property_value)} icon={<Landmark size={24} />} />
-                <MetricCard label="Rented" value={String(properties.filter(p => p.status === 'RENTED').length)} icon={<Home size={24} />} />
-                <MetricCard label="Vacant" value={String(properties.filter(p => p.status === 'VACANT').length)} icon={<AlertCircle size={24} />} />
-              </div>
-
-              <div style={{ display: 'flex', gap: 16, marginBottom: 16, flexWrap: 'wrap' }}>
-                <div style={{ width: 300 }}>
-                  <SearchInput value={search} onChange={setSearch} placeholder="Search properties..." />
-                </div>
-                <button className="btn btn--primary" onClick={() => setShowPropertyModal(true)} style={{ marginLeft: 'auto' }}>
-                  <Plus size={16} style={{ marginRight: 8 }} /> Register Property
-                </button>
-              </div>
-
-              <DataTable
-                data={filteredProperties}
-                keyExtractor={(p) => p.id}
-                columns={propertyCols}
-                emptyMessage="No properties registered yet"
-              />
-            </>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => setShowPropertyModal(true)}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}
+            >
+              <Plus size={16} /> Register Property
+            </button>
           )}
-
-          {/* RENTALS TAB */}
           {activeTab === 'rentals' && (
-            <>
-              <div className="metric-grid" style={{ marginBottom: 24 }}>
-                <MetricCard label="Active Leases" value={String(leases.filter(l => l.status === 'ACTIVE').length)} icon={<Users size={24} />} />
-                <MetricCard label="Expected Rent (Mo)" value={fmt(dashboard?.monthly_rental_expected)} icon={<Calendar size={24} />} />
-                <MetricCard label="Collected This Month" value={fmt(dashboard?.monthly_rental_collected)} icon={<Coins size={24} />} />
-                <MetricCard label="Overdue Amount" value={fmt((dashboard?.monthly_rental_expected || 0) - (dashboard?.monthly_rental_collected || 0))} icon={<AlertCircle size={24} />} />
-              </div>
-
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 32, marginBottom: 16 }}>
-                <h2 style={{ fontSize: 18, margin: 0 }}>Lease Agreements</h2>
-                <button className="btn btn--primary" onClick={() => setShowLeaseModal(true)}>
-                  <Plus size={16} style={{ marginRight: 8 }} /> Create Lease
-                </button>
-              </div>
-              <DataTable data={leases} keyExtractor={(l) => l.id} columns={leaseCols} emptyMessage="No lease agreements yet" />
-
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 32, marginBottom: 16 }}>
-                <h2 style={{ fontSize: 18, margin: 0 }}>Recent Payments</h2>
-                <button className="btn btn--primary" onClick={() => setShowRentModal(true)}>
-                  <CreditCard size={16} style={{ marginRight: 8 }} /> Record Payment
-                </button>
-              </div>
-              <DataTable data={rentalPayments} keyExtractor={(p) => p.id} columns={paymentCols} emptyMessage="No payments recorded yet" />
-
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 32, marginBottom: 16 }}>
-                <h2 style={{ fontSize: 18, margin: 0 }}>Tenants Directory</h2>
-                <button className="btn btn--primary" onClick={() => setShowTenantModal(true)}>
-                  <Plus size={16} style={{ marginRight: 8 }} /> Register Tenant
-                </button>
-              </div>
-              <DataTable data={tenants} keyExtractor={(t) => t.id} columns={tenantCols} emptyMessage="No tenants registered yet" />
-            </>
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => setShowTenantModal(true)}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+              >
+                <Users size={15} /> Add Tenant
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() => setShowLeaseModal(true)}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+              >
+                <Plus size={15} /> Create Lease
+              </button>
+            </div>
           )}
-
-          {/* LIVESTOCK TAB */}
           {activeTab === 'livestock' && (
-            <>
-              <div className="metric-grid" style={{ marginBottom: 24 }}>
-                <MetricCard label="Total Head Count" value={String(livestockList.reduce((s, l) => s + (l.quantity || 0), 0))} icon={<Beef size={24} />} />
-                <MetricCard label="Total Value" value={fmt(dashboard?.total_livestock_value)} icon={<Landmark size={24} />} />
-                <MetricCard label="Active Animals" value={String(livestockList.filter(l => l.status === 'ACTIVE').length)} icon={<Activity size={24} />} />
-                <MetricCard label="Revenue This Year" value={fmt(dashboard?.livestock_revenue_ytd)} icon={<TrendingUp size={24} />} />
-              </div>
-
-              <div style={{ display: 'flex', gap: 16, marginBottom: 16, flexWrap: 'wrap' }}>
-                <div style={{ width: 300 }}>
-                  <SearchInput value={search} onChange={setSearch} placeholder="Search by tag, name, type..." />
-                </div>
-                <button className="btn btn--primary" onClick={() => setShowLivestockModal(true)} style={{ marginLeft: 'auto' }}>
-                  <Plus size={16} style={{ marginRight: 8 }} /> Register Livestock
-                </button>
-              </div>
-
-              <DataTable
-                data={filteredLivestock}
-                keyExtractor={(l) => l.id}
-                columns={livestockCols}
-                emptyMessage="No livestock registered yet"
-              />
-            </>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => setShowLivestockModal(true)}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}
+            >
+              <Plus size={16} /> Register Livestock
+            </button>
           )}
         </div>
+      </section>
+
+      {/* Tabs */}
+      <section style={{ marginBottom: 14 }}>
+        <Tabs
+          activeTab={activeTab}
+          onTabChange={(t) => { setActiveTab(t); setSearch(''); }}
+          tabs={[
+            { key: 'properties', label: 'Properties', count: properties.length },
+            { key: 'rentals', label: 'Rentals & Leases', count: leases.length },
+            { key: 'livestock', label: 'Livestock', count: livestockList.length },
+          ]}
+        />
+      </section>
+
+      {/* Search / Filter Bar */}
+      <section className="panel" style={{ padding: '14px 18px', marginBottom: 16 }}>
+        <div style={{ display: 'flex', gap: 12, alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap' }}>
+          <div style={{ position: 'relative', flex: '1 1 320px', maxWidth: '400px' }}>
+            <SearchInput
+              value={search}
+              onChange={setSearch}
+              placeholder={
+                activeTab === 'properties'
+                  ? 'Search properties by name, city, or address...'
+                  : activeTab === 'livestock'
+                  ? 'Search livestock by tag, name, or animal type...'
+                  : 'Search rentals, leases, or tenants...'
+              }
+            />
+          </div>
+        </div>
+      </section>
+
+      {/* PROPERTIES TAB */}
+      {activeTab === 'properties' && (
+        <>
+          <section className="metric-grid" style={{ marginBottom: 20 }}>
+            <MetricCard
+              label="Total Properties"
+              value={String(properties.length)}
+              trend="Registered real estate"
+              icon={<Building2 size={20} />}
+            />
+            <MetricCard
+              label="Total Valuation"
+              value={fmt(dashboard?.total_property_value ?? properties.reduce((s, p) => s + Number(p.current_value || p.purchase_price || 0), 0))}
+              trend="Estimated portfolio value"
+              icon={<Landmark size={20} />}
+            />
+            <MetricCard
+              label="Rented Properties"
+              value={`${properties.filter(p => p.status === 'RENTED').length} Rented`}
+              trend="Active tenancy leases"
+              icon={<Home size={20} />}
+            />
+            <MetricCard
+              label="Vacant Properties"
+              value={`${properties.filter(p => p.status === 'VACANT').length} Vacant`}
+              trend="Available for lease"
+              icon={<AlertCircle size={20} />}
+            />
+          </section>
+
+          <DataTable
+            data={filteredProperties}
+            keyExtractor={(p) => p.id}
+            columns={propertyCols}
+            emptyMessage="No properties registered yet"
+          />
+        </>
+      )}
+
+      {/* RENTALS TAB */}
+      {activeTab === 'rentals' && (
+        <>
+          <section className="metric-grid" style={{ marginBottom: 20 }}>
+            <MetricCard
+              label="Active Leases"
+              value={String(leases.filter(l => l.status === 'ACTIVE').length)}
+              trend="Current tenant agreements"
+              icon={<Users size={20} />}
+            />
+            <MetricCard
+              label="Expected Rent (Mo)"
+              value={fmt(dashboard?.monthly_rental_expected ?? leases.filter(l => l.status === 'ACTIVE').reduce((s, l) => s + Number(l.monthly_rent || 0), 0))}
+              trend="Monthly scheduled revenue"
+              icon={<Calendar size={20} />}
+            />
+            <MetricCard
+              label="Collected This Month"
+              value={fmt(dashboard?.monthly_rental_collected ?? 0)}
+              trend="Payments recorded"
+              icon={<Coins size={20} />}
+            />
+            <MetricCard
+              label="Overdue / Pending"
+              value={fmt(Math.max(0, Number(dashboard?.monthly_rental_expected || 0) - Number(dashboard?.monthly_rental_collected || 0)))}
+              trend="Uncollected balance"
+              icon={<AlertCircle size={20} />}
+            />
+          </section>
+
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 24, marginBottom: 12 }}>
+            <h3 style={{ fontSize: 16, fontWeight: 700, margin: 0, color: '#0f172a' }}>Lease Agreements</h3>
+            <button className="btn btn-primary btn-sm" onClick={() => setShowLeaseModal(true)}>
+              <Plus size={14} style={{ marginRight: 6 }} /> Create Lease
+            </button>
+          </div>
+          <DataTable data={leases} keyExtractor={(l) => l.id} columns={leaseCols} emptyMessage="No lease agreements yet" />
+
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 32, marginBottom: 12 }}>
+            <h3 style={{ fontSize: 16, fontWeight: 700, margin: 0, color: '#0f172a' }}>Recent Payments</h3>
+            <button className="btn btn-primary btn-sm" onClick={() => setShowRentModal(true)}>
+              <CreditCard size={14} style={{ marginRight: 6 }} /> Record Payment
+            </button>
+          </div>
+          <DataTable data={rentalPayments} keyExtractor={(p) => p.id} columns={paymentCols} emptyMessage="No payments recorded yet" />
+
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 32, marginBottom: 12 }}>
+            <h3 style={{ fontSize: 16, fontWeight: 700, margin: 0, color: '#0f172a' }}>Tenants Directory</h3>
+            <button className="btn btn-primary btn-sm" onClick={() => setShowTenantModal(true)}>
+              <Plus size={14} style={{ marginRight: 6 }} /> Register Tenant
+            </button>
+          </div>
+          <DataTable data={tenants} keyExtractor={(t) => t.id} columns={tenantCols} emptyMessage="No tenants registered yet" />
+        </>
+      )}
+
+      {/* LIVESTOCK TAB */}
+      {activeTab === 'livestock' && (
+        <>
+          <section className="metric-grid" style={{ marginBottom: 20 }}>
+            <MetricCard
+              label="Total Head Count"
+              value={String(livestockList.reduce((s, l) => s + (Number(l.quantity) || 1), 0))}
+              trend="Current herd inventory"
+              icon={<Beef size={20} />}
+            />
+            <MetricCard
+              label="Livestock Valuation"
+              value={fmt(dashboard?.total_livestock_value ?? livestockList.reduce((s, l) => s + Number(l.total_value || 0), 0))}
+              trend="Estimated portfolio value"
+              icon={<Landmark size={20} />}
+            />
+            <MetricCard
+              label="Active Animals"
+              value={`${livestockList.filter(l => l.status === 'ACTIVE').length} Active`}
+              trend="Healthy animals on record"
+              icon={<Activity size={20} />}
+            />
+            <MetricCard
+              label="Revenue This Year"
+              value={fmt(dashboard?.livestock_revenue_ytd ?? 0)}
+              trend="Livestock sales YTD"
+              icon={<TrendingUp size={20} />}
+            />
+          </section>
+
+          <DataTable
+            data={filteredLivestock}
+            keyExtractor={(l) => l.id}
+            columns={livestockCols}
+            emptyMessage="No livestock registered yet"
+          />
+        </>
       )}
 
       {/* ── MODALS ────────────────────────────────────────── */}
