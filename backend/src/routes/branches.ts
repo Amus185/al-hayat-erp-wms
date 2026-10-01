@@ -26,7 +26,17 @@ branches.get('/', async (c) => {
       SELECT b.*,
         COALESCE((SELECT SUM(s.quantity_on_hand) FROM inventory_stock s WHERE s.branch_id = b.id AND s.owner_type = 'BRANCH'), 0) as total_units,
         COALESCE((SELECT COUNT(*) FROM sales_orders so WHERE so.branch_id = b.id), 0) as order_count,
-        COALESCE((SELECT SUM(so.total_amount) FROM sales_orders so WHERE so.branch_id = b.id AND so.status NOT IN ('CANCELLED', 'VOID')), 0) as total_revenue
+        COALESCE((
+          SELECT SUM(
+            CASE 
+              WHEN i.id IS NOT NULL THEN (COALESCE(i.total_amount, 0) - COALESCE(i.discount_amount, 0)) + COALESCE(i.installation_fee, so.installation_fee, 0)
+              ELSE (SELECT COALESCE(SUM(sol.line_total), SUM(sol.quantity * sol.unit_price - sol.discount_amount), 0) FROM sales_order_lines sol WHERE sol.sales_order_id = so.id) + COALESCE(so.installation_fee, 0)
+            END
+          )
+          FROM sales_orders so
+          LEFT JOIN invoices i ON i.sales_order_id = so.id
+          WHERE so.branch_id = b.id AND so.status IN ('CONFIRMED', 'INVOICED', 'PAID')
+        ), 0) as total_revenue
       FROM branches b
       ORDER BY b.name ASC
     `).all();
@@ -38,7 +48,17 @@ branches.get('/', async (c) => {
     SELECT b.*,
       COALESCE((SELECT SUM(s.quantity_on_hand) FROM inventory_stock s WHERE s.branch_id = b.id AND s.owner_type = 'BRANCH'), 0) as total_units,
       COALESCE((SELECT COUNT(*) FROM sales_orders so WHERE so.branch_id = b.id), 0) as order_count,
-      COALESCE((SELECT SUM(so.total_amount) FROM sales_orders so WHERE so.branch_id = b.id AND so.status NOT IN ('CANCELLED', 'VOID')), 0) as total_revenue
+      COALESCE((
+        SELECT SUM(
+          CASE 
+            WHEN i.id IS NOT NULL THEN (COALESCE(i.total_amount, 0) - COALESCE(i.discount_amount, 0)) + COALESCE(i.installation_fee, so.installation_fee, 0)
+            ELSE (SELECT COALESCE(SUM(sol.line_total), SUM(sol.quantity * sol.unit_price - sol.discount_amount), 0) FROM sales_order_lines sol WHERE sol.sales_order_id = so.id) + COALESCE(so.installation_fee, 0)
+          END
+        )
+        FROM sales_orders so
+        LEFT JOIN invoices i ON i.sales_order_id = so.id
+        WHERE so.branch_id = b.id AND so.status IN ('CONFIRMED', 'INVOICED', 'PAID')
+      ), 0) as total_revenue
     FROM branches b
     WHERE b.id = ?
   `).bind(payload.branch_id).first();
@@ -138,15 +158,30 @@ branches.get('/:id/performance', async (c) => {
   const result = await c.env.DB.prepare(`
     SELECT 
       b.id, b.code, b.name,
-      COUNT(DISTINCT so.id) as order_count,
-      COALESCE(SUM(i.total_amount), 0) as invoiced_amount,
-      COALESCE(SUM(sol.quantity), 0) as units_sold
+      COALESCE((
+        SELECT COUNT(DISTINCT so.id)
+        FROM sales_orders so
+        WHERE so.branch_id = b.id AND so.status IN ('CONFIRMED', 'INVOICED', 'PAID')
+      ), 0) as order_count,
+      COALESCE((
+        SELECT SUM(
+          CASE 
+            WHEN i.id IS NOT NULL THEN (COALESCE(i.total_amount, 0) - COALESCE(i.discount_amount, 0)) + COALESCE(i.installation_fee, so.installation_fee, 0)
+            ELSE (SELECT COALESCE(SUM(sol.line_total), SUM(sol.quantity * sol.unit_price - sol.discount_amount), 0) FROM sales_order_lines sol WHERE sol.sales_order_id = so.id) + COALESCE(so.installation_fee, 0)
+          END
+        )
+        FROM sales_orders so
+        LEFT JOIN invoices i ON i.sales_order_id = so.id
+        WHERE so.branch_id = b.id AND so.status IN ('CONFIRMED', 'INVOICED', 'PAID')
+      ), 0) as invoiced_amount,
+      COALESCE((
+        SELECT SUM(sol.quantity)
+        FROM sales_order_lines sol
+        JOIN sales_orders so ON so.id = sol.sales_order_id
+        WHERE so.branch_id = b.id AND so.status IN ('CONFIRMED', 'INVOICED', 'PAID')
+      ), 0) as units_sold
     FROM branches b
-    LEFT JOIN sales_orders so ON so.branch_id = b.id AND so.status IN ('CONFIRMED', 'PAID')
-    LEFT JOIN invoices i ON i.sales_order_id = so.id AND i.status = 'PAID'
-    LEFT JOIN sales_order_lines sol ON sol.sales_order_id = so.id
     WHERE b.id = ?
-    GROUP BY b.id, b.code, b.name
   `).bind(id).first();
   if (!result) return c.json({ message: 'Branch not found' }, 404);
   return c.json(result);
