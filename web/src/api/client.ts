@@ -24,7 +24,9 @@ export class ApiError extends Error {
     public statusText: string,
     public body: Record<string, unknown> | null
   ) {
-    super(body?.message as string ?? `API error ${status}: ${statusText}`);
+    const detailsList = Array.isArray(body?.details) ? (body!.details as string[]) : undefined;
+    const detailSuffix = detailsList && detailsList.length > 0 ? ` Details: ${detailsList.join('; ')}` : '';
+    super((body?.message as string ?? `API error ${status}: ${statusText}`) + detailSuffix);
     this.name = 'ApiError';
   }
 }

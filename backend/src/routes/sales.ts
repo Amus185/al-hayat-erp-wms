@@ -458,8 +458,41 @@ sales.post('/orders/:id/invoice', requirePermissions(['manage_sales']), async (c
     }
 
     if (insufficientLines.length > 0) {
+      // Find where stock is available in other locations to guide the user
+      const failedPids = lines
+        .filter((l: any) => (stockMap.get(l.product_id as string)?.qtyOnHand || 0) < Number(l.quantity))
+        .map((l: any) => l.product_id as string);
+
+      const altHolders = failedPids.map(() => '?').join(', ');
+      const { results: altStocks } = await c.env.DB.prepare(`
+        SELECT s.product_id, s.quantity_on_hand, COALESCE(w.name, b.name, 'Other Location') AS location_name
+        FROM inventory_stock s
+        LEFT JOIN warehouses w ON w.id = s.warehouse_id
+        LEFT JOIN branches b ON b.id = s.branch_id
+        WHERE s.product_id IN (${altHolders}) AND s.quantity_on_hand > 0 AND NOT (s.owner_type = 'BRANCH' AND s.branch_id = ?)
+      `).bind(...failedPids, branchId).all();
+
+      const altLocationMap = new Map<string, string[]>();
+      for (const alt of (altStocks || []) as any[]) {
+        const list = altLocationMap.get(alt.product_id) || [];
+        list.push(`${alt.quantity_on_hand} at ${alt.location_name}`);
+        altLocationMap.set(alt.product_id, list);
+      }
+
+      const detailedLines = lines
+        .filter((l: any) => (stockMap.get(l.product_id as string)?.qtyOnHand || 0) < Number(l.quantity))
+        .map((l: any) => {
+          const pid = l.product_id as string;
+          const name = productNameMap.get(pid) || pid;
+          const available = stockMap.get(pid)?.qtyOnHand || 0;
+          const requested = Number(l.quantity);
+          const alts = altLocationMap.get(pid);
+          const altHint = alts && alts.length > 0 ? ` (Found in other locations: ${alts.join(', ')})` : ' (Out of stock company-wide)';
+          return `${name}: need ${requested}, available ${available} at this branch${altHint}`;
+        });
+
       await c.env.DB.prepare("UPDATE sales_orders SET status = 'CONFIRMED' WHERE id = ?").bind(orderId).run();
-      return c.json({ message: 'Insufficient stock for this sale.', details: insufficientLines }, 400);
+      return c.json({ message: 'Insufficient stock for this sale.', details: detailedLines }, 400);
     }
 
     // Calculate total and discount from order lines
@@ -714,8 +747,41 @@ sales.post('/orders/:id/complete', requirePermissions(['manage_sales']), async (
     }
 
     if (insufficientLines.length > 0) {
+      const failedPids = lines
+        .filter((l: any) => (stockLookup.get(l.product_id as string)?.qtyOnHand || 0) < Number(l.quantity))
+        .map((l: any) => l.product_id as string);
+
+      const altHolders = failedPids.map(() => '?').join(', ');
+      const { results: altStocks } = await c.env.DB.prepare(`
+        SELECT s.product_id, s.quantity_on_hand, COALESCE(w.name, b.name, 'Other Location') AS location_name
+        FROM inventory_stock s
+        LEFT JOIN warehouses w ON w.id = s.warehouse_id
+        LEFT JOIN branches b ON b.id = s.branch_id
+        WHERE s.product_id IN (${altHolders}) AND s.quantity_on_hand > 0 AND NOT (s.owner_type = 'BRANCH' AND s.branch_id = ?)
+      `).bind(...failedPids, branchId).all();
+
+      const altLocationMap = new Map<string, string[]>();
+      for (const alt of (altStocks || []) as any[]) {
+        const list = altLocationMap.get(alt.product_id) || [];
+        list.push(`${alt.quantity_on_hand} at ${alt.location_name}`);
+        altLocationMap.set(alt.product_id, list);
+      }
+
+      const detailedLines = lines
+        .filter((l: any) => (stockLookup.get(l.product_id as string)?.qtyOnHand || 0) < Number(l.quantity))
+        .map((l: any) => {
+          const pid = l.product_id as string;
+          const info = stockLookup.get(pid);
+          const name = info?.name || pid;
+          const available = info?.qtyOnHand || 0;
+          const requested = Number(l.quantity);
+          const alts = altLocationMap.get(pid);
+          const altHint = alts && alts.length > 0 ? ` (Found in other locations: ${alts.join(', ')})` : ' (Out of stock company-wide)';
+          return `${name}: need ${requested}, available ${available} at this branch${altHint}`;
+        });
+
       await c.env.DB.prepare("UPDATE sales_orders SET status = ? WHERE id = ?").bind(validSource, orderId).run();
-      return c.json({ message: 'Insufficient stock for this sale.', details: insufficientLines }, 400);
+      return c.json({ message: 'Insufficient stock for this sale.', details: detailedLines }, 400);
     }
 
     // Calculate total and discount

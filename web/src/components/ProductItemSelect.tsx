@@ -10,6 +10,8 @@ export interface SelectableProduct {
   priceLabel?: string;
   category?: string | null;
   stock?: number | null;
+  stockHint?: string | null;
+  stockWarning?: boolean;
 }
 
 interface ProductItemSelectProps {
@@ -349,6 +351,32 @@ export function ProductItemSelect({
                             </span>
                           )}
                         </div>
+
+                        {/* Stock & Location Guidance Hint */}
+                        {(p.stock !== undefined || p.stockHint) && (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '4px', flexWrap: 'wrap' }}>
+                            {p.stock !== undefined && (
+                              <span
+                                style={{
+                                  fontSize: '11px',
+                                  fontWeight: 600,
+                                  padding: '1px 6px',
+                                  borderRadius: '4px',
+                                  background: (p.stock ?? 0) > 0 ? '#ecfdf5' : '#fef2f2',
+                                  color: (p.stock ?? 0) > 0 ? '#065f46' : '#991b1b',
+                                  border: (p.stock ?? 0) > 0 ? '1px solid #a7f3d0' : '1px solid #fecaca',
+                                }}
+                              >
+                                {(p.stock ?? 0) > 0 ? `✓ ${p.stock} at branch` : '⚠ 0 at branch'}
+                              </span>
+                            )}
+                            {p.stockHint && (
+                              <span style={{ fontSize: '11px', color: (p.stock ?? 0) === 0 ? '#0369a1' : '#64748b', fontWeight: (p.stock ?? 0) === 0 ? 500 : 400 }}>
+                                {p.stockHint}
+                              </span>
+                            )}
+                          </div>
+                        )}
                       </div>
                     </div>
 

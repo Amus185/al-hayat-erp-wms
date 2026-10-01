@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ShoppingCart, ArrowLeft, Plus, Trash2, Loader2, Wrench, Info, ShieldCheck } from 'lucide-react';
+import { ShoppingCart, ArrowLeft, Plus, Trash2, Loader2, Wrench, Info, ShieldCheck, AlertTriangle } from 'lucide-react';
 import { apiGet, apiPost } from '../api/client';
 import { FormField, InputField, TextareaField } from '../components/FormField';
 import { SearchInput } from '../components/SearchInput';
@@ -27,6 +27,17 @@ interface ProductLine {
   sellingPrice: number;
 }
 
+interface StockRecord {
+  product_id: string;
+  owner_type: 'BRANCH' | 'WAREHOUSE';
+  warehouse_id?: string | null;
+  branch_id?: string | null;
+  warehouse?: string | null;
+  branch?: string | null;
+  quantity_on_hand: number;
+  quantity_reserved: number;
+}
+
 export function CreateSalesOrderPage() {
   const navigate = useNavigate();
   const { addToast } = useToast();
@@ -34,6 +45,7 @@ export function CreateSalesOrderPage() {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [branches, setBranches] = useState<Branch[]>([]);
   const [products, setProducts] = useState<ProductLine[]>([]);
+  const [inventoryStocks, setInventoryStocks] = useState<StockRecord[]>([]);
 
   // Form states
   const [customerId, setCustomerId] = useState('');
@@ -93,12 +105,16 @@ export function CreateSalesOrderPage() {
   useEffect(() => {
     async function loadData() {
       try {
-        const custs = await apiGet<Customer[]>('/sales/customers');
-        const brs = await apiGet<Branch[]>('/branches');
-        const productsList = await apiGet<any[]>('/products?status=active');
+        const [custs, brs, productsList, stockList] = await Promise.all([
+          apiGet<Customer[]>('/sales/customers'),
+          apiGet<Branch[]>('/branches'),
+          apiGet<any[]>('/products?status=active'),
+          apiGet<StockRecord[]>('/inventory/stock').catch(() => []),
+        ]);
         
         setCustomers(custs || []);
         setBranches(brs || []);
+        setInventoryStocks(stockList || []);
 
         const flatList: ProductLine[] = [];
         (productsList || []).filter((p) => p.is_active !== 0).forEach((p) => {
@@ -117,6 +133,53 @@ export function CreateSalesOrderPage() {
     }
     loadData();
   }, []);
+
+  const getProductStockInfo = (pid: string, targetBranchId: string) => {
+    const branchRows = inventoryStocks.filter(
+      (s) => s.product_id === pid && s.owner_type === 'BRANCH' && s.branch_id === targetBranchId
+    );
+    const branchQty = branchRows.reduce(
+      (acc, curr) => acc + (Number(curr.quantity_on_hand) || 0) - (Number(curr.quantity_reserved) || 0),
+      0
+    );
+
+    const otherRows = inventoryStocks.filter(
+      (s) => s.product_id === pid && !(s.owner_type === 'BRANCH' && s.branch_id === targetBranchId) && (Number(s.quantity_on_hand) > 0)
+    );
+    const otherLocations = otherRows.map((s) => ({
+      name: s.warehouse || s.branch || (s.owner_type === 'WAREHOUSE' ? 'Warehouse' : 'Branch'),
+      type: s.owner_type,
+      qty: (Number(s.quantity_on_hand) || 0) - (Number(s.quantity_reserved) || 0),
+    }));
+
+    const totalOtherQty = otherLocations.reduce((acc, curr) => acc + curr.qty, 0);
+
+    return {
+      branchQty: Math.max(0, branchQty),
+      otherLocations,
+      totalOtherQty: Math.max(0, totalOtherQty),
+    };
+  };
+
+  const selectedBranchObj = branches.find((b) => b.id === branchId);
+  const selectedBranchName = selectedBranchObj?.name || 'Selected Branch';
+
+  const insufficientItems = branchId
+    ? lines
+        .map((l) => {
+          const sInfo = getProductStockInfo(l.productId, branchId);
+          return {
+            ...l,
+            branchQty: sInfo.branchQty,
+            otherLocations: sInfo.otherLocations,
+            totalOtherQty: sInfo.totalOtherQty,
+            isInsufficient: sInfo.branchQty < l.quantity,
+          };
+        })
+        .filter((item) => item.isInsufficient)
+    : [];
+
+  const hasInsufficientStock = insufficientItems.length > 0;
 
   // Search filter
   useEffect(() => {
@@ -319,14 +382,36 @@ export function CreateSalesOrderPage() {
           <h3 style={{ margin: '0 0 14px', color: '#066006' }}>Ordered Items</h3>
 
           <ProductItemSelect
-            products={products.map((p) => ({
-              id: p.id,
-              name: p.name,
-              sku: p.sku,
-              barcode: p.barcode,
-              price: p.sellingPrice,
-              priceLabel: 'Price',
-            }))}
+            products={products.map((p) => {
+              const stockInfo = branchId ? getProductStockInfo(p.id, branchId) : null;
+              let hint: string | null = null;
+              if (stockInfo) {
+                if (stockInfo.branchQty > 0) {
+                  if (stockInfo.totalOtherQty > 0) {
+                    hint = `(+${stockInfo.totalOtherQty} in other locations)`;
+                  }
+                } else {
+                  if (stockInfo.otherLocations.length > 0) {
+                    const locList = stockInfo.otherLocations.map((l) => `${l.qty} at ${l.name}`).join(', ');
+                    hint = `📍 In Stock: ${locList}`;
+                  } else {
+                    hint = 'Out of stock in all locations';
+                  }
+                }
+              }
+
+              return {
+                id: p.id,
+                name: p.name,
+                sku: p.sku,
+                barcode: p.barcode,
+                price: p.sellingPrice,
+                priceLabel: 'Price',
+                stock: stockInfo ? stockInfo.branchQty : undefined,
+                stockHint: hint,
+                stockWarning: stockInfo ? stockInfo.branchQty === 0 : false,
+              };
+            })}
             onSelect={addLine}
             placeholder="Search / click to select product to add to order..."
             existingLines={lines.map((l) => ({ productId: l.productId, quantity: l.quantity }))}
@@ -353,10 +438,57 @@ export function CreateSalesOrderPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {lines.map((l, index) => (
-                      <tr key={l.productId}>
-                        <td>{l.sku}</td>
-                        <td>{l.name}</td>
+                    {lines.map((l, index) => {
+                      const stockInfo = branchId ? getProductStockInfo(l.productId, branchId) : null;
+                      const hasEnough = stockInfo ? stockInfo.branchQty >= l.quantity : true;
+
+                      return (
+                        <tr key={l.productId}>
+                          <td>{l.sku}</td>
+                          <td>
+                            <div style={{ fontWeight: 600, color: '#0f172a' }}>{l.name}</div>
+                            {stockInfo && (
+                              <div style={{ marginTop: '4px', fontSize: '11px', display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                  <span
+                                    style={{
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: '3px',
+                                      padding: '1px 6px',
+                                      borderRadius: '4px',
+                                      fontWeight: 600,
+                                      background: hasEnough ? '#ecfdf5' : '#fef2f2',
+                                      color: hasEnough ? '#065f46' : '#991b1b',
+                                      border: hasEnough ? '1px solid #a7f3d0' : '1px solid #fecaca',
+                                    }}
+                                  >
+                                    {hasEnough
+                                      ? `✓ ${stockInfo.branchQty} in stock at ${selectedBranchName}`
+                                      : `⚠ Only ${stockInfo.branchQty} available at ${selectedBranchName} (need ${l.quantity})`}
+                                  </span>
+                                </div>
+                                {!hasEnough && stockInfo.otherLocations.length > 0 && (
+                                  <div
+                                    style={{
+                                      color: '#0369a1',
+                                      background: '#f0f9ff',
+                                      border: '1px solid #bae6fd',
+                                      padding: '2px 8px',
+                                      borderRadius: '4px',
+                                      fontWeight: 500,
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: '4px',
+                                      width: 'fit-content',
+                                    }}
+                                  >
+                                    <span>📍 <strong>Stored elsewhere:</strong> {stockInfo.otherLocations.map((loc) => `${loc.name} (${loc.qty} available)`).join(', ')}</span>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </td>
                         <td>
                           <input
                             type="number"
@@ -402,7 +534,8 @@ export function CreateSalesOrderPage() {
                           </button>
                         </td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
 
@@ -513,21 +646,94 @@ export function CreateSalesOrderPage() {
           )}
         </div>
 
+        {/* Branch Stock Guidance Alert */}
+        {hasInsufficientStock && (
+          <div
+            style={{
+              padding: '14px 18px',
+              borderRadius: '8px',
+              background: '#fffbeb',
+              border: '1.5px solid #fcd34d',
+              color: '#92400e',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '8px',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 700, fontSize: '14px', color: '#b45309' }}>
+              <AlertTriangle size={18} />
+              Stock Notice: Immediate Dispatch Unavailable at {selectedBranchName}
+            </div>
+            <div style={{ fontSize: '13px', lineHeight: '1.5' }}>
+              The following item(s) cannot be fulfilled immediately because physical stock is not present at <strong>{selectedBranchName}</strong>:
+              <ul style={{ margin: '6px 0 0 18px', padding: 0 }}>
+                {insufficientItems.map((item) => (
+                  <li key={item.productId} style={{ marginBottom: '4px' }}>
+                    <strong>{item.name}</strong>: Need {item.quantity}, but only {item.branchQty} available at {selectedBranchName}.
+                    {item.otherLocations.length > 0 ? (
+                      <span style={{ color: '#0369a1', fontWeight: 600, marginLeft: '6px' }}>
+                        (📍 Found: {item.otherLocations.map((l) => `${l.qty} at ${l.name}`).join(', ')})
+                      </span>
+                    ) : (
+                      <span style={{ color: '#b91c1c', fontWeight: 600, marginLeft: '6px' }}>
+                        (Out of stock company-wide)
+                      </span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </div>
+            <div
+              style={{
+                fontSize: '12.5px',
+                color: '#78350f',
+                background: '#fef3c7',
+                padding: '8px 12px',
+                borderRadius: '6px',
+                marginTop: '4px',
+              }}
+            >
+              💡 <strong>Next Steps:</strong>
+              <div style={{ marginTop: '4px' }}>
+                • Click <strong>"Save as Draft"</strong> below to record this sales order now without deducting stock.
+                <br />
+                • Or create an <strong>Internal Stock Transfer</strong> to move the products to <strong>{selectedBranchName}</strong> before completing.
+              </div>
+            </div>
+          </div>
+        )}
+
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
           <button type="button" className="btn btn-secondary" onClick={() => navigate('/sales')} disabled={!!submittingAction}>
             Cancel
           </button>
-          <button type="submit" className="btn btn-secondary" disabled={lines.length === 0 || !!submittingAction}
-            onClick={() => (document.getElementById('completeNowFlag') as HTMLInputElement).value = '0'}>
+          <button
+            type="submit"
+            className="btn btn-secondary"
+            disabled={lines.length === 0 || !!submittingAction}
+            onClick={() => (document.getElementById('completeNowFlag') as HTMLInputElement).value = '0'}
+            style={hasInsufficientStock ? { border: '1.5px solid #066006', color: '#066006', fontWeight: 700, background: '#f0fdf4' } : undefined}
+          >
             {submittingAction === 'draft' ? (
               <><Loader2 size={14} className="spin-icon" /> Saving Draft…</>
             ) : (
-              'Save as Draft'
+              hasInsufficientStock ? '✓ Save as Draft (Recommended)' : 'Save as Draft'
             )}
           </button>
-          <button type="submit" className="btn btn-primary" disabled={lines.length === 0 || !!submittingAction}
+          <button
+            type="submit"
+            className="btn btn-primary"
+            disabled={lines.length === 0 || !!submittingAction || hasInsufficientStock}
+            title={hasInsufficientStock ? `Cannot complete immediately: ${insufficientItems.map(i => i.name).join(', ')} has insufficient stock at ${selectedBranchName}. Save as Draft or transfer stock first.` : ''}
             onClick={() => (document.getElementById('completeNowFlag') as HTMLInputElement).value = '1'}
-            style={{ background: 'linear-gradient(135deg, #0b8f08, #066006)', display: 'flex', alignItems: 'center' }}>
+            style={{
+              background: hasInsufficientStock ? '#9ca3af' : 'linear-gradient(135deg, #0b8f08, #066006)',
+              display: 'flex',
+              alignItems: 'center',
+              cursor: hasInsufficientStock ? 'not-allowed' : 'pointer',
+              opacity: hasInsufficientStock ? 0.6 : 1,
+            }}
+          >
             {submittingAction === 'complete' ? (
               <><Loader2 size={14} className="spin-icon" /> Processing Sale…</>
             ) : (
