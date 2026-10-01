@@ -47,6 +47,21 @@ export function CreateSalesOrderPage() {
   const [products, setProducts] = useState<ProductLine[]>([]);
   const [inventoryStocks, setInventoryStocks] = useState<StockRecord[]>([]);
 
+  // SweetAlert modal for stock limitation
+  const [stockAlert, setStockAlert] = useState<{
+    isOpen: boolean;
+    productName: string;
+    maxAvailable: number;
+    branchName: string;
+    otherLocations: { name: string; type: string; qty: number }[];
+  }>({
+    isOpen: false,
+    productName: '',
+    maxAvailable: 0,
+    branchName: '',
+    otherLocations: [],
+  });
+
   // Form states
   const [customerId, setCustomerId] = useState('');
   const [branchId, setBranchId] = useState('');
@@ -198,6 +213,32 @@ export function CreateSalesOrderPage() {
   }, [searchQuery, products]);
 
   const addLine = (v: SelectableProduct | ProductLine) => {
+    if (branchId) {
+      const sInfo = getProductStockInfo(v.id, branchId);
+      const existing = lines.find((l) => l.productId === v.id);
+      const currentQty = existing ? existing.quantity : 0;
+      if (sInfo.branchQty <= 0) {
+        setStockAlert({
+          isOpen: true,
+          productName: v.name,
+          maxAvailable: 0,
+          branchName: selectedBranchName,
+          otherLocations: sInfo.otherLocations,
+        });
+        return;
+      }
+      if (currentQty + 1 > sInfo.branchQty) {
+        setStockAlert({
+          isOpen: true,
+          productName: v.name,
+          maxAvailable: sInfo.branchQty,
+          branchName: selectedBranchName,
+          otherLocations: sInfo.otherLocations,
+        });
+        return;
+      }
+    }
+
     const existingIndex = lines.findIndex((l) => l.productId === v.id);
     if (existingIndex !== -1) {
       setLines((prev) =>
@@ -220,7 +261,22 @@ export function CreateSalesOrderPage() {
   };
 
   const updateLine = (idx: number, field: 'quantity' | 'unitPrice' | 'discount', val: number) => {
-    const num = isNaN(val) ? 0 : val;
+    let num = isNaN(val) ? 0 : val;
+    if (field === 'quantity' && branchId) {
+      const line = lines[idx];
+      const sInfo = getProductStockInfo(line.productId, branchId);
+      if (sInfo.branchQty > 0 && num > sInfo.branchQty) {
+        setStockAlert({
+          isOpen: true,
+          productName: line.name,
+          maxAvailable: sInfo.branchQty,
+          branchName: selectedBranchName,
+          otherLocations: sInfo.otherLocations,
+        });
+        num = sInfo.branchQty;
+      }
+    }
+
     setLines((prev) => {
       const copy = [...prev];
       copy[idx] = {
@@ -381,6 +437,28 @@ export function CreateSalesOrderPage() {
         <div className="panel" style={{ padding: '20px' }}>
           <h3 style={{ margin: '0 0 14px', color: '#066006' }}>Ordered Items</h3>
 
+          {hasInsufficientStock && (
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                padding: '8px 12px',
+                marginBottom: '14px',
+                background: '#fffbeb',
+                border: '1px solid #fde68a',
+                borderRadius: '6px',
+                fontSize: '12px',
+                color: '#92400e',
+              }}
+            >
+              <AlertTriangle size={15} style={{ color: '#d97706', flexShrink: 0 }} />
+              <span>
+                <strong>Notice:</strong> One or more items have 0 stock at {selectedBranchName}. Click <strong>Save as Draft</strong> to save without immediate stock deduction.
+              </span>
+            </div>
+          )}
+
           <ProductItemSelect
             products={products.map((p) => {
               const stockInfo = branchId ? getProductStockInfo(p.id, branchId) : null;
@@ -448,44 +526,25 @@ export function CreateSalesOrderPage() {
                           <td>
                             <div style={{ fontWeight: 600, color: '#0f172a' }}>{l.name}</div>
                             {stockInfo && (
-                              <div style={{ marginTop: '4px', fontSize: '11px', display: 'flex', flexDirection: 'column', gap: '3px' }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                  <span
-                                    style={{
-                                      display: 'inline-flex',
-                                      alignItems: 'center',
-                                      gap: '3px',
-                                      padding: '1px 6px',
-                                      borderRadius: '4px',
-                                      fontWeight: 600,
-                                      background: hasEnough ? '#ecfdf5' : '#fef2f2',
-                                      color: hasEnough ? '#065f46' : '#991b1b',
-                                      border: hasEnough ? '1px solid #a7f3d0' : '1px solid #fecaca',
-                                    }}
-                                  >
-                                    {hasEnough
-                                      ? `✓ ${stockInfo.branchQty} in stock at ${selectedBranchName}`
-                                      : `⚠ Only ${stockInfo.branchQty} available at ${selectedBranchName} (need ${l.quantity})`}
-                                  </span>
-                                </div>
-                                {!hasEnough && stockInfo.otherLocations.length > 0 && (
-                                  <div
-                                    style={{
-                                      color: '#0369a1',
-                                      background: '#f0f9ff',
-                                      border: '1px solid #bae6fd',
-                                      padding: '2px 8px',
-                                      borderRadius: '4px',
-                                      fontWeight: 500,
-                                      display: 'inline-flex',
-                                      alignItems: 'center',
-                                      gap: '4px',
-                                      width: 'fit-content',
-                                    }}
-                                  >
-                                    <span>📍 <strong>Stored elsewhere:</strong> {stockInfo.otherLocations.map((loc) => `${loc.name} (${loc.qty} available)`).join(', ')}</span>
-                                  </div>
-                                )}
+                              <div style={{ marginTop: '3px' }}>
+                                <span
+                                  style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '4px',
+                                    padding: '2px 7px',
+                                    borderRadius: '4px',
+                                    fontSize: '11px',
+                                    fontWeight: 600,
+                                    background: stockInfo.branchQty > 0 ? '#ecfdf5' : '#fef2f2',
+                                    color: stockInfo.branchQty > 0 ? '#065f46' : '#991b1b',
+                                    border: stockInfo.branchQty > 0 ? '1px solid #a7f3d0' : '1px solid #fecaca',
+                                  }}
+                                >
+                                  {stockInfo.branchQty > 0
+                                    ? `✓ ${stockInfo.branchQty} in stock at ${selectedBranchName}`
+                                    : `⚠ 0 in stock at ${selectedBranchName}`}
+                                </span>
                               </div>
                             )}
                           </td>
@@ -494,6 +553,7 @@ export function CreateSalesOrderPage() {
                             type="number"
                             value={l.quantity}
                             min={1}
+                            max={branchId ? Math.max(1, stockInfo?.branchQty || 1) : undefined}
                             onChange={(e) => updateLine(index, 'quantity', Number(e.target.value))}
                             className="form-input"
                             style={{ width: '70px', minHeight: '32px', textAlign: 'center' }}
@@ -646,63 +706,6 @@ export function CreateSalesOrderPage() {
           )}
         </div>
 
-        {/* Branch Stock Guidance Alert */}
-        {hasInsufficientStock && (
-          <div
-            style={{
-              padding: '14px 18px',
-              borderRadius: '8px',
-              background: '#fffbeb',
-              border: '1.5px solid #fcd34d',
-              color: '#92400e',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '8px',
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 700, fontSize: '14px', color: '#b45309' }}>
-              <AlertTriangle size={18} />
-              Stock Notice: Immediate Dispatch Unavailable at {selectedBranchName}
-            </div>
-            <div style={{ fontSize: '13px', lineHeight: '1.5' }}>
-              The following item(s) cannot be fulfilled immediately because physical stock is not present at <strong>{selectedBranchName}</strong>:
-              <ul style={{ margin: '6px 0 0 18px', padding: 0 }}>
-                {insufficientItems.map((item) => (
-                  <li key={item.productId} style={{ marginBottom: '4px' }}>
-                    <strong>{item.name}</strong>: Need {item.quantity}, but only {item.branchQty} available at {selectedBranchName}.
-                    {item.otherLocations.length > 0 ? (
-                      <span style={{ color: '#0369a1', fontWeight: 600, marginLeft: '6px' }}>
-                        (📍 Found: {item.otherLocations.map((l) => `${l.qty} at ${l.name}`).join(', ')})
-                      </span>
-                    ) : (
-                      <span style={{ color: '#b91c1c', fontWeight: 600, marginLeft: '6px' }}>
-                        (Out of stock company-wide)
-                      </span>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            </div>
-            <div
-              style={{
-                fontSize: '12.5px',
-                color: '#78350f',
-                background: '#fef3c7',
-                padding: '8px 12px',
-                borderRadius: '6px',
-                marginTop: '4px',
-              }}
-            >
-              💡 <strong>Next Steps:</strong>
-              <div style={{ marginTop: '4px' }}>
-                • Click <strong>"Save as Draft"</strong> below to record this sales order now without deducting stock.
-                <br />
-                • Or create an <strong>Internal Stock Transfer</strong> to move the products to <strong>{selectedBranchName}</strong> before completing.
-              </div>
-            </div>
-          </div>
-        )}
-
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
           <button type="button" className="btn btn-secondary" onClick={() => navigate('/sales')} disabled={!!submittingAction}>
             Cancel
@@ -712,19 +715,18 @@ export function CreateSalesOrderPage() {
             className="btn btn-secondary"
             disabled={lines.length === 0 || !!submittingAction}
             onClick={() => (document.getElementById('completeNowFlag') as HTMLInputElement).value = '0'}
-            style={hasInsufficientStock ? { border: '1.5px solid #066006', color: '#066006', fontWeight: 700, background: '#f0fdf4' } : undefined}
           >
             {submittingAction === 'draft' ? (
               <><Loader2 size={14} className="spin-icon" /> Saving Draft…</>
             ) : (
-              hasInsufficientStock ? '✓ Save as Draft (Recommended)' : 'Save as Draft'
+              'Save as Draft'
             )}
           </button>
           <button
             type="submit"
             className="btn btn-primary"
             disabled={lines.length === 0 || !!submittingAction || hasInsufficientStock}
-            title={hasInsufficientStock ? `Cannot complete immediately: ${insufficientItems.map(i => i.name).join(', ')} has insufficient stock at ${selectedBranchName}. Save as Draft or transfer stock first.` : ''}
+            title={hasInsufficientStock ? `Cannot complete immediately: some items have 0 stock at ${selectedBranchName}. Save as Draft or transfer stock first.` : ''}
             onClick={() => (document.getElementById('completeNowFlag') as HTMLInputElement).value = '1'}
             style={{
               background: hasInsufficientStock ? '#9ca3af' : 'linear-gradient(135deg, #0b8f08, #066006)',
@@ -789,6 +791,111 @@ export function CreateSalesOrderPage() {
           </div>
         </form>
       </Modal>
+
+      {/* SweetAlert-Style Stock Limit Modal */}
+      {stockAlert.isOpen && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(15, 23, 42, 0.65)',
+            backdropFilter: 'blur(4px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 9999,
+            padding: '16px',
+            animation: 'fadeIn 0.15s ease-out',
+          }}
+          onClick={() => setStockAlert((prev) => ({ ...prev, isOpen: false }))}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: '#ffffff',
+              borderRadius: '16px',
+              maxWidth: '430px',
+              width: '100%',
+              padding: '28px 24px',
+              textAlign: 'center',
+              boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)',
+              border: '1px solid #e2e8f0',
+            }}
+          >
+            {/* SweetAlert Circular Warning Badge */}
+            <div
+              style={{
+                width: '64px',
+                height: '64px',
+                margin: '0 auto 16px',
+                borderRadius: '50%',
+                background: '#fef3c7',
+                border: '3px solid #fde68a',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: '#d97706',
+              }}
+            >
+              <AlertTriangle size={32} />
+            </div>
+
+            <h3 style={{ margin: '0 0 8px', fontSize: '19px', fontWeight: 800, color: '#0f172a' }}>
+              Insufficient Branch Stock
+            </h3>
+
+            <p style={{ margin: '0 0 16px', fontSize: '14px', color: '#475569', lineHeight: '1.5' }}>
+              Only <strong style={{ color: '#0f172a' }}>{stockAlert.maxAvailable} units</strong> of{' '}
+              <strong style={{ color: '#066006' }}>{stockAlert.productName}</strong> are available at{' '}
+              <strong style={{ color: '#0f172a' }}>{stockAlert.branchName}</strong>.
+            </p>
+
+            {stockAlert.otherLocations.length > 0 && (
+              <div
+                style={{
+                  background: '#f8fafc',
+                  border: '1px solid #e2e8f0',
+                  borderRadius: '10px',
+                  padding: '12px 14px',
+                  marginBottom: '20px',
+                  textAlign: 'left',
+                  fontSize: '12px',
+                }}
+              >
+                <div style={{ fontWeight: 700, color: '#0369a1', marginBottom: '6px' }}>
+                  📍 Available at other locations:
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  {stockAlert.otherLocations.map((loc, idx) => (
+                    <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', color: '#334155' }}>
+                      <span>• {loc.name}</span>
+                      <strong style={{ color: '#0f172a' }}>{loc.qty} available</strong>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <button
+              type="button"
+              onClick={() => setStockAlert((prev) => ({ ...prev, isOpen: false }))}
+              autoFocus
+              className="btn btn-primary"
+              style={{
+                width: '100%',
+                padding: '10px 16px',
+                fontSize: '14px',
+                fontWeight: 700,
+                background: 'linear-gradient(135deg, #0b8f08, #066006)',
+                borderRadius: '8px',
+                boxShadow: '0 2px 8px rgba(6, 96, 6, 0.25)',
+              }}
+            >
+              Got it
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
