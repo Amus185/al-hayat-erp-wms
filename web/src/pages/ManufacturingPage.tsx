@@ -131,7 +131,7 @@ export function ManufacturingPage() {
   const [actionProcessing, setActionProcessing] = useState<string | null>(null);
 
   // Work Order Form State
-  const [woMode, setWoMode] = useState<'NEW_ITEM' | 'EXISTING_PRODUCT'>('NEW_ITEM');
+  const [woMode, setWoMode] = useState<'NEW_ITEM' | 'EXISTING_PRODUCT'>('EXISTING_PRODUCT');
   const [woNewItem, setWoNewItem] = useState({
     name: '',
     sku: `MFG-${Date.now().toString().slice(-6)}`,
@@ -328,6 +328,35 @@ export function ManufacturingPage() {
       loadData();
     } catch (err: any) {
       addToast('error', err?.message || 'Failed to advance stage');
+    } finally {
+      setActionProcessing(null);
+    }
+  };
+
+  // Quick Complete Work Order (1-Click)
+  const handleQuickComplete = async (wo: WorkOrder) => {
+    const confirmed = await confirmAction(
+      'Complete Production Run?',
+      `Complete WO #${wo.wo_number} with all ${wo.target_quantity} units deposited to ${wo.warehouse_name}?`,
+      'Yes, Complete & Deposit Stock',
+      'success'
+    );
+    if (!confirmed) return;
+    try {
+      setActionProcessing(`complete_${wo.id}`);
+      await apiPost(`/manufacturing/work-orders/${wo.id}/complete`, {
+        completedQuantity: wo.target_quantity,
+        rejectedQuantity: 0,
+        notes: 'Full production run completed and verified.',
+      });
+      addToast('success', `Production complete! ${wo.target_quantity} units deposited to inventory.`);
+      if (isDetailsOpen && selectedWo?.id === wo.id) {
+        const full = await apiGet<WorkOrder>(`/manufacturing/work-orders/${wo.id}`);
+        if (full) setSelectedWo(full);
+      }
+      loadData();
+    } catch (err: any) {
+      addToast('error', err?.message || 'Failed to complete work order');
     } finally {
       setActionProcessing(null);
     }
@@ -592,7 +621,7 @@ export function ManufacturingPage() {
 
           {row.status === 'IN_PROGRESS' && hasPermission('manage_inventory') && (
             <>
-              {row.current_stage !== STAGES[STAGES.length - 1] ? (
+              {row.current_stage !== STAGES[STAGES.length - 1] && (
                 <button
                   type="button"
                   className="btn btn-sm"
@@ -603,17 +632,17 @@ export function ManufacturingPage() {
                 >
                   <ArrowRight size={12} /> Next Stage
                 </button>
-              ) : (
-                <button
-                  type="button"
-                  className="btn btn-sm"
-                  onClick={() => handleOpenComplete(row)}
-                  style={{ background: '#16a34a', color: '#fff', border: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '12px', padding: '4px 8px', borderRadius: '6px' }}
-                  title="Complete Run & Deposit Finished Stock"
-                >
-                  <CheckCheck size={12} /> Complete
-                </button>
               )}
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={() => handleQuickComplete(row)}
+                disabled={actionProcessing === `complete_${row.id}`}
+                style={{ background: '#16a34a', color: '#fff', border: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '12px', padding: '4px 8px', borderRadius: '6px' }}
+                title="1-Click Complete & Stock Inventory"
+              >
+                <CheckCheck size={12} /> Complete
+              </button>
             </>
           )}
         </div>
@@ -1486,25 +1515,26 @@ export function ManufacturingPage() {
 
               {selectedWo.status === 'IN_PROGRESS' && hasPermission('manage_inventory') && (
                 <>
-                  {selectedWo.current_stage !== STAGES[STAGES.length - 1] ? (
+                  {selectedWo.current_stage !== STAGES[STAGES.length - 1] && (
                     <button
                       type="button"
-                      className="btn btn-primary"
+                      className="btn btn-secondary"
                       onClick={() => handleAdvanceStage(selectedWo)}
-                      style={{ background: '#0284c7', display: 'flex', alignItems: 'center', gap: '4px' }}
+                      disabled={actionProcessing === `advance_${selectedWo.id}`}
+                      style={{ display: 'flex', alignItems: 'center', gap: '4px' }}
                     >
                       <ArrowRight size={14} /> Advance Stage
                     </button>
-                  ) : (
-                    <button
-                      type="button"
-                      className="btn btn-primary"
-                      onClick={() => { setIsDetailsOpen(false); handleOpenComplete(selectedWo); }}
-                      style={{ background: '#16a34a', display: 'flex', alignItems: 'center', gap: '4px' }}
-                    >
-                      <CheckCheck size={14} /> Complete Run & Deposit Stock
-                    </button>
                   )}
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    onClick={() => handleQuickComplete(selectedWo)}
+                    disabled={actionProcessing === `complete_${selectedWo.id}`}
+                    style={{ background: '#16a34a', borderColor: '#16a34a', display: 'flex', alignItems: 'center', gap: '4px' }}
+                  >
+                    <CheckCheck size={14} /> Complete Run & Deposit Stock
+                  </button>
                 </>
               )}
             </div>

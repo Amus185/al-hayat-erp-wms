@@ -203,7 +203,7 @@ export function DeliveriesPage() {
     }));
   };
 
-  const handleCreateDelivery = async (e: React.FormEvent) => {
+  const handleCreateDelivery = async (e: React.FormEvent, dispatchImmediately = false) => {
     e.preventDefault();
     if (!createForm.customerName || !createForm.customerPhone || !createForm.deliveryAddress) {
       addToast('error', 'Please complete customer contact and address details.');
@@ -211,12 +211,78 @@ export function DeliveriesPage() {
     }
     try {
       setSubmitting(true);
-      await apiPost('/deliveries', createForm);
-      addToast('success', 'Delivery scheduled successfully');
+      const created = await apiPost<any>('/deliveries', createForm);
+      if (dispatchImmediately && created?.id) {
+        await apiPost(`/deliveries/${created.id}/dispatch`, {
+          driverName: createForm.driverName || 'Assigned Driver',
+          vehiclePlate: createForm.vehiclePlate || undefined,
+        });
+        addToast('success', 'Delivery scheduled and dispatched immediately!');
+      } else {
+        addToast('success', 'Delivery scheduled successfully');
+      }
       setIsCreateOpen(false);
       loadData();
     } catch (err: any) {
       addToast('error', err?.message || 'Failed to create delivery');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleQuickDispatch = async (d: Delivery) => {
+    if (!d.driver_name) {
+      handleOpenDispatch(d);
+      return;
+    }
+    const confirmed = await confirmAction(
+      'Dispatch Delivery?',
+      `Dispatch Delivery #${d.delivery_number} with driver ${d.driver_name} (${d.vehicle_plate || 'No plate'})?`,
+      'Yes, Dispatch 🚚',
+      'info'
+    );
+    if (!confirmed) return;
+    try {
+      setSubmitting(true);
+      await apiPost(`/deliveries/${d.id}/dispatch`, {
+        driverName: d.driver_name,
+        vehiclePlate: d.vehicle_plate,
+      });
+      addToast('success', `Delivery #${d.delivery_number} marked as DISPATCHED!`);
+      if (isDetailsOpen && selectedDelivery?.id === d.id) {
+        const full = await apiGet<Delivery>(`/deliveries/${d.id}`);
+        if (full) setSelectedDelivery(full);
+      }
+      loadData();
+    } catch (err: any) {
+      addToast('error', err?.message || 'Failed to dispatch delivery');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleQuickComplete = async (d: Delivery) => {
+    const confirmed = await confirmAction(
+      'Confirm Delivered?',
+      `Mark Delivery #${d.delivery_number} as DELIVERED to ${d.customer_name}?`,
+      'Yes, Confirm Received ✅',
+      'success'
+    );
+    if (!confirmed) return;
+    try {
+      setSubmitting(true);
+      await apiPost(`/deliveries/${d.id}/complete`, {
+        recipientSignatureName: d.customer_name,
+        notes: 'Delivered in good condition and accepted by customer.',
+      });
+      addToast('success', `Delivery #${d.delivery_number} completed & confirmed!`);
+      if (isDetailsOpen && selectedDelivery?.id === d.id) {
+        const full = await apiGet<Delivery>(`/deliveries/${d.id}`);
+        if (full) setSelectedDelivery(full);
+      }
+      loadData();
+    } catch (err: any) {
+      addToast('error', err?.message || 'Failed to complete delivery');
     } finally {
       setSubmitting(false);
     }
@@ -532,9 +598,9 @@ export function DeliveriesPage() {
             <button
               type="button"
               className="btn btn-sm"
-              onClick={() => handleOpenDispatch(row)}
+              onClick={() => handleQuickDispatch(row)}
               style={{ background: '#0284c7', color: '#fff', border: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '12px', padding: '4px 8px', borderRadius: '6px' }}
-              title="Dispatch to Driver"
+              title="Quick Dispatch to Driver"
             >
               <Send size={12} /> Dispatch
             </button>
@@ -544,9 +610,9 @@ export function DeliveriesPage() {
             <button
               type="button"
               className="btn btn-sm"
-              onClick={() => handleOpenComplete(row)}
+              onClick={() => handleQuickComplete(row)}
               style={{ background: '#16a34a', color: '#fff', border: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '12px', padding: '4px 8px', borderRadius: '6px' }}
-              title="Confirm Delivery"
+              title="Quick Confirm Delivered"
             >
               <CheckCheck size={12} /> Delivered
             </button>
@@ -809,8 +875,26 @@ export function DeliveriesPage() {
             <button type="button" className="btn btn-secondary" onClick={() => setIsCreateOpen(false)} disabled={submitting}>
               Cancel
             </button>
-            <button type="submit" className="btn btn-primary" disabled={submitting} style={{ background: '#0284c7', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
-              {submitting ? <><Loader2 size={14} className="spin-icon" /> Scheduling…</> : <><Truck size={14} /> Schedule Delivery</>}
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={(e) => handleCreateDelivery(e, false)}
+              disabled={submitting}
+            >
+              Schedule Only
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={(e) => handleCreateDelivery(e, true)}
+              disabled={submitting}
+              style={{ background: '#0b8f08', borderColor: '#0b8f08', display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+            >
+              {submitting ? (
+                <><Loader2 size={14} className="spin-icon" /> Processing…</>
+              ) : (
+                <><Send size={14} /> Schedule & Dispatch Now 🚚</>
+              )}
             </button>
           </div>
         </form>
@@ -996,7 +1080,7 @@ export function DeliveriesPage() {
                 <button
                   type="button"
                   className="btn btn-primary"
-                  onClick={() => { setIsDetailsOpen(false); handleOpenDispatch(selectedDelivery); }}
+                  onClick={() => handleQuickDispatch(selectedDelivery)}
                   style={{ background: '#0284c7', display: 'flex', alignItems: 'center', gap: '4px' }}
                 >
                   <Send size={14} /> Dispatch
@@ -1006,7 +1090,7 @@ export function DeliveriesPage() {
                 <button
                   type="button"
                   className="btn btn-primary"
-                  onClick={() => { setIsDetailsOpen(false); handleOpenComplete(selectedDelivery); }}
+                  onClick={() => handleQuickComplete(selectedDelivery)}
                   style={{ background: '#16a34a', display: 'flex', alignItems: 'center', gap: '4px' }}
                 >
                   <CheckCheck size={14} /> Confirm Delivered

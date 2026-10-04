@@ -120,7 +120,7 @@ export function CreateTransferPage() {
     });
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent, dispatchImmediately = false) => {
     e.preventDefault();
     if (submitting) return;
     if (!sourceId) {
@@ -156,8 +156,13 @@ export function CreateTransferPage() {
 
     try {
       setSubmitting(true);
-      await apiPost('/transfers', payload);
-      addToast('success', 'Transfer order created successfully');
+      const created = await apiPost<any>('/transfers', payload);
+      if (dispatchImmediately && created?.id) {
+        await apiPost(`/transfers/${created.id}/dispatch`, {});
+        addToast('success', 'Transfer created and dispatched immediately — stock deducted from origin!');
+      } else {
+        addToast('success', 'Transfer order created successfully');
+      }
       navigate('/transfers');
     } catch (err: any) {
       addToast('error', err?.message || 'Failed to create Transfer Order');
@@ -342,11 +347,25 @@ export function CreateTransferPage() {
           <button type="button" className="btn btn-secondary" onClick={() => navigate('/transfers')} disabled={submitting}>
             Cancel
           </button>
-          <button type="submit" className="btn btn-primary" disabled={lines.length === 0 || submitting} style={{ display: 'flex', alignItems: 'center' }}>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={(e) => handleSubmit(e, false)}
+            disabled={lines.length === 0 || submitting}
+          >
+            Submit Transfer Request
+          </button>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={(e) => handleSubmit(e, true)}
+            disabled={lines.length === 0 || submitting}
+            style={{ display: 'flex', alignItems: 'center', gap: '6px', background: '#0b8f08', borderColor: '#0b8f08' }}
+          >
             {submitting ? (
-              <><Loader2 size={14} className="spin-icon" /> Submitting Transfer…</>
+              <><Loader2 size={14} className="spin-icon" /> Processing…</>
             ) : (
-              'Submit Transfer Request'
+              <>🚚 Create & Dispatch Now</>
             )}
           </button>
         </div>

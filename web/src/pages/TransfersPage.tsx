@@ -8,6 +8,7 @@ import { StatusBadge } from '../components/StatusBadge';
 import { LoadingSpinner } from '../components/LoadingSpinner';
 import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
+import { confirmAction } from '../utils/swal';
 
 interface TransferLine {
   id: string;
@@ -118,13 +119,26 @@ export function TransfersPage() {
     }
   };
 
-  const handleApprove = async (id: string) => {
+  const refreshSelectedTransfer = async (id: string) => {
+    try {
+      const full = await apiGet<Transfer>(`/transfers/${id}`);
+      if (full) setSelectedTransfer(full);
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleApprove = async (id: string, stayOpen = true) => {
     try {
       setActionLoading(true);
       await apiPost(`/transfers/${id}/approve`, {});
       addToast('success', 'Transfer approved successfully');
-      setSelectedTransfer(null);
       loadData();
+      if (stayOpen && selectedTransfer?.id === id) {
+        await refreshSelectedTransfer(id);
+      } else if (!stayOpen) {
+        setSelectedTransfer(null);
+      }
     } catch (err: any) {
       addToast('error', err?.message || 'Failed to approve transfer');
     } finally {
@@ -132,13 +146,24 @@ export function TransfersPage() {
     }
   };
 
-  const handleDispatch = async (id: string) => {
+  const handleApproveAndDispatch = async (id: string, stayOpen = true) => {
+    const confirmed = await confirmAction(
+      'Approve & Dispatch Transfer?',
+      'This will approve the transfer and immediately deduct stock from the origin for transit.',
+      'Yes, Approve & Dispatch',
+      'info'
+    );
+    if (!confirmed) return;
     try {
       setActionLoading(true);
       await apiPost(`/transfers/${id}/dispatch`, {});
-      addToast('success', 'Transfer dispatched — stock deducted from source');
-      setSelectedTransfer(null);
+      addToast('success', 'Transfer approved & dispatched! Stock deducted from origin.');
       loadData();
+      if (stayOpen && selectedTransfer?.id === id) {
+        await refreshSelectedTransfer(id);
+      } else if (!stayOpen) {
+        setSelectedTransfer(null);
+      }
     } catch (err: any) {
       addToast('error', err?.message || 'Failed to dispatch transfer');
     } finally {
@@ -146,13 +171,49 @@ export function TransfersPage() {
     }
   };
 
-  const handleReceive = async (id: string) => {
+  const handleDispatch = async (id: string, stayOpen = true) => {
+    const confirmed = await confirmAction(
+      'Dispatch Transfer?',
+      'Stock will be deducted from the origin location and placed in transit.',
+      'Yes, Dispatch',
+      'info'
+    );
+    if (!confirmed) return;
+    try {
+      setActionLoading(true);
+      await apiPost(`/transfers/${id}/dispatch`, {});
+      addToast('success', 'Transfer dispatched — stock deducted from origin');
+      loadData();
+      if (stayOpen && selectedTransfer?.id === id) {
+        await refreshSelectedTransfer(id);
+      } else if (!stayOpen) {
+        setSelectedTransfer(null);
+      }
+    } catch (err: any) {
+      addToast('error', err?.message || 'Failed to dispatch transfer');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleReceive = async (id: string, stayOpen = true) => {
+    const confirmed = await confirmAction(
+      'Receive Transfer?',
+      'Stock will be deposited into the destination warehouse/branch.',
+      'Yes, Confirm Received',
+      'success'
+    );
+    if (!confirmed) return;
     try {
       setActionLoading(true);
       await apiPost(`/transfers/${id}/receive`, {});
-      addToast('success', 'Transfer received — stock added to destination');
-      setSelectedTransfer(null);
+      addToast('success', 'Transfer received — stock deposited at destination');
       loadData();
+      if (stayOpen && selectedTransfer?.id === id) {
+        await refreshSelectedTransfer(id);
+      } else if (!stayOpen) {
+        setSelectedTransfer(null);
+      }
     } catch (err: any) {
       addToast('error', err?.message || 'Failed to receive transfer');
     } finally {
@@ -165,8 +226,12 @@ export function TransfersPage() {
       setActionLoading(true);
       await apiPost(`/transfers/${id}/reject`, { reason: rejectReason });
       addToast('success', 'Transfer rejected');
-      setSelectedTransfer(null);
       loadData();
+      if (selectedTransfer?.id === id) {
+        await refreshSelectedTransfer(id);
+      } else {
+        setSelectedTransfer(null);
+      }
     } catch (err: any) {
       addToast('error', err?.message || 'Failed to reject transfer');
     } finally {
@@ -181,8 +246,12 @@ export function TransfersPage() {
       setActionLoading(true);
       await apiPost(`/transfers/${id}/cancel`, {});
       addToast('success', 'Transfer cancelled');
-      setSelectedTransfer(null);
       loadData();
+      if (selectedTransfer?.id === id) {
+        await refreshSelectedTransfer(id);
+      } else {
+        setSelectedTransfer(null);
+      }
     } catch (err: any) {
       addToast('error', err?.message || 'Failed to cancel transfer');
     } finally {
@@ -251,7 +320,7 @@ export function TransfersPage() {
       key: 'actions',
       label: 'Actions',
       render: (row) => (
-        <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
           <button
             type="button"
             className="btn btn-secondary btn-sm"
@@ -259,6 +328,42 @@ export function TransfersPage() {
           >
             View / Manage
           </button>
+
+          {row.status === 'PENDING_APPROVAL' && hasPermission('manage_transfers') && (
+            <button
+              type="button"
+              className="btn btn-sm"
+              style={{ background: '#0b8f08', color: '#fff', border: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '12px', padding: '4px 8px', borderRadius: '6px' }}
+              onClick={(e) => { e.stopPropagation(); handleApproveAndDispatch(row.id, false); }}
+              title="Approve & Dispatch in 1 click"
+            >
+              ⚡ Approve & Dispatch
+            </button>
+          )}
+
+          {row.status === 'APPROVED' && hasPermission('manage_transfers') && (
+            <button
+              type="button"
+              className="btn btn-sm"
+              style={{ background: '#0284c7', color: '#fff', border: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '12px', padding: '4px 8px', borderRadius: '6px' }}
+              onClick={(e) => { e.stopPropagation(); handleDispatch(row.id, false); }}
+              title="Dispatch to transit"
+            >
+              🚚 Dispatch
+            </button>
+          )}
+
+          {row.status === 'DISPATCHED' && hasPermission('manage_transfers') && (
+            <button
+              type="button"
+              className="btn btn-sm"
+              style={{ background: '#16a34a', color: '#fff', border: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '12px', padding: '4px 8px', borderRadius: '6px' }}
+              onClick={(e) => { e.stopPropagation(); handleReceive(row.id, false); }}
+              title="Confirm transfer received"
+            >
+              ✅ Receive
+            </button>
+          )}
         </div>
       ),
     },
@@ -521,11 +626,22 @@ export function TransfersPage() {
                     </button>
                     <button
                       type="button"
-                      className="btn btn-primary"
-                      onClick={() => handleApprove(selectedTransfer.id)}
+                      className="btn btn-secondary"
+                      onClick={() => handleApprove(selectedTransfer.id, true)}
                       disabled={actionLoading}
+                      title="Approve request only"
                     >
-                      {actionLoading ? 'Processing...' : 'Approve Transfer'}
+                      Approve Only
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      onClick={() => handleApproveAndDispatch(selectedTransfer.id, true)}
+                      disabled={actionLoading}
+                      style={{ background: '#0b8f08', borderColor: '#0b8f08' }}
+                      title="Approve and immediately dispatch goods in 1 click"
+                    >
+                      {actionLoading ? 'Processing...' : '⚡ Approve & Dispatch Now'}
                     </button>
                   </>
                 )}
@@ -535,7 +651,7 @@ export function TransfersPage() {
                   <button
                     type="button"
                     className="btn btn-primary"
-                    onClick={() => handleDispatch(selectedTransfer.id)}
+                    onClick={() => handleDispatch(selectedTransfer.id, true)}
                     disabled={actionLoading}
                     style={{ background: '#0284c7', borderColor: '#0284c7' }}
                   >
@@ -548,7 +664,7 @@ export function TransfersPage() {
                   <button
                     type="button"
                     className="btn btn-primary"
-                    onClick={() => handleReceive(selectedTransfer.id)}
+                    onClick={() => handleReceive(selectedTransfer.id, true)}
                     disabled={actionLoading}
                   >
                     {actionLoading ? 'Processing...' : '✅ Receive Transfer (Complete)'}
