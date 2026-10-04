@@ -36,12 +36,12 @@ deliveries.get('/', async (c) => {
   const { status, search, driver, dateFrom, dateTo } = c.req.query();
 
   let query = `
-    SELECT d.*, so.order_number, w.name AS warehouse_name, u.full_name AS created_by_name,
+    SELECT d.*, so.order_number, b.name AS branch_name, u.full_name AS created_by_name,
            (SELECT COUNT(*) FROM delivery_items di WHERE di.delivery_id = d.id) AS total_items,
            (SELECT COALESCE(SUM(di.quantity), 0) FROM delivery_items di WHERE di.delivery_id = d.id) AS total_units
     FROM deliveries d
     LEFT JOIN sales_orders so ON so.id = d.sales_order_id
-    LEFT JOIN warehouses w ON w.id = d.source_warehouse_id
+    LEFT JOIN branches b ON b.id = so.branch_id
     LEFT JOIN users u ON u.id = d.created_by
     WHERE 1=1
   `;
@@ -85,10 +85,10 @@ deliveries.get('/', async (c) => {
 deliveries.get('/:id', async (c) => {
   const id = c.req.param('id');
   const delivery = await c.env.DB.prepare(`
-    SELECT d.*, so.order_number, w.name AS warehouse_name, u.full_name AS created_by_name
+    SELECT d.*, so.order_number, b.name AS branch_name, u.full_name AS created_by_name
     FROM deliveries d
     LEFT JOIN sales_orders so ON so.id = d.sales_order_id
-    LEFT JOIN warehouses w ON w.id = d.source_warehouse_id
+    LEFT JOIN branches b ON b.id = so.branch_id
     LEFT JOIN users u ON u.id = d.created_by
     WHERE d.id = ?
   `).bind(id).first();
@@ -112,15 +112,10 @@ deliveries.post('/', requirePermissions(['manage_sales']), async (c) => {
   const body = await c.req.json();
   const userId = c.get('jwtPayload').sub;
 
-  if (!body.customerName || !body.customerName.trim()) {
-    return c.json({ message: 'Customer name is required.' }, 400);
-  }
-  if (!body.customerPhone || !body.customerPhone.trim()) {
-    return c.json({ message: 'Customer phone is required.' }, 400);
-  }
-  if (!body.deliveryAddress || !body.deliveryAddress.trim()) {
-    return c.json({ message: 'Delivery address is required.' }, 400);
-  }
+  let customerName = body.customerName?.trim();
+  let customerPhone = body.customerPhone?.trim();
+  let deliveryAddress = body.deliveryAddress?.trim();
+  let city = body.city?.trim() || 'Hargeisa';
 
   // Prevent duplicate deliveries for the same sales order
   if (body.salesOrderId) {
@@ -138,7 +133,36 @@ deliveries.post('/', requirePermissions(['manage_sales']), async (c) => {
         message: `A delivery is already active for this sales order (${existingDelivery.delivery_number} - Status: ${existingDelivery.status}). Duplicate delivery cannot be created.`
       }, 400);
     }
+
+    // Auto-populate customer information and branch from the sales order
+    const so = await c.env.DB.prepare(`
+      SELECT so.*, c.name AS customer_name, c.phone AS customer_phone, c.address AS customer_address, c.city AS customer_city
+      FROM sales_orders so
+      LEFT JOIN customers c ON c.id = so.customer_id
+      WHERE so.id = ?
+    `).bind(body.salesOrderId).first() as any;
+
+    if (so) {
+      customerName = customerName || so.customer_name || 'Customer';
+      customerPhone = customerPhone || so.customer_phone || 'N/A';
+      deliveryAddress = deliveryAddress || so.customer_address || 'Customer Location';
+      city = city || so.customer_city || 'Hargeisa';
+    }
+  } else if (body.customerId) {
+    const cust = await c.env.DB.prepare('SELECT * FROM customers WHERE id = ?').bind(body.customerId).first() as any;
+    if (cust) {
+      customerName = customerName || cust.name || 'Customer';
+      customerPhone = customerPhone || cust.phone || 'N/A';
+      deliveryAddress = deliveryAddress || cust.address || 'Customer Location';
+      city = city || cust.city || 'Hargeisa';
+    }
   }
+
+  if (!customerName) {
+    return c.json({ message: 'Please select a Sales Order or Customer to schedule delivery.' }, 400);
+  }
+  if (!customerPhone) customerPhone = 'N/A';
+  if (!deliveryAddress) deliveryAddress = 'Customer Location';
 
   const id = uuidv4();
   const deliveryNumber = `DEL-${Date.now()}`;
@@ -156,10 +180,10 @@ deliveries.post('/', requirePermissions(['manage_sales']), async (c) => {
     id,
     deliveryNumber,
     body.salesOrderId || null,
-    body.customerName.trim(),
-    body.customerPhone.trim(),
-    body.deliveryAddress.trim(),
-    body.city?.trim() || 'Hargeisa',
+    customerName,
+    customerPhone,
+    deliveryAddress,
+    city,
     body.sourceWarehouseId || null,
     body.driverName?.trim() || null,
     body.driverPhone?.trim() || null,

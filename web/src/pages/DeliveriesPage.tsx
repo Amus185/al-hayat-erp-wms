@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import {
-  Truck, Plus, Search, Filter, CheckCircle2, Clock, AlertTriangle,
+  Truck, Plus, Search, Filter, CheckCircle2, Clock, AlertTriangle, AlertCircle,
   MapPin, Phone, User, Calendar, Eye, Send, CheckCheck, Printer,
   FileText, Wrench, ShieldCheck, ChevronRight, X, Loader2
 } from 'lucide-react';
@@ -38,6 +38,7 @@ interface Delivery {
   city: string;
   source_warehouse_id: string | null;
   warehouse_name?: string;
+  branch_name?: string;
   driver_name: string | null;
   driver_phone: string | null;
   vehicle_plate: string | null;
@@ -67,7 +68,7 @@ export function DeliveriesPage() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const { addToast } = useToast();
-  const { hasPermission } = useAuth();
+  const { hasPermission, user } = useAuth();
 
   const [deliveries, setDeliveries] = useState<Delivery[]>([]);
   const [stats, setStats] = useState<Stats>({ total: 0, pending: 0, dispatched: 0, deliveredToday: 0 });
@@ -86,14 +87,19 @@ export function DeliveriesPage() {
 
   // Form states for creation
   const [salesOrders, setSalesOrders] = useState<any[]>([]);
-  const [warehouses, setWarehouses] = useState<any[]>([]);
+  const [customers, setCustomers] = useState<any[]>([]);
+  const [branches, setBranches] = useState<any[]>([]);
+  const [showAddressOverride, setShowAddressOverride] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+
   const [createForm, setCreateForm] = useState({
     salesOrderId: '',
+    customerId: '',
     customerName: '',
     customerPhone: '',
     deliveryAddress: '',
     city: 'Hargeisa',
-    sourceWarehouseId: '',
+    branchName: '',
     driverName: '',
     driverPhone: '',
     vehiclePlate: '',
@@ -129,16 +135,18 @@ export function DeliveriesPage() {
     loadData();
   }, []);
 
-  // Pre-load Sales Orders & Warehouses for creation modal
+  // Pre-load Sales Orders, Customers & Branches for creation modal
   useEffect(() => {
     async function loadAux() {
       try {
-        const [ordersRes, whRes] = await Promise.all([
+        const [ordersRes, custsRes, branchesRes] = await Promise.all([
           apiGet<any[]>('/sales/orders'),
-          apiGet<any[]>('/warehouses'),
+          apiGet<any[]>('/sales/customers'),
+          apiGet<any[]>('/branches'),
         ]);
         setSalesOrders(ordersRes || []);
-        setWarehouses(whRes || []);
+        setCustomers(custsRes || []);
+        setBranches(branchesRes || []);
 
         // If URL has ?orderId=..., open create modal pre-filled
         const orderIdParam = searchParams.get('orderId');
@@ -161,13 +169,16 @@ export function DeliveriesPage() {
   }, [searchParams]);
 
   const handleOpenCreateWithOrder = (order: any) => {
+    setFormError(null);
+    setShowAddressOverride(false);
     setCreateForm({
       salesOrderId: order.id,
-      customerName: order.customer_name || '',
+      customerId: order.customer_id || '',
+      customerName: order.customer_name || 'Customer',
       customerPhone: order.customer_phone || '',
       deliveryAddress: order.customer_address || '',
-      city: 'Hargeisa',
-      sourceWarehouseId: warehouses[0]?.id || '',
+      city: order.customer_city || 'Hargeisa',
+      branchName: order.branch_name || '',
       driverName: '',
       driverPhone: '',
       vehiclePlate: '',
@@ -181,9 +192,19 @@ export function DeliveriesPage() {
   };
 
   const handleSelectSalesOrder = (soId: string) => {
+    setFormError(null);
+    setShowAddressOverride(false);
     const matched = salesOrders.find((s) => s.id === soId);
     if (!matched) {
-      setCreateForm((prev) => ({ ...prev, salesOrderId: soId }));
+      setCreateForm((prev) => ({
+        ...prev,
+        salesOrderId: '',
+        customerId: '',
+        customerName: '',
+        customerPhone: '',
+        deliveryAddress: '',
+        branchName: '',
+      }));
       return;
     }
     if (matched.status === 'DELIVERED' || matched.delivery_status === 'DELIVERED') {
@@ -193,25 +214,101 @@ export function DeliveriesPage() {
     setCreateForm((prev) => ({
       ...prev,
       salesOrderId: soId,
-      customerName: matched.customer_name || prev.customerName,
-      customerPhone: matched.customer_phone || prev.customerPhone,
-      deliveryAddress: matched.customer_address || prev.deliveryAddress,
+      customerId: matched.customer_id || '',
+      customerName: matched.customer_name || 'Customer',
+      customerPhone: matched.customer_phone || '',
+      deliveryAddress: matched.customer_address || '',
+      city: matched.customer_city || 'Hargeisa',
+      branchName: matched.branch_name || '',
       installationRequired: Number(matched.installation_fee || 0) > 0,
-      installerName: matched.installer_name || prev.installerName,
+      installerName: matched.installer_name || '',
       installationFee: Number(matched.installation_fee || 40),
       notes: `Delivery for Sales Order #${matched.order_number}`,
     }));
   };
 
-  const handleCreateDelivery = async (e: React.FormEvent, dispatchImmediately = false) => {
-    e.preventDefault();
-    if (!createForm.customerName || !createForm.customerPhone || !createForm.deliveryAddress) {
-      addToast('error', 'Please complete customer contact and address details.');
+  const handleSelectCustomer = (custId: string) => {
+    setFormError(null);
+    setShowAddressOverride(false);
+    const matched = customers.find((c) => c.id === custId);
+    if (!matched) {
+      setCreateForm((prev) => ({
+        ...prev,
+        customerId: '',
+        customerName: '',
+        customerPhone: '',
+        deliveryAddress: '',
+      }));
       return;
     }
+    const defaultBranch = branches.find((b) => b.id === (user as any)?.branchId) || branches[0];
+    setCreateForm((prev) => ({
+      ...prev,
+      salesOrderId: '',
+      customerId: custId,
+      customerName: matched.name || 'Customer',
+      customerPhone: matched.phone || '',
+      deliveryAddress: matched.address || '',
+      city: matched.city || 'Hargeisa',
+      branchName: defaultBranch?.name || '',
+      notes: `Direct delivery for ${matched.name}`,
+    }));
+  };
+
+  const handleOpenCreateNew = () => {
+    setFormError(null);
+    setShowAddressOverride(false);
+    const defaultBranch = branches.find((b) => b.id === (user as any)?.branchId) || branches[0];
+    setCreateForm({
+      salesOrderId: '',
+      customerId: '',
+      customerName: '',
+      customerPhone: '',
+      deliveryAddress: '',
+      city: 'Hargeisa',
+      branchName: defaultBranch?.name || '',
+      driverName: '',
+      driverPhone: '',
+      vehiclePlate: '',
+      scheduledDate: new Date().toISOString().split('T')[0],
+      installationRequired: false,
+      installerName: '',
+      installationFee: 40,
+      notes: '',
+    });
+    setIsCreateOpen(true);
+  };
+
+  const handleCreateDelivery = async (e: React.FormEvent, dispatchImmediately = false) => {
+    e.preventDefault();
+    setFormError(null);
+
+    if (!createForm.salesOrderId && !createForm.customerId && !createForm.customerName) {
+      const msg = 'Please select a Sales Order or Customer to schedule a delivery.';
+      setFormError(msg);
+      addToast('error', msg);
+      return;
+    }
+
     try {
       setSubmitting(true);
-      const created = await apiPost<any>('/deliveries', createForm);
+      const created = await apiPost<any>('/deliveries', {
+        salesOrderId: createForm.salesOrderId || undefined,
+        customerId: createForm.customerId || undefined,
+        customerName: createForm.customerName,
+        customerPhone: createForm.customerPhone || 'N/A',
+        deliveryAddress: createForm.deliveryAddress || 'Customer Location',
+        city: createForm.city || 'Hargeisa',
+        driverName: createForm.driverName?.trim() || undefined,
+        driverPhone: createForm.driverPhone?.trim() || undefined,
+        vehiclePlate: createForm.vehiclePlate?.trim() || undefined,
+        scheduledDate: createForm.scheduledDate || undefined,
+        installationRequired: createForm.installationRequired,
+        installerName: createForm.installerName?.trim() || undefined,
+        installationFee: createForm.installationFee,
+        notes: createForm.notes?.trim() || undefined,
+      });
+
       if (dispatchImmediately && created?.id) {
         await apiPost(`/deliveries/${created.id}/dispatch`, {
           driverName: createForm.driverName || 'Assigned Driver',
@@ -224,7 +321,9 @@ export function DeliveriesPage() {
       setIsCreateOpen(false);
       loadData();
     } catch (err: any) {
-      addToast('error', err?.message || 'Failed to create delivery');
+      const msg = err?.message || 'Failed to create delivery';
+      setFormError(msg);
+      addToast('error', msg);
     } finally {
       setSubmitting(false);
     }
@@ -652,7 +751,7 @@ export function DeliveriesPage() {
             <button
               type="button"
               className="btn btn-primary"
-              onClick={() => setIsCreateOpen(true)}
+              onClick={handleOpenCreateNew}
               style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}
             >
               <Plus size={16} /> Schedule Delivery
@@ -718,94 +817,186 @@ export function DeliveriesPage() {
       {/* ── CREATE DELIVERY MODAL ── */}
       <Modal isOpen={isCreateOpen} onClose={() => setIsCreateOpen(false)} title="Schedule New Delivery" width="lg">
         <form onSubmit={handleCreateDelivery} style={{ display: 'grid', gap: '16px' }}>
-          {/* Link to sales order */}
-          <div>
-            <label className="form-label" style={{ fontWeight: 600, fontSize: '13px', color: '#1e293b' }}>
-              Link to Sales Order (Optional)
-            </label>
-            <SearchableSelect
-              options={[
-                { value: '', label: '— No Sales Order (Direct Delivery) —' },
-                ...(Array.isArray(salesOrders) ? salesOrders : [])
-                  .filter((s) => s.status !== 'DELIVERED' && s.delivery_status !== 'DELIVERED')
-                  .map((s) => ({
-                    value: s.id,
-                    label: `${s.order_number} (${s.customer_name || 'Walk-in'} - ${s.status})`,
-                  })),
-              ]}
-              value={createForm.salesOrderId}
-              onChange={handleSelectSalesOrder}
-              placeholder="Search Sales Order (undelivered only)..."
-            />
-            <span style={{ fontSize: '11px', color: '#64748b' }}>
-              Only undelivered sales orders are listed. Delivered sales cannot have duplicate delivery registrations.
-            </span>
-          </div>
+          {/* Visible Error Banner inside modal */}
+          {formError && (
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '10px',
+                padding: '12px 14px',
+                borderRadius: '8px',
+                background: '#fef2f2',
+                border: '1px solid #fecaca',
+                color: '#991b1b',
+                fontSize: '13px',
+                fontWeight: 500,
+              }}
+            >
+              <AlertCircle size={18} style={{ flexShrink: 0, color: '#dc2626' }} />
+              <div style={{ flex: 1 }}>{formError}</div>
+            </div>
+          )}
 
+          {/* Step 1: Select Order OR Customer */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
-            <InputField
-              label="Customer Name *"
-              id="delCustName"
-              value={createForm.customerName}
-              onChange={(val) => setCreateForm((p) => ({ ...p, customerName: val }))}
-              placeholder="Full name..."
-              required
-            />
-            <InputField
-              label="Customer Phone *"
-              id="delCustPhone"
-              value={createForm.customerPhone}
-              onChange={(val) => setCreateForm((p) => ({ ...p, customerPhone: val }))}
-              placeholder="+252 61..."
-              required
-            />
-          </div>
-
-          <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '14px' }}>
-            <InputField
-              label="Destination Address *"
-              id="delAddress"
-              value={createForm.deliveryAddress}
-              onChange={(val) => setCreateForm((p) => ({ ...p, deliveryAddress: val }))}
-              placeholder="District, street, landmark, building..."
-              required
-            />
-            <InputField
-              label="City"
-              id="delCity"
-              value={createForm.city}
-              onChange={(val) => setCreateForm((p) => ({ ...p, city: val }))}
-              placeholder="Hargeisa"
-            />
-          </div>
-
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '14px' }}>
             <div>
               <label className="form-label" style={{ fontWeight: 600, fontSize: '13px', color: '#1e293b' }}>
-                Source Warehouse
+                1. Link Sales Order (Recommended)
               </label>
-              <select
-                className="form-input"
-                value={createForm.sourceWarehouseId}
-                onChange={(e) => setCreateForm((p) => ({ ...p, sourceWarehouseId: e.target.value }))}
-              >
-                <option value="">Central Dispatch Hub</option>
-                {(Array.isArray(warehouses) ? warehouses : []).map((w) => (
-                  <option key={w.id} value={w.id}>{w.name}</option>
-                ))}
-              </select>
+              <SearchableSelect
+                options={[
+                  { value: '', label: '— Select a Sales Order —' },
+                  ...(Array.isArray(salesOrders) ? salesOrders : [])
+                    .filter((s) => s.status !== 'DELIVERED' && s.delivery_status !== 'DELIVERED')
+                    .map((s) => ({
+                      value: s.id,
+                      label: `${s.order_number} (${s.customer_name || 'Walk-in'} - ${s.status})`,
+                    })),
+                ]}
+                value={createForm.salesOrderId}
+                onChange={handleSelectSalesOrder}
+                placeholder="Search Sales Order..."
+              />
+              <span style={{ fontSize: '11px', color: '#64748b' }}>
+                Auto-fills customer contact, destination & branch.
+              </span>
             </div>
 
+            <div>
+              <label className="form-label" style={{ fontWeight: 600, fontSize: '13px', color: '#1e293b' }}>
+                2. Or Select Customer Directly
+              </label>
+              <SearchableSelect
+                options={[
+                  { value: '', label: '— Select Customer Directly —' },
+                  ...(Array.isArray(customers) ? customers : []).map((c) => ({
+                    value: c.id,
+                    label: `${c.name} ${c.phone ? `(${c.phone})` : ''}`,
+                  })),
+                ]}
+                value={createForm.customerId}
+                onChange={handleSelectCustomer}
+                placeholder="Search existing customer..."
+              />
+              <span style={{ fontSize: '11px', color: '#64748b' }}>
+                For direct deliveries not linked to a specific SO.
+              </span>
+            </div>
+          </div>
+
+          {/* Auto-Fetched Customer & Origin Branch Card */}
+          {createForm.customerName || createForm.salesOrderId || createForm.customerId ? (
+            <div
+              style={{
+                background: '#f8fafc',
+                border: '1px solid #e2e8f0',
+                borderRadius: '8px',
+                padding: '14px',
+                display: 'grid',
+                gap: '12px',
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontSize: '12px', fontWeight: 700, textTransform: 'uppercase', color: '#0b8f08', letterSpacing: '0.5px' }}>
+                  ✓ Customer & Branch Information (Auto-Fetched)
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setShowAddressOverride(!showAddressOverride)}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    color: '#0284c7',
+                    fontSize: '12px',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    padding: '2px 6px',
+                    textDecoration: 'underline',
+                  }}
+                >
+                  {showAddressOverride ? 'Close Address Edit' : 'Edit Drop-off Address ✏️'}
+                </button>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '12px' }}>
+                <div>
+                  <div style={{ fontSize: '11px', color: '#64748b', fontWeight: 600 }}>Customer Name & Contact</div>
+                  <div style={{ fontSize: '14px', fontWeight: 700, color: '#0f172a' }}>{createForm.customerName || '—'}</div>
+                  <div style={{ fontSize: '12px', color: '#475569' }}>📞 {createForm.customerPhone || 'No phone recorded'}</div>
+                </div>
+
+                <div>
+                  <div style={{ fontSize: '11px', color: '#64748b', fontWeight: 600 }}>Delivery Destination</div>
+                  <div style={{ fontSize: '13px', fontWeight: 600, color: '#0f172a' }}>
+                    📍 {createForm.deliveryAddress || 'Customer Location'}, {createForm.city}
+                  </div>
+                </div>
+
+                <div>
+                  <div style={{ fontSize: '11px', color: '#64748b', fontWeight: 600 }}>Originating Branch</div>
+                  <div style={{ fontSize: '13px', fontWeight: 600, color: '#0f172a' }}>
+                    🏢 {createForm.branchName || (user as any)?.branchName || 'Branch Context'}
+                  </div>
+                  <div style={{ fontSize: '11px', color: '#64748b' }}>Assigned automatically from sales branch</div>
+                </div>
+              </div>
+
+              {showAddressOverride && (
+                <div
+                  style={{
+                    marginTop: '4px',
+                    paddingTop: '10px',
+                    borderTop: '1px dashed #cbd5e1',
+                    display: 'grid',
+                    gridTemplateColumns: '2fr 1fr',
+                    gap: '12px',
+                  }}
+                >
+                  <InputField
+                    label="Custom Delivery Address (Optional Override)"
+                    id="delAddressOverride"
+                    value={createForm.deliveryAddress}
+                    onChange={(val) => setCreateForm((p) => ({ ...p, deliveryAddress: val }))}
+                    placeholder="District, street, landmark, building..."
+                  />
+                  <InputField
+                    label="City"
+                    id="delCityOverride"
+                    value={createForm.city}
+                    onChange={(val) => setCreateForm((p) => ({ ...p, city: val }))}
+                    placeholder="Hargeisa"
+                  />
+                </div>
+              )}
+            </div>
+          ) : (
+            <div
+              style={{
+                background: '#f8fafc',
+                border: '1px dashed #cbd5e1',
+                borderRadius: '8px',
+                padding: '16px',
+                textAlign: 'center',
+                color: '#64748b',
+                fontSize: '13px',
+              }}
+            >
+              Please select a <strong>Sales Order</strong> or <strong>Customer</strong> above. Customer contact details, delivery address, and branch will be loaded automatically without manual typing.
+            </div>
+          )}
+
+          {/* Fleet & Logistics Details (All Optional) */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
             <InputField
-              label="Assigned Driver Name"
+              label="Assigned Driver Name (Optional)"
               id="delDriver"
               value={createForm.driverName}
               onChange={(val) => setCreateForm((p) => ({ ...p, driverName: val }))}
               placeholder="e.g. Mahdi Driver"
             />
-
             <InputField
-              label="Vehicle Plate Number"
+              label="Vehicle Plate Number (Optional)"
               id="delPlate"
               value={createForm.vehiclePlate}
               onChange={(val) => setCreateForm((p) => ({ ...p, vehiclePlate: val }))}
@@ -815,14 +1006,14 @@ export function DeliveriesPage() {
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
             <InputField
-              label="Scheduled Delivery Date"
+              label="Scheduled Delivery Date (Optional)"
               id="delDate"
               type="date"
               value={createForm.scheduledDate}
               onChange={(val) => setCreateForm((p) => ({ ...p, scheduledDate: val }))}
             />
             <InputField
-              label="Driver Contact Phone"
+              label="Driver Contact Phone (Optional)"
               id="delDriverPhone"
               value={createForm.driverPhone}
               onChange={(val) => setCreateForm((p) => ({ ...p, driverPhone: val }))}
@@ -830,16 +1021,33 @@ export function DeliveriesPage() {
             />
           </div>
 
-          {/* Installation Section */}
-          <div style={{ background: createForm.installationRequired ? '#fefce8' : '#f8fafc', border: `1px solid ${createForm.installationRequired ? '#fde047' : '#e2e8f0'}`, borderRadius: '8px', padding: '12px' }}>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 600, fontSize: '13px', cursor: 'pointer', color: '#1e293b' }}>
+          {/* Installation Section (Optional) */}
+          <div
+            style={{
+              background: createForm.installationRequired ? '#fefce8' : '#f8fafc',
+              border: `1px solid ${createForm.installationRequired ? '#fde047' : '#e2e8f0'}`,
+              borderRadius: '8px',
+              padding: '12px',
+            }}
+          >
+            <label
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                fontWeight: 600,
+                fontSize: '13px',
+                cursor: 'pointer',
+                color: '#1e293b',
+              }}
+            >
               <input
                 type="checkbox"
                 checked={createForm.installationRequired}
                 onChange={(e) => setCreateForm((p) => ({ ...p, installationRequired: e.target.checked }))}
                 style={{ width: '16px', height: '16px', accentColor: '#0b8f08' }}
               />
-              Include On-Site Product Installation Service
+              Include On-Site Product Installation Service (Optional)
             </label>
 
             {createForm.installationRequired && (
@@ -863,7 +1071,7 @@ export function DeliveriesPage() {
           </div>
 
           <TextareaField
-            label="Special Delivery Instructions / Gate Code"
+            label="Special Delivery Instructions / Gate Code (Optional)"
             id="delNotes"
             value={createForm.notes}
             onChange={(val) => setCreateForm((p) => ({ ...p, notes: val }))}

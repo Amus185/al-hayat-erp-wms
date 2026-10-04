@@ -1404,6 +1404,11 @@ tbody tr:hover { background: var(--primary-lighter); }
   background: #e2e8f0 !important;
 }
 
+/* Ensure SweetAlert modals & floating toasts ALWAYS sit above all application modals */
+.swal2-container {
+  z-index: 99999 !important;
+}
+
 /* ─── Card & Grid System ─────────────────────────────── */
 .card-grid {
   display: grid;

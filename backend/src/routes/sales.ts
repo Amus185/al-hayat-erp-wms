@@ -109,7 +109,8 @@ sales.get('/orders', async (c) => {
   const scopedBranchId = isAdminUser(payload) ? null : payload.branch_id;
 
   let query = `
-    SELECT so.*, c.name AS customer_name, b.name AS branch_name, i.id AS invoice_id,
+    SELECT so.*, c.name AS customer_name, c.phone AS customer_phone, c.address AS customer_address, c.city AS customer_city,
+           b.name AS branch_name, i.id AS invoice_id,
            i.total_amount AS invoice_total, i.discount_amount AS invoice_discount, i.status AS invoice_status,
            COALESCE((SELECT SUM(ip.amount) FROM invoice_payments ip WHERE ip.invoice_id = i.id), 0) AS amount_paid,
            (SELECT d.status FROM deliveries d WHERE d.sales_order_id = so.id AND d.status != 'CANCELLED' ORDER BY d.created_at DESC LIMIT 1) AS delivery_status,
@@ -210,7 +211,8 @@ sales.get('/orders/:id', async (c) => {
   const scopedBranchId = isAdminUser(payload) ? null : payload.branch_id;
 
   const { results: orders } = await c.env.DB.prepare(`
-    SELECT so.*, c.name AS customer_name, b.name AS branch_name,
+    SELECT so.*, c.name AS customer_name, c.phone AS customer_phone, c.address AS customer_address, c.city AS customer_city,
+           b.name AS branch_name,
            i.id AS invoice_id, i.invoice_number, i.total_amount AS invoice_total,
            i.discount_amount AS invoice_discount, i.status AS invoice_status, i.issued_at
     FROM sales_orders so
