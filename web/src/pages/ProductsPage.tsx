@@ -34,6 +34,7 @@ interface Product {
   cost_price: number;
   selling_price: number;
   reorder_level: number;
+  box_count?: number;
   is_active: boolean;
   category_name?: string;
   brand_name?: string;
@@ -97,6 +98,7 @@ export function ProductsPage() {
     costPrice: 0,
     sellingPrice: 0,
     reorderLevel: 5,
+    boxCount: 1,
     totalOpeningStock: 0,
   });
 
@@ -242,9 +244,9 @@ export function ProductsPage() {
   // CSV Template Downloader
   const handleDownloadTemplate = () => {
     const csvContent =
-      "SKU,Barcode,Name,Description,Category,Brand,CostPrice,SellingPrice,ReorderLevel,InitialStock,LocationType,LocationName\n" +
-      "FUR-001,8901001,Executive Desk 180cm,Ergonomic office desk,Office Furniture,AlHayat,250,400,5,10,WAREHOUSE,Central Warehouse\n" +
-      "CHAIR-001,8901002,Ergonomic Mesh Chair,Breathable mesh chair,Office Furniture,AlHayat,80,150,10,25,BRANCH,Calaamad Showroom\n";
+      "SKU,Barcode,Name,Description,Category,Brand,CostPrice,SellingPrice,ReorderLevel,BoxCount,InitialStock,LocationType,LocationName\n" +
+      "FUR-001,8901001,Executive Desk 180cm,Ergonomic office desk,Office Furniture,AlHayat,250,400,5,3,10,WAREHOUSE,Central Warehouse\n" +
+      "CHAIR-001,8901002,Ergonomic Mesh Chair,Breathable mesh chair,Office Furniture,AlHayat,80,150,10,1,25,BRANCH,Calaamad Showroom\n";
 
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
@@ -296,9 +298,10 @@ export function ProductsPage() {
           costPrice: Number(getVal('CostPrice', 6) || 0),
           sellingPrice: Number(getVal('SellingPrice', 7) || 0),
           reorderLevel: Number(getVal('ReorderLevel', 8) || 5),
-          initialStock: Number(getVal('InitialStock', 9) || 0),
-          locationType: (getVal('LocationType', 10) || 'WAREHOUSE').toUpperCase(),
-          locationName: getVal('LocationName', 11),
+          boxCount: Number(getVal('BoxCount', 9) || 1),
+          initialStock: Number(getVal('InitialStock', 10) || 0),
+          locationType: (getVal('LocationType', 11) || 'WAREHOUSE').toUpperCase(),
+          locationName: getVal('LocationName', 12),
         });
       }
 
@@ -386,6 +389,7 @@ export function ProductsPage() {
       costPrice: newProduct.costPrice,
       sellingPrice: newProduct.sellingPrice,
       reorderLevel: newProduct.reorderLevel,
+      boxCount: newProduct.boxCount || 1,
     };
     if (newProduct.categoryId) payload.categoryId = newProduct.categoryId;
     if (newProduct.brandId) payload.brandId = newProduct.brandId;
@@ -429,6 +433,7 @@ export function ProductsPage() {
         costPrice: 0,
         sellingPrice: 0,
         reorderLevel: 5,
+        boxCount: 1,
       });
       setInitialStockLines([]);
       loadData();
@@ -478,6 +483,7 @@ export function ProductsPage() {
         costPrice: editingProduct.cost_price,
         sellingPrice: editingProduct.selling_price,
         reorderLevel: editingProduct.reorder_level,
+        boxCount: editingProduct.box_count || 1,
         isActive: editingProduct.is_active !== undefined ? (editingProduct.is_active ? 1 : 0) : 1,
       });
 
@@ -526,6 +532,33 @@ export function ProductsPage() {
     { key: 'brand_name', label: 'Brand', render: (row) => row.brand_name || 'N/A' },
     { key: 'cost_price', label: 'Cost Price', render: (row) => `$${Number(row.cost_price).toLocaleString()}` },
     { key: 'selling_price', label: 'Selling Price', render: (row) => `$${Number(row.selling_price).toLocaleString()}` },
+    {
+      key: 'box_count',
+      label: 'Box Count',
+      sortable: true,
+      render: (row) => {
+        const count = row.box_count || 1;
+        return (
+          <span
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '4px',
+              padding: '2px 8px',
+              borderRadius: '6px',
+              fontSize: '12px',
+              fontWeight: 600,
+              background: '#f0f9ff',
+              color: '#0369a1',
+              border: '1px solid #bae6fd',
+            }}
+            title={`${count} physical boxes per unit for delivery`}
+          >
+            📦 {count} {count === 1 ? 'box' : 'boxes'}
+          </span>
+        );
+      },
+    },
     {
       key: 'status',
       label: 'Status',
@@ -758,7 +791,7 @@ export function ProductsPage() {
             </FormField>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px', marginTop: '10px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '14px', marginTop: '10px' }}>
             <InputField
               label="Cost Price ($) *"
               id="costPrice"
@@ -775,6 +808,32 @@ export function ProductsPage() {
               onChange={(val) => setNewProduct((prev) => ({ ...prev, sellingPrice: Number(val) }))}
               required
             />
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '14px', marginTop: '10px' }}>
+            <div>
+              <InputField
+                label="Delivery Box Count (Boxes per Unit) *"
+                id="boxCount"
+                type="number"
+                value={String(newProduct.boxCount || 1)}
+                onChange={(val) => setNewProduct((prev) => ({ ...prev, boxCount: Math.max(1, parseInt(val, 10) || 1) }))}
+                required
+              />
+              <div style={{ fontSize: '11px', color: '#64748b', marginTop: '3px' }}>
+                📦 Number of physical boxes for shipping 1 unit (e.g. Bed = 8 boxes). Used for split delivery logistics without changing inventory stock or price.
+              </div>
+            </div>
+            <div>
+              <InputField
+                label="Reorder Alert Level *"
+                id="reorderLevel"
+                type="number"
+                value={String(newProduct.reorderLevel || 5)}
+                onChange={(val) => setNewProduct((prev) => ({ ...prev, reorderLevel: Math.max(0, parseInt(val, 10) || 0) }))}
+                required
+              />
+            </div>
           </div>
 
           {/* Initial Stock Section — Multi-location */}
@@ -1035,10 +1094,23 @@ export function ProductsPage() {
               </FormField>
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '14px', marginTop: '10px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '14px', marginTop: '10px' }}>
               <InputField type="number" label="Cost Price ($) *" id="editCost" value={editingProduct.cost_price.toString()} onChange={(val) => setEditingProduct({ ...editingProduct, cost_price: parseFloat(val) || 0 })} required />
               <InputField type="number" label="Selling Price ($) *" id="editSell" value={editingProduct.selling_price.toString()} onChange={(val) => setEditingProduct({ ...editingProduct, selling_price: parseFloat(val) || 0 })} required />
               <InputField type="number" label="Reorder Level *" id="editReorder" value={editingProduct.reorder_level.toString()} onChange={(val) => setEditingProduct({ ...editingProduct, reorder_level: parseInt(val, 10) || 0 })} required />
+              <div>
+                <InputField
+                  type="number"
+                  label="Box Count (Per Unit) *"
+                  id="editBoxCount"
+                  value={String(editingProduct.box_count || 1)}
+                  onChange={(val) => setEditingProduct({ ...editingProduct, box_count: Math.max(1, parseInt(val, 10) || 1) })}
+                  required
+                />
+                <div style={{ fontSize: '11px', color: '#64748b', marginTop: '2px' }}>
+                  📦 Boxes per unit
+                </div>
+              </div>
             </div>
 
             <div style={{ marginTop: '16px', display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 14px', background: '#f8fafc', borderRadius: '8px', border: '1px solid #e2e8f0' }}>

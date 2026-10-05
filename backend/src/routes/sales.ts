@@ -783,7 +783,8 @@ sales.get('/orders', async (c) => {
            (SELECT d.status FROM deliveries d WHERE d.sales_order_id = so.id AND d.status != 'CANCELLED' ORDER BY d.created_at DESC LIMIT 1) AS delivery_status,
            (SELECT d.id FROM deliveries d WHERE d.sales_order_id = so.id AND d.status != 'CANCELLED' ORDER BY d.created_at DESC LIMIT 1) AS delivery_id,
            (SELECT d.delivery_number FROM deliveries d WHERE d.sales_order_id = so.id AND d.status != 'CANCELLED' ORDER BY d.created_at DESC LIMIT 1) AS delivery_number,
-           (SELECT d.delivered_at FROM deliveries d WHERE d.sales_order_id = so.id AND d.status != 'CANCELLED' ORDER BY d.created_at DESC LIMIT 1) AS delivered_at
+           (SELECT d.delivered_at FROM deliveries d WHERE d.sales_order_id = so.id AND d.status != 'CANCELLED' ORDER BY d.created_at DESC LIMIT 1) AS delivered_at,
+           (SELECT COALESCE(SUM(sol.quantity * COALESCE(p.box_count, 1)), 0) FROM sales_order_lines sol LEFT JOIN products p ON p.id = sol.product_id WHERE sol.sales_order_id = so.id) AS total_boxes
     FROM sales_orders so
     LEFT JOIN customers c ON c.id = so.customer_id
     JOIN branches b ON b.id = so.branch_id
@@ -897,11 +898,14 @@ sales.get('/orders/:id', async (c) => {
   }
 
   const { results: lines } = await c.env.DB.prepare(`
-    SELECT sol.*, p.name AS product_name, p.sku AS product_sku
+    SELECT sol.*, p.name AS product_name, p.sku AS product_sku, COALESCE(p.box_count, 1) AS box_count,
+           (sol.quantity * COALESCE(p.box_count, 1)) AS total_boxes
     FROM sales_order_lines sol
     LEFT JOIN products p ON p.id = sol.product_id
     WHERE sol.sales_order_id = ?
   `).bind(id).all();
+
+  order.total_boxes = (lines || []).reduce((sum: number, l: any) => sum + (Number(l.total_boxes) || Number(l.quantity) || 1), 0);
 
   // Enrich with payment summary if invoice exists
   let paymentSummary = null;

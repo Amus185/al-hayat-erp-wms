@@ -114,7 +114,7 @@ export async function ensurePostgresInit(pool: Pool) {
         id TEXT PRIMARY KEY, code TEXT UNIQUE, name TEXT NOT NULL, description TEXT, created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
       );
       CREATE TABLE IF NOT EXISTS products (
-        id TEXT PRIMARY KEY, sku TEXT UNIQUE NOT NULL, name TEXT NOT NULL, description TEXT, category_id TEXT REFERENCES categories(id), brand_id TEXT REFERENCES brands(id), unit_of_measure TEXT NOT NULL DEFAULT 'UNIT', cost_price DOUBLE PRECISION NOT NULL DEFAULT 0, selling_price DOUBLE PRECISION NOT NULL DEFAULT 0, reorder_level INTEGER NOT NULL DEFAULT 5, barcode TEXT UNIQUE, created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+        id TEXT PRIMARY KEY, sku TEXT UNIQUE NOT NULL, name TEXT NOT NULL, description TEXT, category_id TEXT REFERENCES categories(id), brand_id TEXT REFERENCES brands(id), unit_of_measure TEXT NOT NULL DEFAULT 'UNIT', cost_price DOUBLE PRECISION NOT NULL DEFAULT 0, selling_price DOUBLE PRECISION NOT NULL DEFAULT 0, reorder_level INTEGER NOT NULL DEFAULT 5, box_count INTEGER NOT NULL DEFAULT 1, barcode TEXT UNIQUE, created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
       );
       CREATE TABLE IF NOT EXISTS inventory_stock (
         id TEXT PRIMARY KEY, product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE, owner_type TEXT NOT NULL CHECK (owner_type IN ('WAREHOUSE', 'BRANCH')), warehouse_id TEXT REFERENCES warehouses(id), branch_id TEXT REFERENCES branches(id), location_id TEXT REFERENCES warehouse_locations(id), quantity_on_hand INTEGER NOT NULL DEFAULT 0, quantity_reserved INTEGER NOT NULL DEFAULT 0, updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -222,6 +222,7 @@ export async function ensurePostgresInit(pool: Pool) {
       ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS user_agent TEXT;
       ALTER TABLE journal_entries ADD COLUMN IF NOT EXISTS notes TEXT;
       ALTER TABLE products ADD COLUMN IF NOT EXISTS is_active INTEGER NOT NULL DEFAULT 1;
+      ALTER TABLE products ADD COLUMN IF NOT EXISTS box_count INTEGER NOT NULL DEFAULT 1;
       ALTER TABLE transfers ADD COLUMN IF NOT EXISTS approved_by TEXT REFERENCES users(id);
       ALTER TABLE transfers ADD COLUMN IF NOT EXISTS approved_at TIMESTAMP WITH TIME ZONE;
       ALTER TABLE transfers ADD COLUMN IF NOT EXISTS dispatched_by TEXT REFERENCES users(id);

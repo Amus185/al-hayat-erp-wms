@@ -56,7 +56,7 @@ export function SearchableSelect({
     <div
       ref={containerRef}
       id={id}
-      style={{ position: 'relative', width: '100%', ...style }}
+      style={{ position: 'relative', width: '100%', minWidth: 0, boxSizing: 'border-box', ...style }}
     >
       {/* Target input trigger */}
       <div
@@ -74,6 +74,9 @@ export function SearchableSelect({
           boxShadow: isOpen ? '0 0 0 3px rgba(6, 96, 6, 0.12)' : 'none',
           cursor: disabled ? 'not-allowed' : 'pointer',
           minHeight: '38px',
+          minWidth: 0,
+          width: '100%',
+          boxSizing: 'border-box',
           transition: 'all 0.15s ease',
           userSelect: 'none',
         }}
@@ -86,11 +89,13 @@ export function SearchableSelect({
             textOverflow: 'ellipsis',
             whiteSpace: 'nowrap',
             flex: 1,
+            minWidth: 0,
+            maxWidth: '100%',
             marginRight: '8px',
           }}
         >
           {selectedOption ? (
-            <span>
+            <span style={{ display: 'inline-block', maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               <strong>{selectedOption.label}</strong>
               {selectedOption.sublabel && (
                 <span style={{ color: '#667066', marginLeft: '6px', fontSize: '12px' }}>

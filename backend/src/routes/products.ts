@@ -10,7 +10,7 @@ products.use('/*', authMiddleware);
 products.get('/', async (c) => {
   const status = c.req.query('status'); // 'active' | 'inactive' | 'all'
   let query = `
-    SELECT p.*, COALESCE(p.is_active, 1) AS is_active, c.name as category_name, b.name as brand_name
+    SELECT p.*, COALESCE(p.box_count, 1) AS box_count, COALESCE(p.is_active, 1) AS is_active, c.name as category_name, b.name as brand_name
     FROM products p
     LEFT JOIN categories c ON p.category_id = c.id
     LEFT JOIN brands b ON p.brand_id = b.id
@@ -98,13 +98,15 @@ products.post('/', requirePermissions(['manage_inventory']), async (c) => {
 
   const stmts = [];
 
+  const boxCount = Math.max(1, parseInt(body.boxCount ?? body.box_count, 10) || 1);
+
   // 1. Insert product catalog entry
   stmts.push(c.env.DB.prepare(`
-    INSERT INTO products (id, sku, name, description, category_id, brand_id, cost_price, selling_price, reorder_level, barcode)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO products (id, sku, name, description, category_id, brand_id, cost_price, selling_price, reorder_level, box_count, barcode)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).bind(
     productId, body.sku.trim(), body.name.trim(), body.description || null, body.categoryId || null, 
-    body.brandId || null, cost, sell, body.reorderLevel || 5, body.barcode || null
+    body.brandId || null, cost, sell, body.reorderLevel || 5, boxCount, body.barcode || null
   ));
 
   // 2. Insert initial inventory_stock entry so product directly goes to inventory
@@ -231,14 +233,16 @@ products.post('/bulk', requirePermissions(['manage_inventory']), async (c) => {
     const cost = Math.max(0, Number(item.costPrice || 0));
     const sell = Math.max(cost, Number(item.sellingPrice || 0));
 
+    const boxCount = Math.max(1, parseInt(item.boxCount ?? item.box_count, 10) || 1);
+
     // ON CONFLICT on both sku and barcode as safety nets
     stmts.push(c.env.DB.prepare(`
-      INSERT INTO products (id, sku, barcode, name, description, category_id, brand_id, cost_price, selling_price, reorder_level)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO products (id, sku, barcode, name, description, category_id, brand_id, cost_price, selling_price, reorder_level, box_count)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT (sku) DO NOTHING
     `).bind(
       productId, sku, barcode, name, item.description || null,
-      categoryId, brandId, cost, sell, Number(item.reorderLevel || 5)
+      categoryId, brandId, cost, sell, Number(item.reorderLevel || 5), boxCount
     ));
 
     // Handle initial stock allocation
@@ -333,7 +337,7 @@ products.delete('/categories/:id', requirePermissions(['manage_inventory']), asy
 products.get('/:id', async (c) => {
   const id = c.req.param('id');
   const product = await c.env.DB.prepare(`
-    SELECT p.*, COALESCE(p.is_active, 1) AS is_active, c.name as category_name, b.name as brand_name
+    SELECT p.*, COALESCE(p.box_count, 1) AS box_count, COALESCE(p.is_active, 1) AS is_active, c.name as category_name, b.name as brand_name
     FROM products p
     LEFT JOIN categories c ON p.category_id = c.id
     LEFT JOIN brands b ON p.brand_id = b.id
@@ -406,6 +410,11 @@ products.patch('/:id', requirePermissions(['manage_inventory']), async (c) => {
     fields.push('reorder_level = ?'); vals.push(reorder);
   }
 
+  if (body.boxCount !== undefined || body.box_count !== undefined) {
+    const boxCount = Math.max(1, parseInt(body.boxCount ?? body.box_count, 10) || 1);
+    fields.push('box_count = ?'); vals.push(boxCount);
+  }
+
   if (body.isActive !== undefined || body.is_active !== undefined) {
     const active = (body.isActive ?? body.is_active) ? 1 : 0;
     fields.push('is_active = ?'); vals.push(active);
@@ -421,7 +430,7 @@ products.patch('/:id', requirePermissions(['manage_inventory']), async (c) => {
   await c.env.DB.prepare(`UPDATE products SET ${fields.join(', ')} WHERE id = ?`).bind(...vals).run();
 
   const updated = await c.env.DB.prepare(`
-    SELECT p.*, COALESCE(p.is_active, 1) AS is_active, c.name as category_name, b.name as brand_name
+    SELECT p.*, COALESCE(p.box_count, 1) AS box_count, COALESCE(p.is_active, 1) AS is_active, c.name as category_name, b.name as brand_name
     FROM products p
     LEFT JOIN categories c ON p.category_id = c.id
     LEFT JOIN brands b ON p.brand_id = b.id

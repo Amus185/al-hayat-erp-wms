@@ -883,31 +883,39 @@ tbody tr:hover { background: var(--primary-lighter); }
   align-items: center;
   justify-content: center;
   z-index: 100;
-  padding: 24px;
+  padding: 16px;
   animation: fadeIn 0.15s ease;
+  box-sizing: border-box;
+  overflow-x: hidden;
 }
 .modal-panel {
   background: var(--bg-card);
   border-radius: var(--radius-lg);
   box-shadow: 0 20px 60px rgba(0,0,0,0.3);
   width: 100%;
-  max-height: calc(100vh - 48px);
+  max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 32px);
   display: flex;
   flex-direction: column;
   animation: slideInUp 0.2s ease;
+  box-sizing: border-box;
+  overflow: hidden;
 }
-.modal-panel--sm { max-width: 420px; }
-.modal-panel--md { max-width: 560px; }
-.modal-panel--lg { max-width: 720px; }
-.modal-panel--xl { max-width: 960px; }
+.modal-panel--sm { max-width: min(calc(100vw - 32px), 420px); }
+.modal-panel--md { max-width: min(calc(100vw - 32px), 560px); }
+.modal-panel--lg { max-width: min(calc(100vw - 32px), 760px); }
+.modal-panel--xl { max-width: min(calc(100vw - 32px), 980px); }
 .modal-panel__header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 18px 22px;
+  padding: 16px 20px;
   border-bottom: 1px solid var(--border);
+  box-sizing: border-box;
+  width: 100%;
+  flex-shrink: 0;
 }
-.modal-panel__header h2 { font-size: 18px; font-weight: 700; }
+.modal-panel__header h2 { font-size: 18px; font-weight: 700; margin: 0; }
 .modal-panel__close {
   width: 34px; height: 34px;
   display: grid;
@@ -918,17 +926,35 @@ tbody tr:hover { background: var(--primary-lighter); }
   cursor: pointer;
   color: var(--text-muted);
   transition: all var(--transition);
+  flex-shrink: 0;
 }
 .modal-panel__close:hover { background: #fee2e2; color: #dc2626; border-color: #fecaca; }
-.modal-panel__body { padding: 22px; overflow-y: auto; flex: 1; }
+.modal-panel__body {
+  padding: 20px;
+  overflow-y: auto;
+  overflow-x: hidden !important;
+  flex: 1;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  word-break: break-word;
+  overflow-wrap: break-word;
+}
+.modal-panel__body * {
+  max-width: 100%;
+  box-sizing: border-box;
+}
 .modal-panel__footer {
   display: flex;
   gap: 12px;
   justify-content: flex-end;
-  padding: 16px 22px;
+  padding: 16px 20px;
   border-top: 1px solid var(--border);
   background: var(--bg);
   border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+  box-sizing: border-box;
+  width: 100%;
+  flex-shrink: 0;
 }
 
 /* ── Slide-Over ───────────────────────────────────── */
