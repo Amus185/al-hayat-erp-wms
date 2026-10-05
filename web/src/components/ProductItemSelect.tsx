@@ -16,7 +16,8 @@ export interface SelectableProduct {
 
 interface ProductItemSelectProps {
   products: SelectableProduct[];
-  onSelect: (product: SelectableProduct) => void;
+  onSelect?: (product: SelectableProduct) => void;
+  onSelectProduct?: (product: SelectableProduct) => void;
   placeholder?: string;
   priceLabel?: string;
   existingLines?: { productId: string; quantity?: number }[];
@@ -26,6 +27,7 @@ interface ProductItemSelectProps {
 export function ProductItemSelect({
   products,
   onSelect,
+  onSelectProduct,
   placeholder = 'Search or click to select product to add...',
   priceLabel = 'Price',
   existingLines = [],
@@ -77,7 +79,10 @@ export function ProductItemSelect({
   }, [highlightedIndex, isOpen]);
 
   const handleSelect = (product: SelectableProduct) => {
-    onSelect(product);
+    const fn = onSelect || onSelectProduct;
+    if (typeof fn === 'function') {
+      fn(product);
+    }
     setSearch('');
     setIsOpen(false);
     if (inputRef.current) {

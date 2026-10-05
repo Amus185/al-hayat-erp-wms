@@ -473,18 +473,38 @@ export function CreateSalesOrderModal({ isOpen, onClose, onOrderCreated }: Creat
           </label>
           <ProductItemSelect
             products={products.map((p) => {
-              const sInfo = branchId ? getProductStockInfo(p.id, branchId) : { branchQty: 0, otherLocations: [], totalOtherQty: 0 };
+              const sInfo = branchId ? getProductStockInfo(p.id, branchId) : null;
+              let hint: string | null = null;
+              if (sInfo) {
+                if (sInfo.branchQty > 0) {
+                  if (sInfo.totalOtherQty > 0) {
+                    hint = `(+${sInfo.totalOtherQty} in other locations)`;
+                  }
+                } else {
+                  if (sInfo.otherLocations.length > 0) {
+                    const locList = sInfo.otherLocations.map((l) => `${l.qty} at ${l.name}`).join(', ');
+                    hint = `Available: ${locList}`;
+                  } else {
+                    hint = 'Out of stock in all locations';
+                  }
+                }
+              }
+
               return {
                 id: p.id,
                 sku: p.sku,
                 name: p.name,
                 price: p.sellingPrice,
                 category: 'Furniture',
-                stockOnHand: sInfo.branchQty,
-                otherLocations: sInfo.otherLocations,
+                stock: sInfo ? sInfo.branchQty : undefined,
+                stockHint: hint,
+                stockWarning: sInfo ? sInfo.branchQty === 0 : false,
               };
             })}
-            onSelectProduct={(p) => addLine(p)}
+            onSelect={addLine}
+            onSelectProduct={addLine}
+            existingLines={lines.map((l) => ({ productId: l.productId, quantity: l.quantity }))}
+            placeholder="Search products by name, SKU, or barcode..."
           />
         </div>
 
