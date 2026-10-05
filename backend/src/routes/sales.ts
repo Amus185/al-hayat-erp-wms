@@ -206,9 +206,14 @@ sales.get('/debts/summary', async (c) => {
   `).all().catch(() => ({ results: [] }));
 
   const totalCollectedRes = await c.env.DB.prepare(`
-    SELECT 
-      (SELECT COALESCE(SUM(amount), 0) FROM invoice_payments) +
-      (SELECT COALESCE(SUM(amount), 0) FROM customer_payments WHERE allocation_type != 'INVOICE') AS total_collected
+    SELECT COALESCE(SUM(amount), 0) AS total_collected
+    FROM customer_payments
+    WHERE notes IS NULL 
+       OR (
+         notes NOT LIKE '%Full payment via Complete Sale%' 
+         AND notes NOT LIKE '%Deposit / Partial payment via Complete Sale%' 
+         AND notes NOT LIKE '%Upfront Deposit at Checkout%'
+       )
   `).first().catch(() => ({ total_collected: 0 }));
 
   const customerBalances = new Map<string, number>();
@@ -239,6 +244,7 @@ sales.get('/debts/summary', async (c) => {
     total_outstanding_debt: totalOutstandingDebt,
     total_debt_collected: Number(totalCollectedRes?.total_collected || 0),
     total_active_debtors: activeDebtorsCount,
+    active_debtors: activeDebtorsCount,
   });
 });
 
@@ -285,15 +291,25 @@ sales.get('/debts', async (c) => {
     const curBal = Math.max(0, Number(r.unpaid_sales_balance || 0) + Number(r.unpaid_manual_balance || 0) - Number(r.unallocated_payments || 0));
     return {
       id: r.id,
+      customer_id: r.id,
       name: r.name,
+      customer_name: r.name,
       phone: r.phone,
+      customer_phone: r.phone,
       email: r.email,
+      customer_email: r.email,
       address: r.address,
       city: r.city,
       current_balance: curBal,
+      outstanding_balance: curBal,
+      unpaid_sales: Number(r.unpaid_sales_balance || 0),
       unpaid_sales_balance: Number(r.unpaid_sales_balance || 0),
+      unpaid_manual: Number(r.unpaid_manual_balance || 0),
       unpaid_manual_balance: Number(r.unpaid_manual_balance || 0),
+      unallocated_payments: Number(r.unallocated_payments || 0),
       last_payment_date: r.last_payment_date,
+      last_activity_date: r.last_payment_date,
+      active_debts_count: curBal > 0.01 ? 1 : 0,
       debt_status: curBal > 0.01 ? 'DEBT_ACTIVE' : 'CURRENT',
     };
   });
@@ -305,6 +321,9 @@ sales.get('/debts', async (c) => {
 
   if (status && status !== 'ALL') {
     rows = rows.filter((r) => r.debt_status === status);
+  } else if (!status) {
+    // By default, debts endpoint returns only customers who actually have outstanding debt
+    rows = rows.filter((r) => r.current_balance > 0.01);
   }
 
   return c.json(rows);
@@ -551,7 +570,9 @@ sales.get('/customers/:id/ledger', async (c) => {
       description: e.description,
       reference: e.reference,
       charge: e.charge,
+      debit: e.charge,
       payment: e.payment,
+      credit: e.payment,
       running_balance: runningBalance,
       type: e.type,
     };
@@ -566,6 +587,8 @@ sales.get('/customers/:id/ledger', async (c) => {
       address: customer.address,
       current_balance: runningBalance,
     },
+    current_balance: runningBalance,
+    entries: ledger,
     ledger,
   });
 });

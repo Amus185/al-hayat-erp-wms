@@ -43,29 +43,41 @@ interface SalesOrder {
 interface DebtSummary {
   total_outstanding_debt: number;
   total_debt_collected: number;
-  active_debtors: number;
+  active_debtors?: number;
+  total_active_debtors?: number;
 }
 
 interface DebtorRow {
+  id?: string;
   customer_id: string;
+  name?: string;
   customer_name: string;
+  phone?: string | null;
   customer_phone: string | null;
+  email?: string | null;
   customer_email: string | null;
   unpaid_sales: number;
+  unpaid_sales_balance?: number;
   unpaid_manual: number;
+  unpaid_manual_balance?: number;
   unallocated_payments: number;
   outstanding_balance: number;
+  current_balance?: number;
   last_activity_date: string | null;
+  last_payment_date?: string | null;
   active_debts_count: number;
 }
 
 interface LedgerEntry {
+  id?: string;
   date: string;
-  type: 'SALE_INVOICE' | 'MANUAL_DEBT' | 'INVOICE_PAYMENT' | 'ACCOUNT_PAYMENT';
+  type: string;
   reference: string;
   description: string;
-  debit: number;
-  credit: number;
+  debit?: number;
+  charge?: number;
+  credit?: number;
+  payment?: number;
   running_balance: number;
 }
 
@@ -76,9 +88,11 @@ interface CustomerLedgerData {
     phone: string | null;
     email: string | null;
     address: string | null;
+    current_balance?: number;
   };
-  current_balance: number;
-  entries: LedgerEntry[];
+  current_balance?: number;
+  entries?: LedgerEntry[];
+  ledger?: LedgerEntry[];
 }
 
 interface ManualDebtItem {
@@ -535,15 +549,24 @@ export function CustomersPage() {
     );
   }, [customers, search]);
 
+  const activeDebtors = useMemo(() => {
+    return debtors.filter(d => (d.outstanding_balance ?? (d as any).current_balance ?? 0) > 0.01);
+  }, [debtors]);
+
   const filteredDebtors = useMemo(() => {
     const q = search.toLowerCase().trim();
-    if (!q) return debtors;
-    return debtors.filter(d =>
-      d.customer_name.toLowerCase().includes(q) ||
-      (d.customer_phone || '').includes(q) ||
-      (d.customer_email || '').toLowerCase().includes(q)
-    );
-  }, [debtors, search]);
+    if (!q) return activeDebtors;
+    return activeDebtors.filter(d => {
+      const name = d.customer_name || (d as any).name || '';
+      const phone = d.customer_phone || (d as any).phone || '';
+      const email = d.customer_email || (d as any).email || '';
+      return (
+        name.toLowerCase().includes(q) ||
+        phone.includes(q) ||
+        email.toLowerCase().includes(q)
+      );
+    });
+  }, [activeDebtors, search]);
 
   // Printable Statement Trigger
   const handlePrintStatement = () => {
@@ -552,6 +575,9 @@ export function CustomersPage() {
     if (!w) { addToast('error', 'Pop-up blocked. Please allow pop-ups to print statement.'); return; }
 
     const c = ledgerData.customer;
+    const currentBal = ledgerData.current_balance ?? ledgerData.customer?.current_balance ?? 0;
+    const entries = ledgerData.entries || (ledgerData as any).ledger || [];
+
     w.document.write(`
       <!DOCTYPE html>
       <html>
@@ -603,7 +629,7 @@ export function CustomersPage() {
           </div>
           <div class="balance-box">
             <h3>Net Outstanding Balance</h3>
-            <div class="amount">${fmt(ledgerData.current_balance)}</div>
+            <div class="amount">${fmt(currentBal)}</div>
             <p style="font-size: 11px; color: #7f1d1d; margin-top: 4px;">As of ${new Date().toLocaleDateString()}</p>
           </div>
         </div>
@@ -619,16 +645,20 @@ export function CustomersPage() {
             </tr>
           </thead>
           <tbody>
-            ${ledgerData.entries.map(e => `
+            ${entries.map(e => {
+              const debitVal = Number(e.debit ?? (e as any).charge ?? 0);
+              const creditVal = Number(e.credit ?? (e as any).payment ?? 0);
+              return `
               <tr>
                 <td>${new Date(e.date).toLocaleDateString()}</td>
                 <td style="font-family: monospace; font-weight: 600;">${e.reference}</td>
                 <td>${e.description}</td>
-                <td class="debit">${e.debit > 0 ? fmt(e.debit) : '—'}</td>
-                <td class="credit">${e.credit > 0 ? fmt(e.credit) : '—'}</td>
+                <td class="debit">${debitVal > 0 ? fmt(debitVal) : '—'}</td>
+                <td class="credit">${creditVal > 0 ? fmt(creditVal) : '—'}</td>
                 <td class="run-bal" style="color: ${e.running_balance > 0 ? '#b91c1c' : '#15803d'};">${fmt(e.running_balance)}</td>
               </tr>
-            `).join('')}
+            `;
+            }).join('')}
           </tbody>
         </table>
         <div class="footer">
@@ -840,7 +870,9 @@ export function CustomersPage() {
             <Users size={24} />
           </div>
           <div>
-            <div style={{ fontSize: '22px', fontWeight: 800, color: '#1d4ed8' }}>{debtSummary.active_debtors}</div>
+            <div style={{ fontSize: '22px', fontWeight: 800, color: '#1d4ed8' }}>
+              {debtSummary.active_debtors ?? debtSummary.total_active_debtors ?? activeDebtors.length}
+            </div>
             <div style={{ fontSize: '12px', fontWeight: 600, color: '#1e40af' }}>Active Debtors</div>
           </div>
         </div>
@@ -861,7 +893,7 @@ export function CustomersPage() {
         <Tabs
           tabs={[
             { id: 'ALL', label: `All Customers (${customers.length})` },
-            { id: 'DEBTS', label: `Customer Debt Ledger (${debtors.length})` },
+            { id: 'DEBTS', label: `Customer Debt Ledger (${activeDebtors.length})` },
           ]}
           activeTab={activeTab}
           onChange={(tab) => setActiveTab(tab as 'ALL' | 'DEBTS')}
@@ -918,89 +950,100 @@ export function CustomersPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredDebtors.map((d) => (
-                    <tr key={d.customer_id} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                      <td style={{ padding: '12px 16px' }}>
-                        <div style={{ fontWeight: 700, color: '#0f172a' }}>{d.customer_name}</div>
-                        <div style={{ fontSize: '12px', color: '#64748b', display: 'flex', gap: '10px', marginTop: '2px' }}>
-                          {d.customer_phone && <span>📞 {d.customer_phone}</span>}
-                          {d.customer_email && <span>✉️ {d.customer_email}</span>}
-                        </div>
-                      </td>
-                      <td style={{ padding: '12px 16px', textAlign: 'right', fontWeight: 600, color: '#334155' }}>
-                        {fmt(d.unpaid_sales)}
-                      </td>
-                      <td style={{ padding: '12px 16px', textAlign: 'right', fontWeight: 600, color: '#b45309' }}>
-                        {fmt(d.unpaid_manual)}
-                      </td>
-                      <td style={{ padding: '12px 16px', textAlign: 'right', fontWeight: 600, color: '#16a34a' }}>
-                        {d.unallocated_payments > 0 ? `-${fmt(d.unallocated_payments)}` : '$0.00'}
-                      </td>
-                      <td style={{ padding: '12px 16px', textAlign: 'right' }}>
-                        <span style={{
-                          fontWeight: 800,
-                          fontSize: '14px',
-                          color: '#b91c1c',
-                          background: '#fef2f2',
-                          padding: '4px 10px',
-                          borderRadius: '6px',
-                          border: '1px solid #fecaca',
-                          display: 'inline-block',
-                        }}>
-                          {fmt(d.outstanding_balance)}
-                        </span>
-                      </td>
-                      <td style={{ padding: '12px 16px', textAlign: 'center', fontSize: '12px', color: '#64748b' }}>
-                        {d.last_activity_date ? new Date(d.last_activity_date).toLocaleDateString() : '—'}
-                      </td>
-                      <td style={{ padding: '12px 16px', textAlign: 'center' }}>
-                        <div style={{ display: 'flex', gap: '6px', justifyContent: 'center' }}>
-                          <button
-                            type="button"
-                            onClick={() => openCustomerLedger(d)}
-                            title="View Chronological Ledger"
-                            style={{
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              gap: '4px',
-                              padding: '5px 9px',
-                              background: '#f8fafc',
-                              color: '#0f172a',
-                              border: '1px solid #cbd5e1',
-                              borderRadius: '6px',
-                              fontSize: '12px',
-                              fontWeight: 600,
-                              cursor: 'pointer',
-                            }}
-                          >
-                            <BookOpen size={13} /> Ledger
-                          </button>
-                          {hasPermission('manage_sales') && (
-                            <>
-                              <button
-                                type="button"
-                                onClick={() => openAddDebt(d.customer_id)}
-                                title="Add Manual Charge (assembly, repair, upholstery)"
-                                style={{
-                                  display: 'inline-flex',
-                                  alignItems: 'center',
-                                  gap: '3px',
-                                  padding: '5px 8px',
-                                  background: '#fffbeb',
-                                  color: '#b45309',
-                                  border: '1px solid #fde68a',
-                                  borderRadius: '6px',
-                                  fontSize: '12px',
-                                  fontWeight: 600,
-                                  cursor: 'pointer',
-                                }}
-                              >
-                                <Wrench size={13} /> Charge
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => openPaymentModal(d.customer_id, d.outstanding_balance)}
-                                title="Record Debt Payment"
+                  {filteredDebtors.map((d) => {
+                    const custId = d.customer_id || (d as any).id;
+                    const custName = d.customer_name || (d as any).name || 'Unknown Customer';
+                    const custPhone = d.customer_phone || (d as any).phone;
+                    const custEmail = d.customer_email || (d as any).email;
+                    const unpaidSales = Number(d.unpaid_sales ?? (d as any).unpaid_sales_balance ?? 0);
+                    const unpaidManual = Number(d.unpaid_manual ?? (d as any).unpaid_manual_balance ?? 0);
+                    const unallocated = Number(d.unallocated_payments ?? 0);
+                    const netOutstanding = Number(d.outstanding_balance ?? (d as any).current_balance ?? 0);
+                    const lastAct = d.last_activity_date || (d as any).last_payment_date;
+
+                    return (
+                      <tr key={custId} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                        <td style={{ padding: '12px 16px' }}>
+                          <div style={{ fontWeight: 700, color: '#0f172a' }}>{custName}</div>
+                          <div style={{ fontSize: '12px', color: '#64748b', display: 'flex', gap: '10px', marginTop: '2px' }}>
+                            {custPhone && <span>📞 {custPhone}</span>}
+                            {custEmail && <span>✉️ {custEmail}</span>}
+                          </div>
+                        </td>
+                        <td style={{ padding: '12px 16px', textAlign: 'right', fontWeight: 600, color: '#334155' }}>
+                          {fmt(unpaidSales)}
+                        </td>
+                        <td style={{ padding: '12px 16px', textAlign: 'right', fontWeight: 600, color: '#b45309' }}>
+                          {fmt(unpaidManual)}
+                        </td>
+                        <td style={{ padding: '12px 16px', textAlign: 'right', fontWeight: 600, color: '#16a34a' }}>
+                          {unallocated > 0 ? `-${fmt(unallocated)}` : '$0.00'}
+                        </td>
+                        <td style={{ padding: '12px 16px', textAlign: 'right' }}>
+                          <span style={{
+                            fontWeight: 800,
+                            fontSize: '14px',
+                            color: '#b91c1c',
+                            background: '#fef2f2',
+                            padding: '4px 10px',
+                            borderRadius: '6px',
+                            border: '1px solid #fecaca',
+                            display: 'inline-block',
+                          }}>
+                            {fmt(netOutstanding)}
+                          </span>
+                        </td>
+                        <td style={{ padding: '12px 16px', textAlign: 'center', fontSize: '12px', color: '#64748b' }}>
+                          {lastAct ? new Date(lastAct).toLocaleDateString() : '—'}
+                        </td>
+                        <td style={{ padding: '12px 16px', textAlign: 'center' }}>
+                          <div style={{ display: 'flex', gap: '6px', justifyContent: 'center' }}>
+                            <button
+                              type="button"
+                              onClick={() => openCustomerLedger(d)}
+                              title="View Chronological Ledger"
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '4px',
+                                padding: '5px 9px',
+                                background: '#f8fafc',
+                                color: '#0f172a',
+                                border: '1px solid #cbd5e1',
+                                borderRadius: '6px',
+                                fontSize: '12px',
+                                fontWeight: 600,
+                                cursor: 'pointer',
+                              }}
+                            >
+                              <BookOpen size={13} /> Ledger
+                            </button>
+                            {hasPermission('manage_sales') && (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => openAddDebt(custId)}
+                                  title="Add Manual Charge (assembly, repair, upholstery)"
+                                  style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '3px',
+                                    padding: '5px 8px',
+                                    background: '#fffbeb',
+                                    color: '#b45309',
+                                    border: '1px solid #fde68a',
+                                    borderRadius: '6px',
+                                    fontSize: '12px',
+                                    fontWeight: 600,
+                                    cursor: 'pointer',
+                                  }}
+                                >
+                                  <Wrench size={13} /> Charge
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => openPaymentModal(custId, netOutstanding)}
+                                  title="Record Debt Payment"
                                 style={{
                                   display: 'inline-flex',
                                   alignItems: 'center',
@@ -1022,8 +1065,9 @@ export function CustomersPage() {
                         </div>
                       </td>
                     </tr>
-                  ))}
-                </tbody>
+                  );
+                })}
+              </tbody>
               </table>
             </div>
           </div>
@@ -1219,159 +1263,168 @@ export function CustomersPage() {
           <div style={{ textAlign: 'center', padding: '40px', color: '#dc2626' }}>
             Failed to load customer ledger. Please try again.
           </div>
-        ) : (
-          <div>
-            {/* Ledger Header Card with Running Balance */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '14px', marginBottom: '16px' }}>
-              <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '10px', padding: '14px' }}>
-                <h4 style={{ margin: '0 0 6px', fontSize: '11px', textTransform: 'uppercase', color: '#64748b', letterSpacing: '0.05em' }}>Customer Information</h4>
-                <div style={{ fontWeight: 700, fontSize: '15px', color: '#0f172a' }}>{ledgerData.customer.name}</div>
-                {ledgerData.customer.phone && <div style={{ fontSize: '13px', color: '#475569', marginTop: '2px' }}>📞 {ledgerData.customer.phone}</div>}
-                {ledgerData.customer.address && <div style={{ fontSize: '12px', color: '#64748b', marginTop: '2px' }}>📍 {ledgerData.customer.address}</div>}
-              </div>
+        ) : (() => {
+          const ledgerEntries = ledgerData.entries || (ledgerData as any).ledger || [];
+          const currentBal = ledgerData.current_balance ?? ledgerData.customer?.current_balance ?? 0;
 
-              <div style={{
-                background: ledgerData.current_balance > 0 ? '#fef2f2' : '#f0fdf4',
-                border: `1.5px solid ${ledgerData.current_balance > 0 ? '#fca5a5' : '#86efac'}`,
-                borderRadius: '10px',
-                padding: '14px',
-                display: 'flex',
-                flexDirection: 'column',
-                justifyContent: 'space-between',
-              }}>
-                <div>
-                  <div style={{ fontSize: '11px', textTransform: 'uppercase', fontWeight: 700, color: ledgerData.current_balance > 0 ? '#991b1b' : '#166534' }}>
-                    Current Net Outstanding Balance
-                  </div>
-                  <div style={{ fontSize: '26px', fontWeight: 800, color: ledgerData.current_balance > 0 ? '#b91c1c' : '#15803d', marginTop: '2px' }}>
-                    {fmt(ledgerData.current_balance)}
-                  </div>
+          return (
+            <div>
+              {/* Ledger Header Card with Running Balance */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '14px', marginBottom: '16px' }}>
+                <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '10px', padding: '14px' }}>
+                  <h4 style={{ margin: '0 0 6px', fontSize: '11px', textTransform: 'uppercase', color: '#64748b', letterSpacing: '0.05em' }}>Customer Information</h4>
+                  <div style={{ fontWeight: 700, fontSize: '15px', color: '#0f172a' }}>{ledgerData.customer?.name}</div>
+                  {ledgerData.customer?.phone && <div style={{ fontSize: '13px', color: '#475569', marginTop: '2px' }}>📞 {ledgerData.customer.phone}</div>}
+                  {ledgerData.customer?.address && <div style={{ fontSize: '12px', color: '#64748b', marginTop: '2px' }}>📍 {ledgerData.customer.address}</div>}
                 </div>
 
-                <div style={{ display: 'flex', gap: '8px', marginTop: '10px', flexWrap: 'wrap' }}>
-                  {ledgerData.current_balance > 0 && hasPermission('manage_sales') && (
+                <div style={{
+                  background: currentBal > 0 ? '#fef2f2' : '#f0fdf4',
+                  border: `1.5px solid ${currentBal > 0 ? '#fca5a5' : '#86efac'}`,
+                  borderRadius: '10px',
+                  padding: '14px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  justifyContent: 'space-between',
+                }}>
+                  <div>
+                    <div style={{ fontSize: '11px', textTransform: 'uppercase', fontWeight: 700, color: currentBal > 0 ? '#991b1b' : '#166534' }}>
+                      Current Net Outstanding Balance
+                    </div>
+                    <div style={{ fontSize: '26px', fontWeight: 800, color: currentBal > 0 ? '#b91c1c' : '#15803d', marginTop: '2px' }}>
+                      {fmt(currentBal)}
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', gap: '8px', marginTop: '10px', flexWrap: 'wrap' }}>
+                    {currentBal > 0 && hasPermission('manage_sales') && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsLedgerModalOpen(false);
+                          openPaymentModal(ledgerData.customer.id, currentBal);
+                        }}
+                        style={{
+                          padding: '5px 10px',
+                          background: '#15803d',
+                          color: '#fff',
+                          border: 'none',
+                          borderRadius: '6px',
+                          fontSize: '12px',
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '4px',
+                        }}
+                      >
+                        <CreditCard size={13} /> Pay in Full
+                      </button>
+                    )}
                     <button
                       type="button"
-                      onClick={() => {
-                        setIsLedgerModalOpen(false);
-                        openPaymentModal(ledgerData.customer.id, ledgerData.current_balance);
-                      }}
+                      onClick={handlePrintStatement}
                       style={{
                         padding: '5px 10px',
-                        background: '#15803d',
-                        color: '#fff',
-                        border: 'none',
+                        background: '#fff',
+                        color: '#0f172a',
+                        border: '1px solid #cbd5e1',
                         borderRadius: '6px',
                         fontSize: '12px',
-                        fontWeight: 700,
+                        fontWeight: 600,
                         cursor: 'pointer',
                         display: 'flex',
                         alignItems: 'center',
                         gap: '4px',
                       }}
                     >
-                      <CreditCard size={13} /> Pay in Full
+                      <Printer size={13} /> Print Statement
                     </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={handlePrintStatement}
-                    style={{
-                      padding: '5px 10px',
-                      background: '#fff',
-                      color: '#0f172a',
-                      border: '1px solid #cbd5e1',
-                      borderRadius: '6px',
-                      fontSize: '12px',
-                      fontWeight: 600,
-                      cursor: 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '4px',
-                    }}
-                  >
-                    <Printer size={13} /> Print Statement
-                  </button>
+                  </div>
                 </div>
               </div>
-            </div>
 
-            {/* Chronological Ledger Table */}
-            <div style={{ border: '1px solid #e2e8f0', borderRadius: '8px', overflow: 'hidden' }}>
-              <div style={{ background: '#f8fafc', padding: '10px 14px', borderBottom: '1px solid #e2e8f0', fontWeight: 700, fontSize: '13px', color: '#0f172a' }}>
-                Bank-Style Chronological Ledger Activity
-              </div>
-              {ledgerData.entries.length === 0 ? (
-                <div style={{ padding: '24px', textAlign: 'center', color: '#94a3b8', fontSize: '13px' }}>
-                  No transaction records found in customer ledger.
+              {/* Chronological Ledger Table */}
+              <div style={{ border: '1px solid #e2e8f0', borderRadius: '8px', overflow: 'hidden' }}>
+                <div style={{ background: '#f8fafc', padding: '10px 14px', borderBottom: '1px solid #e2e8f0', fontWeight: 700, fontSize: '13px', color: '#0f172a' }}>
+                  Bank-Style Chronological Ledger Activity
                 </div>
-              ) : (
-                <div style={{ maxHeight: '380px', overflowY: 'auto' }}>
-                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
-                    <thead>
-                      <tr style={{ background: '#f1f5f9', borderBottom: '1px solid #e2e8f0', textAlign: 'left', position: 'sticky', top: 0 }}>
-                        <th style={{ padding: '8px 12px', fontWeight: 600, color: '#475569' }}>Date</th>
-                        <th style={{ padding: '8px 12px', fontWeight: 600, color: '#475569' }}>Reference</th>
-                        <th style={{ padding: '8px 12px', fontWeight: 600, color: '#475569' }}>Description</th>
-                        <th style={{ padding: '8px 12px', fontWeight: 600, color: '#475569', textAlign: 'right' }}>Charge (DR)</th>
-                        <th style={{ padding: '8px 12px', fontWeight: 600, color: '#475569', textAlign: 'right' }}>Payment (CR)</th>
-                        <th style={{ padding: '8px 12px', fontWeight: 700, color: '#0f172a', textAlign: 'right' }}>Running Balance</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {ledgerData.entries.map((entry, idx) => (
-                        <tr key={idx} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                          <td style={{ padding: '8px 12px', color: '#64748b' }}>
-                            {new Date(entry.date).toLocaleDateString()}
-                          </td>
-                          <td style={{ padding: '8px 12px' }}>
-                            <span style={{
-                              fontFamily: 'monospace',
-                              fontWeight: 700,
-                              color: entry.type.includes('PAYMENT') ? '#15803d' : '#0f172a',
-                              background: entry.type.includes('PAYMENT') ? '#dcfce7' : '#f1f5f9',
-                              padding: '2px 6px',
-                              borderRadius: '4px',
-                            }}>
-                              {entry.reference}
-                            </span>
-                          </td>
-                          <td style={{ padding: '8px 12px', color: '#334155' }}>
-                            {entry.description}
-                          </td>
-                          <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 600, color: entry.debit > 0 ? '#b91c1c' : '#94a3b8' }}>
-                            {entry.debit > 0 ? fmt(entry.debit) : '—'}
-                          </td>
-                          <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 600, color: entry.credit > 0 ? '#15803d' : '#94a3b8' }}>
-                            {entry.credit > 0 ? fmt(entry.credit) : '—'}
-                          </td>
-                          <td style={{
-                            padding: '8px 12px',
-                            textAlign: 'right',
-                            fontWeight: 700,
-                            color: entry.running_balance > 0 ? '#b91c1c' : '#15803d',
-                          }}>
-                            {fmt(entry.running_balance)}
-                          </td>
+                {ledgerEntries.length === 0 ? (
+                  <div style={{ padding: '24px', textAlign: 'center', color: '#94a3b8', fontSize: '13px' }}>
+                    No transaction records found in customer ledger.
+                  </div>
+                ) : (
+                  <div style={{ maxHeight: '380px', overflowY: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
+                      <thead>
+                        <tr style={{ background: '#f1f5f9', borderBottom: '1px solid #e2e8f0', textAlign: 'left', position: 'sticky', top: 0 }}>
+                          <th style={{ padding: '8px 12px', fontWeight: 600, color: '#475569' }}>Date</th>
+                          <th style={{ padding: '8px 12px', fontWeight: 600, color: '#475569' }}>Reference</th>
+                          <th style={{ padding: '8px 12px', fontWeight: 600, color: '#475569' }}>Description</th>
+                          <th style={{ padding: '8px 12px', fontWeight: 600, color: '#475569', textAlign: 'right' }}>Charge (DR)</th>
+                          <th style={{ padding: '8px 12px', fontWeight: 600, color: '#475569', textAlign: 'right' }}>Payment (CR)</th>
+                          <th style={{ padding: '8px 12px', fontWeight: 700, color: '#0f172a', textAlign: 'right' }}>Running Balance</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
+                      </thead>
+                      <tbody>
+                        {ledgerEntries.map((entry, idx) => {
+                          const debitVal = Number(entry.debit ?? (entry as any).charge ?? 0);
+                          const creditVal = Number(entry.credit ?? (entry as any).payment ?? 0);
+                          return (
+                            <tr key={idx} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                              <td style={{ padding: '8px 12px', color: '#64748b' }}>
+                                {new Date(entry.date).toLocaleDateString()}
+                              </td>
+                              <td style={{ padding: '8px 12px' }}>
+                                <span style={{
+                                  fontFamily: 'monospace',
+                                  fontWeight: 700,
+                                  color: (entry.type || '').includes('PAYMENT') ? '#15803d' : '#0f172a',
+                                  background: (entry.type || '').includes('PAYMENT') ? '#dcfce7' : '#f1f5f9',
+                                  padding: '2px 6px',
+                                  borderRadius: '4px',
+                                }}>
+                                  {entry.reference}
+                                </span>
+                              </td>
+                              <td style={{ padding: '8px 12px', color: '#334155' }}>
+                                {entry.description}
+                              </td>
+                              <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 600, color: debitVal > 0 ? '#b91c1c' : '#94a3b8' }}>
+                                {debitVal > 0 ? fmt(debitVal) : '—'}
+                              </td>
+                              <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 600, color: creditVal > 0 ? '#15803d' : '#94a3b8' }}>
+                                {creditVal > 0 ? fmt(creditVal) : '—'}
+                              </td>
+                              <td style={{
+                                padding: '8px 12px',
+                                textAlign: 'right',
+                                fontWeight: 700,
+                                color: entry.running_balance > 0 ? '#b91c1c' : '#15803d',
+                              }}>
+                                {fmt(entry.running_balance)}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
 
-            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '16px' }}>
-              <button
-                type="button"
-                className="btn btn-secondary"
-                onClick={() => setIsLedgerModalOpen(false)}
-              >
-                Close Statement
-              </button>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '16px' }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => setIsLedgerModalOpen(false)}
+                >
+                  Close Statement
+                </button>
+              </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
       </Modal>
 
       {/* ── MODAL 2: ADD MANUAL DEBT CHARGE ────────────────────────── */}
