@@ -34,6 +34,8 @@ export function ConfirmModal({
       confirmButtonText: confirmLabel,
       cancelButtonText: cancelLabel,
       reverseButtons: true,
+      allowOutsideClick: false,
+      allowEscapeKey: false,
       customClass: {
         popup: 'swal2-alhayat-popup',
         title: 'swal2-alhayat-title',

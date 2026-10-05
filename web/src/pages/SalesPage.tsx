@@ -12,6 +12,7 @@ import { KanbanBoard, type KanbanColumnDef } from '../components/KanbanBoard';
 import { ViewSwitcher } from '../components/ViewSwitcher';
 import { Tabs } from '../components/Tabs';
 import { Modal } from '../components/Modal';
+import { CreateSalesOrderModal } from '../components/CreateSalesOrderModal';
 import { InputField, TextareaField } from '../components/FormField';
 import { StatusBadge } from '../components/StatusBadge';
 import { LoadingSpinner } from '../components/LoadingSpinner';
@@ -175,6 +176,14 @@ export function SalesPage() {
   });
   const [paymentSubmitting, setPaymentSubmitting] = useState(false);
 
+  // New Order Modal
+  const [isNewOrderModalOpen, setIsNewOrderModalOpen] = useState(false);
+
+  // Cancellation Modal
+  const [isCancelModalOpen, setIsCancelModalOpen] = useState(false);
+  const [cancellingOrderId, setCancellingOrderId] = useState<string | null>(null);
+  const [cancellationReason, setCancellationReason] = useState('');
+
   // Payment History toggle
   const [showHistory, setShowHistory] = useState(false);
 
@@ -305,19 +314,22 @@ export function SalesPage() {
     }
   };
 
-  const handleCancelOrder = async (id: string) => {
-    const confirmed = await confirmAction(
-      'Cancel Sales Order?',
-      'Are you sure you want to cancel this sales order? This action cannot be undone.',
-      'Yes, Cancel Order',
-      'warning'
-    );
-    if (!confirmed) return;
+  const promptCancelOrder = (id: string) => {
+    setCancellingOrderId(id);
+    setCancellationReason('');
+    setIsCancelModalOpen(true);
+  };
+
+  const executeCancelOrder = async () => {
+    if (!cancellingOrderId) return;
     try {
       setActionProcessing('cancel');
       setOrderDetailsLoading(true);
-      await apiPost(`/sales/orders/${id}/cancel`, {});
-      addToast('success', 'Sales order cancelled');
+      await apiPost(`/sales/orders/${cancellingOrderId}/cancel`, {
+        reason: cancellationReason.trim() || 'Order cancelled by staff',
+      });
+      addToast('success', 'Sales order cancelled and inventory restored to warehouse.');
+      setIsCancelModalOpen(false);
       setSelectedOrder(null);
       loadData();
     } catch (err: any) {
@@ -727,7 +739,7 @@ export function SalesPage() {
             </button>
           )}
           {hasPermission('manage_sales') && (
-            <button type="button" className="btn btn-primary" onClick={() => navigate('/sales/new')}>
+            <button type="button" className="btn btn-primary" onClick={() => setIsNewOrderModalOpen(true)}>
               <Plus size={16} style={{ marginRight: '6px', inlineSize: 'auto' }} /> New Order
             </button>
           )}
@@ -815,7 +827,7 @@ export function SalesPage() {
               <div>
                 <span style={{ color: '#667066' }}>Order Status:</span>
                 <div style={{ marginTop: '2px', display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                  <StatusBadge label={selectedOrder.status.replace('_', ' ')} tone={selectedOrder.status === 'PAID' ? 'green' : 'neutral'} />
+                  <StatusBadge label={selectedOrder.status.replace('_', ' ')} tone={selectedOrder.status === 'PAID' ? 'green' : selectedOrder.status === 'CANCELLED' ? 'red' : 'neutral'} />
                   {orderSummary && (
                     <StatusBadge
                       label={orderSummary.summary.payment_status.replace('_', ' ')}
@@ -825,6 +837,22 @@ export function SalesPage() {
                 </div>
               </div>
             </div>
+
+            {selectedOrder.status === 'CANCELLED' && (
+              <div style={{ background: '#fef2f2', border: '1.5px solid #fecaca', borderRadius: '8px', padding: '12px 14px', color: '#991b1b', fontSize: '13px' }}>
+                <div style={{ fontWeight: 700, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <ShieldCheck size={16} /> Sale Cancelled — Stock Restored & Debt Voided
+                </div>
+                {selectedOrder.cancellation_reason && (
+                  <div style={{ marginTop: '4px' }}><strong>Reason:</strong> {selectedOrder.cancellation_reason}</div>
+                )}
+                {selectedOrder.cancelled_at && (
+                  <div style={{ fontSize: '11px', color: '#7f1d1d', marginTop: '2px' }}>
+                    Cancelled on {new Date(selectedOrder.cancelled_at).toLocaleString()}
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Invoice Summary */}
             {orderSummary && (
@@ -1021,12 +1049,12 @@ export function SalesPage() {
 
               {selectedOrder.status !== 'PAID' && selectedOrder.status !== 'CANCELLED' && hasPermission('manage_sales') && (
                 <button type="button" className="btn btn-secondary" disabled={orderDetailsLoading || !!actionProcessing}
-                  onClick={() => handleCancelOrder(selectedOrder.id)}
-                  style={{ display: 'flex', alignItems: 'center' }}>
+                  onClick={() => promptCancelOrder(selectedOrder.id)}
+                  style={{ display: 'flex', alignItems: 'center', color: '#b91c1c', borderColor: '#fca5a5' }}>
                   {actionProcessing === 'cancel' ? (
                     <><Loader2 size={14} className="spin-icon" /> Cancelling…</>
                   ) : (
-                    'Cancel Order'
+                    'Cancel Sale'
                   )}
                 </button>
               )}
@@ -1132,6 +1160,64 @@ export function SalesPage() {
             </button>
           </div>
         </form>
+      </Modal>
+
+      {/* New Order Modal */}
+      <CreateSalesOrderModal
+        isOpen={isNewOrderModalOpen}
+        onClose={() => setIsNewOrderModalOpen(false)}
+        onOrderCreated={() => {
+          setIsNewOrderModalOpen(false);
+          loadData();
+        }}
+      />
+
+      {/* Safe Cancel Order Modal with Static Backdrop */}
+      <Modal
+        isOpen={isCancelModalOpen}
+        onClose={() => { if (!actionProcessing) setIsCancelModalOpen(false); }}
+        title="Cancel Sales Order & Restore Stock"
+        size="md"
+      >
+        <div style={{ padding: '4px 0' }}>
+          <div style={{ background: '#fef2f2', border: '1.5px solid #fecaca', borderRadius: '8px', padding: '14px', marginBottom: '16px', color: '#991b1b', fontSize: '13px' }}>
+            <strong style={{ display: 'block', marginBottom: '4px', fontSize: '14px' }}>Safe Cancellation Guarantee</strong>
+            <p style={{ margin: 0, color: '#7f1d1d', lineHeight: '1.5' }}>
+              Cancelling this sales order will atomically restore furniture quantities back to branch inventory stock, void any linked invoices or customer debt records, and reverse general ledger accounting journal entries.
+            </p>
+          </div>
+          <TextareaField
+            label="Reason for Cancellation"
+            id="cancelReasonInput"
+            value={cancellationReason}
+            onChange={setCancellationReason}
+            placeholder="Please enter the reason for cancelling this sale (e.g. customer returned item, incorrect order, customer changed mind)..."
+            required
+          />
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '20px' }}>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => setIsCancelModalOpen(false)}
+              disabled={!!actionProcessing}
+            >
+              Back
+            </button>
+            <button
+              type="button"
+              className="btn btn-danger"
+              disabled={!cancellationReason.trim() || !!actionProcessing}
+              onClick={executeCancelOrder}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+            >
+              {actionProcessing === 'cancel' ? (
+                <><Loader2 size={14} className="spin-icon" /> Cancelling & Restoring Stock…</>
+              ) : (
+                'Confirm & Cancel Sale'
+              )}
+            </button>
+          </div>
+        </div>
       </Modal>
     </div>
   );

@@ -167,6 +167,7 @@ deliveries.post('/', requirePermissions(['manage_sales']), async (c) => {
   const id = uuidv4();
   const deliveryNumber = `DEL-${Date.now()}`;
   const status = body.scheduledDate || body.driverName ? 'SCHEDULED' : 'PENDING';
+  const totalBoxes = Math.max(1, Number(body.totalBoxes || 1));
 
   const stmts: any[] = [];
   stmts.push(c.env.DB.prepare(`
@@ -174,8 +175,8 @@ deliveries.post('/', requirePermissions(['manage_sales']), async (c) => {
       id, delivery_number, sales_order_id, customer_name, customer_phone,
       delivery_address, city, source_warehouse_id, driver_name, driver_phone,
       vehicle_plate, status, scheduled_date, installation_required, installer_name,
-      installation_fee, notes, created_by
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      installation_fee, notes, total_boxes, delivered_boxes, remaining_boxes, created_by
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
   `).bind(
     id,
     deliveryNumber,
@@ -194,6 +195,8 @@ deliveries.post('/', requirePermissions(['manage_sales']), async (c) => {
     body.installerName?.trim() || null,
     Number(body.installationFee || 0),
     body.notes?.trim() || null,
+    totalBoxes,
+    totalBoxes,
     userId
   ));
 
@@ -250,6 +253,13 @@ deliveries.patch('/:id', requirePermissions(['manage_sales']), async (c) => {
   if (body.installationFee !== undefined) { fields.push('installation_fee = ?'); vals.push(Number(body.installationFee || 0)); }
   if (body.notes !== undefined) { fields.push('notes = ?'); vals.push(body.notes?.trim() || null); }
   if (body.status !== undefined) { fields.push('status = ?'); vals.push(body.status); }
+  if (body.totalBoxes !== undefined) {
+    const tb = Math.max(1, Number(body.totalBoxes));
+    fields.push('total_boxes = ?');
+    vals.push(tb);
+    fields.push('remaining_boxes = GREATEST(0, ? - COALESCE(delivered_boxes, 0))');
+    vals.push(tb);
+  }
 
   vals.push(id);
   await c.env.DB.prepare(`UPDATE deliveries SET ${fields.join(', ')} WHERE id = ?`).bind(...vals).run();
@@ -299,16 +309,19 @@ deliveries.post('/:id/complete', requirePermissions(['manage_sales']), async (c)
 
   const recipientName = body.recipientSignatureName?.trim() || existing.customer_name;
   const deliveryNotes = body.notes?.trim() || existing.notes;
+  const currentTotal = Number(existing.total_boxes || 1);
 
   await c.env.DB.prepare(`
     UPDATE deliveries
     SET status = 'DELIVERED',
         delivered_at = CURRENT_TIMESTAMP,
+        delivered_boxes = ?,
+        remaining_boxes = 0,
         recipient_signature_name = ?,
         notes = ?,
         updated_at = CURRENT_TIMESTAMP
     WHERE id = ?
-  `).bind(recipientName, deliveryNotes, id).run();
+  `).bind(currentTotal, recipientName, deliveryNotes, id).run();
 
   if (existing.sales_order_id) {
     await c.env.DB.prepare(
@@ -319,6 +332,94 @@ deliveries.post('/:id/complete', requirePermissions(['manage_sales']), async (c)
   await logAudit(c, 'DELIVERY_COMPLETE', 'deliveries', id, existing, { status: 'DELIVERED', recipientName });
   const updated = await c.env.DB.prepare('SELECT * FROM deliveries WHERE id = ?').bind(id).first();
   return c.json({ success: true, delivery: updated });
+});
+
+// ──────────────────────────────────────────────────────────────────────
+// DELIVERY RUNS & MULTI-BOX TRACKING (SPLIT DELIVERIES)
+// ──────────────────────────────────────────────────────────────────────
+deliveries.get('/:id/runs', async (c) => {
+  const id = c.req.param('id');
+  const { results } = await c.env.DB.prepare(`
+    SELECT dr.*, u.full_name AS created_by_name
+    FROM delivery_runs dr
+    LEFT JOIN users u ON u.id = dr.created_by
+    WHERE dr.delivery_id = ?
+    ORDER BY dr.delivered_at DESC, dr.created_at DESC
+  `).bind(id).all();
+  return c.json(results || []);
+});
+
+deliveries.post('/:id/runs', requirePermissions(['manage_sales']), async (c) => {
+  const id = c.req.param('id');
+  const body = await c.req.json();
+  const userId = c.get('jwtPayload').sub;
+
+  const existing = await c.env.DB.prepare('SELECT * FROM deliveries WHERE id = ?').bind(id).first() as any;
+  if (!existing) return c.json({ message: 'Delivery not found' }, 404);
+
+  const boxesDelivered = Math.max(1, Number(body.boxesDelivered || 1));
+  const currentTotal = Math.max(1, Number(existing.total_boxes || 1));
+  const currentDelivered = Number(existing.delivered_boxes || 0);
+  const newDelivered = Math.min(currentTotal, currentDelivered + boxesDelivered);
+  const newRemaining = Math.max(0, currentTotal - newDelivered);
+
+  let newStatus = 'PARTIALLY_DELIVERED';
+  if (newRemaining === 0 || newDelivered >= currentTotal) {
+    newStatus = 'DELIVERED';
+  }
+
+  const runId = uuidv4();
+  const stmts: any[] = [];
+
+  stmts.push(c.env.DB.prepare(`
+    INSERT INTO delivery_runs (
+      id, delivery_id, boxes_delivered, handled_by, driver_name, driver_phone,
+      vehicle_plate, delivered_at, notes, recipient_signature_name, created_by
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).bind(
+    runId,
+    id,
+    boxesDelivered,
+    body.handledBy?.trim() || body.driverName?.trim() || existing.driver_name || null,
+    body.driverName?.trim() || existing.driver_name || null,
+    body.driverPhone?.trim() || existing.driver_phone || null,
+    body.vehiclePlate?.trim() || existing.vehicle_plate || null,
+    body.deliveredAt || new Date().toISOString(),
+    body.notes?.trim() || null,
+    body.recipientSignatureName?.trim() || null,
+    userId
+  ));
+
+  const deliveredAtClause = newStatus === 'DELIVERED' ? ', delivered_at = CURRENT_TIMESTAMP' : '';
+  stmts.push(c.env.DB.prepare(`
+    UPDATE deliveries
+    SET delivered_boxes = ?,
+        remaining_boxes = ?,
+        status = ?,
+        updated_at = CURRENT_TIMESTAMP
+        ${deliveredAtClause}
+    WHERE id = ?
+  `).bind(newDelivered, newRemaining, newStatus, id));
+
+  if (newStatus === 'DELIVERED' && existing.sales_order_id) {
+    stmts.push(c.env.DB.prepare(
+      "UPDATE sales_orders SET status = 'DELIVERED', updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+    ).bind(existing.sales_order_id));
+  }
+
+  stmts.push(createAuditLogStmt(c, 'DELIVERY_RUN_RECORD', 'deliveries', id, existing, {
+    boxesDelivered,
+    newDelivered,
+    newRemaining,
+    newStatus,
+  }));
+
+  await c.env.DB.batch(stmts);
+
+  const updatedDelivery = await c.env.DB.prepare('SELECT * FROM deliveries WHERE id = ?').bind(id).first();
+  const createdRun = await c.env.DB.prepare('SELECT * FROM delivery_runs WHERE id = ?').bind(runId).first();
+
+  return c.json({ success: true, delivery: updatedDelivery, run: createdRun }, 201);
 });
 
 export default deliveries;

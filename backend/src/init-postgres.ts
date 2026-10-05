@@ -284,6 +284,9 @@ export async function ensurePostgresInit(pool: Pool) {
         installation_fee DOUBLE PRECISION NOT NULL DEFAULT 0,
         notes TEXT,
         recipient_signature_name TEXT,
+        total_boxes INTEGER NOT NULL DEFAULT 1,
+        delivered_boxes INTEGER NOT NULL DEFAULT 0,
+        remaining_boxes INTEGER NOT NULL DEFAULT 1,
         created_by TEXT REFERENCES users(id),
         created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -296,6 +299,70 @@ export async function ensurePostgresInit(pool: Pool) {
         quantity INTEGER NOT NULL CHECK (quantity > 0),
         notes TEXT
       );
+
+      CREATE TABLE IF NOT EXISTS delivery_runs (
+        id TEXT PRIMARY KEY,
+        delivery_id TEXT NOT NULL REFERENCES deliveries(id) ON DELETE CASCADE,
+        boxes_delivered INTEGER NOT NULL CHECK (boxes_delivered > 0),
+        handled_by TEXT,
+        driver_name TEXT,
+        driver_phone TEXT,
+        vehicle_plate TEXT,
+        delivered_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        notes TEXT,
+        recipient_signature_name TEXT,
+        created_by TEXT REFERENCES users(id),
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+
+      -- Customer Debts and Payments (Ledger & Credit Sales)
+      CREATE TABLE IF NOT EXISTS customer_debts (
+        id TEXT PRIMARY KEY,
+        debt_number TEXT UNIQUE NOT NULL,
+        customer_id TEXT NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+        description TEXT NOT NULL,
+        category TEXT NOT NULL DEFAULT 'MANUAL',
+        amount DOUBLE PRECISION NOT NULL CHECK (amount > 0),
+        remaining_balance DOUBLE PRECISION NOT NULL CHECK (remaining_balance >= 0),
+        status TEXT NOT NULL DEFAULT 'UNPAID',
+        debt_date TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        branch_id TEXT REFERENCES branches(id),
+        created_by TEXT REFERENCES users(id),
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE TABLE IF NOT EXISTS customer_payments (
+        id TEXT PRIMARY KEY,
+        receipt_number TEXT UNIQUE NOT NULL,
+        customer_id TEXT NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+        allocation_type TEXT NOT NULL,
+        invoice_id TEXT REFERENCES invoices(id) ON DELETE SET NULL,
+        manual_debt_id TEXT REFERENCES customer_debts(id) ON DELETE SET NULL,
+        amount DOUBLE PRECISION NOT NULL CHECK (amount > 0),
+        payment_method TEXT NOT NULL DEFAULT 'CASH',
+        payment_date TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        previous_balance DOUBLE PRECISION NOT NULL DEFAULT 0,
+        remaining_balance DOUBLE PRECISION NOT NULL DEFAULT 0,
+        notes TEXT,
+        recorded_by TEXT REFERENCES users(id),
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+
+      ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS total_boxes INTEGER NOT NULL DEFAULT 1;
+      ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS delivered_boxes INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS remaining_boxes INTEGER NOT NULL DEFAULT 1;
+      ALTER TABLE sales_orders ADD COLUMN IF NOT EXISTS is_credit_sale INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE sales_orders ADD COLUMN IF NOT EXISTS initial_deposit DOUBLE PRECISION NOT NULL DEFAULT 0;
+      ALTER TABLE sales_orders ADD COLUMN IF NOT EXISTS cancelled_by TEXT REFERENCES users(id);
+      ALTER TABLE sales_orders ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMP WITH TIME ZONE;
+      ALTER TABLE sales_orders ADD COLUMN IF NOT EXISTS cancellation_reason TEXT;
+      ALTER TABLE invoices ADD COLUMN IF NOT EXISTS is_credit_sale INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE invoices ADD COLUMN IF NOT EXISTS cancelled_by TEXT REFERENCES users(id);
+      ALTER TABLE invoices ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMP WITH TIME ZONE;
+      ALTER TABLE invoice_payments ADD COLUMN IF NOT EXISTS receipt_number TEXT;
+      ALTER TABLE invoice_payments ADD COLUMN IF NOT EXISTS previous_balance DOUBLE PRECISION;
+      ALTER TABLE invoice_payments ADD COLUMN IF NOT EXISTS running_balance DOUBLE PRECISION;
 
       -- Manufacturing Module Tables (BOM, Work Orders, Stages, Material Consumption)
       CREATE TABLE IF NOT EXISTS bill_of_materials (

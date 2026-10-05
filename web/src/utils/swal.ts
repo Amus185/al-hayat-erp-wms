@@ -5,6 +5,8 @@ import Swal from 'sweetalert2';
  * Inspired by Google Material 3 & Modern Enterprise UI
  */
 const AlHayatSwal = Swal.mixin({
+  allowOutsideClick: false,
+  allowEscapeKey: false,
   customClass: {
     popup: 'swal2-alhayat-popup',
     title: 'swal2-alhayat-title',

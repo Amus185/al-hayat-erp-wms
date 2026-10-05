@@ -3,7 +3,7 @@ import { useSearchParams, useNavigate } from 'react-router-dom';
 import {
   Truck, Plus, Search, Filter, CheckCircle2, Clock, AlertTriangle, AlertCircle,
   MapPin, Phone, User, Calendar, Eye, Send, CheckCheck, Printer,
-  FileText, Wrench, ShieldCheck, ChevronRight, X, Loader2
+  FileText, Wrench, ShieldCheck, ChevronRight, X, Loader2, Package
 } from 'lucide-react';
 import { apiGet, apiPost, apiPatch } from '../api/client';
 import { DataTable, type Column } from '../components/DataTable';
@@ -42,7 +42,7 @@ interface Delivery {
   driver_name: string | null;
   driver_phone: string | null;
   vehicle_plate: string | null;
-  status: 'PENDING' | 'SCHEDULED' | 'DISPATCHED' | 'DELIVERED' | 'FAILED' | 'CANCELLED';
+  status: 'PENDING' | 'SCHEDULED' | 'DISPATCHED' | 'PARTIALLY_DELIVERED' | 'DELIVERED' | 'FAILED' | 'CANCELLED';
   scheduled_date: string | null;
   dispatched_at: string | null;
   delivered_at: string | null;
@@ -54,7 +54,21 @@ interface Delivery {
   created_at: string;
   total_items?: number;
   total_units?: number;
+  total_boxes?: number;
+  delivered_boxes?: number;
+  remaining_boxes?: number;
   items?: DeliveryItem[];
+}
+
+interface DeliveryRun {
+  id: string;
+  delivery_id: string;
+  run_number: number;
+  boxes_delivered: number;
+  run_date: string;
+  handled_by: string | null;
+  notes: string | null;
+  created_at: string;
 }
 
 interface Stats {
@@ -107,6 +121,7 @@ export function DeliveriesPage() {
     installationRequired: false,
     installerName: '',
     installationFee: 40,
+    totalBoxes: 1,
     notes: '',
   });
   const [submitting, setSubmitting] = useState(false);
@@ -114,6 +129,17 @@ export function DeliveriesPage() {
   // Dispatch / Complete form states
   const [dispatchForm, setDispatchForm] = useState({ driverName: '', vehiclePlate: '' });
   const [completeForm, setCompleteForm] = useState({ recipientName: '', notes: '' });
+
+  // Split Delivery Runs state
+  const [isRunModalOpen, setIsRunModalOpen] = useState(false);
+  const [runForm, setRunForm] = useState({
+    boxesDelivered: 1,
+    handledBy: '',
+    notes: '',
+  });
+  const [runSubmitting, setRunSubmitting] = useState(false);
+  const [deliveryRuns, setDeliveryRuns] = useState<DeliveryRun[]>([]);
+  const [loadingRuns, setLoadingRuns] = useState(false);
 
   const loadData = async () => {
     try {
@@ -186,6 +212,7 @@ export function DeliveriesPage() {
       installationRequired: Number(order.installation_fee || 0) > 0,
       installerName: order.installer_name || '',
       installationFee: Number(order.installation_fee || 40),
+      totalBoxes: 1,
       notes: `Delivery for Sales Order #${order.order_number}`,
     });
     setIsCreateOpen(true);
@@ -274,6 +301,7 @@ export function DeliveriesPage() {
       installationRequired: false,
       installerName: '',
       installationFee: 40,
+      totalBoxes: 1,
       notes: '',
     });
     setIsCreateOpen(true);
@@ -306,6 +334,7 @@ export function DeliveriesPage() {
         installationRequired: createForm.installationRequired,
         installerName: createForm.installerName?.trim() || undefined,
         installationFee: createForm.installationFee,
+        totalBoxes: Math.max(1, Number(createForm.totalBoxes || 1)),
         notes: createForm.notes?.trim() || undefined,
       });
 
@@ -389,12 +418,71 @@ export function DeliveriesPage() {
 
   const handleViewDetails = async (d: Delivery) => {
     try {
-      const full = await apiGet<Delivery>(`/deliveries/${d.id}`);
+      setLoadingRuns(true);
+      const [full, runs] = await Promise.all([
+        apiGet<Delivery>(`/deliveries/${d.id}`),
+        apiGet<DeliveryRun[]>(`/deliveries/${d.id}/runs`),
+      ]);
       setSelectedDelivery(full || d);
+      setDeliveryRuns(runs || []);
       setIsDetailsOpen(true);
     } catch {
       setSelectedDelivery(d);
+      setDeliveryRuns([]);
       setIsDetailsOpen(true);
+    } finally {
+      setLoadingRuns(false);
+    }
+  };
+
+  const handleOpenRunModal = (d: Delivery) => {
+    setSelectedDelivery(d);
+    const rem = d.remaining_boxes ?? Math.max(0, (d.total_boxes ?? 1) - (d.delivered_boxes ?? 0));
+    setRunForm({
+      boxesDelivered: Math.max(1, Math.min(rem, 1)),
+      handledBy: d.driver_name || '',
+      notes: '',
+    });
+    setIsRunModalOpen(true);
+  };
+
+  const handleRecordRun = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedDelivery) return;
+    const boxes = Number(runForm.boxesDelivered);
+    if (!boxes || boxes < 1) {
+      addToast('error', 'Must dispatch at least 1 box.');
+      return;
+    }
+    const rem = selectedDelivery.remaining_boxes ?? Math.max(0, (selectedDelivery.total_boxes ?? 1) - (selectedDelivery.delivered_boxes ?? 0));
+    if (boxes > rem) {
+      addToast('error', `Cannot dispatch ${boxes} boxes. Only ${rem} remaining.`);
+      return;
+    }
+
+    try {
+      setRunSubmitting(true);
+      await apiPost(`/deliveries/${selectedDelivery.id}/runs`, {
+        boxesDelivered: boxes,
+        handledBy: runForm.handledBy?.trim() || undefined,
+        notes: runForm.notes?.trim() || undefined,
+      });
+
+      addToast('success', `Delivery run recorded: ${boxes} box${boxes > 1 ? 'es' : ''} dispatched!`);
+      setIsRunModalOpen(false);
+
+      const [full, runs] = await Promise.all([
+        apiGet<Delivery>(`/deliveries/${selectedDelivery.id}`),
+        apiGet<DeliveryRun[]>(`/deliveries/${selectedDelivery.id}/runs`),
+      ]);
+      if (full) setSelectedDelivery(full);
+      if (runs) setDeliveryRuns(runs);
+
+      loadData();
+    } catch (err: any) {
+      addToast('error', err?.message || 'Failed to record delivery run');
+    } finally {
+      setRunSubmitting(false);
     }
   };
 
@@ -583,6 +671,7 @@ export function DeliveriesPage() {
     { key: 'ALL', label: 'All Deliveries', count: deliveryList.length },
     { key: 'PENDING', label: 'Pending', count: deliveryList.filter((d) => d.status === 'PENDING').length },
     { key: 'SCHEDULED', label: 'Scheduled', count: deliveryList.filter((d) => d.status === 'SCHEDULED').length },
+    { key: 'PARTIALLY_DELIVERED', label: 'Partially Delivered', count: deliveryList.filter((d) => d.status === 'PARTIALLY_DELIVERED').length },
     { key: 'DISPATCHED', label: 'In Transit', count: deliveryList.filter((d) => d.status === 'DISPATCHED').length },
     { key: 'DELIVERED', label: 'Delivered', count: deliveryList.filter((d) => d.status === 'DELIVERED').length },
   ];
@@ -667,30 +756,76 @@ export function DeliveriesPage() {
       ),
     },
     {
+      key: 'boxes',
+      label: 'Box Logistics',
+      render: (row) => {
+        const total = row.total_boxes ?? 1;
+        const delivered = row.delivered_boxes ?? 0;
+        const remaining = row.remaining_boxes ?? Math.max(0, total - delivered);
+        const pct = Math.min(100, Math.round((delivered / total) * 100));
+
+        return (
+          <div style={{ minWidth: '115px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', fontWeight: 600, color: '#334155', marginBottom: '3px' }}>
+              <span>📦 {delivered} / {total} Boxes</span>
+              <span style={{ color: remaining === 0 ? '#16a34a' : '#b45309' }}>
+                {remaining === 0 ? 'Full' : `${remaining} left`}
+              </span>
+            </div>
+            <div style={{ width: '100%', height: '6px', background: '#e2e8f0', borderRadius: '3px', overflow: 'hidden' }}>
+              <div style={{
+                width: `${pct}%`,
+                height: '100%',
+                background: remaining === 0 ? '#16a34a' : '#0284c7',
+                borderRadius: '3px',
+                transition: 'width 0.3s ease',
+              }} />
+            </div>
+          </div>
+        );
+      },
+    },
+    {
       key: 'status',
       label: 'Status',
       render: (row) => {
         let tone: 'green' | 'yellow' | 'red' | 'blue' | 'neutral' = 'neutral';
         if (row.status === 'SCHEDULED') tone = 'yellow';
+        if (row.status === 'PARTIALLY_DELIVERED') tone = 'yellow';
         if (row.status === 'DISPATCHED') tone = 'blue';
         if (row.status === 'DELIVERED') tone = 'green';
         if (row.status === 'FAILED') tone = 'red';
-        return <StatusBadge label={row.status.replace('_', ' ')} tone={tone} />;
+        const label = row.status === 'PARTIALLY_DELIVERED'
+          ? `Partially Delivered (${row.delivered_boxes || 0}/${row.total_boxes || 1})`
+          : row.status.replace('_', ' ');
+        return <StatusBadge label={label} tone={tone} />;
       },
     },
     {
       key: 'actions',
       label: 'Actions',
       render: (row) => (
-        <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
           <button
             type="button"
             className="btn btn-secondary btn-sm"
             onClick={() => handleViewDetails(row)}
-            title="View Details"
+            title="View Details & Box Tracking"
           >
             <Eye size={13} style={{ marginRight: '3px' }} /> View
           </button>
+
+          {row.status !== 'CANCELLED' && (row.remaining_boxes ?? 1) > 0 && hasPermission('manage_sales') && (
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={() => handleOpenRunModal(row)}
+              style={{ background: '#f59e0b', color: '#fff', border: 'none', display: 'inline-flex', alignItems: 'center', gap: '3px', fontSize: '11px', padding: '4px 7px', borderRadius: '6px', fontWeight: 600 }}
+              title="Record Split Delivery Run (Dispatch Boxes)"
+            >
+              <Package size={12} /> Dispatch Boxes
+            </button>
+          )}
 
           {['PENDING', 'SCHEDULED'].includes(row.status) && hasPermission('manage_sales') && (
             <button
@@ -1048,6 +1183,24 @@ export function DeliveriesPage() {
             )}
           </div>
 
+          {/* Multi-Box Split Delivery Logistics */}
+          <div style={{ background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: '8px', padding: '12px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '12px', alignItems: 'center' }}>
+              <InputField
+                label="Total Furniture Boxes *"
+                id="delTotalBoxes"
+                type="number"
+                value={String(createForm.totalBoxes || 1)}
+                onChange={(val) => setCreateForm((p) => ({ ...p, totalBoxes: Math.max(1, parseInt(val, 10) || 1) }))}
+                placeholder="1"
+                required
+              />
+              <div style={{ fontSize: '12px', color: '#0369a1', marginTop: '10px' }}>
+                📦 <strong>Multi-Box Tracking:</strong> Total packages for this shipment. Supports split delivery dispatch runs without modifying sales prices or inventory quantities.
+              </div>
+            </div>
+          </div>
+
           <TextareaField
             label="Delivery Notes"
             id="delNotes"
@@ -1222,6 +1375,102 @@ export function DeliveriesPage() {
               </div>
             ) : null}
 
+            {/* Multi-Box Logistics Summary */}
+            <div style={{ background: '#f0f9ff', border: '1.5px solid #bae6fd', borderRadius: '8px', padding: '14px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <Package size={18} color="#0284c7" />
+                  <strong style={{ color: '#0369a1', fontSize: '14px' }}>Multi-Box Logistics Tracking</strong>
+                </div>
+                {(selectedDelivery.remaining_boxes ?? 1) > 0 && hasPermission('manage_sales') && (
+                  <button
+                    type="button"
+                    onClick={() => handleOpenRunModal(selectedDelivery)}
+                    style={{
+                      padding: '4px 10px',
+                      background: '#f59e0b',
+                      color: '#fff',
+                      border: 'none',
+                      borderRadius: '6px',
+                      fontSize: '12px',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                    }}
+                  >
+                    <Package size={13} /> Dispatch Split Run
+                  </button>
+                )}
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px', textAlign: 'center', marginBottom: '10px' }}>
+                <div style={{ background: '#fff', padding: '8px', borderRadius: '6px', border: '1px solid #e0f2fe' }}>
+                  <div style={{ fontSize: '11px', color: '#64748b', fontWeight: 600 }}>Total Boxes</div>
+                  <div style={{ fontSize: '18px', fontWeight: 800, color: '#0f172a' }}>{selectedDelivery.total_boxes || 1}</div>
+                </div>
+                <div style={{ background: '#fff', padding: '8px', borderRadius: '6px', border: '1px solid #e0f2fe' }}>
+                  <div style={{ fontSize: '11px', color: '#16a34a', fontWeight: 600 }}>Delivered Boxes</div>
+                  <div style={{ fontSize: '18px', fontWeight: 800, color: '#16a34a' }}>{selectedDelivery.delivered_boxes || 0}</div>
+                </div>
+                <div style={{ background: '#fff', padding: '8px', borderRadius: '6px', border: '1px solid #e0f2fe' }}>
+                  <div style={{ fontSize: '11px', color: '#b45309', fontWeight: 600 }}>Remaining Boxes</div>
+                  <div style={{ fontSize: '18px', fontWeight: 800, color: '#b45309' }}>
+                    {selectedDelivery.remaining_boxes ?? Math.max(0, (selectedDelivery.total_boxes || 1) - (selectedDelivery.delivered_boxes || 0))}
+                  </div>
+                </div>
+              </div>
+
+              {/* Progress bar */}
+              <div style={{ width: '100%', height: '8px', background: '#e2e8f0', borderRadius: '4px', overflow: 'hidden' }}>
+                <div style={{
+                  width: `${Math.min(100, Math.round(((selectedDelivery.delivered_boxes || 0) / (selectedDelivery.total_boxes || 1)) * 100))}%`,
+                  height: '100%',
+                  background: (selectedDelivery.remaining_boxes ?? 1) === 0 ? '#16a34a' : '#0284c7',
+                  borderRadius: '4px',
+                  transition: 'width 0.3s ease',
+                }} />
+              </div>
+            </div>
+
+            {/* Delivery Runs History */}
+            <div>
+              <h4 style={{ margin: '0 0 8px', color: '#066006', fontSize: '14px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <Clock size={16} /> Delivery Dispatch Runs History
+              </h4>
+              {loadingRuns ? (
+                <div style={{ fontSize: '12px', color: '#64748b' }}>Loading dispatch runs…</div>
+              ) : deliveryRuns.length === 0 ? (
+                <div style={{ background: '#f8fafc', padding: '12px', borderRadius: '6px', border: '1px solid #e2e8f0', fontSize: '12px', color: '#64748b' }}>
+                  No split delivery dispatch runs recorded yet for this order.
+                </div>
+              ) : (
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
+                  <thead>
+                    <tr style={{ background: '#f1f5f9', borderBottom: '1px solid #e2e8f0', textAlign: 'left' }}>
+                      <th style={{ padding: '6px 10px', color: '#475569' }}>Run #</th>
+                      <th style={{ padding: '6px 10px', color: '#475569' }}>Date & Time</th>
+                      <th style={{ padding: '6px 10px', color: '#475569', textAlign: 'center' }}>Boxes Delivered</th>
+                      <th style={{ padding: '6px 10px', color: '#475569' }}>Handled By</th>
+                      <th style={{ padding: '6px 10px', color: '#475569' }}>Notes</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {deliveryRuns.map((run) => (
+                      <tr key={run.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                        <td style={{ padding: '6px 10px', fontWeight: 700, color: '#0284c7' }}>#{run.run_number}</td>
+                        <td style={{ padding: '6px 10px', color: '#64748b' }}>{new Date(run.run_date).toLocaleString()}</td>
+                        <td style={{ padding: '6px 10px', textAlign: 'center', fontWeight: 700, color: '#16a34a' }}>📦 {run.boxes_delivered}</td>
+                        <td style={{ padding: '6px 10px', color: '#334155' }}>{run.handled_by || '—'}</td>
+                        <td style={{ padding: '6px 10px', color: '#64748b' }}>{run.notes || '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+
             {/* Shipped Items */}
             <div>
               <h4 style={{ margin: '0 0 8px', color: '#066006', fontSize: '14px' }}>Items</h4>
@@ -1285,6 +1534,73 @@ export function DeliveriesPage() {
             </div>
           </div>
         )}
+      </Modal>
+
+      {/* ── SPLIT DELIVERY DISPATCH RUN MODAL ── */}
+      <Modal
+        isOpen={isRunModalOpen}
+        onClose={() => { if (!runSubmitting) setIsRunModalOpen(false); }}
+        title={`Record Split Delivery Run — ${selectedDelivery?.delivery_number}`}
+        size="md"
+      >
+        <form onSubmit={handleRecordRun} style={{ display: 'grid', gap: '14px' }}>
+          <div style={{ background: '#fef3c7', border: '1px solid #fde68a', borderRadius: '8px', padding: '12px', fontSize: '13px', color: '#92400e' }}>
+            <strong>Multi-Box Dispatch Run</strong>
+            <p style={{ margin: '4px 0 0', color: '#78350f' }}>
+              Record partial box delivery for this order. Remaining boxes can be dispatched on a future run.
+            </p>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+            <InputField
+              label={`Boxes to Dispatch (Max: ${selectedDelivery?.remaining_boxes ?? 1}) *`}
+              id="runBoxes"
+              type="number"
+              value={String(runForm.boxesDelivered)}
+              onChange={(val) => setRunForm((p) => ({ ...p, boxesDelivered: Math.max(1, parseInt(val, 10) || 1) }))}
+              required
+            />
+            <InputField
+              label="Handled / Driver By"
+              id="runDriver"
+              value={runForm.handledBy}
+              onChange={(val) => setRunForm((p) => ({ ...p, handledBy: val }))}
+              placeholder="e.g. Mahdi or Warehouse Staff"
+            />
+          </div>
+
+          <TextareaField
+            label="Run Notes (e.g. which boxes or furniture parts were dispatched)"
+            id="runNotes"
+            value={runForm.notes}
+            onChange={(val) => setRunForm((p) => ({ ...p, notes: val }))}
+            rows={2}
+            placeholder="e.g. Dispatched wardrobe base and side panels; mirror remaining for next run"
+          />
+
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '10px' }}>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => setIsRunModalOpen(false)}
+              disabled={runSubmitting}
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              className="btn btn-primary"
+              disabled={runSubmitting || !runForm.boxesDelivered}
+              style={{ background: '#f59e0b', borderColor: '#d97706' }}
+            >
+              {runSubmitting ? (
+                <><Loader2 size={14} className="spin-icon" style={{ marginRight: '6px' }} /> Recording Dispatch…</>
+              ) : (
+                'Confirm Dispatch Run'
+              )}
+            </button>
+          </div>
+        </form>
       </Modal>
     </div>
   );

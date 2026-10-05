@@ -387,6 +387,54 @@ CREATE TABLE files (
   created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS customer_debts (
+  id TEXT PRIMARY KEY,
+  debt_number TEXT UNIQUE NOT NULL,
+  customer_id TEXT NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+  description TEXT NOT NULL,
+  category TEXT NOT NULL DEFAULT 'MANUAL',
+  amount DOUBLE PRECISION NOT NULL CHECK (amount > 0),
+  remaining_balance DOUBLE PRECISION NOT NULL CHECK (remaining_balance >= 0),
+  status TEXT NOT NULL DEFAULT 'UNPAID',
+  debt_date TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  branch_id TEXT REFERENCES branches(id),
+  created_by TEXT REFERENCES users(id),
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS customer_payments (
+  id TEXT PRIMARY KEY,
+  receipt_number TEXT UNIQUE NOT NULL,
+  customer_id TEXT NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+  allocation_type TEXT NOT NULL,
+  invoice_id TEXT REFERENCES invoices(id) ON DELETE SET NULL,
+  manual_debt_id TEXT REFERENCES customer_debts(id) ON DELETE SET NULL,
+  amount DOUBLE PRECISION NOT NULL CHECK (amount > 0),
+  payment_method TEXT NOT NULL DEFAULT 'CASH',
+  payment_date TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  previous_balance DOUBLE PRECISION NOT NULL DEFAULT 0,
+  remaining_balance DOUBLE PRECISION NOT NULL DEFAULT 0,
+  notes TEXT,
+  recorded_by TEXT REFERENCES users(id),
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS delivery_runs (
+  id TEXT PRIMARY KEY,
+  delivery_id TEXT NOT NULL REFERENCES deliveries(id) ON DELETE CASCADE,
+  boxes_delivered INTEGER NOT NULL CHECK (boxes_delivered > 0),
+  handled_by TEXT,
+  driver_name TEXT,
+  driver_phone TEXT,
+  vehicle_plate TEXT,
+  delivered_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  notes TEXT,
+  recipient_signature_name TEXT,
+  created_by TEXT REFERENCES users(id),
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE INDEX idx_inventory_stock_owner ON inventory_stock(owner_type, warehouse_id, branch_id);
 CREATE INDEX idx_inventory_transactions_product_created ON inventory_transactions(product_id, created_at DESC);
 CREATE INDEX idx_products_barcode ON products(barcode);

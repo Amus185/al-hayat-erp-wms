@@ -47,12 +47,9 @@ function useModalStack(isOpen: boolean, onClose: () => void, zIndex?: number) {
       }
       document.body.style.overflow = 'hidden';
 
-      const handleKeyDown = (e: KeyboardEvent) => {
-        // Only the topmost open modal closes on Escape
-        if (e.key === 'Escape' && activeModalStack[activeModalStack.length - 1] === modalId) {
-          onCloseRef.current();
-        }
-      };
+      // Static backdrop: keyboard Escape does not accidentally close modals with unsaved data
+      // Modals only close when explicitly clicking Close, Cancel, or the X button.
+      const handleKeyDown = () => {};
 
       document.addEventListener('keydown', handleKeyDown);
 
@@ -118,7 +115,6 @@ export function Modal({
   return (
     <div
       className="modal-backdrop"
-      onClick={onClose}
       id={`${id}-backdrop`}
       style={{ zIndex: effectiveZIndex }}
     >
@@ -176,7 +172,6 @@ export function SlideOver({
   return (
     <div
       className="slide-over-backdrop"
-      onClick={onClose}
       id={`${id}-backdrop`}
       style={{ zIndex: effectiveZIndex }}
     >
