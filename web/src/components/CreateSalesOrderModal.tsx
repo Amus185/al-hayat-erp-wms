@@ -779,26 +779,34 @@ export function CreateSalesOrderModal({ isOpen, onClose, onOrderCreated }: Creat
         <form onSubmit={handleCreateInlineCustomer}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
             <InputField
-              label="Full Name *"
+              label="Full Name"
+              id="inline-customer-name"
               value={newCustomerForm.name}
-              onChange={(e) => setNewCustomerForm({ ...newCustomerForm, name: e.target.value })}
+              onChange={(val) => setNewCustomerForm(prev => ({ ...prev, name: val }))}
+              placeholder="e.g. Ahmed Ali"
               required
             />
             <InputField
               label="Phone Number"
+              id="inline-customer-phone"
               value={newCustomerForm.phone}
-              onChange={(e) => setNewCustomerForm({ ...newCustomerForm, phone: e.target.value })}
+              onChange={(val) => setNewCustomerForm(prev => ({ ...prev, phone: val }))}
+              placeholder="+252 63..."
             />
             <InputField
               label="Email Address"
+              id="inline-customer-email"
               type="email"
               value={newCustomerForm.email}
-              onChange={(e) => setNewCustomerForm({ ...newCustomerForm, email: e.target.value })}
+              onChange={(val) => setNewCustomerForm(prev => ({ ...prev, email: val }))}
+              placeholder="customer@example.com"
             />
             <TextareaField
               label="Delivery / Residential Address"
+              id="inline-customer-address"
               value={newCustomerForm.address}
-              onChange={(e) => setNewCustomerForm({ ...newCustomerForm, address: e.target.value })}
+              onChange={(val) => setNewCustomerForm(prev => ({ ...prev, address: val }))}
+              placeholder="Street, District, City"
               rows={2}
             />
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '8px' }}>

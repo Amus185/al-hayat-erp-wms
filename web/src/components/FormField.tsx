@@ -55,7 +55,17 @@ export function InputField({
         id={id}
         type={type}
         value={value}
-        onChange={(e) => onChange(e.target.value)}
+        onChange={(e) => {
+          try {
+            onChange(e.target.value);
+          } catch (err: any) {
+            if (err?.message?.includes('target') || err?.message?.includes('value')) {
+              (onChange as any)(e);
+            } else {
+              throw err;
+            }
+          }
+        }}
         className="form-input"
         placeholder={placeholder}
         disabled={disabled}
@@ -139,7 +149,17 @@ export function TextareaField({
       <textarea
         id={id}
         value={value}
-        onChange={(e) => onChange(e.target.value)}
+        onChange={(e) => {
+          try {
+            onChange(e.target.value);
+          } catch (err: any) {
+            if (err?.message?.includes('target') || err?.message?.includes('value')) {
+              (onChange as any)(e);
+            } else {
+              throw err;
+            }
+          }
+        }}
         className="form-textarea"
         placeholder={placeholder}
         rows={rows}
