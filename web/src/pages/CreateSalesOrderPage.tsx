@@ -327,7 +327,7 @@ export function CreateSalesOrderPage() {
       if (completeNow) {
         try {
           await apiPost(`/sales/orders/${order.id}/complete`, {});
-          addToast('success', '✅ Sale completed! Invoice issued and payment recorded.');
+          addToast('success', 'Sale completed. Invoice issued and payment recorded.');
         } catch (err: any) {
           // If completion fails (e.g. stock validation), cancel the draft order so orphan DRAFT orders don't linger
           await apiPost(`/sales/orders/${order.id}/cancel`, {}).catch(() => {});
@@ -412,7 +412,7 @@ export function CreateSalesOrderPage() {
               </div>
             </FormField>
 
-            <FormField label="Originating Branch *">
+            <FormField label="Branch *">
               <SearchableSelect
                 options={branches.map((b) => ({ value: b.id, label: b.name }))}
                 value={branchId}
@@ -471,7 +471,7 @@ export function CreateSalesOrderPage() {
                 } else {
                   if (stockInfo.otherLocations.length > 0) {
                     const locList = stockInfo.otherLocations.map((l) => `${l.qty} at ${l.name}`).join(', ');
-                    hint = `📍 In Stock: ${locList}`;
+                    hint = `Available: ${locList}`;
                   } else {
                     hint = 'Out of stock in all locations';
                   }
@@ -491,7 +491,7 @@ export function CreateSalesOrderPage() {
               };
             })}
             onSelect={addLine}
-            placeholder="Search / click to select product to add to order..."
+            placeholder="Search products by name, SKU, or barcode..."
             existingLines={lines.map((l) => ({ productId: l.productId, quantity: l.quantity }))}
           />
 
@@ -542,8 +542,8 @@ export function CreateSalesOrderPage() {
                                   }}
                                 >
                                   {stockInfo.branchQty > 0
-                                    ? `✓ ${stockInfo.branchQty} in stock at ${selectedBranchName}`
-                                    : `⚠ 0 in stock at ${selectedBranchName}`}
+                                    ? `${stockInfo.branchQty} in stock at ${selectedBranchName}`
+                                    : `0 in stock at ${selectedBranchName}`}
                                 </span>
                               </div>
                             )}
@@ -654,10 +654,9 @@ export function CreateSalesOrderPage() {
               <div>
                 <h3 style={{ margin: 0, fontSize: '16px', color: '#1e293b', display: 'flex', alignItems: 'center', gap: '8px' }}>
                   Service Installation Fee
-                  {hasInstallationFee && <span style={{ fontSize: '11px', background: '#eab308', color: '#fff', padding: '2px 8px', borderRadius: '12px', fontWeight: 700 }}>Pass-Through Liability</span>}
                 </h3>
                 <p style={{ margin: '2px 0 0', fontSize: '13px', color: '#64748b' }}>
-                  Collected from customer and paid directly to technician. Does not count as company revenue.
+                  Collected from customer and paid to technician.
                 </p>
               </div>
             </div>
@@ -739,7 +738,7 @@ export function CreateSalesOrderPage() {
             {submittingAction === 'complete' ? (
               <><Loader2 size={14} className="spin-icon" /> Processing Sale…</>
             ) : (
-              '⚡ Create & Complete'
+              'Create & Complete'
             )}
           </button>
         </div>
@@ -863,7 +862,7 @@ export function CreateSalesOrderPage() {
                 }}
               >
                 <div style={{ fontWeight: 700, color: '#0369a1', marginBottom: '6px' }}>
-                  📍 Available at other locations:
+                  Available at other locations:
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                   {stockAlert.otherLocations.map((loc, idx) => (

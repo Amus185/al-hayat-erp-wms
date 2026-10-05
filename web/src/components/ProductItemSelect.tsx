@@ -367,7 +367,7 @@ export function ProductItemSelect({
                                   border: (p.stock ?? 0) > 0 ? '1px solid #a7f3d0' : '1px solid #fecaca',
                                 }}
                               >
-                                {(p.stock ?? 0) > 0 ? `✓ ${p.stock} at branch` : '⚠ 0 at branch'}
+                                {(p.stock ?? 0) > 0 ? `${p.stock} in stock` : '0 in stock'}
                               </span>
                             )}
                             {p.stockHint && (

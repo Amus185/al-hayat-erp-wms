@@ -125,7 +125,7 @@ function PurchaseInvoiceSummaryBox({ summary, discountAmount }: { summary: Payme
         </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700, fontSize: '15px', borderTop: '1px solid #d1e8d1', paddingTop: '6px', marginTop: '2px' }}>
           <span style={{ color: summary.balance > 0 ? '#b45309' : '#0b8f08' }}>
-            {summary.balance > 0 ? 'Remaining Payable' : '✓ Fully Paid'}
+            {summary.balance > 0 ? 'Remaining Payable' : 'Fully Paid'}
           </span>
           <span style={{ color: summary.balance > 0 ? '#b45309' : '#0b8f08' }}>{fmt(summary.balance)}</span>
         </div>
@@ -246,7 +246,7 @@ export function PurchasingPage() {
     try {
       setPoDetailsLoading(true);
       await apiPost<any>(`/purchasing/orders/${poId}/approve`, {});
-      addToast('success', '✅ PO Approved successfully!');
+      addToast('success', 'PO approved successfully.');
       await viewPoDetails({ id: poId } as any);
       loadData();
     } catch (err: any) {
@@ -284,7 +284,7 @@ export function PurchasingPage() {
         lines: linesToReceive,
       });
       const totalUnits = linesToReceive.reduce((sum: number, l: any) => sum + l.quantityReceived, 0);
-      addToast('success', `✅ Goods Receipt recorded! Received ${totalUnits} items into warehouse.`);
+      addToast('success', `Goods receipt recorded. Received ${totalUnits} items.`);
       await viewPoDetails({ id: selectedPO.id } as any);
       loadData();
     } catch (err: any) {
@@ -401,7 +401,7 @@ export function PurchasingPage() {
   </style>
 </head>
 <body>
-  <button class="btn-print no-print" onclick="window.print()">🖨️ Print / Save as PDF</button>
+  <button class="btn-print no-print" onclick="window.print()">Print / Save as PDF</button>
   <div class="header">
     <div>
       <div class="company-title">AL-HAYAT ERP</div>
@@ -963,7 +963,7 @@ export function PurchasingPage() {
                           style={{ minHeight: '34px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}
                         >
                           <CheckCircle size={15} />
-                          Approve PO Only
+                          Approve PO
                         </button>
                       </div>
                     )}
@@ -971,7 +971,7 @@ export function PurchasingPage() {
 
                   {totalReceivingNow > 0 && (
                     <div style={{ fontSize: '12px', color: '#0369a1', background: '#e0f2fe', padding: '8px 12px', borderRadius: '6px', lineHeight: 1.5 }}>
-                      ℹ️ Receiving <strong>{totalReceivingNow}</strong> units now. <strong>{Math.max(0, totalRemainingQty - totalReceivingNow)}</strong> units will remain on this PO. Status will be <strong>{totalReceivingNow >= totalRemainingQty ? 'RECEIVED' : 'PARTIALLY_RECEIVED'}</strong>.
+                      Receiving <strong>{totalReceivingNow}</strong> units now ({Math.max(0, totalRemainingQty - totalReceivingNow)} remaining). New status: <strong>{totalReceivingNow >= totalRemainingQty ? 'RECEIVED' : 'PARTIALLY_RECEIVED'}</strong>.
                     </div>
                   )}
                 </div>

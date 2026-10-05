@@ -131,7 +131,7 @@ function InvoiceSummaryBox({ summary, discountAmount }: { summary: PaymentSummar
         </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700, fontSize: '15px', borderTop: '1px solid #d1e8d1', paddingTop: '6px', marginTop: '2px' }}>
           <span style={{ color: summary.balance > 0 ? '#b45309' : '#0b8f08' }}>
-            {summary.balance > 0 ? 'Remaining Balance' : '✓ Fully Paid'}
+            {summary.balance > 0 ? 'Remaining Balance' : 'Fully Paid'}
           </span>
           <span style={{ color: summary.balance > 0 ? '#b45309' : '#0b8f08' }}>{fmt(summary.balance)}</span>
         </div>
@@ -250,7 +250,7 @@ export function SalesPage() {
       setActionProcessing('complete');
       setOrderDetailsLoading(true);
       await apiPost(`/sales/orders/${id}/complete`, {});
-      addToast('success', '✅ Sale completed! Invoice issued and payment recorded.');
+      addToast('success', 'Sale completed. Invoice issued and payment recorded.');
       setSelectedOrder(null);
       loadData();
     } catch (err: any) {
@@ -543,7 +543,7 @@ export function SalesPage() {
               }}
               title={row.installation_status === 'PAID_OUT' ? 'Installation fee paid to technician' : 'Installation fee pending technician payout'}
             >
-              <Wrench size={10} /> +${Number(row.installation_fee).toFixed(2)} Install {row.installation_status === 'PAID_OUT' ? '✓' : ''}
+              <Wrench size={10} /> +${Number(row.installation_fee).toFixed(2)} Install {row.installation_status === 'PAID_OUT' ? '(Paid)' : ''}
             </div>
           )}
         </div>
@@ -887,7 +887,7 @@ export function SalesPage() {
                     <span style={{ color: '#64748b' }}>Assigned Installer:</span> <strong>{selectedOrder.installer_name || 'Technician'}</strong>
                   </div>
                   <div>
-                    <span style={{ color: '#64748b' }}>Notes:</span> <span>{selectedOrder.installer_notes || 'Pass-through fee payable upon job completion'}</span>
+                    <span style={{ color: '#64748b' }}>Notes:</span> <span>{selectedOrder.installer_notes || '—'}</span>
                   </div>
                 </div>
               </div>

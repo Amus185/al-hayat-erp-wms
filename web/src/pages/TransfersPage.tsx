@@ -335,9 +335,9 @@ export function TransfersPage() {
               className="btn btn-sm"
               style={{ background: '#0b8f08', color: '#fff', border: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '12px', padding: '4px 8px', borderRadius: '6px' }}
               onClick={(e) => { e.stopPropagation(); handleApproveAndDispatch(row.id, false); }}
-              title="Approve & Dispatch in 1 click"
+              title="Approve & Dispatch"
             >
-              ⚡ Approve & Dispatch
+              Approve & Dispatch
             </button>
           )}
 
@@ -347,9 +347,9 @@ export function TransfersPage() {
               className="btn btn-sm"
               style={{ background: '#0284c7', color: '#fff', border: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '12px', padding: '4px 8px', borderRadius: '6px' }}
               onClick={(e) => { e.stopPropagation(); handleDispatch(row.id, false); }}
-              title="Dispatch to transit"
+              title="Dispatch transfer"
             >
-              🚚 Dispatch
+              Dispatch
             </button>
           )}
 
@@ -361,7 +361,7 @@ export function TransfersPage() {
               onClick={(e) => { e.stopPropagation(); handleReceive(row.id, false); }}
               title="Confirm transfer received"
             >
-              ✅ Receive
+              Receive
             </button>
           )}
         </div>
@@ -629,9 +629,9 @@ export function TransfersPage() {
                       className="btn btn-secondary"
                       onClick={() => handleApprove(selectedTransfer.id, true)}
                       disabled={actionLoading}
-                      title="Approve request only"
+                      title="Approve transfer"
                     >
-                      Approve Only
+                      Approve
                     </button>
                     <button
                       type="button"
@@ -639,9 +639,9 @@ export function TransfersPage() {
                       onClick={() => handleApproveAndDispatch(selectedTransfer.id, true)}
                       disabled={actionLoading}
                       style={{ background: '#0b8f08', borderColor: '#0b8f08' }}
-                      title="Approve and immediately dispatch goods in 1 click"
+                      title="Approve and immediately dispatch goods"
                     >
-                      {actionLoading ? 'Processing...' : '⚡ Approve & Dispatch Now'}
+                      {actionLoading ? 'Processing...' : 'Approve & Dispatch'}
                     </button>
                   </>
                 )}
@@ -655,7 +655,7 @@ export function TransfersPage() {
                     disabled={actionLoading}
                     style={{ background: '#0284c7', borderColor: '#0284c7' }}
                   >
-                    {actionLoading ? 'Processing...' : '🚚 Dispatch Transfer (Transit)'}
+                    {actionLoading ? 'Processing...' : 'Dispatch Transfer'}
                   </button>
                 )}
 
@@ -667,7 +667,7 @@ export function TransfersPage() {
                     onClick={() => handleReceive(selectedTransfer.id, true)}
                     disabled={actionLoading}
                   >
-                    {actionLoading ? 'Processing...' : '✅ Receive Transfer (Complete)'}
+                    {actionLoading ? 'Processing...' : 'Receive Transfer'}
                   </button>
                 )}
               </div>

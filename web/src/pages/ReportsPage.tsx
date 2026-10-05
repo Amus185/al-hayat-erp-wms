@@ -336,7 +336,7 @@ export function ReportsPage() {
               border: `1px solid ${isConv ? '#bbf7d0' : '#fecaca'}`,
             }}
           >
-            {isConv ? '✓ Converted' : r.status || 'DRAFT'}
+            {isConv ? 'Converted' : r.status || 'DRAFT'}
           </span>
         );
       },

@@ -337,7 +337,7 @@ export function DeliveriesPage() {
     const confirmed = await confirmAction(
       'Dispatch Delivery?',
       `Dispatch Delivery #${d.delivery_number} with driver ${d.driver_name} (${d.vehicle_plate || 'No plate'})?`,
-      'Yes, Dispatch 🚚',
+      'Yes, Dispatch',
       'info'
     );
     if (!confirmed) return;
@@ -364,7 +364,7 @@ export function DeliveriesPage() {
     const confirmed = await confirmAction(
       'Confirm Delivered?',
       `Mark Delivery #${d.delivery_number} as DELIVERED to ${d.customer_name}?`,
-      'Yes, Confirm Received ✅',
+      'Yes, Confirm Received',
       'success'
     );
     if (!confirmed) return;
@@ -502,19 +502,18 @@ export function DeliveriesPage() {
             <div>Address: ${d.delivery_address}, ${d.city}</div>
           </div>
           <div class="box">
-            <h4>Fulfillment & Logistics</h4>
-            <div>Origin: ${d.warehouse_name || 'Central Distribution Warehouse'}</div>
-            <div>Assigned Driver: ${d.driver_name || 'Pending assignment'} (${d.driver_phone || '—'})</div>
-            <div>Vehicle Plate: ${d.vehicle_plate || '—'}</div>
-            <div>Scheduled: ${d.scheduled_date || 'Standard Delivery'}</div>
+            <h4>Logistics</h4>
+            <div>Driver: ${d.driver_name || '—'} (${d.driver_phone || '—'})</div>
+            <div>Vehicle: ${d.vehicle_plate || '—'}</div>
+            <div>Scheduled: ${d.scheduled_date || 'Immediate'}</div>
           </div>
         </div>
 
         ${d.installation_required ? `
           <div style="background: #fefce8; border: 1px solid #fde047; border-radius: 8px; padding: 12px; margin-bottom: 20px;">
-            <strong style="color: #854d0e;">🛠️ On-Site Installation Service Included</strong>
+            <strong style="color: #854d0e;">Installation Service</strong>
             <div style="font-size: 12px; color: #713f12; margin-top: 4px;">
-              Technician: ${d.installer_name || 'Assigned Technician'} | Installation Fee: $${Number(d.installation_fee).toFixed(2)} (Pass-through service)
+              Technician: ${d.installer_name || '—'} | Fee: $${Number(d.installation_fee).toFixed(2)}
             </div>
           </div>
         ` : ''}
@@ -532,10 +531,10 @@ export function DeliveriesPage() {
           <tbody>
             ${(d.items || []).map((i) => `
               <tr>
-                <td><strong>${i.product_name || 'Standard Merchandise'}</strong></td>
+                <td><strong>${i.product_name || '—'}</strong></td>
                 <td>${i.product_sku || '—'}</td>
-                <td><strong>${i.quantity} units</strong></td>
-                <td>${i.notes || 'Good Condition'}</td>
+                <td><strong>${i.quantity}</strong></td>
+                <td>${i.notes || '—'}</td>
               </tr>
             `).join('')}
             ${(!d.items || d.items.length === 0) ? `
@@ -743,8 +742,8 @@ export function DeliveriesPage() {
           <Truck size={24} />
         </div>
         <div className="module-header__info">
-          <p>Logistics & Fulfillment</p>
-          <h2>Product Deliveries & Fleet Management</h2>
+          <p>Logistics</p>
+          <h2>Deliveries</h2>
         </div>
         <div className="module-header__actions">
           {hasPermission('manage_sales') && (
@@ -842,7 +841,7 @@ export function DeliveriesPage() {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
             <div>
               <label className="form-label" style={{ fontWeight: 600, fontSize: '13px', color: '#1e293b' }}>
-                1. Link Sales Order (Recommended)
+                Sales Order
               </label>
               <SearchableSelect
                 options={[
@@ -858,18 +857,15 @@ export function DeliveriesPage() {
                 onChange={handleSelectSalesOrder}
                 placeholder="Search Sales Order..."
               />
-              <span style={{ fontSize: '11px', color: '#64748b' }}>
-                Auto-fills customer contact, destination & branch.
-              </span>
             </div>
 
             <div>
               <label className="form-label" style={{ fontWeight: 600, fontSize: '13px', color: '#1e293b' }}>
-                2. Or Select Customer Directly
+                Customer
               </label>
               <SearchableSelect
                 options={[
-                  { value: '', label: '— Select Customer Directly —' },
+                  { value: '', label: '— Select Customer —' },
                   ...(Array.isArray(customers) ? customers : []).map((c) => ({
                     value: c.id,
                     label: `${c.name} ${c.phone ? `(${c.phone})` : ''}`,
@@ -877,15 +873,12 @@ export function DeliveriesPage() {
                 ]}
                 value={createForm.customerId}
                 onChange={handleSelectCustomer}
-                placeholder="Search existing customer..."
+                placeholder="Search customer..."
               />
-              <span style={{ fontSize: '11px', color: '#64748b' }}>
-                For direct deliveries not linked to a specific SO.
-              </span>
             </div>
           </div>
 
-          {/* Auto-Fetched Customer & Origin Branch Card */}
+          {/* Customer & Origin Branch Card */}
           {createForm.customerName || createForm.salesOrderId || createForm.customerId ? (
             <div
               style={{
@@ -898,8 +891,8 @@ export function DeliveriesPage() {
               }}
             >
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontSize: '12px', fontWeight: 700, textTransform: 'uppercase', color: '#0b8f08', letterSpacing: '0.5px' }}>
-                  ✓ Customer & Branch Information (Auto-Fetched)
+                <span style={{ fontSize: '12px', fontWeight: 600, textTransform: 'uppercase', color: '#475569', letterSpacing: '0.5px' }}>
+                  Customer Details
                 </span>
                 <button
                   type="button"
@@ -915,30 +908,29 @@ export function DeliveriesPage() {
                     textDecoration: 'underline',
                   }}
                 >
-                  {showAddressOverride ? 'Close Address Edit' : 'Edit Drop-off Address ✏️'}
+                  {showAddressOverride ? 'Close' : 'Edit Address'}
                 </button>
               </div>
 
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '12px' }}>
                 <div>
-                  <div style={{ fontSize: '11px', color: '#64748b', fontWeight: 600 }}>Customer Name & Contact</div>
+                  <div style={{ fontSize: '11px', color: '#64748b', fontWeight: 600 }}>Customer</div>
                   <div style={{ fontSize: '14px', fontWeight: 700, color: '#0f172a' }}>{createForm.customerName || '—'}</div>
-                  <div style={{ fontSize: '12px', color: '#475569' }}>📞 {createForm.customerPhone || 'No phone recorded'}</div>
+                  <div style={{ fontSize: '12px', color: '#475569' }}>{createForm.customerPhone || '—'}</div>
                 </div>
 
                 <div>
-                  <div style={{ fontSize: '11px', color: '#64748b', fontWeight: 600 }}>Delivery Destination</div>
+                  <div style={{ fontSize: '11px', color: '#64748b', fontWeight: 600 }}>Destination</div>
                   <div style={{ fontSize: '13px', fontWeight: 600, color: '#0f172a' }}>
-                    📍 {createForm.deliveryAddress || 'Customer Location'}, {createForm.city}
+                    {createForm.deliveryAddress || '—'}, {createForm.city}
                   </div>
                 </div>
 
                 <div>
-                  <div style={{ fontSize: '11px', color: '#64748b', fontWeight: 600 }}>Originating Branch</div>
+                  <div style={{ fontSize: '11px', color: '#64748b', fontWeight: 600 }}>Branch</div>
                   <div style={{ fontSize: '13px', fontWeight: 600, color: '#0f172a' }}>
-                    🏢 {createForm.branchName || (user as any)?.branchName || 'Branch Context'}
+                    {createForm.branchName || (user as any)?.branchName || '—'}
                   </div>
-                  <div style={{ fontSize: '11px', color: '#64748b' }}>Assigned automatically from sales branch</div>
                 </div>
               </div>
 
@@ -954,7 +946,7 @@ export function DeliveriesPage() {
                   }}
                 >
                   <InputField
-                    label="Custom Delivery Address (Optional Override)"
+                    label="Delivery Address"
                     id="delAddressOverride"
                     value={createForm.deliveryAddress}
                     onChange={(val) => setCreateForm((p) => ({ ...p, deliveryAddress: val }))}
@@ -970,33 +962,19 @@ export function DeliveriesPage() {
                 </div>
               )}
             </div>
-          ) : (
-            <div
-              style={{
-                background: '#f8fafc',
-                border: '1px dashed #cbd5e1',
-                borderRadius: '8px',
-                padding: '16px',
-                textAlign: 'center',
-                color: '#64748b',
-                fontSize: '13px',
-              }}
-            >
-              Please select a <strong>Sales Order</strong> or <strong>Customer</strong> above. Customer contact details, delivery address, and branch will be loaded automatically without manual typing.
-            </div>
-          )}
+          ) : null}
 
           {/* Fleet & Logistics Details (All Optional) */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
             <InputField
-              label="Assigned Driver Name (Optional)"
+              label="Driver Name"
               id="delDriver"
               value={createForm.driverName}
               onChange={(val) => setCreateForm((p) => ({ ...p, driverName: val }))}
               placeholder="e.g. Mahdi Driver"
             />
             <InputField
-              label="Vehicle Plate Number (Optional)"
+              label="Vehicle Plate"
               id="delPlate"
               value={createForm.vehiclePlate}
               onChange={(val) => setCreateForm((p) => ({ ...p, vehiclePlate: val }))}
@@ -1006,14 +984,14 @@ export function DeliveriesPage() {
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
             <InputField
-              label="Scheduled Delivery Date (Optional)"
+              label="Scheduled Date"
               id="delDate"
               type="date"
               value={createForm.scheduledDate}
               onChange={(val) => setCreateForm((p) => ({ ...p, scheduledDate: val }))}
             />
             <InputField
-              label="Driver Contact Phone (Optional)"
+              label="Driver Phone"
               id="delDriverPhone"
               value={createForm.driverPhone}
               onChange={(val) => setCreateForm((p) => ({ ...p, driverPhone: val }))}
@@ -1047,7 +1025,7 @@ export function DeliveriesPage() {
                 onChange={(e) => setCreateForm((p) => ({ ...p, installationRequired: e.target.checked }))}
                 style={{ width: '16px', height: '16px', accentColor: '#0b8f08' }}
               />
-              Include On-Site Product Installation Service (Optional)
+              Include Installation Service
             </label>
 
             {createForm.installationRequired && (
@@ -1071,7 +1049,7 @@ export function DeliveriesPage() {
           </div>
 
           <TextareaField
-            label="Special Delivery Instructions / Gate Code (Optional)"
+            label="Delivery Notes"
             id="delNotes"
             value={createForm.notes}
             onChange={(val) => setCreateForm((p) => ({ ...p, notes: val }))}
@@ -1101,7 +1079,7 @@ export function DeliveriesPage() {
               {submitting ? (
                 <><Loader2 size={14} className="spin-icon" /> Processing…</>
               ) : (
-                <><Send size={14} /> Schedule & Dispatch Now 🚚</>
+                <><Send size={14} /> Schedule & Dispatch</>
               )}
             </button>
           </div>
@@ -1157,7 +1135,7 @@ export function DeliveriesPage() {
           </div>
 
           <InputField
-            label="Recipient Full Name (Customer or Authorized Receiver) *"
+            label="Recipient Name *"
             id="compRecip"
             value={completeForm.recipientName}
             onChange={(val) => setCompleteForm((p) => ({ ...p, recipientName: val }))}
@@ -1166,7 +1144,7 @@ export function DeliveriesPage() {
           />
 
           <TextareaField
-            label="Delivery Notes & Condition Confirmation"
+            label="Delivery Notes"
             id="compNotes"
             value={completeForm.notes}
             onChange={(val) => setCompleteForm((p) => ({ ...p, notes: val }))}
@@ -1207,19 +1185,19 @@ export function DeliveriesPage() {
             {/* Customer & Location */}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
               <div style={{ background: '#f8fafc', padding: '12px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
-                <span style={{ fontSize: '11px', color: '#64748b', fontWeight: 700, textTransform: 'uppercase' }}>Recipient Details</span>
+                <span style={{ fontSize: '11px', color: '#64748b', fontWeight: 700, textTransform: 'uppercase' }}>Customer</span>
                 <div style={{ fontWeight: 700, fontSize: '14px', color: '#0f172a', marginTop: '4px' }}>{selectedDelivery.customer_name}</div>
-                <div style={{ fontSize: '12px', color: '#475569', marginTop: '2px' }}>📞 {selectedDelivery.customer_phone}</div>
-                <div style={{ fontSize: '12px', color: '#475569', marginTop: '2px' }}>📍 {selectedDelivery.delivery_address}, {selectedDelivery.city}</div>
+                <div style={{ fontSize: '12px', color: '#475569', marginTop: '2px' }}>{selectedDelivery.customer_phone}</div>
+                <div style={{ fontSize: '12px', color: '#475569', marginTop: '2px' }}>{selectedDelivery.delivery_address}, {selectedDelivery.city}</div>
               </div>
 
               <div style={{ background: '#f8fafc', padding: '12px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
-                <span style={{ fontSize: '11px', color: '#64748b', fontWeight: 700, textTransform: 'uppercase' }}>Logistics Fleet</span>
+                <span style={{ fontSize: '11px', color: '#64748b', fontWeight: 700, textTransform: 'uppercase' }}>Driver & Vehicle</span>
                 <div style={{ fontWeight: 700, fontSize: '14px', color: '#0f172a', marginTop: '4px' }}>
-                  Driver: {selectedDelivery.driver_name || 'Pending assignment'}
+                  {selectedDelivery.driver_name || 'Unassigned'}
                 </div>
                 <div style={{ fontSize: '12px', color: '#475569', marginTop: '2px' }}>
-                  Vehicle Plate: {selectedDelivery.vehicle_plate || '—'}
+                  {selectedDelivery.vehicle_plate || '—'}
                 </div>
                 {selectedDelivery.driver_phone && (
                   <div style={{ fontSize: '12px', color: '#475569', marginTop: '2px' }}>
@@ -1235,10 +1213,10 @@ export function DeliveriesPage() {
                 <Wrench size={20} color="#854d0e" />
                 <div>
                   <div style={{ fontWeight: 700, color: '#854d0e', fontSize: '13px' }}>
-                    On-Site Service Installation Included (${Number(selectedDelivery.installation_fee).toFixed(2)})
+                    Installation — ${Number(selectedDelivery.installation_fee).toFixed(2)}
                   </div>
                   <div style={{ fontSize: '12px', color: '#713f12' }}>
-                    Technician: {selectedDelivery.installer_name || 'Assigned Technician'} (Pass-through fee)
+                    Technician: {selectedDelivery.installer_name || '—'}
                   </div>
                 </div>
               </div>
@@ -1246,7 +1224,7 @@ export function DeliveriesPage() {
 
             {/* Shipped Items */}
             <div>
-              <h4 style={{ margin: '0 0 8px', color: '#066006', fontSize: '14px' }}>Shipped Product Items</h4>
+              <h4 style={{ margin: '0 0 8px', color: '#066006', fontSize: '14px' }}>Items</h4>
               <table>
                 <thead>
                   <tr>

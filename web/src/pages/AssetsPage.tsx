@@ -1276,12 +1276,12 @@ export function AssetsPage() {
             </p>
             {confirmDelete.type === 'property' && (
               <p style={{ margin: 0, fontSize: 13, color: '#dc2626', background: '#fee2e2', padding: 10, borderRadius: 6 }}>
-                ⚠️ Warning: Deleting this property will also remove all associated lease agreements, rental payments, and property expenses.
+                Deleting this property will also remove all associated lease agreements, rental payments, and property expenses.
               </p>
             )}
             {confirmDelete.type === 'tenant' && (
               <p style={{ margin: 0, fontSize: 13, color: '#dc2626', background: '#fee2e2', padding: 10, borderRadius: 6 }}>
-                ⚠️ Warning: Deleting this tenant will also remove their associated lease agreements and rental records.
+                Deleting this tenant will also remove their associated lease agreements and rental records.
               </p>
             )}
             <div className="form-actions">

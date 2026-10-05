@@ -543,7 +543,7 @@ export function ManufacturingPage() {
           </div>
           {row.rejected_quantity > 0 && (
             <div style={{ fontSize: '11px', color: '#dc2626' }}>
-              ⚠️ {row.rejected_quantity} scrap/rejected
+              {row.rejected_quantity} rejected
             </div>
           )}
         </div>
@@ -693,7 +693,7 @@ export function ManufacturingPage() {
     {
       key: 'hours',
       label: 'Est. Hours',
-      render: (row) => <span>⏱️ {row.estimated_hours} hrs</span>,
+      render: (row) => <span>{row.estimated_hours} hrs</span>,
     },
     {
       key: 'actions',
@@ -1267,7 +1267,7 @@ export function ManufacturingPage() {
               <SearchableSelect
                 options={products.map((p) => ({
                   value: p.id,
-                  label: `➕ Add: ${p.name} (${p.sku}) - Cost: $${Number(p.cost_price || 0).toFixed(2)}`,
+                  label: `${p.name} (${p.sku}) - Cost: $${Number(p.cost_price || 0).toFixed(2)}`,
                 }))}
                 value=""
                 onChange={(val) => { if (val) addBomMaterialLine(val); }}
@@ -1378,7 +1378,7 @@ export function ManufacturingPage() {
           </div>
 
           <TextareaField
-            label="Quality Inspector Sign-Off & Notes"
+            label="Quality Notes"
             id="compNotes"
             value={completeForm.notes}
             onChange={(val) => setCompleteForm((p) => ({ ...p, notes: val }))}
@@ -1386,7 +1386,7 @@ export function ManufacturingPage() {
           />
 
           <div style={{ fontSize: '12px', color: '#166534', background: '#f0fdf4', padding: '8px 12px', borderRadius: '6px' }}>
-            ✓ Will automatically deposit {completeForm.completedQuantity} units into warehouse inventory stock and post GL entry: DR 1030 (Finished Goods) / CR 1070 (WIP).
+            {completeForm.completedQuantity} units will be added to warehouse inventory.
           </div>
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
@@ -1447,7 +1447,7 @@ export function ManufacturingPage() {
                       }}
                     >
                       <div style={{ fontSize: '11px', fontWeight: 800, color: isCurrent ? '#0369a1' : (isDone ? '#166534' : '#64748b') }}>
-                        {isDone ? '✓ Completed' : (isCurrent ? '⚡ In Progress' : 'Pending')}
+                        {isDone ? 'Completed' : (isCurrent ? 'In Progress' : 'Pending')}
                       </div>
                       <div style={{ fontSize: '12px', fontWeight: 600, color: '#1e293b', marginTop: '2px' }}>
                         {stageName}

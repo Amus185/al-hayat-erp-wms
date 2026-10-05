@@ -365,7 +365,7 @@ export function CreateTransferPage() {
             {submitting ? (
               <><Loader2 size={14} className="spin-icon" /> Processing…</>
             ) : (
-              <>🚚 Create & Dispatch Now</>
+              <>Create & Dispatch</>
             )}
           </button>
         </div>

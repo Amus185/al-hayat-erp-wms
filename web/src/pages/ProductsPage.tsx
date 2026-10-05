@@ -780,8 +780,8 @@ export function ProductsPage() {
           {/* Initial Stock Section — Multi-location */}
           <div style={{ marginTop: '16px', padding: '16px', background: '#f4fbf4', borderRadius: '10px', border: '1px solid #d1e8d1' }}>
             <div style={{ marginBottom: '14px' }}>
-              <p style={{ margin: 0, fontWeight: 700, color: '#066006', fontSize: '14px' }}>📦 Initial Opening Stock (Optional)</p>
-              <p style={{ margin: '3px 0 0', fontSize: '12px', color: '#667066' }}>Specify total opening units (e.g. 100, 1,000) and split them across warehouses & branches.</p>
+              <p style={{ margin: 0, fontWeight: 700, color: '#066006', fontSize: '14px' }}>Initial Opening Stock (Optional)</p>
+              <p style={{ margin: '3px 0 0', fontSize: '12px', color: '#667066' }}>Specify total opening units and assign across warehouses and branches.</p>
             </div>
 
             {/* Total Opening Stock Input & Quick Presets */}
@@ -841,13 +841,13 @@ export function ProductsPage() {
               }}>
                 <div>
                   {totalAllocated === totalOpening && (
-                    <span>🟢 <strong>100% Allocated</strong> ({totalAllocated.toLocaleString()} / {totalOpening.toLocaleString()} units assigned)</span>
+                    <span><strong>Fully Allocated</strong> ({totalAllocated.toLocaleString()} / {totalOpening.toLocaleString()} units)</span>
                   )}
                   {remainingToAllocate > 0 && (
-                    <span>🟡 <strong>Incomplete Allocation</strong>: {totalAllocated.toLocaleString()} / {totalOpening.toLocaleString()} assigned — <strong>{remainingToAllocate.toLocaleString()} units remaining</strong></span>
+                    <span><strong>Incomplete Allocation</strong>: {totalAllocated.toLocaleString()} / {totalOpening.toLocaleString()} units ({remainingToAllocate.toLocaleString()} remaining)</span>
                   )}
                   {remainingToAllocate < 0 && (
-                    <span>🔴 <strong>Over Allocated</strong>: {totalAllocated.toLocaleString()} assigned (exceeds total opening stock by {Math.abs(remainingToAllocate).toLocaleString()} units)</span>
+                    <span><strong>Over Allocated</strong>: {totalAllocated.toLocaleString()} units (exceeds total by {Math.abs(remainingToAllocate).toLocaleString()})</span>
                   )}
                 </div>
 
@@ -859,7 +859,7 @@ export function ProductsPage() {
                       onClick={handleSplitEqually}
                       style={{ padding: '5px 10px', borderRadius: '6px', background: '#fff', border: '1px solid #cbd5e1', fontSize: '12px', fontWeight: 600, cursor: 'pointer', color: '#1e293b' }}
                     >
-                      ⚡ Split Equally
+                      Split Equally
                     </button>
                   )}
                   {remainingToAllocate > 0 && (
@@ -868,7 +868,7 @@ export function ProductsPage() {
                       onClick={handleFillRemaining}
                       style={{ padding: '5px 10px', borderRadius: '6px', background: '#066006', color: '#fff', border: 'none', fontSize: '12px', fontWeight: 600, cursor: 'pointer' }}
                     >
-                      ➕ Fill Remaining ({remainingToAllocate.toLocaleString()})
+                      Fill Remaining ({remainingToAllocate.toLocaleString()})
                     </button>
                   )}
                 </div>
@@ -896,7 +896,7 @@ export function ProductsPage() {
 
             {initialStockLines.length === 0 ? (
               <div style={{ textAlign: 'center', padding: '18px 0', color: '#889388', fontSize: '13px', border: '1px dashed #c8dcc8', borderRadius: '8px' }}>
-                No stock locations added — click <strong>Add Location</strong> to assign opening stock.
+                No stock locations added.
               </div>
             ) : (
               <div style={{ display: 'grid', gap: '8px' }}>
@@ -1160,7 +1160,7 @@ export function ProductsPage() {
             <div>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
                 <span style={{ fontSize: '13px', fontWeight: 700, color: '#065f46' }}>
-                  🟢 Preview Products Ready ({bulkRows.length} items)
+                  Preview Products ({bulkRows.length} items)
                 </span>
                 <button
                   type="button"

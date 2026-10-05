@@ -829,7 +829,7 @@ export function WarehouseDetailsPage() {
             </FormField>
           </div>
 
-          <FormField label="Location Barcode (Optional — auto-generated if blank)">
+          <FormField label="Location Barcode (Optional)">
             <input
               type="text"
               className="form-input"

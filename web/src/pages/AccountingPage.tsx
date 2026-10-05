@@ -760,7 +760,6 @@ export function AccountingPage() {
                   <div>
                     <div style={{ fontSize: '20px', fontWeight: 700, color: '#111827' }}>{fmt(dashboard?.total_cogs || 0)}</div>
                     <div style={{ fontSize: '12px', color: '#6b7280', fontWeight: 500 }}>Cost of Goods Sold</div>
-                    <div style={{ fontSize: '10px', color: '#9ca3af', marginTop: '2px' }}>Auto-posted from sales</div>
                   </div>
                 </div>
                 {/* Operating Expenses */}
@@ -901,7 +900,7 @@ export function AccountingPage() {
                     <div style={{ background: trialBalance.totals?.is_balanced ? G + '12' : RED + '12', borderRadius: '10px', padding: '14px 20px', border: `1px solid ${trialBalance.totals?.is_balanced ? G : RED}44`, flex: 1, textAlign: 'center' }}>
                       <p style={{ margin: 0, fontSize: '12px', color: '#6b7280', fontWeight: 600 }}>Status</p>
                       <p style={{ margin: '4px 0 0', fontSize: '16px', fontWeight: 800, color: trialBalance.totals?.is_balanced ? G : RED }}>
-                        {trialBalance.totals?.is_balanced ? '✓ Balanced' : '✗ Unbalanced'}
+                        {trialBalance.totals?.is_balanced ? 'Balanced' : 'Unbalanced'}
                       </p>
                     </div>
                   </div>
@@ -1008,7 +1007,7 @@ export function AccountingPage() {
                     </StmtCard>
                     <div style={{ background: (balanceSheet.totals?.is_balanced ? G : RED) + '12', borderRadius: '10px', padding: '14px 20px', border: `1px solid ${(balanceSheet.totals?.is_balanced ? G : RED)}44`, textAlign: 'center' }}>
                       <p style={{ margin: 0, fontWeight: 800, color: balanceSheet.totals?.is_balanced ? G : RED, fontSize: '15px' }}>
-                        {balanceSheet.totals?.is_balanced ? '✓ Balance Sheet Balanced' : '✗ Unbalanced — Check Entries'}
+                        {balanceSheet.totals?.is_balanced ? 'Balance Sheet Balanced' : 'Unbalanced'}
                       </p>
                       <p style={{ margin: '4px 0 0', fontSize: '13px', color: '#6b7280' }}>
                         Total Assets: {fmt(balanceSheet.totals?.total_assets || 0)} | Liabilities + Equity: {fmt(balanceSheet.totals?.total_liabilities_and_equity || 0)}
@@ -1181,7 +1180,7 @@ export function AccountingPage() {
             <label style={{ fontSize: '12px', fontWeight: 600, color: '#374151', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Journal Lines <span style={{ color: RED }}>*</span></label>
             <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
               <span style={{ fontSize: '12px', color: jeBalanced ? G : RED, fontWeight: 700 }}>
-                Dr: {fmtN(jeLineTotalDr)} | Cr: {fmtN(jeLineTotalCr)} {jeBalanced ? '✓' : '≠'}
+                Dr: {fmtN(jeLineTotalDr)} | Cr: {fmtN(jeLineTotalCr)} {jeBalanced ? '(Balanced)' : '(Unbalanced)'}
               </span>
               <button onClick={() => setJeForm({ ...jeForm, lines: [...jeForm.lines, { account_id: '', description: '', debit_amount: '', credit_amount: '' }] })}
                 style={{ background: G + '18', border: 'none', color: G, borderRadius: '6px', padding: '4px 10px', cursor: 'pointer', fontSize: '12px', fontWeight: 600 }}>
@@ -1389,7 +1388,7 @@ export function AccountingPage() {
           <button onClick={() => setShowClosingModal(false)} style={{ background: '#f3f4f6', border: 'none', color: '#374151', borderRadius: '8px', padding: '9px 20px', cursor: 'pointer', fontWeight: 600 }}>Cancel</button>
           <button onClick={generateClosing} disabled={submitting || !selectedPeriod}
             style={{ background: selectedPeriod ? AMBER : '#9ca3af', border: 'none', color: '#fff', borderRadius: '8px', padding: '9px 20px', cursor: selectedPeriod ? 'pointer' : 'not-allowed', fontWeight: 700, opacity: submitting ? 0.7 : 1 }}>
-            {submitting ? 'Generating...' : '⚡ Generate Closing Entries'}
+            {submitting ? 'Generating...' : 'Generate Closing Entries'}
           </button>
         </div>
       </Modal>
