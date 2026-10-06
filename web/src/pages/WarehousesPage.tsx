@@ -629,7 +629,7 @@ export function WarehousesPage() {
       )}
 
       {/* Create Modal */}
-      <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title="Create New Warehouse">
+      <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title="Create New Warehouse" size="md" width="md">
         <form onSubmit={handleCreate} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
           <FormField label="Warehouse Code *">
             <input

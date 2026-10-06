@@ -85,29 +85,33 @@ function useModalStack(isOpen: boolean, onClose: () => void, zIndex?: number) {
 }
 
 interface ModalProps {
-  isOpen: boolean;
+  isOpen?: boolean;
+  open?: boolean;
   onClose: () => void;
   title: string;
   children: ReactNode;
   footer?: ReactNode;
-  width?: 'sm' | 'md' | 'lg' | 'xl';
-  size?: 'sm' | 'md' | 'lg' | 'xl';
+  width?: 'sm' | 'md' | 'lg' | 'xl' | number | string;
+  size?: 'sm' | 'md' | 'lg' | 'xl' | number | string;
   id?: string;
   zIndex?: number;
 }
 
-export function Modal({
-  isOpen,
-  onClose,
-  title,
-  children,
-  footer,
-  width = 'md',
-  size,
-  id = 'modal',
-  zIndex,
-}: ModalProps) {
-  const { effectiveZIndex } = useModalStack(isOpen, onClose, zIndex);
+export function Modal(props: ModalProps) {
+  const {
+    isOpen,
+    open,
+    onClose,
+    title,
+    children,
+    footer,
+    width = 'md',
+    size,
+    id = 'modal',
+    zIndex,
+  } = props;
+  const isModalOpen = Boolean(isOpen ?? open);
+  const { effectiveZIndex } = useModalStack(isModalOpen, onClose, zIndex);
   const panelWidth = size || width;
   const widthStyles: Record<string, string> = {
     sm: '420px',
@@ -115,9 +119,17 @@ export function Modal({
     lg: '760px',
     xl: '960px',
   };
-  const targetMaxWidth = widthStyles[panelWidth] || '520px';
 
-  if (!isOpen) return null;
+  let targetMaxWidth = '520px';
+  if (typeof panelWidth === 'number') {
+    targetMaxWidth = `${panelWidth}px`;
+  } else if (typeof panelWidth === 'string' && widthStyles[panelWidth]) {
+    targetMaxWidth = widthStyles[panelWidth];
+  } else if (typeof panelWidth === 'string' && (panelWidth.endsWith('px') || panelWidth.endsWith('%'))) {
+    targetMaxWidth = panelWidth;
+  }
+
+  if (!isModalOpen) return null;
 
   return (
     <div

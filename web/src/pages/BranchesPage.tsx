@@ -708,7 +708,7 @@ export function BranchesPage() {
       )}
 
       {/* ── CREATE BRANCH MODAL ── */}
-      <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title="Add New Branch Outlet">
+      <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title="Add New Branch Outlet" size="md" width="md">
         <form onSubmit={handleCreate} style={{ display: 'grid', gap: '16px' }}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '14px' }}>
             <FormField label="Branch Code *" id="brCode">

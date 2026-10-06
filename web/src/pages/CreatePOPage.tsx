@@ -430,7 +430,7 @@ export function CreatePOPage() {
       </form>
 
       {/* Inline Add Supplier Modal */}
-      <Modal isOpen={isInlineSupplierOpen} onClose={() => setIsInlineSupplierOpen(false)} title="Register New Supplier">
+      <Modal isOpen={isInlineSupplierOpen} onClose={() => setIsInlineSupplierOpen(false)} title="Register New Supplier" size="sm" width="sm">
         <form onSubmit={handleCreateSupplier} style={{ display: 'grid', gap: '14px' }}>
           <InputField
             label="Supplier Company Name *"

@@ -792,7 +792,7 @@ export function ProductsPage() {
         </div>
       </section>
 
-      <Modal isOpen={isCategoryModalOpen} onClose={() => setIsCategoryModalOpen(false)} title="Manage Categories">
+      <Modal isOpen={isCategoryModalOpen} onClose={() => setIsCategoryModalOpen(false)} title="Manage Categories" size="sm" width="sm">
         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
           <form onSubmit={handleCreateCategory} style={{ display: 'flex', gap: '8px' }}>
             <input type="text" className="form-input" style={{ flex: 1 }} required placeholder="New Category Name" value={newCategoryName} onChange={e => setNewCategoryName(e.target.value)} />
@@ -1598,7 +1598,7 @@ export function ProductsPage() {
       )}
 
       {/* Inline Category Creation Modal */}
-      <Modal isOpen={isInlineCategoryOpen} onClose={() => setIsInlineCategoryOpen(false)} title="Add New Category">
+      <Modal isOpen={isInlineCategoryOpen} onClose={() => setIsInlineCategoryOpen(false)} title="Add New Category" size="sm" width="sm">
         <form onSubmit={handleCreateInlineCategory} style={{ display: 'grid', gap: '14px' }}>
           <InputField
             label="Category Name *"

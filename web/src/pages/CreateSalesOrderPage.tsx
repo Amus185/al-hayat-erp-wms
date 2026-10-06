@@ -745,7 +745,7 @@ export function CreateSalesOrderPage() {
       </form>
 
       {/* Inline Customer Creation Modal */}
-      <Modal isOpen={isInlineCustomerOpen} onClose={() => setIsInlineCustomerOpen(false)} title="Add New Customer">
+      <Modal isOpen={isInlineCustomerOpen} onClose={() => setIsInlineCustomerOpen(false)} title="Add New Customer" size="sm" width="sm">
         <form onSubmit={handleCreateInlineCustomer} style={{ display: 'grid', gap: '14px' }}>
           <InputField
             label="Customer Name *"
