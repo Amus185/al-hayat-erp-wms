@@ -133,10 +133,29 @@ CREATE TABLE products (
   cost_price DOUBLE PRECISION NOT NULL CHECK (cost_price >= 0),
   selling_price DOUBLE PRECISION NOT NULL CHECK (selling_price >= 0),
   reorder_level INTEGER NOT NULL DEFAULT 5,
+  product_type TEXT NOT NULL DEFAULT 'STANDARD',
   is_active INTEGER NOT NULL DEFAULT 1,
   barcode TEXT UNIQUE,
   created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS product_group_items (
+  id TEXT PRIMARY KEY,
+  parent_product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+  component_product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+  quantity INTEGER NOT NULL CHECK (quantity > 0),
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (parent_product_id, component_product_id)
+);
+
+CREATE TABLE IF NOT EXISTS product_price_tiers (
+  id TEXT PRIMARY KEY,
+  product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+  tier_name TEXT NOT NULL,
+  price DOUBLE PRECISION NOT NULL CHECK (price >= 0),
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (product_id, tier_name)
 );
 
 CREATE TABLE warehouse_locations (

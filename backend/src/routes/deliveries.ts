@@ -96,8 +96,7 @@ deliveries.get('/:id', async (c) => {
   if (!delivery) return c.json({ message: 'Delivery not found' }, 404);
 
   const { results: items } = await c.env.DB.prepare(`
-    SELECT di.*, p.name AS product_name, p.sku AS product_sku, COALESCE(p.box_count, 1) AS box_count,
-           (di.quantity * COALESCE(p.box_count, 1)) AS total_boxes
+    SELECT di.*, p.name AS product_name, p.sku AS product_sku
     FROM delivery_items di
     JOIN products p ON p.id = di.product_id
     WHERE di.delivery_id = ?
@@ -168,35 +167,7 @@ deliveries.post('/', requirePermissions(['manage_sales']), async (c) => {
   const id = uuidv4();
   const deliveryNumber = `DEL-${Date.now()}`;
   const status = body.scheduledDate || body.driverName ? 'SCHEDULED' : 'PENDING';
-  let totalBoxes = Number(body.totalBoxes || 0);
-
-  // If totalBoxes was not provided or <= 0, auto-calculate from sales order lines & product box counts
-  if (totalBoxes <= 0 && body.salesOrderId) {
-    const { results: solLines } = await c.env.DB.prepare(`
-      SELECT sol.quantity, COALESCE(p.box_count, 1) as box_count 
-      FROM sales_order_lines sol 
-      LEFT JOIN products p ON p.id = sol.product_id 
-      WHERE sol.sales_order_id = ?
-    `).bind(body.salesOrderId).all();
-    
-    if (solLines && solLines.length > 0) {
-      totalBoxes = (solLines as any[]).reduce((sum: number, l: any) => sum + (Number(l.quantity || 1) * Number(l.box_count || 1)), 0);
-    }
-  }
-
-  // If still not calculated or no sales order, check body.items
-  if (totalBoxes <= 0 && Array.isArray(body.items) && body.items.length > 0) {
-    let computed = 0;
-    for (const it of body.items) {
-      if (it.productId) {
-        const prod = await c.env.DB.prepare('SELECT COALESCE(box_count, 1) AS box_count FROM products WHERE id = ?').bind(it.productId).first() as any;
-        computed += Number(it.quantity || 1) * Number(prod?.box_count || 1);
-      }
-    }
-    if (computed > 0) totalBoxes = computed;
-  }
-
-  if (totalBoxes <= 0) totalBoxes = 1;
+  const totalBoxes = Math.max(1, Number(body.totalBoxes || 1));
 
   const stmts: any[] = [];
   stmts.push(c.env.DB.prepare(`

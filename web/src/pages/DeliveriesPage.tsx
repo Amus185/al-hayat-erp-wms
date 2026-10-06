@@ -241,19 +241,10 @@ export function DeliveriesPage() {
     });
     setIsCreateOpen(true);
 
-    // Fetch full order lines to ensure exact multi-unit product box calculation (Quantity × Boxes Per Unit)
+    // Fetch full order lines for delivery reference
     apiGet<any>(`/sales/orders/${order.id}`).then((full) => {
       if (full?.lines && full.lines.length > 0) {
-        const sumBoxes = full.lines.reduce((acc: number, l: any) => {
-          const q = Number(l.quantity || 1);
-          const b = Number(l.box_count || 1);
-          return acc + (q * b);
-        }, 0);
-        const finalBoxes = sumBoxes > 0 ? sumBoxes : (full.total_boxes || calculatedBoxes);
         setSelectedOrderLines(full.lines);
-        setCreateForm((prev) => (prev.salesOrderId === order.id ? { ...prev, totalBoxes: finalBoxes } : prev));
-      } else if (full?.total_boxes) {
-        setCreateForm((prev) => (prev.salesOrderId === order.id ? { ...prev, totalBoxes: full.total_boxes } : prev));
       }
     }).catch(() => {});
   };
@@ -296,19 +287,10 @@ export function DeliveriesPage() {
       notes: `Delivery for Sales Order #${matched.order_number}`,
     }));
 
-    // Fetch full order lines to ensure exact multi-unit product box calculation (Quantity × Boxes Per Unit)
+    // Fetch full order lines for delivery reference
     apiGet<any>(`/sales/orders/${soId}`).then((full) => {
       if (full?.lines && full.lines.length > 0) {
-        const sumBoxes = full.lines.reduce((acc: number, l: any) => {
-          const q = Number(l.quantity || 1);
-          const b = Number(l.box_count || 1);
-          return acc + (q * b);
-        }, 0);
-        const finalBoxes = sumBoxes > 0 ? sumBoxes : (full.total_boxes || calculatedBoxes);
         setSelectedOrderLines(full.lines);
-        setCreateForm((prev) => (prev.salesOrderId === soId ? { ...prev, totalBoxes: finalBoxes } : prev));
-      } else if (full?.total_boxes) {
-        setCreateForm((prev) => (prev.salesOrderId === soId ? { ...prev, totalBoxes: full.total_boxes } : prev));
       }
     }).catch(() => {});
   };
@@ -1257,33 +1239,32 @@ export function DeliveriesPage() {
             )}
           </div>
 
-          {/* Selected Order Product & Box Breakdown */}
+          {/* Selected Order Product Breakdown */}
           {selectedOrderLines.length > 0 && (
             <div style={{ border: '1px solid #e2e8f0', borderRadius: '8px', overflow: 'hidden' }}>
               <div style={{ background: '#f8fafc', padding: '8px 12px', borderBottom: '1px solid #e2e8f0', fontSize: '12px', fontWeight: 600, color: '#334155' }}>
-                Order Line Items & Box Calculation
+                Order Line Items
               </div>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
                 <thead>
                   <tr style={{ background: '#f1f5f9', borderBottom: '1px solid #e2e8f0', textAlign: 'left', color: '#475569' }}>
                     <th style={{ padding: '6px 10px' }}>Product</th>
+                    <th style={{ padding: '6px 10px' }}>SKU</th>
                     <th style={{ padding: '6px 10px', textAlign: 'center' }}>Quantity</th>
-                    <th style={{ padding: '6px 10px', textAlign: 'center' }}>Boxes / Unit</th>
-                    <th style={{ padding: '6px 10px', textAlign: 'right' }}>Total Boxes</th>
                   </tr>
                 </thead>
                 <tbody>
                   {selectedOrderLines.map((line: any, idx: number) => {
                     const q = Number(line.quantity) || 1;
-                    const b = Number(line.box_count) || 1;
                     return (
                       <tr key={line.id || idx} style={{ borderBottom: '1px solid #f1f5f9' }}>
                         <td style={{ padding: '6px 10px', fontWeight: 600, color: '#1e293b' }}>
                           {line.product_name || 'Product'}
                         </td>
-                        <td style={{ padding: '6px 10px', textAlign: 'center' }}>{q}</td>
-                        <td style={{ padding: '6px 10px', textAlign: 'center', color: '#0284c7' }}>{b}</td>
-                        <td style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 700, color: '#0f172a' }}>{q * b}</td>
+                        <td style={{ padding: '6px 10px', color: '#64748b' }}>
+                          {line.product_sku || line.sku || '—'}
+                        </td>
+                        <td style={{ padding: '6px 10px', textAlign: 'center', fontWeight: 600 }}>{q}</td>
                       </tr>
                     );
                   })}
@@ -1590,31 +1571,21 @@ export function DeliveriesPage() {
                       <th style={{ padding: '8px 10px' }}>Product</th>
                       <th style={{ padding: '8px 10px' }}>SKU</th>
                       <th style={{ padding: '8px 10px', textAlign: 'center' }}>Units Sold</th>
-                      <th style={{ padding: '8px 10px', textAlign: 'center' }}>Box Count</th>
-                      <th style={{ padding: '8px 10px', textAlign: 'center' }}>Total Boxes</th>
                     </tr>
                   </thead>
                   <tbody>
                     {(selectedDelivery.items || []).map((i: any) => {
-                      const boxCount = i.box_count || 1;
-                      const lineBoxes = i.total_boxes || (i.quantity * boxCount);
                       return (
                         <tr key={i.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
                           <td style={{ padding: '8px 10px' }}><strong>{i.product_name || 'Product'}</strong></td>
                           <td style={{ padding: '8px 10px', color: '#64748b' }}>{i.product_sku || '—'}</td>
                           <td style={{ padding: '8px 10px', textAlign: 'center', fontWeight: 600 }}>{i.quantity} units</td>
-                          <td style={{ padding: '8px 10px', textAlign: 'center', color: '#0284c7', fontWeight: 600 }}>
-                            {boxCount} {boxCount === 1 ? 'box' : 'boxes'}/unit
-                          </td>
-                          <td style={{ padding: '8px 10px', textAlign: 'center', fontWeight: 700, color: '#0f172a' }}>
-                            {lineBoxes} boxes
-                          </td>
                         </tr>
                       );
                     })}
                     {(!selectedDelivery.items || selectedDelivery.items.length === 0) && (
                       <tr>
-                        <td colSpan={5} style={{ textAlign: 'center', padding: '12px', color: '#64748b' }}>
+                        <td colSpan={3} style={{ textAlign: 'center', padding: '12px', color: '#64748b' }}>
                           Linked to Sales Order #{selectedDelivery.order_number || selectedDelivery.sales_order_id}
                         </td>
                       </tr>
@@ -1623,20 +1594,17 @@ export function DeliveriesPage() {
                 </table>
               </div>
 
-              {/* Explicit Product Box Breakdown Card */}
-              {selectedDelivery.items && selectedDelivery.items.length > 0 && (
-                <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '12px', marginTop: '10px' }}>
-                  <div style={{ fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '6px' }}>
-                    Product Delivery Status:
-                  </div>
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '8px', fontSize: '13px' }}>
-                    <div><span style={{ color: '#64748b' }}>Product:</span> <strong>{selectedDelivery.items[0]?.product_name}</strong></div>
-                    <div><span style={{ color: '#64748b' }}>Total boxes:</span> <strong>{selectedDelivery.total_boxes || 1}</strong></div>
-                    <div><span style={{ color: '#16a34a' }}>Delivered:</span> <strong style={{ color: '#16a34a' }}>{selectedDelivery.delivered_boxes || 0}</strong></div>
-                    <div><span style={{ color: '#b45309' }}>Remaining:</span> <strong style={{ color: '#b45309' }}>{selectedDelivery.remaining_boxes ?? Math.max(0, (selectedDelivery.total_boxes || 1) - (selectedDelivery.delivered_boxes || 0))}</strong></div>
-                  </div>
+              {/* Delivery Box Status Card */}
+              <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '12px', marginTop: '10px' }}>
+                <div style={{ fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '6px' }}>
+                  Delivery Box Status:
                 </div>
-              )}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '8px', fontSize: '13px' }}>
+                  <div><span style={{ color: '#64748b' }}>Total boxes:</span> <strong>{selectedDelivery.total_boxes || 1}</strong></div>
+                  <div><span style={{ color: '#16a34a' }}>Delivered:</span> <strong style={{ color: '#16a34a' }}>{selectedDelivery.delivered_boxes || 0}</strong></div>
+                  <div><span style={{ color: '#b45309' }}>Remaining:</span> <strong style={{ color: '#b45309' }}>{selectedDelivery.remaining_boxes ?? Math.max(0, (selectedDelivery.total_boxes || 1) - (selectedDelivery.delivered_boxes || 0))}</strong></div>
+                </div>
+              </div>
             </div>
 
             {/* Action buttons */}

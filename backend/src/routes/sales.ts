@@ -785,7 +785,7 @@ sales.get('/orders', async (c) => {
            (SELECT d.id FROM deliveries d WHERE d.sales_order_id = so.id AND d.status != 'CANCELLED' ORDER BY d.created_at DESC LIMIT 1) AS delivery_id,
            (SELECT d.delivery_number FROM deliveries d WHERE d.sales_order_id = so.id AND d.status != 'CANCELLED' ORDER BY d.created_at DESC LIMIT 1) AS delivery_number,
            (SELECT d.delivered_at FROM deliveries d WHERE d.sales_order_id = so.id AND d.status != 'CANCELLED' ORDER BY d.created_at DESC LIMIT 1) AS delivered_at,
-           (SELECT COALESCE(SUM(sol.quantity * COALESCE(p.box_count, 1)), 0) FROM sales_order_lines sol LEFT JOIN products p ON p.id = sol.product_id WHERE sol.sales_order_id = so.id) AS total_boxes
+           (SELECT d.total_boxes FROM deliveries d WHERE d.sales_order_id = so.id AND d.status != 'CANCELLED' ORDER BY d.created_at DESC LIMIT 1) AS total_boxes
     FROM sales_orders so
     LEFT JOIN customers c ON c.id = so.customer_id
     JOIN branches b ON b.id = so.branch_id
@@ -899,14 +899,18 @@ sales.get('/orders/:id', async (c) => {
   }
 
   const { results: lines } = await c.env.DB.prepare(`
-    SELECT sol.*, p.name AS product_name, p.sku AS product_sku, COALESCE(p.box_count, 1) AS box_count,
-           (sol.quantity * COALESCE(p.box_count, 1)) AS total_boxes
+    SELECT sol.*, p.name AS product_name, p.sku AS product_sku, COALESCE(p.product_type, 'STANDARD') AS product_type
     FROM sales_order_lines sol
     LEFT JOIN products p ON p.id = sol.product_id
     WHERE sol.sales_order_id = ?
   `).bind(id).all();
 
-  order.total_boxes = (lines || []).reduce((sum: number, l: any) => sum + (Number(l.total_boxes) || Number(l.quantity) || 1), 0);
+  const delInfo = await c.env.DB.prepare(
+    "SELECT total_boxes, delivered_boxes, remaining_boxes FROM deliveries WHERE sales_order_id = ? AND status != 'CANCELLED' ORDER BY created_at DESC LIMIT 1"
+  ).bind(id).first() as any;
+  order.total_boxes = delInfo ? delInfo.total_boxes : null;
+  order.delivered_boxes = delInfo ? delInfo.delivered_boxes : 0;
+  order.remaining_boxes = delInfo ? delInfo.remaining_boxes : null;
 
   // Enrich with payment summary if invoice exists
   let paymentSummary = null;
@@ -949,6 +953,76 @@ sales.get('/orders/:id', async (c) => {
     payments,
   });
 });
+
+// ──────────────────────────────────────────────────────────────────────
+// Helper: Resolve sales lines to inventory requirements (standard vs grouped)
+// ──────────────────────────────────────────────────────────────────────
+async function resolveLinesToInventoryRequirements(
+  db: any,
+  lines: Array<{ productId?: string; product_id?: string; quantity: number }>
+): Promise<Array<{ productId: string; quantity: number; productName: string }>> {
+  if (!lines || lines.length === 0) return [];
+
+  const cleanLines = lines.map((l) => ({
+    productId: (l.productId || l.product_id) as string,
+    quantity: Number(l.quantity || 1),
+  })).filter((l) => Boolean(l.productId));
+
+  if (!cleanLines.length) return [];
+
+  const productIds = Array.from(new Set(cleanLines.map((l) => l.productId)));
+  const placeholders = productIds.map(() => '?').join(', ');
+  const { results: prods } = await db.prepare(
+    `SELECT id, name, COALESCE(product_type, 'STANDARD') AS product_type FROM products WHERE id IN (${placeholders})`
+  ).bind(...productIds).all();
+
+  const prodMap = new Map<string, any>();
+  for (const p of (prods || []) as any[]) {
+    prodMap.set(p.id, p);
+  }
+
+  const groupedIds = (prods || []).filter((p: any) => p.product_type === 'GROUPED').map((p: any) => p.id);
+  const groupItemsMap = new Map<string, any[]>();
+  if (groupedIds.length > 0) {
+    const gPlaceholders = groupedIds.map(() => '?').join(', ');
+    const { results: gItems } = await db.prepare(`
+      SELECT pgi.parent_product_id, pgi.component_product_id, pgi.quantity, cp.name AS component_name
+      FROM product_group_items pgi
+      JOIN products cp ON cp.id = pgi.component_product_id
+      WHERE pgi.parent_product_id IN (${gPlaceholders})
+    `).bind(...groupedIds).all();
+
+    for (const gi of (gItems || []) as any[]) {
+      const list = groupItemsMap.get(gi.parent_product_id) || [];
+      list.push(gi);
+      groupItemsMap.set(gi.parent_product_id, list);
+    }
+  }
+
+  const reqMap = new Map<string, { quantity: number; productName: string }>();
+  for (const l of cleanLines) {
+    const p = prodMap.get(l.productId);
+    if (p?.product_type === 'GROUPED') {
+      const components = groupItemsMap.get(l.productId) || [];
+      for (const comp of components) {
+        const compQty = Math.max(1, Number(comp.quantity || 1)) * l.quantity;
+        const existing = reqMap.get(comp.component_product_id) || { quantity: 0, productName: comp.component_name || 'Component' };
+        existing.quantity += compQty;
+        reqMap.set(comp.component_product_id, existing);
+      }
+    } else {
+      const existing = reqMap.get(l.productId) || { quantity: 0, productName: p?.name || 'Product' };
+      existing.quantity += l.quantity;
+      reqMap.set(l.productId, existing);
+    }
+  }
+
+  return Array.from(reqMap.entries()).map(([productId, item]) => ({
+    productId,
+    quantity: item.quantity,
+    productName: item.productName,
+  }));
+}
 
 // ──────────────────────────────────────────────────────────────────────
 // CREATE ORDER — with full input validation
@@ -1000,8 +1074,10 @@ sales.post('/orders', requirePermissions(['manage_sales']), async (c) => {
       return c.json({ message: `Cannot sell inactive product "${product.name}". Please activate the product before creating new sales orders.` }, 400);
     }
 
-    // Override client's unitPrice with the actual selling price from DB to prevent price manipulation
-    line.unitPrice = product.selling_price;
+    // Support price tiers & negotiated selling price overrides (preserve actual transaction unit price)
+    line.unitPrice = (line.unitPrice !== undefined && line.unitPrice !== null && !isNaN(Number(line.unitPrice)) && Number(line.unitPrice) >= 0)
+      ? Number(line.unitPrice)
+      : Number(product.selling_price || 0);
   }
 
   const isCreditSale = Boolean(body.isCreditSale);
@@ -1010,29 +1086,32 @@ sales.post('/orders', requirePermissions(['manage_sales']), async (c) => {
 
   // If credit sale, do immediate stock check so inventory can be deducted at creation
   if (isCreditSale) {
-    const productIds = body.lines.map((l: any) => l.productId as string);
-    const placeholders = productIds.map(() => '?').join(', ');
-    const { results: stockRows } = await c.env.DB.prepare(`
-      SELECT s.product_id, s.quantity_on_hand, p.name AS product_name
-      FROM inventory_stock s
-      JOIN products p ON p.id = s.product_id
-      WHERE s.product_id IN (${placeholders}) AND s.owner_type = 'BRANCH' AND s.branch_id = ?
-    `).bind(...productIds, body.branchId).all();
+    const invReqs = await resolveLinesToInventoryRequirements(c.env.DB, body.lines);
+    if (invReqs.length > 0) {
+      const reqProductIds = invReqs.map((r) => r.productId);
+      const placeholders = reqProductIds.map(() => '?').join(', ');
+      const { results: stockRows } = await c.env.DB.prepare(`
+        SELECT s.product_id, s.quantity_on_hand, p.name AS product_name
+        FROM inventory_stock s
+        JOIN products p ON p.id = s.product_id
+        WHERE s.product_id IN (${placeholders}) AND s.owner_type = 'BRANCH' AND s.branch_id = ?
+      `).bind(...reqProductIds, body.branchId).all();
 
-    const stockMap = new Map<string, number>();
-    for (const row of (stockRows || []) as any[]) {
-      stockMap.set(row.product_id, Number(row.quantity_on_hand) || 0);
-    }
-
-    const insufficient: string[] = [];
-    for (const l of body.lines) {
-      const avail = stockMap.get(l.productId) || 0;
-      if (avail < l.quantity) {
-        insufficient.push(`Product need ${l.quantity}, available ${avail}`);
+      const stockMap = new Map<string, number>();
+      for (const row of (stockRows || []) as any[]) {
+        stockMap.set(row.product_id, Number(row.quantity_on_hand) || 0);
       }
-    }
-    if (insufficient.length > 0) {
-      return c.json({ message: 'Insufficient stock at this branch for credit sale.', details: insufficient }, 400);
+
+      const insufficient: string[] = [];
+      for (const req of invReqs) {
+        const avail = stockMap.get(req.productId) || 0;
+        if (avail < req.quantity) {
+          insufficient.push(`${req.productName}: need ${req.quantity}, available ${avail}`);
+        }
+      }
+      if (insufficient.length > 0) {
+        return c.json({ message: 'Insufficient stock at this branch for credit sale.', details: insufficient }, 400);
+      }
     }
   }
 
@@ -1250,8 +1329,9 @@ sales.post('/orders/:id/invoice', requirePermissions(['manage_sales']), async (c
       return c.json({ message: 'Order has no line items.' }, 400);
     }
 
-    // Pre-flight stock check — single query for all products instead of N+1 individual lookups
-    const productIds = lines.map((l: any) => l.product_id as string);
+    // Pre-flight stock check — single query for all products/components instead of N+1 individual lookups
+    const invReqs = await resolveLinesToInventoryRequirements(c.env.DB, lines);
+    const productIds = invReqs.map((l: any) => l.productId as string);
     const placeholders = productIds.map(() => '?').join(', ');
 
     const { results: stockRows } = await c.env.DB.prepare(`
@@ -1272,12 +1352,12 @@ sales.post('/orders/:id/invoice', requirePermissions(['manage_sales']), async (c
     }
 
     const insufficientLines: string[] = [];
-    for (const line of lines) {
-      const pid = line.product_id as string;
+    for (const req of invReqs) {
+      const pid = req.productId;
       const available = stockMap.get(pid)?.qtyOnHand || 0;
-      const requested = line.quantity as number;
+      const requested = req.quantity;
       if (available < requested) {
-        insufficientLines.push(`${productNameMap.get(pid) || pid}: need ${requested}, available ${available}`);
+        insufficientLines.push(`${productNameMap.get(pid) || req.productName || pid}: need ${requested}, available ${available}`);
       }
       if (!stockMap.has(pid)) {
         stockMap.set(pid, { stockId: '', qtyOnHand: 0 });
@@ -1286,9 +1366,9 @@ sales.post('/orders/:id/invoice', requirePermissions(['manage_sales']), async (c
 
     if (insufficientLines.length > 0) {
       // Find where stock is available in other locations to guide the user
-      const failedPids = lines
-        .filter((l: any) => (stockMap.get(l.product_id as string)?.qtyOnHand || 0) < Number(l.quantity))
-        .map((l: any) => l.product_id as string);
+      const failedPids = invReqs
+        .filter((l: any) => (stockMap.get(l.productId)?.qtyOnHand || 0) < l.quantity)
+        .map((l: any) => l.productId);
 
       const altHolders = failedPids.map(() => '?').join(', ');
       const { results: altStocks } = await c.env.DB.prepare(`
@@ -1306,13 +1386,13 @@ sales.post('/orders/:id/invoice', requirePermissions(['manage_sales']), async (c
         altLocationMap.set(alt.product_id, list);
       }
 
-      const detailedLines = lines
-        .filter((l: any) => (stockMap.get(l.product_id as string)?.qtyOnHand || 0) < Number(l.quantity))
+      const detailedLines = invReqs
+        .filter((l: any) => (stockMap.get(l.productId)?.qtyOnHand || 0) < l.quantity)
         .map((l: any) => {
-          const pid = l.product_id as string;
-          const name = productNameMap.get(pid) || pid;
+          const pid = l.productId;
+          const name = productNameMap.get(pid) || l.productName || pid;
           const available = stockMap.get(pid)?.qtyOnHand || 0;
-          const requested = Number(l.quantity);
+          const requested = l.quantity;
           const alts = altLocationMap.get(pid);
           const altHint = alts && alts.length > 0 ? ` (Found in other locations: ${alts.join(', ')})` : ' (Out of stock company-wide)';
           return `${name}: need ${requested}, available ${available} at this branch${altHint}`;
@@ -1348,18 +1428,18 @@ sales.post('/orders/:id/invoice', requirePermissions(['manage_sales']), async (c
     `).bind(invoiceId, orderId));
 
     // Deduct inventory from branch
-    for (const line of lines) {
-      const qty = line.quantity as number;
+    for (const req of invReqs) {
+      const qty = req.quantity;
 
       stmts.push(c.env.DB.prepare(`
         UPDATE inventory_stock SET quantity_on_hand = quantity_on_hand - ?, updated_at = CURRENT_TIMESTAMP
         WHERE product_id = ? AND owner_type = 'BRANCH' AND branch_id = ?
-      `).bind(qty, line.product_id, branchId));
+      `).bind(qty, req.productId, branchId));
 
       stmts.push(c.env.DB.prepare(`
         INSERT INTO inventory_transactions (id, product_id, transaction_type, quantity, source_owner_type, source_branch_id, reference_type, reference_id, created_by)
         VALUES (?, ?, 'SALE_ISSUE', ?, 'BRANCH', ?, 'INVOICE', ?, ?)
-      `).bind(uuidv4(), line.product_id, -qty, branchId, invoiceId, userId));
+      `).bind(uuidv4(), req.productId, -qty, branchId, invoiceId, userId));
     }
 
     // Flip order to INVOICED
@@ -1666,17 +1746,18 @@ sales.post('/orders/:id/complete', requirePermissions(['manage_sales']), async (
     `).bind(invoiceId, orderId));
 
     // Deduct inventory
-    for (const line of lines) {
-      const qty = line.quantity as number;
+    const invReqs = await resolveLinesToInventoryRequirements(c.env.DB, lines);
+    for (const req of invReqs) {
+      const qty = req.quantity;
       stmts.push(c.env.DB.prepare(`
         UPDATE inventory_stock SET quantity_on_hand = quantity_on_hand - ?, updated_at = CURRENT_TIMESTAMP
         WHERE product_id = ? AND owner_type = 'BRANCH' AND branch_id = ?
-      `).bind(qty, line.product_id, branchId));
+      `).bind(qty, req.productId, branchId));
 
       stmts.push(c.env.DB.prepare(`
         INSERT INTO inventory_transactions (id, product_id, transaction_type, quantity, source_owner_type, source_branch_id, reference_type, reference_id, created_by)
         VALUES (?, ?, 'SALE_ISSUE', ?, 'BRANCH', ?, 'INVOICE', ?, ?)
-      `).bind(uuidv4(), line.product_id, -qty, branchId, invoiceId, userId));
+      `).bind(uuidv4(), req.productId, -qty, branchId, invoiceId, userId));
     }
 
     // Finalize order status

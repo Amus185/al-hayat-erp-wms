@@ -152,7 +152,7 @@ export async function getAccountIdByCode(
  */
 export async function calculateOrderCogs(db: any, orderId: string): Promise<number> {
   const { results: lines } = await db.prepare(`
-    SELECT sol.quantity, p.cost_price
+    SELECT sol.quantity, sol.product_id, p.cost_price, COALESCE(p.product_type, 'STANDARD') AS product_type
     FROM sales_order_lines sol
     JOIN products p ON p.id = sol.product_id
     WHERE sol.sales_order_id = ?
@@ -161,8 +161,23 @@ export async function calculateOrderCogs(db: any, orderId: string): Promise<numb
   let totalCogs = 0;
   for (const line of (lines || []) as any[]) {
     const qty = Number(line.quantity || 0);
-    const unitCost = Number(line.cost_price || 0);
-    totalCogs += qty * unitCost;
+    if (line.product_type === 'GROUPED') {
+      const { results: components } = await db.prepare(`
+        SELECT pgi.quantity, cp.cost_price
+        FROM product_group_items pgi
+        JOIN products cp ON cp.id = pgi.component_product_id
+        WHERE pgi.parent_product_id = ?
+      `).bind(line.product_id).all().catch(() => ({ results: [] }));
+
+      let groupUnitCost = 0;
+      for (const comp of (components || []) as any[]) {
+        groupUnitCost += Number(comp.quantity || 0) * Number(comp.cost_price || 0);
+      }
+      totalCogs += qty * groupUnitCost;
+    } else {
+      const unitCost = Number(line.cost_price || 0);
+      totalCogs += qty * unitCost;
+    }
   }
   return totalCogs;
 }

@@ -10,7 +10,8 @@ products.use('/*', authMiddleware);
 products.get('/', async (c) => {
   const status = c.req.query('status'); // 'active' | 'inactive' | 'all'
   let query = `
-    SELECT p.*, COALESCE(p.box_count, 1) AS box_count, COALESCE(p.is_active, 1) AS is_active, c.name as category_name, b.name as brand_name
+    SELECT p.*, COALESCE(p.is_active, 1) AS is_active, COALESCE(p.product_type, 'STANDARD') AS product_type,
+           c.name as category_name, b.name as brand_name
     FROM products p
     LEFT JOIN categories c ON p.category_id = c.id
     LEFT JOIN brands b ON p.brand_id = b.id
@@ -24,8 +25,39 @@ products.get('/', async (c) => {
   }
   query += ` ORDER BY p.name ASC LIMIT 500`;
   const stmt = c.env.DB.prepare(query);
-  const { results } = params.length > 0 ? await stmt.bind(...params).all() : await stmt.all();
-  return c.json(results);
+  const { results: prods } = params.length > 0 ? await stmt.bind(...params).all() : await stmt.all();
+
+  // Load price tiers & group items
+  const [tierRes, groupRes] = await Promise.all([
+    c.env.DB.prepare('SELECT * FROM product_price_tiers ORDER BY price ASC').all().catch(() => ({ results: [] })),
+    c.env.DB.prepare(`
+      SELECT pgi.*, cp.name AS component_name, cp.sku AS component_sku
+      FROM product_group_items pgi
+      JOIN products cp ON cp.id = pgi.component_product_id
+    `).all().catch(() => ({ results: [] })),
+  ]);
+
+  const tierMap = new Map<string, any[]>();
+  for (const t of (tierRes?.results || []) as any[]) {
+    const list = tierMap.get(t.product_id) || [];
+    list.push(t);
+    tierMap.set(t.product_id, list);
+  }
+
+  const groupMap = new Map<string, any[]>();
+  for (const g of (groupRes?.results || []) as any[]) {
+    const list = groupMap.get(g.parent_product_id) || [];
+    list.push(g);
+    groupMap.set(g.parent_product_id, list);
+  }
+
+  const enriched = (prods || []).map((p: any) => ({
+    ...p,
+    price_tiers: tierMap.get(p.id) || [],
+    group_items: groupMap.get(p.id) || [],
+  }));
+
+  return c.json(enriched);
 });
 
 products.post('/', requirePermissions(['manage_inventory']), async (c) => {
@@ -41,6 +73,18 @@ products.post('/', requirePermissions(['manage_inventory']), async (c) => {
   if (cost < 0) return c.json({ message: 'Cost price cannot be negative.' }, 400);
   if (sell < 0) return c.json({ message: 'Selling price cannot be negative.' }, 400);
   if (cost > sell) return c.json({ message: 'Cost price cannot be greater than selling price.' }, 400);
+
+  const productType = (body.productType === 'GROUPED' || body.product_type === 'GROUPED') ? 'GROUPED' : 'STANDARD';
+  const groupItems: Array<{ componentProductId: string; quantity: number }> = Array.isArray(body.groupItems)
+    ? body.groupItems
+    : (Array.isArray(body.group_items) ? body.group_items : []);
+  const priceTiers: Array<{ tierName: string; price: number }> = Array.isArray(body.priceTiers)
+    ? body.priceTiers
+    : (Array.isArray(body.price_tiers) ? body.price_tiers : []);
+
+  if (productType === 'GROUPED' && groupItems.length === 0) {
+    return c.json({ message: 'A grouped product must have at least one component product.' }, 400);
+  }
 
   // Check SKU uniqueness
   const existingSku = await c.env.DB.prepare('SELECT id FROM products WHERE sku = ?').bind(body.sku.trim()).first();
@@ -68,7 +112,6 @@ products.post('/', requirePermissions(['manage_inventory']), async (c) => {
   let warehouseId: string | null = null;
 
   if (payload && !isAdminUser(payload) && payload.branch_id) {
-    // Branch user: force ownerType = BRANCH and assign their branch_id
     ownerType = 'BRANCH';
     branchId = payload.branch_id;
   } else if (body.initialBranchId) {
@@ -78,7 +121,6 @@ products.post('/', requirePermissions(['manage_inventory']), async (c) => {
     ownerType = 'WAREHOUSE';
     warehouseId = body.initialWarehouseId;
   } else {
-    // Admin default: attempt main warehouse first, fallback to first branch
     const defaultWh = await c.env.DB.prepare('SELECT id FROM warehouses LIMIT 1').first();
     if (defaultWh) {
       ownerType = 'WAREHOUSE';
@@ -98,35 +140,62 @@ products.post('/', requirePermissions(['manage_inventory']), async (c) => {
 
   const stmts = [];
 
-  const boxCount = Math.max(1, parseInt(body.boxCount ?? body.box_count, 10) || 1);
-
   // 1. Insert product catalog entry
   stmts.push(c.env.DB.prepare(`
-    INSERT INTO products (id, sku, name, description, category_id, brand_id, cost_price, selling_price, reorder_level, box_count, barcode)
+    INSERT INTO products (id, sku, name, description, category_id, brand_id, cost_price, selling_price, reorder_level, product_type, barcode)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).bind(
     productId, body.sku.trim(), body.name.trim(), body.description || null, body.categoryId || null, 
-    body.brandId || null, cost, sell, body.reorderLevel || 5, boxCount, body.barcode || null
+    body.brandId || null, cost, sell, body.reorderLevel || 5, productType, body.barcode || null
   ));
 
-  // 2. Insert initial inventory_stock entry so product directly goes to inventory
-  stmts.push(c.env.DB.prepare(`
-    INSERT INTO inventory_stock (id, product_id, owner_type, warehouse_id, branch_id, quantity_on_hand, quantity_reserved)
-    VALUES (?, ?, ?, ?, ?, ?, 0)
-  `).bind(
-    stockId, productId, ownerType, warehouseId, branchId, initialQty
-  ));
+  // 2. Insert initial inventory_stock entry (only for STANDARD products; grouped products draw stock from components)
+  if (productType === 'STANDARD') {
+    stmts.push(c.env.DB.prepare(`
+      INSERT INTO inventory_stock (id, product_id, owner_type, warehouse_id, branch_id, quantity_on_hand, quantity_reserved)
+      VALUES (?, ?, ?, ?, ?, ?, 0)
+    `).bind(
+      stockId, productId, ownerType, warehouseId, branchId, initialQty
+    ));
+  }
 
-  // 3. Audit log statement
+  // 3. Insert grouped items if GROUPED
+  if (productType === 'GROUPED') {
+    for (const item of groupItems) {
+      const cId = item.componentProductId || (item as any).component_product_id;
+      const cQty = Math.max(1, Number(item.quantity || 1));
+      if (!cId) continue;
+      stmts.push(c.env.DB.prepare(`
+        INSERT INTO product_group_items (id, parent_product_id, component_product_id, quantity)
+        VALUES (?, ?, ?, ?)
+      `).bind(uuidv4(), productId, cId, cQty));
+    }
+  }
+
+  // 4. Insert price tiers if provided
+  for (const tier of priceTiers) {
+    const tierName = (tier.tierName ?? (tier as any).tier_name)?.trim();
+    const tierPrice = Number(tier.price);
+    if (!tierName || isNaN(tierPrice) || tierPrice < 0) continue;
+    stmts.push(c.env.DB.prepare(`
+      INSERT INTO product_price_tiers (id, product_id, tier_name, price)
+      VALUES (?, ?, ?, ?)
+    `).bind(uuidv4(), productId, tierName, tierPrice));
+  }
+
+  // 5. Audit log statement
   stmts.push(createAuditLogStmt(c, 'PRODUCT_CREATE', 'products', productId, null, {
     ...body,
     initialInventory: { ownerType, warehouseId, branchId, initialQuantity: initialQty }
   }));
 
-  // Atomic batch execution to guarantee tight coupling
+  // Atomic batch execution
   await c.env.DB.batch(stmts);
 
-  const product = await c.env.DB.prepare('SELECT * FROM products WHERE id = ?').bind(productId).first();
+  const product = await c.env.DB.prepare(`
+    SELECT p.*, COALESCE(p.is_active, 1) AS is_active, COALESCE(p.product_type, 'STANDARD') AS product_type
+    FROM products WHERE id = ?
+  `).bind(productId).first();
   return c.json(product, 201);
 });
 
@@ -233,16 +302,14 @@ products.post('/bulk', requirePermissions(['manage_inventory']), async (c) => {
     const cost = Math.max(0, Number(item.costPrice || 0));
     const sell = Math.max(cost, Number(item.sellingPrice || 0));
 
-    const boxCount = Math.max(1, parseInt(item.boxCount ?? item.box_count, 10) || 1);
-
     // ON CONFLICT on both sku and barcode as safety nets
     stmts.push(c.env.DB.prepare(`
-      INSERT INTO products (id, sku, barcode, name, description, category_id, brand_id, cost_price, selling_price, reorder_level, box_count)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO products (id, sku, barcode, name, description, category_id, brand_id, cost_price, selling_price, reorder_level)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT (sku) DO NOTHING
     `).bind(
       productId, sku, barcode, name, item.description || null,
-      categoryId, brandId, cost, sell, Number(item.reorderLevel || 5), boxCount
+      categoryId, brandId, cost, sell, Number(item.reorderLevel || 5)
     ));
 
     // Handle initial stock allocation
@@ -337,14 +404,30 @@ products.delete('/categories/:id', requirePermissions(['manage_inventory']), asy
 products.get('/:id', async (c) => {
   const id = c.req.param('id');
   const product = await c.env.DB.prepare(`
-    SELECT p.*, COALESCE(p.box_count, 1) AS box_count, COALESCE(p.is_active, 1) AS is_active, c.name as category_name, b.name as brand_name
+    SELECT p.*, COALESCE(p.is_active, 1) AS is_active, COALESCE(p.product_type, 'STANDARD') AS product_type,
+           c.name as category_name, b.name as brand_name
     FROM products p
     LEFT JOIN categories c ON p.category_id = c.id
     LEFT JOIN brands b ON p.brand_id = b.id
     WHERE p.id = ?
   `).bind(id).first();
   if (!product) return c.json({ message: 'Product not found' }, 404);
-  return c.json(product);
+
+  const [tierRes, groupRes] = await Promise.all([
+    c.env.DB.prepare('SELECT * FROM product_price_tiers WHERE product_id = ? ORDER BY price ASC').bind(id).all().catch(() => ({ results: [] })),
+    c.env.DB.prepare(`
+      SELECT pgi.*, cp.name AS component_name, cp.sku AS component_sku, cp.cost_price AS component_cost_price, cp.selling_price AS component_selling_price
+      FROM product_group_items pgi
+      JOIN products cp ON cp.id = pgi.component_product_id
+      WHERE pgi.parent_product_id = ?
+    `).bind(id).all().catch(() => ({ results: [] })),
+  ]);
+
+  return c.json({
+    ...product,
+    price_tiers: tierRes?.results || [],
+    group_items: groupRes?.results || [],
+  });
 });
 
 products.patch('/:id', requirePermissions(['manage_inventory']), async (c) => {
@@ -410,9 +493,9 @@ products.patch('/:id', requirePermissions(['manage_inventory']), async (c) => {
     fields.push('reorder_level = ?'); vals.push(reorder);
   }
 
-  if (body.boxCount !== undefined || body.box_count !== undefined) {
-    const boxCount = Math.max(1, parseInt(body.boxCount ?? body.box_count, 10) || 1);
-    fields.push('box_count = ?'); vals.push(boxCount);
+  if (body.productType !== undefined || body.product_type !== undefined) {
+    const pType = (body.productType ?? body.product_type) === 'GROUPED' ? 'GROUPED' : 'STANDARD';
+    fields.push('product_type = ?'); vals.push(pType);
   }
 
   if (body.isActive !== undefined || body.is_active !== undefined) {
@@ -420,25 +503,67 @@ products.patch('/:id', requirePermissions(['manage_inventory']), async (c) => {
     fields.push('is_active = ?'); vals.push(active);
   }
 
-  if (fields.length === 0) {
-    return c.json({ message: 'No valid fields provided for update.' }, 400);
+  if (fields.length > 0) {
+    fields.push('updated_at = CURRENT_TIMESTAMP');
+    vals.push(id);
+    await c.env.DB.prepare(`UPDATE products SET ${fields.join(', ')} WHERE id = ?`).bind(...vals).run();
   }
 
-  fields.push('updated_at = CURRENT_TIMESTAMP');
-  vals.push(id);
+  // Handle group items if passed
+  const passedGroupItems = body.groupItems ?? body.group_items;
+  if (Array.isArray(passedGroupItems)) {
+    await c.env.DB.prepare('DELETE FROM product_group_items WHERE parent_product_id = ?').bind(id).run();
+    for (const item of passedGroupItems) {
+      const cId = item.componentProductId || item.component_product_id;
+      const cQty = Math.max(1, Number(item.quantity || 1));
+      if (!cId) continue;
+      await c.env.DB.prepare(
+        'INSERT INTO product_group_items (id, parent_product_id, component_product_id, quantity) VALUES (?, ?, ?, ?)'
+      ).bind(uuidv4(), id, cId, cQty).run();
+    }
+  }
 
-  await c.env.DB.prepare(`UPDATE products SET ${fields.join(', ')} WHERE id = ?`).bind(...vals).run();
+  // Handle price tiers if passed
+  const passedPriceTiers = body.priceTiers ?? body.price_tiers;
+  if (Array.isArray(passedPriceTiers)) {
+    await c.env.DB.prepare('DELETE FROM product_price_tiers WHERE product_id = ?').bind(id).run();
+    for (const tier of passedPriceTiers) {
+      const tierName = (tier.tierName ?? tier.tier_name)?.trim();
+      const tierPrice = Number(tier.price);
+      if (!tierName || isNaN(tierPrice) || tierPrice < 0) continue;
+      await c.env.DB.prepare(
+        'INSERT INTO product_price_tiers (id, product_id, tier_name, price) VALUES (?, ?, ?, ?)'
+      ).bind(uuidv4(), id, tierName, tierPrice).run();
+    }
+  }
 
   const updated = await c.env.DB.prepare(`
-    SELECT p.*, COALESCE(p.box_count, 1) AS box_count, COALESCE(p.is_active, 1) AS is_active, c.name as category_name, b.name as brand_name
+    SELECT p.*, COALESCE(p.is_active, 1) AS is_active, COALESCE(p.product_type, 'STANDARD') AS product_type,
+           c.name as category_name, b.name as brand_name
     FROM products p
     LEFT JOIN categories c ON p.category_id = c.id
     LEFT JOIN brands b ON p.brand_id = b.id
     WHERE p.id = ?
   `).bind(id).first();
 
-  await logAudit(c, 'PRODUCT_UPDATE', 'products', id, existing, updated);
-  return c.json(updated);
+  const [tierRes, groupRes] = await Promise.all([
+    c.env.DB.prepare('SELECT * FROM product_price_tiers WHERE product_id = ? ORDER BY price ASC').bind(id).all().catch(() => ({ results: [] })),
+    c.env.DB.prepare(`
+      SELECT pgi.*, cp.name AS component_name, cp.sku AS component_sku
+      FROM product_group_items pgi
+      JOIN products cp ON cp.id = pgi.component_product_id
+      WHERE pgi.parent_product_id = ?
+    `).bind(id).all().catch(() => ({ results: [] })),
+  ]);
+
+  const responseObj = {
+    ...updated,
+    price_tiers: tierRes?.results || [],
+    group_items: groupRes?.results || [],
+  };
+
+  await logAudit(c, 'PRODUCT_UPDATE', 'products', id, existing, responseObj);
+  return c.json(responseObj);
 });
 
 products.patch('/:id/status', requirePermissions(['manage_inventory']), async (c) => {

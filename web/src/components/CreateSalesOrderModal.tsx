@@ -20,12 +20,29 @@ interface Branch {
   name: string;
 }
 
+interface ProductPriceTier {
+  id?: string;
+  tier_name: string;
+  price: number;
+}
+
+interface ProductGroupItem {
+  id?: string;
+  component_product_id: string;
+  quantity: number;
+  component_name?: string;
+  component_sku?: string;
+}
+
 interface ProductLine {
   id: string;
   sku: string;
   barcode: string;
   name: string;
   sellingPrice: number;
+  productType?: 'STANDARD' | 'GROUPED';
+  priceTiers?: ProductPriceTier[];
+  groupItems?: ProductGroupItem[];
 }
 
 interface StockRecord {
@@ -99,7 +116,18 @@ export function CreateSalesOrderModal({ isOpen, onClose, onOrderCreated }: Creat
   const [searchResults, setSearchResults] = useState<ProductLine[]>([]);
 
   // Selected lines
-  const [lines, setLines] = useState<{ productId: string; sku: string; name: string; quantity: number; unitPrice: number; discount: number }[]>([]);
+  const [lines, setLines] = useState<{
+    productId: string;
+    sku: string;
+    name: string;
+    quantity: number;
+    unitPrice: number;
+    discount: number;
+    productType?: 'STANDARD' | 'GROUPED';
+    priceTiers?: ProductPriceTier[];
+    groupItems?: ProductGroupItem[];
+    selectedTier?: string;
+  }[]>([]);
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
@@ -128,7 +156,10 @@ export function CreateSalesOrderModal({ isOpen, onClose, onOrderCreated }: Creat
             sku: p.sku,
             barcode: p.barcode,
             name: p.name,
-            sellingPrice: p.selling_price,
+            sellingPrice: Number(p.selling_price) || 0,
+            productType: p.product_type || 'STANDARD',
+            priceTiers: p.price_tiers || [],
+            groupItems: p.group_items || [],
           });
         });
         setProducts(flatList);
@@ -166,6 +197,31 @@ export function CreateSalesOrderModal({ isOpen, onClose, onOrderCreated }: Creat
   };
 
   const getProductStockInfo = (pid: string, targetBranchId: string) => {
+    const prod = products.find((p) => p.id === pid);
+    if (prod?.productType === 'GROUPED' && prod.groupItems && prod.groupItems.length > 0) {
+      let minBranchSets = Infinity;
+      for (const comp of prod.groupItems) {
+        const compRows = inventoryStocks.filter(
+          (s) => s.product_id === comp.component_product_id && s.owner_type === 'BRANCH' && s.branch_id === targetBranchId
+        );
+        const compAvailable = compRows.reduce(
+          (acc, curr) => acc + (Number(curr.quantity_on_hand) || 0) - (Number(curr.quantity_reserved) || 0),
+          0
+        );
+        const possibleSets = Math.floor(Math.max(0, compAvailable) / (comp.quantity || 1));
+        if (possibleSets < minBranchSets) {
+          minBranchSets = possibleSets;
+        }
+      }
+      const branchQty = minBranchSets === Infinity ? 0 : Math.max(0, minBranchSets);
+
+      return {
+        branchQty,
+        otherLocations: [],
+        totalOtherQty: 0,
+      };
+    }
+
     const branchRows = inventoryStocks.filter(
       (s) => s.product_id === pid && s.owner_type === 'BRANCH' && s.branch_id === targetBranchId
     );
@@ -222,6 +278,9 @@ export function CreateSalesOrderModal({ isOpen, onClose, onOrderCreated }: Creat
       }
     }
 
+    const prod = products.find((p) => p.id === v.id);
+    const initialPrice = prod?.sellingPrice ?? (v as any).sellingPrice ?? (v as any).price ?? 0;
+
     const existingIndex = lines.findIndex((l) => l.productId === v.id);
     if (existingIndex !== -1) {
       setLines((prev) =>
@@ -234,13 +293,47 @@ export function CreateSalesOrderModal({ isOpen, onClose, onOrderCreated }: Creat
     }
     setLines((prev) => [
       ...prev,
-      { productId: v.id, sku: v.sku, name: v.name, quantity: 1, unitPrice: (v as any).sellingPrice ?? (v as any).price ?? 0, discount: 0 },
+      {
+        productId: v.id,
+        sku: v.sku,
+        name: v.name,
+        quantity: 1,
+        unitPrice: initialPrice,
+        discount: 0,
+        productType: prod?.productType,
+        priceTiers: prod?.priceTiers || [],
+        groupItems: prod?.groupItems || [],
+        selectedTier: '',
+      },
     ]);
     addToast('success', `Added "${v.name}" to order`);
   };
 
   const removeLine = (idx: number) => {
     setLines((prev) => prev.filter((_, i) => i !== idx));
+  };
+
+  const handleSelectTier = (idx: number, tierName: string) => {
+    const line = lines[idx];
+    const prod = products.find((p) => p.id === line.productId);
+    let newPrice = line.unitPrice;
+    if (!tierName) {
+      newPrice = prod?.sellingPrice || line.unitPrice;
+    } else {
+      const tier = line.priceTiers?.find((t) => t.tier_name === tierName);
+      if (tier) {
+        newPrice = Number(tier.price) || 0;
+      }
+    }
+    setLines((prev) => {
+      const copy = [...prev];
+      copy[idx] = {
+        ...copy[idx],
+        selectedTier: tierName,
+        unitPrice: newPrice,
+      };
+      return copy;
+    });
   };
 
   const updateLine = (idx: number, field: 'quantity' | 'unitPrice' | 'discount', val: number) => {
@@ -265,6 +358,7 @@ export function CreateSalesOrderModal({ isOpen, onClose, onOrderCreated }: Creat
       copy[idx] = {
         ...copy[idx],
         [field]: field === 'quantity' ? Math.max(1, num) : Math.max(0, num),
+        ...(field === 'unitPrice' ? { selectedTier: 'CUSTOM' } : {}),
       };
       return copy;
     });
@@ -495,7 +589,7 @@ export function CreateSalesOrderModal({ isOpen, onClose, onOrderCreated }: Creat
                 sku: p.sku,
                 name: p.name,
                 price: p.sellingPrice,
-                category: 'Furniture',
+                category: p.productType === 'GROUPED' ? 'Bundle' : 'Furniture',
                 stock: sInfo ? sInfo.branchQty : undefined,
                 stockHint: hint,
                 stockWarning: sInfo ? sInfo.branchQty === 0 : false,
@@ -523,11 +617,11 @@ export function CreateSalesOrderModal({ isOpen, onClose, onOrderCreated }: Creat
                 <thead>
                   <tr style={{ background: '#f4fbf4', borderBottom: '1px solid #d1e8d1' }}>
                     <th style={{ padding: '8px 12px', textAlign: 'left', color: '#066006' }}>Item</th>
-                    <th style={{ padding: '8px 12px', textAlign: 'center', width: '100px', color: '#066006' }}>Quantity</th>
-                    <th style={{ padding: '8px 12px', textAlign: 'right', width: '120px', color: '#066006' }}>Unit Price</th>
-                    <th style={{ padding: '8px 12px', textAlign: 'right', width: '110px', color: '#066006' }}>Discount</th>
-                    <th style={{ padding: '8px 12px', textAlign: 'right', width: '120px', color: '#066006' }}>Total</th>
-                    <th style={{ padding: '8px 12px', width: '50px' }}></th>
+                    <th style={{ padding: '8px 12px', textAlign: 'center', width: '90px', color: '#066006' }}>Quantity</th>
+                    <th style={{ padding: '8px 12px', textAlign: 'right', width: '150px', color: '#066006' }}>Unit Price</th>
+                    <th style={{ padding: '8px 12px', textAlign: 'right', width: '100px', color: '#066006' }}>Discount</th>
+                    <th style={{ padding: '8px 12px', textAlign: 'right', width: '110px', color: '#066006' }}>Total</th>
+                    <th style={{ padding: '8px 12px', width: '45px' }}></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -538,6 +632,11 @@ export function CreateSalesOrderModal({ isOpen, onClose, onOrderCreated }: Creat
                         <td style={{ padding: '8px 12px' }}>
                           <div style={{ fontWeight: 600, color: '#1a331e' }}>{l.name}</div>
                           <div style={{ fontSize: '11px', color: '#667066' }}>SKU: {l.sku}</div>
+                          {l.productType === 'GROUPED' && l.groupItems && l.groupItems.length > 0 && (
+                            <div style={{ fontSize: '11px', color: '#047857', marginTop: '3px' }}>
+                              Bundle: {l.groupItems.map((g) => `${g.quantity}x ${g.component_name || g.component_sku || 'Item'}`).join(', ')}
+                            </div>
+                          )}
                         </td>
                         <td style={{ padding: '8px 12px', textAlign: 'center' }}>
                           <input
@@ -545,11 +644,38 @@ export function CreateSalesOrderModal({ isOpen, onClose, onOrderCreated }: Creat
                             min="1"
                             value={l.quantity}
                             onChange={(e) => updateLine(idx, 'quantity', parseInt(e.target.value) || 1)}
-                            style={{ width: '70px', padding: '4px 6px', textAlign: 'center', borderRadius: '4px', border: '1px solid #c8d8c8' }}
+                            style={{ width: '65px', padding: '4px 6px', textAlign: 'center', borderRadius: '4px', border: '1px solid #c8d8c8' }}
                           />
                         </td>
-                        <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 500 }}>
-                          ${l.unitPrice.toFixed(2)}
+                        <td style={{ padding: '8px 12px', textAlign: 'right' }}>
+                          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
+                              <span style={{ fontSize: '12px', color: '#667066' }}>$</span>
+                              <input
+                                type="number"
+                                min="0"
+                                step="0.01"
+                                value={l.unitPrice}
+                                onChange={(e) => updateLine(idx, 'unitPrice', parseFloat(e.target.value) || 0)}
+                                style={{ width: '85px', padding: '4px 6px', textAlign: 'right', borderRadius: '4px', border: '1px solid #c8d8c8', fontWeight: 600 }}
+                              />
+                            </div>
+                            {l.priceTiers && l.priceTiers.length > 0 && (
+                              <select
+                                value={l.selectedTier || ''}
+                                onChange={(e) => handleSelectTier(idx, e.target.value)}
+                                style={{ fontSize: '11px', padding: '2px 4px', borderRadius: '4px', border: '1px solid #c8d8c8', maxWidth: '125px' }}
+                              >
+                                <option value="">Base (${(products.find(p => p.id === l.productId)?.sellingPrice ?? l.unitPrice).toFixed(2)})</option>
+                                {l.priceTiers.map((t) => (
+                                  <option key={t.tier_name} value={t.tier_name}>
+                                    {t.tier_name} (${Number(t.price).toFixed(2)})
+                                  </option>
+                                ))}
+                                {l.selectedTier === 'CUSTOM' && <option value="CUSTOM">Custom</option>}
+                              </select>
+                            )}
+                          </div>
                         </td>
                         <td style={{ padding: '8px 12px', textAlign: 'right' }}>
                           <input
@@ -558,7 +684,7 @@ export function CreateSalesOrderModal({ isOpen, onClose, onOrderCreated }: Creat
                             step="0.01"
                             value={l.discount}
                             onChange={(e) => updateLine(idx, 'discount', parseFloat(e.target.value) || 0)}
-                            style={{ width: '80px', padding: '4px 6px', textAlign: 'right', borderRadius: '4px', border: '1px solid #c8d8c8' }}
+                            style={{ width: '75px', padding: '4px 6px', textAlign: 'right', borderRadius: '4px', border: '1px solid #c8d8c8' }}
                           />
                         </td>
                         <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 600, color: '#0b8f08' }}>

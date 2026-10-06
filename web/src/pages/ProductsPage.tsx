@@ -23,7 +23,21 @@ interface Brand {
   name: string;
 }
 
-interface Product {
+export interface PriceTier {
+  id?: string;
+  tier_name: string;
+  price: number | string;
+}
+
+export interface GroupItem {
+  id?: string;
+  component_product_id: string;
+  quantity: number | string;
+  component_name?: string;
+  component_sku?: string;
+}
+
+export interface Product {
   id: string;
   sku: string;
   barcode?: string;
@@ -34,7 +48,9 @@ interface Product {
   cost_price: number | string;
   selling_price: number | string;
   reorder_level: number | string;
-  box_count?: number | string;
+  product_type?: 'STANDARD' | 'GROUPED';
+  price_tiers?: PriceTier[];
+  group_items?: GroupItem[];
   is_active: boolean;
   category_name?: string;
   brand_name?: string;
@@ -98,7 +114,7 @@ export function ProductsPage() {
     costPrice: number | string;
     sellingPrice: number | string;
     reorderLevel: number | string;
-    boxCount: number | string;
+    productType: 'STANDARD' | 'GROUPED';
     totalOpeningStock: number | string;
   }>({
     sku: '',
@@ -110,9 +126,15 @@ export function ProductsPage() {
     costPrice: 0,
     sellingPrice: 0,
     reorderLevel: 5,
-    boxCount: 1,
+    productType: 'STANDARD',
     totalOpeningStock: 0,
   });
+
+  const [newPriceTiers, setNewPriceTiers] = useState<{ tierName: string; price: number | string }[]>([]);
+  const [newGroupItems, setNewGroupItems] = useState<{ componentProductId: string; quantity: number | string }[]>([]);
+
+  const [editPriceTiers, setEditPriceTiers] = useState<{ id?: string; tier_name: string; price: number | string }[]>([]);
+  const [editGroupItems, setEditGroupItems] = useState<{ component_product_id: string; quantity: number | string }[]>([]);
 
   // Multi-location initial stock lines
   interface StockLine {
@@ -166,7 +188,25 @@ export function ProductsPage() {
   };
 
   const openEditModal = (prod: Product) => {
-    setEditingProduct({ ...prod, is_active: prod.is_active !== undefined ? prod.is_active : 1 });
+    setEditingProduct({
+      ...prod,
+      product_type: prod.product_type || 'STANDARD',
+      is_active: prod.is_active !== undefined ? prod.is_active : 1,
+    });
+    setEditPriceTiers(
+      (prod.price_tiers || []).map((t) => ({
+        id: t.id,
+        tier_name: t.tier_name,
+        price: t.price,
+      }))
+    );
+    setEditGroupItems(
+      (prod.group_items || []).map((g) => ({
+        component_product_id: g.component_product_id,
+        quantity: g.quantity,
+        component_name: g.component_name,
+      }))
+    );
     setIsEditOpen(true);
   };
 
@@ -256,9 +296,9 @@ export function ProductsPage() {
   // CSV Template Downloader
   const handleDownloadTemplate = () => {
     const csvContent =
-      "SKU,Barcode,Name,Description,Category,Brand,CostPrice,SellingPrice,ReorderLevel,BoxCount,InitialStock,LocationType,LocationName\n" +
-      "FUR-001,8901001,Executive Desk 180cm,Ergonomic office desk,Office Furniture,AlHayat,250,400,5,3,10,WAREHOUSE,Central Warehouse\n" +
-      "CHAIR-001,8901002,Ergonomic Mesh Chair,Breathable mesh chair,Office Furniture,AlHayat,80,150,10,1,25,BRANCH,Calaamad Showroom\n";
+      "SKU,Barcode,Name,Description,Category,Brand,CostPrice,SellingPrice,ReorderLevel,InitialStock,LocationType,LocationName\n" +
+      "FUR-001,8901001,Executive Desk 180cm,Ergonomic office desk,Office Furniture,AlHayat,250,400,5,10,WAREHOUSE,Central Warehouse\n" +
+      "CHAIR-001,8901002,Ergonomic Mesh Chair,Breathable mesh chair,Office Furniture,AlHayat,80,150,10,25,BRANCH,Calaamad Showroom\n";
 
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
@@ -310,10 +350,9 @@ export function ProductsPage() {
           costPrice: Number(getVal('CostPrice', 6) || 0),
           sellingPrice: Number(getVal('SellingPrice', 7) || 0),
           reorderLevel: Number(getVal('ReorderLevel', 8) || 5),
-          boxCount: Number(getVal('BoxCount', 9) || 1),
-          initialStock: Number(getVal('InitialStock', 10) || 0),
-          locationType: (getVal('LocationType', 11) || 'WAREHOUSE').toUpperCase(),
-          locationName: getVal('LocationName', 12),
+          initialStock: Number(getVal('InitialStock', 9) || 0),
+          locationType: (getVal('LocationType', 10) || 'WAREHOUSE').toUpperCase(),
+          locationName: getVal('LocationName', 11),
         });
       }
 
@@ -375,15 +414,22 @@ export function ProductsPage() {
     const costPrice = Number(newProduct.costPrice) || 0;
     const sellingPrice = Number(newProduct.sellingPrice) || 0;
     const reorderLevel = Math.max(0, Number(newProduct.reorderLevel) || 0);
-    const boxCount = Math.max(1, Number(newProduct.boxCount) || 1);
 
     if (costPrice > sellingPrice) {
       addToast('error', 'Cost Price cannot be greater than Selling Price');
       return;
     }
 
-    // Strict 100% location allocation validation
-    if (totalOpening > 0) {
+    if (newProduct.productType === 'GROUPED') {
+      const validGroupItems = newGroupItems.filter(g => g.componentProductId && Number(g.quantity) > 0);
+      if (validGroupItems.length === 0) {
+        addToast('error', 'Please add at least one component to the grouped bundle.');
+        return;
+      }
+    }
+
+    // Strict location allocation validation (only for standard products)
+    if (newProduct.productType === 'STANDARD' && totalOpening > 0) {
       if (totalAllocated !== totalOpening) {
         addToast(
           'error',
@@ -406,7 +452,19 @@ export function ProductsPage() {
       costPrice,
       sellingPrice,
       reorderLevel,
-      boxCount,
+      productType: newProduct.productType,
+      groupItems: newProduct.productType === 'GROUPED'
+        ? newGroupItems.filter(g => g.componentProductId && Number(g.quantity) > 0).map(g => ({
+            componentProductId: g.componentProductId,
+            quantity: Number(g.quantity),
+          }))
+        : [],
+      priceTiers: newPriceTiers
+        .filter(t => t.tierName.trim() && Number(t.price) >= 0)
+        .map(t => ({
+          tierName: t.tierName.trim(),
+          price: Number(t.price),
+        })),
     };
     if (newProduct.categoryId) payload.categoryId = newProduct.categoryId;
     if (newProduct.brandId) payload.brandId = newProduct.brandId;
@@ -415,26 +473,28 @@ export function ProductsPage() {
       setSubmitting(true);
       const created: any = await apiPost('/products', payload);
 
-      // Distribute initial stock across multiple locations in parallel
-      const validLines = initialStockLines.filter(l => l.locationId && l.quantity > 0);
-      if (validLines.length > 0) {
-        const stockResults = await Promise.allSettled(
-          validLines.map(line =>
-            apiPost('/inventory/adjust', {
-              productId: created.id,
-              direction: 'INCREASE',
-              quantity: line.quantity,
-              ownerType: line.ownerType,
-              ...(line.ownerType === 'WAREHOUSE'
-                ? { warehouseId: line.locationId }
-                : { branchId: line.locationId }),
-              notes: 'Initial stock on product creation',
-            })
-          )
-        );
-        const failed = stockResults.filter(r => r.status === 'rejected').length;
-        if (failed > 0) {
-          addToast('error', `Product created, but ${failed} stock location(s) failed — check Inventory manually.`);
+      // Distribute initial stock across multiple locations (standard products only)
+      if (newProduct.productType === 'STANDARD') {
+        const validLines = initialStockLines.filter(l => l.locationId && l.quantity > 0);
+        if (validLines.length > 0) {
+          const stockResults = await Promise.allSettled(
+            validLines.map(line =>
+              apiPost('/inventory/adjust', {
+                productId: created.id,
+                direction: 'INCREASE',
+                quantity: line.quantity,
+                ownerType: line.ownerType,
+                ...(line.ownerType === 'WAREHOUSE'
+                  ? { warehouseId: line.locationId }
+                  : { branchId: line.locationId }),
+                notes: 'Initial stock on product creation',
+              })
+            )
+          );
+          const failed = stockResults.filter(r => r.status === 'rejected').length;
+          if (failed > 0) {
+            addToast('error', `Product created, but ${failed} stock location(s) failed — check Inventory manually.`);
+          }
         }
       }
 
@@ -450,8 +510,11 @@ export function ProductsPage() {
         costPrice: 0,
         sellingPrice: 0,
         reorderLevel: 5,
-        boxCount: 1,
+        productType: 'STANDARD',
+        totalOpeningStock: 0,
       });
+      setNewPriceTiers([]);
+      setNewGroupItems([]);
       setInitialStockLines([]);
       loadData();
     } catch (err: any) {
@@ -486,11 +549,19 @@ export function ProductsPage() {
     const costPrice = Number(editingProduct.cost_price) || 0;
     const sellingPrice = Number(editingProduct.selling_price) || 0;
     const reorderLevel = Math.max(0, Number(editingProduct.reorder_level) || 0);
-    const boxCount = Math.max(1, Number(editingProduct.box_count) || 1);
 
     if (costPrice > sellingPrice) {
       addToast('error', 'Cost Price cannot be greater than Selling Price');
       return;
+    }
+
+    const isGrouped = editingProduct.product_type === 'GROUPED';
+    if (isGrouped) {
+      const validGroup = editGroupItems.filter(g => g.component_product_id && Number(g.quantity) > 0);
+      if (validGroup.length === 0) {
+        addToast('error', 'Please add at least one component to the grouped bundle.');
+        return;
+      }
     }
 
     try {
@@ -505,13 +576,27 @@ export function ProductsPage() {
         costPrice,
         sellingPrice,
         reorderLevel,
-        boxCount,
+        productType: editingProduct.product_type || 'STANDARD',
+        groupItems: isGrouped
+          ? editGroupItems.filter(g => g.component_product_id && Number(g.quantity) > 0).map(g => ({
+              componentProductId: g.component_product_id,
+              quantity: Number(g.quantity),
+            }))
+          : [],
+        priceTiers: editPriceTiers
+          .filter(t => t.tier_name.trim() && Number(t.price) >= 0)
+          .map(t => ({
+            tierName: t.tier_name.trim(),
+            price: Number(t.price),
+          })),
         isActive: editingProduct.is_active !== undefined ? (editingProduct.is_active ? 1 : 0) : 1,
       });
 
       addToast('success', 'Product updated successfully');
       setIsEditOpen(false);
       setEditingProduct(null);
+      setEditPriceTiers([]);
+      setEditGroupItems([]);
       loadData();
     } catch (err: any) {
       addToast('error', err?.message || 'Failed to update product');
@@ -553,30 +638,49 @@ export function ProductsPage() {
     { key: 'category_name', label: 'Category', render: (row) => row.category_name || 'N/A' },
     { key: 'brand_name', label: 'Brand', render: (row) => row.brand_name || 'N/A' },
     { key: 'cost_price', label: 'Cost Price', render: (row) => `$${Number(row.cost_price).toLocaleString()}` },
-    { key: 'selling_price', label: 'Selling Price', render: (row) => `$${Number(row.selling_price).toLocaleString()}` },
     {
-      key: 'box_count',
-      label: 'Box Count',
-      sortable: true,
+      key: 'selling_price',
+      label: 'Selling Price',
       render: (row) => {
-        const count = row.box_count || 1;
+        const tierCount = row.price_tiers?.length || 0;
+        return (
+          <div>
+            <div style={{ fontWeight: 600, color: '#0f172a' }}>
+              ${Number(row.selling_price).toLocaleString()}
+            </div>
+            {tierCount > 0 && (
+              <div
+                style={{ fontSize: '11px', color: '#0284c7', cursor: 'help' }}
+                title={row.price_tiers?.map((t) => `${t.tier_name}: $${Number(t.price).toLocaleString()}`).join(', ')}
+              >
+                +{tierCount} {tierCount === 1 ? 'price tier' : 'price tiers'}
+              </div>
+            )}
+          </div>
+        );
+      },
+    },
+    {
+      key: 'product_type',
+      label: 'Type',
+      render: (row) => {
+        const isGroup = row.product_type === 'GROUPED';
+        const componentCount = row.group_items?.length || 0;
         return (
           <span
             style={{
               display: 'inline-flex',
               alignItems: 'center',
-              gap: '4px',
               padding: '2px 8px',
               borderRadius: '6px',
               fontSize: '12px',
               fontWeight: 600,
-              background: '#f0f9ff',
-              color: '#0369a1',
-              border: '1px solid #bae6fd',
+              background: isGroup ? '#faf5ff' : '#f8fafc',
+              color: isGroup ? '#7e22ce' : '#475569',
+              border: `1px solid ${isGroup ? '#e9d5ff' : '#e2e8f0'}`,
             }}
-            title={`${count} physical boxes per unit for delivery`}
           >
-            {count} {count === 1 ? 'box' : 'boxes'}
+            {isGroup ? `Bundle (${componentCount} ${componentCount === 1 ? 'item' : 'items'})` : 'Standard'}
           </span>
         );
       },
@@ -748,6 +852,35 @@ export function ProductsPage() {
       {/* Create Modal */}
       <Modal isOpen={isCreateOpen} onClose={() => setIsCreateOpen(false)} title="Create New Product" width="lg">
         <form onSubmit={handleCreateProduct}>
+          {/* Product Type Selection */}
+          <div style={{ marginBottom: '14px', padding: '12px 14px', background: '#f8fafc', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+            <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: '#1e293b', marginBottom: '8px' }}>
+              Product Type
+            </label>
+            <div style={{ display: 'flex', gap: '20px' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '13px', fontWeight: 500, color: '#334155' }}>
+                <input
+                  type="radio"
+                  name="createProductType"
+                  value="STANDARD"
+                  checked={newProduct.productType === 'STANDARD'}
+                  onChange={() => setNewProduct(prev => ({ ...prev, productType: 'STANDARD' }))}
+                />
+                Standard Product (Physical Inventory)
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '13px', fontWeight: 500, color: '#334155' }}>
+                <input
+                  type="radio"
+                  name="createProductType"
+                  value="GROUPED"
+                  checked={newProduct.productType === 'GROUPED'}
+                  onChange={() => setNewProduct(prev => ({ ...prev, productType: 'GROUPED' }))}
+                />
+                Grouped Product / Bundle (Set of Products)
+              </label>
+            </div>
+          </div>
+
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1.5fr', gap: '14px' }}>
             <InputField
               label="Product ID"
@@ -824,7 +957,7 @@ export function ProductsPage() {
               required
             />
             <InputField
-              label="Selling Price ($)"
+              label="Base Selling Price ($)"
               id="sellingPrice"
               type="number"
               value={newProduct.sellingPrice}
@@ -834,32 +967,154 @@ export function ProductsPage() {
             />
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '14px', marginTop: '10px' }}>
-            <div>
-              <InputField
-                label="Delivery Box Count (Boxes per Unit)"
-                id="boxCount"
-                type="number"
-                value={newProduct.boxCount}
-                onChange={(val) => setNewProduct((prev) => ({ ...prev, boxCount: val }))}
-                onBlur={() => setNewProduct((prev) => ({ ...prev, boxCount: Math.max(1, Number(prev.boxCount) || 1) }))}
-                required
-              />
-            </div>
-            <div>
-              <InputField
-                label="Reorder Alert Level"
-                id="reorderLevel"
-                type="number"
-                value={newProduct.reorderLevel}
-                onChange={(val) => setNewProduct((prev) => ({ ...prev, reorderLevel: val }))}
-                onBlur={() => setNewProduct((prev) => ({ ...prev, reorderLevel: Math.max(0, Number(prev.reorderLevel) || 0) }))}
-                required
-              />
-            </div>
+          <div style={{ marginTop: '10px' }}>
+            <InputField
+              label="Reorder Alert Level"
+              id="reorderLevel"
+              type="number"
+              value={newProduct.reorderLevel}
+              onChange={(val) => setNewProduct((prev) => ({ ...prev, reorderLevel: val }))}
+              onBlur={() => setNewProduct((prev) => ({ ...prev, reorderLevel: Math.max(0, Number(prev.reorderLevel) || 0) }))}
+              required
+            />
           </div>
 
-          {/* Initial Stock Section — Multi-location */}
+          {/* Grouped Product Bundle Components */}
+          {newProduct.productType === 'GROUPED' && (
+            <div style={{ marginTop: '16px', padding: '14px', background: '#faf5ff', borderRadius: '8px', border: '1px solid #e9d5ff' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                <div>
+                  <div style={{ fontWeight: 700, color: '#6b21a8', fontSize: '13px' }}>Bundle Components</div>
+                  <div style={{ fontSize: '12px', color: '#7e22ce' }}>Specify individual items in this set (e.g. 1 Bed, 2 Nightstands).</div>
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => setNewGroupItems(prev => [...prev, { componentProductId: '', quantity: 1 }])}
+                  style={{ fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px' }}
+                >
+                  <Plus size={12} /> Add Component
+                </button>
+              </div>
+
+              {newGroupItems.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '16px', background: '#fff', borderRadius: '6px', border: '1px dashed #d8b4fe', color: '#7e22ce', fontSize: '12px' }}>
+                  No components added yet. Click "+ Add Component" to select underlying products.
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  {newGroupItems.map((item, idx) => (
+                    <div key={idx} style={{ display: 'flex', gap: '8px', alignItems: 'center', background: '#fff', padding: '8px', borderRadius: '6px', border: '1px solid #e9d5ff' }}>
+                      <div style={{ flex: 1 }}>
+                        <select
+                          value={item.componentProductId}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setNewGroupItems(prev => prev.map((g, i) => i === idx ? { ...g, componentProductId: val } : g));
+                          }}
+                          style={{ width: '100%', padding: '6px 8px', borderRadius: '4px', border: '1px solid #cbd5e1', fontSize: '13px' }}
+                          required
+                        >
+                          <option value="">-- Select Component Product --</option>
+                          {products.filter(p => p.product_type !== 'GROUPED').map(p => (
+                            <option key={p.id} value={p.id}>{p.name} ({p.sku})</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div style={{ width: '100px' }}>
+                        <input
+                          type="number"
+                          min="1"
+                          placeholder="Qty"
+                          value={item.quantity}
+                          onChange={(e) => {
+                            const val = Math.max(1, parseInt(e.target.value) || 1);
+                            setNewGroupItems(prev => prev.map((g, i) => i === idx ? { ...g, quantity: val } : g));
+                          }}
+                          style={{ width: '100%', padding: '6px 8px', borderRadius: '4px', border: '1px solid #cbd5e1', fontSize: '13px', textAlign: 'center' }}
+                          required
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setNewGroupItems(prev => prev.filter((_, i) => i !== idx))}
+                        style={{ background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer', padding: '4px' }}
+                        title="Remove Component"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Price Tiers Section */}
+          <div style={{ marginTop: '16px', padding: '14px', background: '#f8fafc', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+              <div>
+                <div style={{ fontWeight: 700, color: '#1e293b', fontSize: '13px' }}>Price Tiers (Optional)</div>
+                <div style={{ fontSize: '12px', color: '#64748b' }}>Configure multiple selling prices for this product (e.g. Wholesale, Special).</div>
+              </div>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => setNewPriceTiers(prev => [...prev, { tierName: '', price: 0 }])}
+                style={{ fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px' }}
+              >
+                <Plus size={12} /> Add Price Tier
+              </button>
+            </div>
+
+            {newPriceTiers.length > 0 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {newPriceTiers.map((tier, idx) => (
+                  <div key={idx} style={{ display: 'flex', gap: '8px', alignItems: 'center', background: '#fff', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1' }}>
+                    <div style={{ flex: 1 }}>
+                      <input
+                        type="text"
+                        placeholder="Tier Name (e.g. Wholesale, VIP)"
+                        value={tier.tierName}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setNewPriceTiers(prev => prev.map((t, i) => i === idx ? { ...t, tierName: val } : t));
+                        }}
+                        style={{ width: '100%', padding: '6px 8px', borderRadius: '4px', border: '1px solid #cbd5e1', fontSize: '13px' }}
+                        required
+                      />
+                    </div>
+                    <div style={{ width: '140px' }}>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        placeholder="Price ($)"
+                        value={tier.price}
+                        onChange={(e) => {
+                          const val = parseFloat(e.target.value) || 0;
+                          setNewPriceTiers(prev => prev.map((t, i) => i === idx ? { ...t, price: val } : t));
+                        }}
+                        style={{ width: '100%', padding: '6px 8px', borderRadius: '4px', border: '1px solid #cbd5e1', fontSize: '13px', textAlign: 'right' }}
+                        required
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setNewPriceTiers(prev => prev.filter((_, i) => i !== idx))}
+                      style={{ background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer', padding: '4px' }}
+                      title="Remove Price Tier"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Initial Stock Section — Multi-location (STANDARD only) */}
+          {newProduct.productType === 'STANDARD' ? (
           <div style={{ marginTop: '16px', padding: '16px', background: '#f4fbf4', borderRadius: '10px', border: '1px solid #d1e8d1' }}>
             <div style={{ marginBottom: '14px' }}>
               <p style={{ margin: 0, fontWeight: 700, color: '#066006', fontSize: '14px' }}>Initial Opening Stock (Optional)</p>
@@ -1047,6 +1302,11 @@ export function ProductsPage() {
               </div>
             )}
           </div>
+          ) : (
+            <div style={{ marginTop: '16px', padding: '14px', background: '#faf5ff', borderRadius: '8px', border: '1px solid #e9d5ff', fontSize: '13px', color: '#6b21a8' }}>
+              Inventory for this grouped product is tracked dynamically based on its underlying components.
+            </div>
+          )}
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '20px' }}>
             <button type="button" className="btn btn-secondary" onClick={() => setIsCreateOpen(false)} disabled={submitting}>
@@ -1065,8 +1325,37 @@ export function ProductsPage() {
 
       {/* Edit Product Modal */}
       {isEditOpen && editingProduct && (
-        <Modal isOpen={isEditOpen} title="Edit Product" onClose={() => { setIsEditOpen(false); setEditingProduct(null); }} width="md">
+        <Modal isOpen={isEditOpen} title="Edit Product" onClose={() => { setIsEditOpen(false); setEditingProduct(null); }} width="lg">
           <form onSubmit={handleEditProduct}>
+            {/* Product Type Selection */}
+            <div style={{ marginBottom: '14px', padding: '12px 14px', background: '#f8fafc', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+              <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: '#1e293b', marginBottom: '8px' }}>
+                Product Type
+              </label>
+              <div style={{ display: 'flex', gap: '20px' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '13px', fontWeight: 500, color: '#334155' }}>
+                  <input
+                    type="radio"
+                    name="editProductType"
+                    value="STANDARD"
+                    checked={editingProduct.product_type !== 'GROUPED'}
+                    onChange={() => setEditingProduct({ ...editingProduct, product_type: 'STANDARD' })}
+                  />
+                  Standard Product (Physical Inventory)
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '13px', fontWeight: 500, color: '#334155' }}>
+                  <input
+                    type="radio"
+                    name="editProductType"
+                    value="GROUPED"
+                    checked={editingProduct.product_type === 'GROUPED'}
+                    onChange={() => setEditingProduct({ ...editingProduct, product_type: 'GROUPED' })}
+                  />
+                  Grouped Product / Bundle (Set of Products)
+                </label>
+              </div>
+            </div>
+
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
               <InputField label="Product ID (SKU) *" id="editSku" value={editingProduct.sku} onChange={(val) => setEditingProduct({ ...editingProduct, sku: val })} required />
               <InputField label="Barcode *" id="editBarcode" value={editingProduct.barcode || ''} onChange={(val) => setEditingProduct({ ...editingProduct, barcode: val })} required />
@@ -1129,7 +1418,7 @@ export function ProductsPage() {
               />
               <InputField
                 type="number"
-                label="Selling Price ($)"
+                label="Base Selling Price ($)"
                 id="editSell"
                 value={editingProduct.selling_price}
                 onChange={(val) => setEditingProduct({ ...editingProduct, selling_price: val })}
@@ -1145,17 +1434,140 @@ export function ProductsPage() {
                 onBlur={() => setEditingProduct(p => p ? { ...p, reorder_level: Math.max(0, Number(p.reorder_level) || 0) } : null)}
                 required
               />
-              <div>
-                <InputField
-                  type="number"
-                  label="Box Count (Per Unit)"
-                  id="editBoxCount"
-                  value={editingProduct.box_count ?? 1}
-                  onChange={(val) => setEditingProduct({ ...editingProduct, box_count: val })}
-                  onBlur={() => setEditingProduct(p => p ? { ...p, box_count: Math.max(1, Number(p.box_count) || 1) } : null)}
-                  required
-                />
+            </div>
+
+            {/* Grouped Product Bundle Components */}
+            {editingProduct.product_type === 'GROUPED' && (
+              <div style={{ marginTop: '16px', padding: '14px', background: '#faf5ff', borderRadius: '8px', border: '1px solid #e9d5ff' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                  <div>
+                    <div style={{ fontWeight: 700, color: '#6b21a8', fontSize: '13px' }}>Bundle Components</div>
+                    <div style={{ fontSize: '12px', color: '#7e22ce' }}>Specify individual items in this set (e.g. 1 Bed, 2 Nightstands).</div>
+                  </div>
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => setEditGroupItems(prev => [...prev, { component_product_id: '', quantity: 1 }])}
+                    style={{ fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px' }}
+                  >
+                    <Plus size={12} /> Add Component
+                  </button>
+                </div>
+
+                {editGroupItems.length === 0 ? (
+                  <div style={{ textAlign: 'center', padding: '16px', background: '#fff', borderRadius: '6px', border: '1px dashed #d8b4fe', color: '#7e22ce', fontSize: '12px' }}>
+                    No components added yet. Click "+ Add Component" to select underlying products.
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    {editGroupItems.map((item, idx) => (
+                      <div key={idx} style={{ display: 'flex', gap: '8px', alignItems: 'center', background: '#fff', padding: '8px', borderRadius: '6px', border: '1px solid #e9d5ff' }}>
+                        <div style={{ flex: 1 }}>
+                          <select
+                            value={item.component_product_id}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setEditGroupItems(prev => prev.map((g, i) => i === idx ? { ...g, component_product_id: val } : g));
+                            }}
+                            style={{ width: '100%', padding: '6px 8px', borderRadius: '4px', border: '1px solid #cbd5e1', fontSize: '13px' }}
+                            required
+                          >
+                            <option value="">-- Select Component Product --</option>
+                            {products.filter(p => p.id !== editingProduct.id && p.product_type !== 'GROUPED').map(p => (
+                              <option key={p.id} value={p.id}>{p.name} ({p.sku})</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div style={{ width: '100px' }}>
+                          <input
+                            type="number"
+                            min="1"
+                            placeholder="Qty"
+                            value={item.quantity}
+                            onChange={(e) => {
+                              const val = Math.max(1, parseInt(e.target.value) || 1);
+                              setEditGroupItems(prev => prev.map((g, i) => i === idx ? { ...g, quantity: val } : g));
+                            }}
+                            style={{ width: '100%', padding: '6px 8px', borderRadius: '4px', border: '1px solid #cbd5e1', fontSize: '13px', textAlign: 'center' }}
+                            required
+                          />
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setEditGroupItems(prev => prev.filter((_, i) => i !== idx))}
+                          style={{ background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer', padding: '4px' }}
+                          title="Remove Component"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
+            )}
+
+            {/* Price Tiers Section */}
+            <div style={{ marginTop: '16px', padding: '14px', background: '#f8fafc', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                <div>
+                  <div style={{ fontWeight: 700, color: '#1e293b', fontSize: '13px' }}>Price Tiers (Optional)</div>
+                  <div style={{ fontSize: '12px', color: '#64748b' }}>Configure multiple selling prices for this product (e.g. Wholesale, Special).</div>
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => setEditPriceTiers(prev => [...prev, { tier_name: '', price: 0 }])}
+                  style={{ fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px' }}
+                >
+                  <Plus size={12} /> Add Price Tier
+                </button>
+              </div>
+
+              {editPriceTiers.length > 0 && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  {editPriceTiers.map((tier, idx) => (
+                    <div key={idx} style={{ display: 'flex', gap: '8px', alignItems: 'center', background: '#fff', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1' }}>
+                      <div style={{ flex: 1 }}>
+                        <input
+                          type="text"
+                          placeholder="Tier Name (e.g. Wholesale, VIP)"
+                          value={tier.tier_name}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setEditPriceTiers(prev => prev.map((t, i) => i === idx ? { ...t, tier_name: val } : t));
+                          }}
+                          style={{ width: '100%', padding: '6px 8px', borderRadius: '4px', border: '1px solid #cbd5e1', fontSize: '13px' }}
+                          required
+                        />
+                      </div>
+                      <div style={{ width: '140px' }}>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          placeholder="Price ($)"
+                          value={tier.price}
+                          onChange={(e) => {
+                            const val = parseFloat(e.target.value) || 0;
+                            setEditPriceTiers(prev => prev.map((t, i) => i === idx ? { ...t, price: val } : t));
+                          }}
+                          style={{ width: '100%', padding: '6px 8px', borderRadius: '4px', border: '1px solid #cbd5e1', fontSize: '13px', textAlign: 'right' }}
+                          required
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setEditPriceTiers(prev => prev.filter((_, i) => i !== idx))}
+                        style={{ background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer', padding: '4px' }}
+                        title="Remove Price Tier"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
 
             <div style={{ marginTop: '16px', display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 14px', background: '#f8fafc', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
