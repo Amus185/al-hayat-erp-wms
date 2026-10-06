@@ -447,13 +447,14 @@ export function CreateSalesOrderModal({ isOpen, onClose, onOrderCreated }: Creat
   const selectedCustomerObj = customers.find((c) => c.id === customerId);
 
   return (
-    <Modal
-      isOpen={isOpen}
-      onClose={onClose}
-      title="New Furniture Order"
-      size="xl"
-      id="new-order-modal"
-    >
+    <>
+      <Modal
+        isOpen={isOpen}
+        onClose={onClose}
+        title="New Furniture Order"
+        size="xl"
+        id="new-order-modal"
+      >
       <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
         {/* Branch, Customer, and Sale Type Header Grid */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '16px' }}>
@@ -893,110 +894,113 @@ export function CreateSalesOrderModal({ isOpen, onClose, onOrderCreated }: Creat
           </button>
         </div>
       </div>
-
-      {/* Inline Create Customer Modal */}
-      <Modal
-        isOpen={isInlineCustomerOpen}
-        onClose={() => setIsInlineCustomerOpen(false)}
-        title="Add New Customer"
-        size="md"
-        id="inline-customer-modal"
-      >
-        <form onSubmit={handleCreateInlineCustomer}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-            <InputField
-              label="Full Name"
-              id="inline-customer-name"
-              value={newCustomerForm.name}
-              onChange={(val) => setNewCustomerForm(prev => ({ ...prev, name: val }))}
-              placeholder="e.g. Ahmed Ali"
-              required
-            />
-            <InputField
-              label="Phone Number"
-              id="inline-customer-phone"
-              value={newCustomerForm.phone}
-              onChange={(val) => setNewCustomerForm(prev => ({ ...prev, phone: val }))}
-              placeholder="+252 63..."
-            />
-            <InputField
-              label="Email Address"
-              id="inline-customer-email"
-              type="email"
-              value={newCustomerForm.email}
-              onChange={(val) => setNewCustomerForm(prev => ({ ...prev, email: val }))}
-              placeholder="customer@example.com"
-            />
-            <TextareaField
-              label="Delivery / Residential Address"
-              id="inline-customer-address"
-              value={newCustomerForm.address}
-              onChange={(val) => setNewCustomerForm(prev => ({ ...prev, address: val }))}
-              placeholder="Street, District, City"
-              rows={2}
-            />
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '8px' }}>
-              <button
-                type="button"
-                className="btn btn-secondary"
-                onClick={() => setIsInlineCustomerOpen(false)}
-                disabled={savingCustomer}
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                className="btn btn-primary"
-                disabled={savingCustomer || !newCustomerForm.name.trim()}
-              >
-                {savingCustomer ? 'Saving...' : 'Save Customer'}
-              </button>
-            </div>
-          </div>
-        </form>
-      </Modal>
-
-      {/* Stock alert modal */}
-      {stockAlert.isOpen && (
-        <Modal
-          isOpen={stockAlert.isOpen}
-          onClose={() => setStockAlert({ ...stockAlert, isOpen: false })}
-          title="Stock Availability Alert"
-          size="md"
-          id="stock-alert-modal"
-        >
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#b45309' }}>
-              <AlertTriangle size={20} />
-              <span style={{ fontWeight: 600 }}>Limited Stock Available at {stockAlert.branchName}</span>
-            </div>
-            <p style={{ fontSize: '13px', color: '#4b5563', margin: 0 }}>
-              The selected item <strong>{stockAlert.productName}</strong> has only <strong>{stockAlert.maxAvailable} units</strong> available in this branch.
-            </p>
-            {stockAlert.otherLocations.length > 0 && (
-              <div style={{ background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: '6px', padding: '10px' }}>
-                <div style={{ fontSize: '12px', fontWeight: 600, color: '#374151', marginBottom: '6px' }}>
-                  Available in other locations:
-                </div>
-                <ul style={{ margin: 0, paddingLeft: '20px', fontSize: '12px', color: '#4b5563' }}>
-                  {stockAlert.otherLocations.map((loc, i) => (
-                    <li key={i}>{loc.name}: <strong>{loc.qty} units</strong></li>
-                  ))}
-                </ul>
-              </div>
-            )}
-            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '10px' }}>
-              <button
-                type="button"
-                className="btn btn-primary"
-                onClick={() => setStockAlert({ ...stockAlert, isOpen: false })}
-              >
-                OK
-              </button>
-            </div>
-          </div>
-        </Modal>
-      )}
     </Modal>
+
+    {/* Inline Create Customer Modal */}
+    <Modal
+      isOpen={isInlineCustomerOpen}
+      onClose={() => setIsInlineCustomerOpen(false)}
+      title="Add New Customer"
+      size="sm"
+      width="sm"
+      id="inline-customer-modal"
+    >
+      <form onSubmit={handleCreateInlineCustomer}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          <InputField
+            label="Full Name"
+            id="inline-customer-name"
+            value={newCustomerForm.name}
+            onChange={(val) => setNewCustomerForm(prev => ({ ...prev, name: val }))}
+            placeholder="e.g. Ahmed Ali"
+            required
+          />
+          <InputField
+            label="Phone Number"
+            id="inline-customer-phone"
+            value={newCustomerForm.phone}
+            onChange={(val) => setNewCustomerForm(prev => ({ ...prev, phone: val }))}
+            placeholder="+252 63..."
+          />
+          <InputField
+            label="Email Address"
+            id="inline-customer-email"
+            type="email"
+            value={newCustomerForm.email}
+            onChange={(val) => setNewCustomerForm(prev => ({ ...prev, email: val }))}
+            placeholder="customer@example.com"
+          />
+          <TextareaField
+            label="Delivery / Residential Address"
+            id="inline-customer-address"
+            value={newCustomerForm.address}
+            onChange={(val) => setNewCustomerForm(prev => ({ ...prev, address: val }))}
+            placeholder="Street, District, City"
+            rows={2}
+          />
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '8px' }}>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => setIsInlineCustomerOpen(false)}
+              disabled={savingCustomer}
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              className="btn btn-primary"
+              disabled={savingCustomer || !newCustomerForm.name.trim()}
+            >
+              {savingCustomer ? 'Saving...' : 'Save Customer'}
+            </button>
+          </div>
+        </div>
+      </form>
+    </Modal>
+
+    {/* Stock alert modal */}
+    {stockAlert.isOpen && (
+      <Modal
+        isOpen={stockAlert.isOpen}
+        onClose={() => setStockAlert({ ...stockAlert, isOpen: false })}
+        title="Stock Availability Alert"
+        size="sm"
+        width="sm"
+        id="stock-alert-modal"
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#b45309' }}>
+            <AlertTriangle size={20} />
+            <span style={{ fontWeight: 600 }}>Limited Stock Available at {stockAlert.branchName}</span>
+          </div>
+          <p style={{ fontSize: '13px', color: '#4b5563', margin: 0 }}>
+            The selected item <strong>{stockAlert.productName}</strong> has only <strong>{stockAlert.maxAvailable} units</strong> available in this branch.
+          </p>
+          {stockAlert.otherLocations.length > 0 && (
+            <div style={{ background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: '6px', padding: '10px' }}>
+              <div style={{ fontSize: '12px', fontWeight: 600, color: '#334155', marginBottom: '6px' }}>
+                Available in other locations:
+              </div>
+              <ul style={{ margin: 0, paddingLeft: '20px', fontSize: '12px', color: '#4b5563' }}>
+                {stockAlert.otherLocations.map((loc, i) => (
+                  <li key={i}>{loc.name}: <strong>{loc.qty} units</strong></li>
+                ))}
+              </ul>
+            </div>
+          )}
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '10px' }}>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => setStockAlert({ ...stockAlert, isOpen: false })}
+            >
+              OK
+            </button>
+          </div>
+        </div>
+      </Modal>
+    )}
+  </>
   );
 }

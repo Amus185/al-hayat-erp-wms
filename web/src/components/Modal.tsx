@@ -109,6 +109,13 @@ export function Modal({
 }: ModalProps) {
   const { effectiveZIndex } = useModalStack(isOpen, onClose, zIndex);
   const panelWidth = size || width;
+  const widthStyles: Record<string, string> = {
+    sm: '420px',
+    md: '520px',
+    lg: '760px',
+    xl: '960px',
+  };
+  const targetMaxWidth = widthStyles[panelWidth] || '520px';
 
   if (!isOpen) return null;
 
@@ -120,6 +127,7 @@ export function Modal({
     >
       <div
         className={`modal-panel modal-panel--${panelWidth}`}
+        style={{ maxWidth: `min(calc(100vw - 32px), ${targetMaxWidth})`, width: '100%' }}
         onClick={(e) => e.stopPropagation()}
         id={id}
         role="dialog"

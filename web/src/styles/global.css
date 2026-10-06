@@ -901,10 +901,10 @@ tbody tr:hover { background: var(--primary-lighter); }
   box-sizing: border-box;
   overflow: hidden;
 }
-.modal-panel--sm { max-width: min(calc(100vw - 32px), 420px); }
-.modal-panel--md { max-width: min(calc(100vw - 32px), 560px); }
-.modal-panel--lg { max-width: min(calc(100vw - 32px), 760px); }
-.modal-panel--xl { max-width: min(calc(100vw - 32px), 980px); }
+.modal-panel--sm { max-width: min(calc(100vw - 32px), 420px) !important; width: 100%; }
+.modal-panel--md { max-width: min(calc(100vw - 32px), 520px) !important; width: 100%; }
+.modal-panel--lg { max-width: min(calc(100vw - 32px), 760px) !important; width: 100%; }
+.modal-panel--xl { max-width: min(calc(100vw - 32px), 960px) !important; width: 100%; }
 .modal-panel__header {
   display: flex;
   align-items: center;
@@ -1321,7 +1321,6 @@ tbody tr:hover { background: var(--primary-lighter); }
   }
 
   .modal-panel {
-    width: 95%;
     max-height: 90vh;
     margin: 12px auto;
   }
