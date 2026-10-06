@@ -103,10 +103,28 @@ export function DeliveriesPage() {
   const [salesOrders, setSalesOrders] = useState<any[]>([]);
   const [customers, setCustomers] = useState<any[]>([]);
   const [branches, setBranches] = useState<any[]>([]);
+  const [selectedOrderLines, setSelectedOrderLines] = useState<any[]>([]);
   const [showAddressOverride, setShowAddressOverride] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
-  const [createForm, setCreateForm] = useState({
+  const [createForm, setCreateForm] = useState<{
+    salesOrderId: string;
+    customerId: string;
+    customerName: string;
+    customerPhone: string;
+    deliveryAddress: string;
+    city: string;
+    branchName: string;
+    driverName: string;
+    driverPhone: string;
+    vehiclePlate: string;
+    scheduledDate: string;
+    installationRequired: boolean;
+    installerName: string;
+    installationFee: number | string;
+    totalBoxes: number | string;
+    notes: string;
+  }>({
     salesOrderId: '',
     customerId: '',
     customerName: '',
@@ -132,7 +150,11 @@ export function DeliveriesPage() {
 
   // Split Delivery Runs state
   const [isRunModalOpen, setIsRunModalOpen] = useState(false);
-  const [runForm, setRunForm] = useState({
+  const [runForm, setRunForm] = useState<{
+    boxesDelivered: number | string;
+    handledBy: string;
+    notes: string;
+  }>({
     boxesDelivered: 1,
     handledBy: '',
     notes: '',
@@ -197,6 +219,7 @@ export function DeliveriesPage() {
   const handleOpenCreateWithOrder = (order: any) => {
     setFormError(null);
     setShowAddressOverride(false);
+    setSelectedOrderLines([]);
     const calculatedBoxes = Math.max(1, Number(order.total_boxes || 1));
     setCreateForm({
       salesOrderId: order.id,
@@ -218,9 +241,18 @@ export function DeliveriesPage() {
     });
     setIsCreateOpen(true);
 
-    // Fetch full order lines to ensure exact product box count
+    // Fetch full order lines to ensure exact multi-unit product box calculation (Quantity × Boxes Per Unit)
     apiGet<any>(`/sales/orders/${order.id}`).then((full) => {
-      if (full?.total_boxes) {
+      if (full?.lines && full.lines.length > 0) {
+        const sumBoxes = full.lines.reduce((acc: number, l: any) => {
+          const q = Number(l.quantity || 1);
+          const b = Number(l.box_count || 1);
+          return acc + (q * b);
+        }, 0);
+        const finalBoxes = sumBoxes > 0 ? sumBoxes : (full.total_boxes || calculatedBoxes);
+        setSelectedOrderLines(full.lines);
+        setCreateForm((prev) => (prev.salesOrderId === order.id ? { ...prev, totalBoxes: finalBoxes } : prev));
+      } else if (full?.total_boxes) {
         setCreateForm((prev) => (prev.salesOrderId === order.id ? { ...prev, totalBoxes: full.total_boxes } : prev));
       }
     }).catch(() => {});
@@ -229,6 +261,7 @@ export function DeliveriesPage() {
   const handleSelectSalesOrder = (soId: string) => {
     setFormError(null);
     setShowAddressOverride(false);
+    setSelectedOrderLines([]);
     const matched = salesOrders.find((s) => s.id === soId);
     if (!matched) {
       setCreateForm((prev) => ({
@@ -263,9 +296,18 @@ export function DeliveriesPage() {
       notes: `Delivery for Sales Order #${matched.order_number}`,
     }));
 
-    // Fetch full order lines to ensure exact product box count
+    // Fetch full order lines to ensure exact multi-unit product box calculation (Quantity × Boxes Per Unit)
     apiGet<any>(`/sales/orders/${soId}`).then((full) => {
-      if (full?.total_boxes) {
+      if (full?.lines && full.lines.length > 0) {
+        const sumBoxes = full.lines.reduce((acc: number, l: any) => {
+          const q = Number(l.quantity || 1);
+          const b = Number(l.box_count || 1);
+          return acc + (q * b);
+        }, 0);
+        const finalBoxes = sumBoxes > 0 ? sumBoxes : (full.total_boxes || calculatedBoxes);
+        setSelectedOrderLines(full.lines);
+        setCreateForm((prev) => (prev.salesOrderId === soId ? { ...prev, totalBoxes: finalBoxes } : prev));
+      } else if (full?.total_boxes) {
         setCreateForm((prev) => (prev.salesOrderId === soId ? { ...prev, totalBoxes: full.total_boxes } : prev));
       }
     }).catch(() => {});
@@ -302,6 +344,7 @@ export function DeliveriesPage() {
   const handleOpenCreateNew = () => {
     setFormError(null);
     setShowAddressOverride(false);
+    setSelectedOrderLines([]);
     const defaultBranch = branches.find((b) => b.id === (user as any)?.branchId) || branches[0];
     setCreateForm({
       salesOrderId: '',
@@ -350,8 +393,8 @@ export function DeliveriesPage() {
         scheduledDate: createForm.scheduledDate || undefined,
         installationRequired: createForm.installationRequired,
         installerName: createForm.installerName?.trim() || undefined,
-        installationFee: createForm.installationFee,
-        totalBoxes: Math.max(1, Number(createForm.totalBoxes || 1)),
+        installationFee: Number(createForm.installationFee) || 0,
+        totalBoxes: Math.max(1, Number(createForm.totalBoxes) || 1),
         notes: createForm.notes?.trim() || undefined,
       });
 
@@ -456,7 +499,7 @@ export function DeliveriesPage() {
     setSelectedDelivery(d);
     const rem = d.remaining_boxes ?? Math.max(0, (d.total_boxes ?? 1) - (d.delivered_boxes ?? 0));
     setRunForm({
-      boxesDelivered: Math.max(1, Math.min(rem, 1)),
+      boxesDelivered: rem > 0 ? rem : 1,
       handledBy: d.driver_name || '',
       notes: '',
     });
@@ -468,7 +511,7 @@ export function DeliveriesPage() {
     if (!selectedDelivery) return;
     const boxes = Number(runForm.boxesDelivered);
     if (!boxes || boxes < 1) {
-      addToast('error', 'Must dispatch at least 1 box.');
+      addToast('error', 'Please enter a valid box quantity (at least 1).');
       return;
     }
     const rem = selectedDelivery.remaining_boxes ?? Math.max(0, (selectedDelivery.total_boxes ?? 1) - (selectedDelivery.delivered_boxes ?? 0));
@@ -735,7 +778,7 @@ export function DeliveriesPage() {
           </div>
           {row.vehicle_plate && (
             <span style={{ fontSize: '11px', background: '#f1f5f9', padding: '1px 6px', borderRadius: '4px', border: '1px solid #e2e8f0', color: '#475569' }}>
-              🚗 {row.vehicle_plate}
+              {row.vehicle_plate}
             </span>
           )}
         </div>
@@ -784,7 +827,7 @@ export function DeliveriesPage() {
         return (
           <div style={{ minWidth: '115px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', fontWeight: 600, color: '#334155', marginBottom: '3px' }}>
-              <span>📦 {delivered} / {total} Boxes</span>
+              <span>{delivered} / {total} Boxes</span>
               <span style={{ color: remaining === 0 ? '#16a34a' : '#b45309' }}>
                 {remaining === 0 ? 'Full' : `${remaining} left`}
               </span>
@@ -1201,32 +1244,69 @@ export function DeliveriesPage() {
                   label="Service Fee ($)"
                   id="delFee"
                   type="number"
-                  value={String(createForm.installationFee)}
-                  onChange={(val) => setCreateForm((p) => ({ ...p, installationFee: Number(val) || 0 }))}
+                  min={0}
+                  value={createForm.installationFee}
+                  onChange={(val) => setCreateForm((p) => ({ ...p, installationFee: val }))}
+                  onBlur={() => {
+                    if (createForm.installationFee === '' || isNaN(Number(createForm.installationFee))) {
+                      setCreateForm((p) => ({ ...p, installationFee: 0 }));
+                    }
+                  }}
                 />
               </div>
             )}
           </div>
 
-          {/* Multi-Box Split Delivery Logistics */}
-          <div style={{ background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: '8px', padding: '12px' }}>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '12px', alignItems: 'center' }}>
-              <div style={{ minWidth: 0 }}>
-                <InputField
-                  label="Total Delivery Boxes *"
-                  id="delTotalBoxes"
-                  type="number"
-                  value={String(createForm.totalBoxes || 1)}
-                  onChange={(val) => setCreateForm((p) => ({ ...p, totalBoxes: Math.max(1, parseInt(val, 10) || 1) }))}
-                  placeholder="1"
-                  required
-                />
+          {/* Selected Order Product & Box Breakdown */}
+          {selectedOrderLines.length > 0 && (
+            <div style={{ border: '1px solid #e2e8f0', borderRadius: '8px', overflow: 'hidden' }}>
+              <div style={{ background: '#f8fafc', padding: '8px 12px', borderBottom: '1px solid #e2e8f0', fontSize: '12px', fontWeight: 600, color: '#334155' }}>
+                Order Line Items & Box Calculation
               </div>
-              <div style={{ fontSize: '12px', color: '#0369a1', minWidth: 0 }}>
-                📦 <strong>Multi-Box Tracking:</strong> Auto-calculated from configured product box counts. Supports split delivery dispatch runs without modifying sales prices or inventory quantities.
-              </div>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
+                <thead>
+                  <tr style={{ background: '#f1f5f9', borderBottom: '1px solid #e2e8f0', textAlign: 'left', color: '#475569' }}>
+                    <th style={{ padding: '6px 10px' }}>Product</th>
+                    <th style={{ padding: '6px 10px', textAlign: 'center' }}>Quantity</th>
+                    <th style={{ padding: '6px 10px', textAlign: 'center' }}>Boxes / Unit</th>
+                    <th style={{ padding: '6px 10px', textAlign: 'right' }}>Total Boxes</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {selectedOrderLines.map((line: any, idx: number) => {
+                    const q = Number(line.quantity) || 1;
+                    const b = Number(line.box_count) || 1;
+                    return (
+                      <tr key={line.id || idx} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                        <td style={{ padding: '6px 10px', fontWeight: 600, color: '#1e293b' }}>
+                          {line.product_name || 'Product'}
+                        </td>
+                        <td style={{ padding: '6px 10px', textAlign: 'center' }}>{q}</td>
+                        <td style={{ padding: '6px 10px', textAlign: 'center', color: '#0284c7' }}>{b}</td>
+                        <td style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 700, color: '#0f172a' }}>{q * b}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
-          </div>
+          )}
+
+          <InputField
+            label="Total Delivery Boxes"
+            id="delTotalBoxes"
+            type="number"
+            min={1}
+            value={createForm.totalBoxes}
+            onChange={(val) => setCreateForm((p) => ({ ...p, totalBoxes: val }))}
+            onBlur={() => {
+              if (!createForm.totalBoxes || Number(createForm.totalBoxes) < 1) {
+                setCreateForm((p) => ({ ...p, totalBoxes: 1 }));
+              }
+            }}
+            placeholder="1"
+            required
+          />
 
           <TextareaField
             label="Delivery Notes"
@@ -1407,7 +1487,7 @@ export function DeliveriesPage() {
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                   <Package size={18} color="#0284c7" />
-                  <strong style={{ color: '#0369a1', fontSize: '14px' }}>Multi-Box Logistics Tracking</strong>
+                  <strong style={{ color: '#0369a1', fontSize: '14px' }}>Box Delivery Tracking</strong>
                 </div>
                 {(selectedDelivery.remaining_boxes ?? 1) > 0 && hasPermission('manage_sales') && (
                   <button
@@ -1427,7 +1507,7 @@ export function DeliveriesPage() {
                       gap: '4px',
                     }}
                   >
-                    <Package size={13} /> Dispatch Split Run
+                    <Package size={13} /> Dispatch Boxes
                   </button>
                 )}
               </div>
@@ -1435,16 +1515,16 @@ export function DeliveriesPage() {
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '10px', textAlign: 'center', marginBottom: '10px' }}>
                 <div style={{ background: '#fff', padding: '10px', borderRadius: '6px', border: '1px solid #e0f2fe' }}>
                   <div style={{ fontSize: '11px', color: '#64748b', fontWeight: 600 }}>Total boxes</div>
-                  <div style={{ fontSize: '20px', fontWeight: 800, color: '#0f172a' }}>📦 {selectedDelivery.total_boxes || 1}</div>
+                  <div style={{ fontSize: '20px', fontWeight: 800, color: '#0f172a' }}>{selectedDelivery.total_boxes || 1}</div>
                 </div>
                 <div style={{ background: '#fff', padding: '10px', borderRadius: '6px', border: '1px solid #e0f2fe' }}>
                   <div style={{ fontSize: '11px', color: '#16a34a', fontWeight: 600 }}>Delivered boxes</div>
-                  <div style={{ fontSize: '20px', fontWeight: 800, color: '#16a34a' }}>📦 {selectedDelivery.delivered_boxes || 0}</div>
+                  <div style={{ fontSize: '20px', fontWeight: 800, color: '#16a34a' }}>{selectedDelivery.delivered_boxes || 0}</div>
                 </div>
                 <div style={{ background: '#fff', padding: '10px', borderRadius: '6px', border: '1px solid #e0f2fe' }}>
                   <div style={{ fontSize: '11px', color: '#b45309', fontWeight: 600 }}>Remaining boxes</div>
                   <div style={{ fontSize: '20px', fontWeight: 800, color: '#b45309' }}>
-                    📦 {selectedDelivery.remaining_boxes ?? Math.max(0, (selectedDelivery.total_boxes || 1) - (selectedDelivery.delivered_boxes || 0))}
+                    {selectedDelivery.remaining_boxes ?? Math.max(0, (selectedDelivery.total_boxes || 1) - (selectedDelivery.delivered_boxes || 0))}
                   </div>
                 </div>
               </div>
@@ -1488,7 +1568,7 @@ export function DeliveriesPage() {
                       <tr key={run.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
                         <td style={{ padding: '6px 10px', fontWeight: 700, color: '#0284c7' }}>#{run.run_number}</td>
                         <td style={{ padding: '6px 10px', color: '#64748b' }}>{new Date(run.run_date).toLocaleString()}</td>
-                        <td style={{ padding: '6px 10px', textAlign: 'center', fontWeight: 700, color: '#16a34a' }}>📦 {run.boxes_delivered}</td>
+                        <td style={{ padding: '6px 10px', textAlign: 'center', fontWeight: 700, color: '#16a34a' }}>{run.boxes_delivered}</td>
                         <td style={{ padding: '6px 10px', color: '#334155' }}>{run.handled_by || '—'}</td>
                         <td style={{ padding: '6px 10px', color: '#64748b' }}>{run.notes || '—'}</td>
                       </tr>
@@ -1524,10 +1604,10 @@ export function DeliveriesPage() {
                           <td style={{ padding: '8px 10px', color: '#64748b' }}>{i.product_sku || '—'}</td>
                           <td style={{ padding: '8px 10px', textAlign: 'center', fontWeight: 600 }}>{i.quantity} units</td>
                           <td style={{ padding: '8px 10px', textAlign: 'center', color: '#0284c7', fontWeight: 600 }}>
-                            📦 {boxCount} {boxCount === 1 ? 'box' : 'boxes'}/unit
+                            {boxCount} {boxCount === 1 ? 'box' : 'boxes'}/unit
                           </td>
                           <td style={{ padding: '8px 10px', textAlign: 'center', fontWeight: 700, color: '#0f172a' }}>
-                            📦 {lineBoxes} boxes
+                            {lineBoxes} boxes
                           </td>
                         </tr>
                       );
@@ -1547,7 +1627,7 @@ export function DeliveriesPage() {
               {selectedDelivery.items && selectedDelivery.items.length > 0 && (
                 <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '12px', marginTop: '10px' }}>
                   <div style={{ fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '6px' }}>
-                    📦 Product Delivery Status:
+                    Product Delivery Status:
                   </div>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '8px', fontSize: '13px' }}>
                     <div><span style={{ color: '#64748b' }}>Product:</span> <strong>{selectedDelivery.items[0]?.product_name}</strong></div>
@@ -1593,107 +1673,124 @@ export function DeliveriesPage() {
       </Modal>
 
       {/* ── SPLIT DELIVERY DISPATCH RUN MODAL ── */}
-      <Modal
-        isOpen={isRunModalOpen}
-        onClose={() => { if (!runSubmitting) setIsRunModalOpen(false); }}
-        title={`Record Split Delivery Run — ${selectedDelivery?.delivery_number}`}
-        size="md"
-      >
-        <form onSubmit={handleRecordRun} style={{ display: 'grid', gap: '14px' }}>
-          <div style={{ background: '#fef3c7', border: '1px solid #fde68a', borderRadius: '8px', padding: '12px', fontSize: '13px', color: '#92400e' }}>
-            <strong>Multi-Box Dispatch Run</strong>
-            <p style={{ margin: '4px 0 0', color: '#78350f' }}>
-              Record partial box delivery for this order. Remaining boxes can be dispatched on a future run.
-            </p>
-          </div>
+      {(() => {
+        const total = Number(selectedDelivery?.total_boxes || 1);
+        const delivered = Number(selectedDelivery?.delivered_boxes || 0);
+        const rem = selectedDelivery?.remaining_boxes ?? Math.max(0, total - delivered);
+        const numBoxes = Number(runForm.boxesDelivered) || 0;
+        const isExceeding = numBoxes > rem;
 
-          {/* Box Calculation Breakdown */}
-          <div style={{ background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: '8px', padding: '12px' }}>
-            <div style={{ fontSize: '13px', fontWeight: 700, color: '#0369a1', marginBottom: '8px' }}>
-              📦 Split Dispatch Box Calculation
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: '8px', textAlign: 'center', fontSize: '12px' }}>
-              <div style={{ background: '#fff', padding: '8px', borderRadius: '6px', border: '1px solid #e0f2fe' }}>
-                <span style={{ color: '#64748b' }}>Total boxes</span>
-                <div style={{ fontSize: '16px', fontWeight: 800, color: '#0f172a' }}>{selectedDelivery?.total_boxes || 1}</div>
+        return (
+          <Modal
+            isOpen={isRunModalOpen}
+            onClose={() => { if (!runSubmitting) setIsRunModalOpen(false); }}
+            title={`Dispatch Boxes — ${selectedDelivery?.delivery_number || ''}`}
+            size="md"
+          >
+            <form onSubmit={handleRecordRun} style={{ display: 'grid', gap: '14px' }}>
+              {/* Box Calculation Breakdown */}
+              <div style={{ background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: '8px', padding: '12px' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: '8px', textAlign: 'center', fontSize: '12px' }}>
+                  <div style={{ background: '#fff', padding: '8px', borderRadius: '6px', border: '1px solid #e0f2fe' }}>
+                    <span style={{ color: '#64748b' }}>Total boxes</span>
+                    <div style={{ fontSize: '16px', fontWeight: 800, color: '#0f172a' }}>{total}</div>
+                  </div>
+                  <div style={{ background: '#fff', padding: '8px', borderRadius: '6px', border: '1px solid #e0f2fe' }}>
+                    <span style={{ color: '#16a34a' }}>Delivered so far</span>
+                    <div style={{ fontSize: '16px', fontWeight: 800, color: '#16a34a' }}>{delivered}</div>
+                  </div>
+                  <div style={{ background: '#fff', padding: '8px', borderRadius: '6px', border: '1px solid #e0f2fe' }}>
+                    <span style={{ color: '#b45309' }}>Remaining boxes</span>
+                    <div style={{ fontSize: '16px', fontWeight: 800, color: '#b45309' }}>{rem}</div>
+                  </div>
+                </div>
+
+                {/* Live calculation preview */}
+                {numBoxes > 0 && (
+                  <div style={{ marginTop: '8px', paddingTop: '8px', borderTop: '1px dashed #bae6fd', fontSize: '12px', display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '4px' }}>
+                    {isExceeding ? (
+                      <span style={{ color: '#dc2626', fontWeight: 600 }}>
+                        Cannot dispatch {numBoxes} boxes. Only {rem} available.
+                      </span>
+                    ) : (
+                      <>
+                        <span style={{ color: '#0369a1' }}>
+                          After this run ({numBoxes} box{numBoxes > 1 ? 'es' : ''}):
+                        </span>
+                        <strong style={{ color: '#0369a1' }}>
+                          Delivered: {delivered + numBoxes} | Remaining: {Math.max(0, rem - numBoxes)}
+                        </strong>
+                      </>
+                    )}
+                  </div>
+                )}
               </div>
-              <div style={{ background: '#fff', padding: '8px', borderRadius: '6px', border: '1px solid #e0f2fe' }}>
-                <span style={{ color: '#16a34a' }}>Delivered so far</span>
-                <div style={{ fontSize: '16px', fontWeight: 800, color: '#16a34a' }}>{selectedDelivery?.delivered_boxes || 0}</div>
-              </div>
-              <div style={{ background: '#fff', padding: '8px', borderRadius: '6px', border: '1px solid #e0f2fe' }}>
-                <span style={{ color: '#b45309' }}>Remaining boxes</span>
-                <div style={{ fontSize: '16px', fontWeight: 800, color: '#b45309' }}>
-                  {selectedDelivery?.remaining_boxes ?? Math.max(0, (selectedDelivery?.total_boxes || 1) - (selectedDelivery?.delivered_boxes || 0))}
+
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '12px' }}>
+                <div style={{ minWidth: 0 }}>
+                  <InputField
+                    label={`Boxes to Dispatch (Max: ${rem})`}
+                    id="runBoxes"
+                    type="number"
+                    min={1}
+                    max={rem}
+                    value={runForm.boxesDelivered}
+                    onChange={(val) => setRunForm((p) => ({ ...p, boxesDelivered: val }))}
+                    onBlur={() => {
+                      if (runForm.boxesDelivered !== '') {
+                        const n = Math.max(1, Math.min(rem, Number(runForm.boxesDelivered) || 1));
+                        setRunForm((p) => ({ ...p, boxesDelivered: n }));
+                      }
+                    }}
+                    required
+                  />
+                </div>
+                <div style={{ minWidth: 0 }}>
+                  <InputField
+                    label="Handled / Driver By"
+                    id="runDriver"
+                    value={runForm.handledBy}
+                    onChange={(val) => setRunForm((p) => ({ ...p, handledBy: val }))}
+                    placeholder="e.g. Mahdi or Warehouse Staff"
+                  />
                 </div>
               </div>
-            </div>
-            {/* Live calculation preview */}
-            {runForm.boxesDelivered > 0 && (
-              <div style={{ marginTop: '8px', paddingTop: '8px', borderTop: '1px dashed #bae6fd', fontSize: '12px', color: '#0284c7', display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '4px' }}>
-                <span>After this run ({runForm.boxesDelivered} boxes):</span>
-                <strong>
-                  Delivered: {(selectedDelivery?.delivered_boxes || 0) + Number(runForm.boxesDelivered)} | Remaining: {Math.max(0, (selectedDelivery?.remaining_boxes ?? 1) - Number(runForm.boxesDelivered))}
-                </strong>
+
+              <TextareaField
+                label="Run Notes"
+                id="runNotes"
+                value={runForm.notes}
+                onChange={(val) => setRunForm((p) => ({ ...p, notes: val }))}
+                rows={2}
+                placeholder="e.g. Dispatched wardrobe base and side panels; mirror remaining for next run"
+              />
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '10px' }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => setIsRunModalOpen(false)}
+                  disabled={runSubmitting}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="btn btn-primary"
+                  disabled={runSubmitting || !runForm.boxesDelivered || numBoxes < 1 || isExceeding}
+                  style={{ background: '#f59e0b', borderColor: '#d97706' }}
+                >
+                  {runSubmitting ? (
+                    <><Loader2 size={14} className="spin-icon" style={{ marginRight: '6px' }} /> Recording Dispatch…</>
+                  ) : (
+                    'Confirm Dispatch'
+                  )}
+                </button>
               </div>
-            )}
-          </div>
-
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '12px' }}>
-            <div style={{ minWidth: 0 }}>
-              <InputField
-                label={`Boxes to Dispatch (Max: ${selectedDelivery?.remaining_boxes ?? 1}) *`}
-                id="runBoxes"
-                type="number"
-                value={String(runForm.boxesDelivered)}
-                onChange={(val) => setRunForm((p) => ({ ...p, boxesDelivered: Math.max(1, parseInt(val, 10) || 1) }))}
-                required
-              />
-            </div>
-            <div style={{ minWidth: 0 }}>
-              <InputField
-                label="Handled / Driver By"
-                id="runDriver"
-                value={runForm.handledBy}
-                onChange={(val) => setRunForm((p) => ({ ...p, handledBy: val }))}
-                placeholder="e.g. Mahdi or Warehouse Staff"
-              />
-            </div>
-          </div>
-
-          <TextareaField
-            label="Run Notes (e.g. which boxes or furniture parts were dispatched)"
-            id="runNotes"
-            value={runForm.notes}
-            onChange={(val) => setRunForm((p) => ({ ...p, notes: val }))}
-            rows={2}
-            placeholder="e.g. Dispatched wardrobe base and side panels; mirror remaining for next run"
-          />
-
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '10px' }}>
-            <button
-              type="button"
-              className="btn btn-secondary"
-              onClick={() => setIsRunModalOpen(false)}
-              disabled={runSubmitting}
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              className="btn btn-primary"
-              disabled={runSubmitting || !runForm.boxesDelivered}
-              style={{ background: '#f59e0b', borderColor: '#d97706' }}
-            >
-              {runSubmitting ? (
-                <><Loader2 size={14} className="spin-icon" style={{ marginRight: '6px' }} /> Recording Dispatch…</>
-              ) : (
-                'Confirm Dispatch Run'
-              )}
-            </button>
-          </div>
-        </form>
-      </Modal>
+            </form>
+          </Modal>
+        );
+      })()}
     </div>
   );
 }

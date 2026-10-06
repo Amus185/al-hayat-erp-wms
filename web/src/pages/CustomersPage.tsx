@@ -1435,13 +1435,6 @@ export function CustomersPage() {
         size="md"
       >
         <form onSubmit={handleSaveDebt}>
-          <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: '8px', padding: '12px', marginBottom: '16px', color: '#92400e', fontSize: '13px' }}>
-            <strong>Non-Inventory Service Charge</strong>
-            <p style={{ margin: '4px 0 0', color: '#78350f' }}>
-              This charge records non-stock customer debts (assembly, custom upholstery, repairs, or historical opening balance) without altering warehouse inventory. Automatically posted to Accounts Receivable (1020).
-            </p>
-          </div>
-
           <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
             <div className="form-field">
               <label className="form-field__label">Target Customer *</label>

@@ -31,10 +31,10 @@ interface Product {
   description?: string;
   category_id: string | null;
   brand_id: string | null;
-  cost_price: number;
-  selling_price: number;
-  reorder_level: number;
-  box_count?: number;
+  cost_price: number | string;
+  selling_price: number | string;
+  reorder_level: number | string;
+  box_count?: number | string;
   is_active: boolean;
   category_name?: string;
   brand_name?: string;
@@ -88,7 +88,19 @@ export function ProductsPage() {
     }
   };
   
-  const [newProduct, setNewProduct] = useState({
+  const [newProduct, setNewProduct] = useState<{
+    sku: string;
+    barcode: string;
+    name: string;
+    description: string;
+    categoryId: string;
+    brandId: string;
+    costPrice: number | string;
+    sellingPrice: number | string;
+    reorderLevel: number | string;
+    boxCount: number | string;
+    totalOpeningStock: number | string;
+  }>({
     sku: '',
     barcode: '',
     name: '',
@@ -324,7 +336,7 @@ export function ProductsPage() {
       if (res?.skipped && res.skipped.length > 0) {
         addToast('warning', `Imported ${res.created || 0} products. ${res.skipped.length} product(s) skipped due to duplicate barcodes/SKUs.`);
       } else {
-        addToast('success', `🎉 Successfully imported ${res?.created || res?.count || bulkRows.length} products!`);
+        addToast('success', `Successfully imported ${res?.created || res?.count || bulkRows.length} products!`);
       }
       setIsBulkModalOpen(false);
       resetBulkUpload();
@@ -360,7 +372,12 @@ export function ProductsPage() {
       addToast('error', 'Product ID, Barcode, and Name are required');
       return;
     }
-    if (newProduct.costPrice > newProduct.sellingPrice) {
+    const costPrice = Number(newProduct.costPrice) || 0;
+    const sellingPrice = Number(newProduct.sellingPrice) || 0;
+    const reorderLevel = Math.max(0, Number(newProduct.reorderLevel) || 0);
+    const boxCount = Math.max(1, Number(newProduct.boxCount) || 1);
+
+    if (costPrice > sellingPrice) {
       addToast('error', 'Cost Price cannot be greater than Selling Price');
       return;
     }
@@ -386,10 +403,10 @@ export function ProductsPage() {
       barcode: newProduct.barcode,
       name: newProduct.name,
       description: newProduct.description,
-      costPrice: newProduct.costPrice,
-      sellingPrice: newProduct.sellingPrice,
-      reorderLevel: newProduct.reorderLevel,
-      boxCount: newProduct.boxCount || 1,
+      costPrice,
+      sellingPrice,
+      reorderLevel,
+      boxCount,
     };
     if (newProduct.categoryId) payload.categoryId = newProduct.categoryId;
     if (newProduct.brandId) payload.brandId = newProduct.brandId;
@@ -466,7 +483,12 @@ export function ProductsPage() {
     e.preventDefault();
     if (!editingProduct || submitting) return;
 
-    if (editingProduct.cost_price > editingProduct.selling_price) {
+    const costPrice = Number(editingProduct.cost_price) || 0;
+    const sellingPrice = Number(editingProduct.selling_price) || 0;
+    const reorderLevel = Math.max(0, Number(editingProduct.reorder_level) || 0);
+    const boxCount = Math.max(1, Number(editingProduct.box_count) || 1);
+
+    if (costPrice > sellingPrice) {
       addToast('error', 'Cost Price cannot be greater than Selling Price');
       return;
     }
@@ -480,10 +502,10 @@ export function ProductsPage() {
         description: editingProduct.description,
         categoryId: editingProduct.category_id || null,
         brandId: editingProduct.brand_id || null,
-        costPrice: editingProduct.cost_price,
-        sellingPrice: editingProduct.selling_price,
-        reorderLevel: editingProduct.reorder_level,
-        boxCount: editingProduct.box_count || 1,
+        costPrice,
+        sellingPrice,
+        reorderLevel,
+        boxCount,
         isActive: editingProduct.is_active !== undefined ? (editingProduct.is_active ? 1 : 0) : 1,
       });
 
@@ -554,7 +576,7 @@ export function ProductsPage() {
             }}
             title={`${count} physical boxes per unit for delivery`}
           >
-            📦 {count} {count === 1 ? 'box' : 'boxes'}
+            {count} {count === 1 ? 'box' : 'boxes'}
           </span>
         );
       },
@@ -793,19 +815,21 @@ export function ProductsPage() {
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '14px', marginTop: '10px' }}>
             <InputField
-              label="Cost Price ($) *"
+              label="Cost Price ($)"
               id="costPrice"
               type="number"
               value={newProduct.costPrice}
-              onChange={(val) => setNewProduct((prev) => ({ ...prev, costPrice: Number(val) }))}
+              onChange={(val) => setNewProduct((prev) => ({ ...prev, costPrice: val }))}
+              onBlur={() => setNewProduct((prev) => ({ ...prev, costPrice: Number(prev.costPrice) || 0 }))}
               required
             />
             <InputField
-              label="Selling Price ($) *"
+              label="Selling Price ($)"
               id="sellingPrice"
               type="number"
               value={newProduct.sellingPrice}
-              onChange={(val) => setNewProduct((prev) => ({ ...prev, sellingPrice: Number(val) }))}
+              onChange={(val) => setNewProduct((prev) => ({ ...prev, sellingPrice: val }))}
+              onBlur={() => setNewProduct((prev) => ({ ...prev, sellingPrice: Number(prev.sellingPrice) || 0 }))}
               required
             />
           </div>
@@ -813,24 +837,23 @@ export function ProductsPage() {
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '14px', marginTop: '10px' }}>
             <div>
               <InputField
-                label="Delivery Box Count (Boxes per Unit) *"
+                label="Delivery Box Count (Boxes per Unit)"
                 id="boxCount"
                 type="number"
-                value={String(newProduct.boxCount || 1)}
-                onChange={(val) => setNewProduct((prev) => ({ ...prev, boxCount: Math.max(1, parseInt(val, 10) || 1) }))}
+                value={newProduct.boxCount}
+                onChange={(val) => setNewProduct((prev) => ({ ...prev, boxCount: val }))}
+                onBlur={() => setNewProduct((prev) => ({ ...prev, boxCount: Math.max(1, Number(prev.boxCount) || 1) }))}
                 required
               />
-              <div style={{ fontSize: '11px', color: '#64748b', marginTop: '3px' }}>
-                📦 Number of physical boxes for shipping 1 unit (e.g. Bed = 8 boxes). Used for split delivery logistics without changing inventory stock or price.
-              </div>
             </div>
             <div>
               <InputField
-                label="Reorder Alert Level *"
+                label="Reorder Alert Level"
                 id="reorderLevel"
                 type="number"
-                value={String(newProduct.reorderLevel || 5)}
-                onChange={(val) => setNewProduct((prev) => ({ ...prev, reorderLevel: Math.max(0, parseInt(val, 10) || 0) }))}
+                value={newProduct.reorderLevel}
+                onChange={(val) => setNewProduct((prev) => ({ ...prev, reorderLevel: val }))}
+                onBlur={() => setNewProduct((prev) => ({ ...prev, reorderLevel: Math.max(0, Number(prev.reorderLevel) || 0) }))}
                 required
               />
             </div>
@@ -1095,21 +1118,43 @@ export function ProductsPage() {
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '14px', marginTop: '10px' }}>
-              <InputField type="number" label="Cost Price ($) *" id="editCost" value={editingProduct.cost_price.toString()} onChange={(val) => setEditingProduct({ ...editingProduct, cost_price: parseFloat(val) || 0 })} required />
-              <InputField type="number" label="Selling Price ($) *" id="editSell" value={editingProduct.selling_price.toString()} onChange={(val) => setEditingProduct({ ...editingProduct, selling_price: parseFloat(val) || 0 })} required />
-              <InputField type="number" label="Reorder Level *" id="editReorder" value={editingProduct.reorder_level.toString()} onChange={(val) => setEditingProduct({ ...editingProduct, reorder_level: parseInt(val, 10) || 0 })} required />
+              <InputField
+                type="number"
+                label="Cost Price ($)"
+                id="editCost"
+                value={editingProduct.cost_price}
+                onChange={(val) => setEditingProduct({ ...editingProduct, cost_price: val })}
+                onBlur={() => setEditingProduct(p => p ? { ...p, cost_price: Number(p.cost_price) || 0 } : null)}
+                required
+              />
+              <InputField
+                type="number"
+                label="Selling Price ($)"
+                id="editSell"
+                value={editingProduct.selling_price}
+                onChange={(val) => setEditingProduct({ ...editingProduct, selling_price: val })}
+                onBlur={() => setEditingProduct(p => p ? { ...p, selling_price: Number(p.selling_price) || 0 } : null)}
+                required
+              />
+              <InputField
+                type="number"
+                label="Reorder Level"
+                id="editReorder"
+                value={editingProduct.reorder_level}
+                onChange={(val) => setEditingProduct({ ...editingProduct, reorder_level: val })}
+                onBlur={() => setEditingProduct(p => p ? { ...p, reorder_level: Math.max(0, Number(p.reorder_level) || 0) } : null)}
+                required
+              />
               <div>
                 <InputField
                   type="number"
-                  label="Box Count (Per Unit) *"
+                  label="Box Count (Per Unit)"
                   id="editBoxCount"
-                  value={String(editingProduct.box_count || 1)}
-                  onChange={(val) => setEditingProduct({ ...editingProduct, box_count: Math.max(1, parseInt(val, 10) || 1) })}
+                  value={editingProduct.box_count ?? 1}
+                  onChange={(val) => setEditingProduct({ ...editingProduct, box_count: val })}
+                  onBlur={() => setEditingProduct(p => p ? { ...p, box_count: Math.max(1, Number(p.box_count) || 1) } : null)}
                   required
                 />
-                <div style={{ fontSize: '11px', color: '#64748b', marginTop: '2px' }}>
-                  📦 Boxes per unit
-                </div>
               </div>
             </div>
 
@@ -1195,7 +1240,7 @@ export function ProductsPage() {
             {bulkFileName && (
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', marginTop: '10px' }}>
                 <span style={{ fontSize: '12px', fontWeight: 600, color: '#066006', background: '#f0fdf4', border: '1px solid #bbf7d0', padding: '4px 10px', borderRadius: '6px', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
-                  📄 {bulkFileName}
+                  <FileSpreadsheet size={14} /> {bulkFileName}
                   <button
                     type="button"
                     onClick={resetBulkUpload}

@@ -528,7 +528,7 @@ export function ManufacturingPage() {
           <div style={{ fontWeight: 700, color: '#0f172a' }}>{row.product_name}</div>
           <div style={{ fontSize: '11px', color: '#64748b' }}>SKU: {row.product_sku}</div>
           <div style={{ fontSize: '11px', color: '#0369a1', display: 'flex', alignItems: 'center', gap: '3px' }}>
-            🏭 Facility: {row.warehouse_name}
+            Facility: {row.warehouse_name}
           </div>
         </div>
       ),
@@ -671,7 +671,7 @@ export function ManufacturingPage() {
       label: 'Components',
       render: (row) => (
         <span style={{ fontSize: '13px', fontWeight: 600, color: '#0369a1' }}>
-          🧩 {row.components_count} raw materials
+          {row.components_count} raw materials
         </span>
       ),
     },
@@ -799,7 +799,7 @@ export function ManufacturingPage() {
               boxShadow: topTab === 'WORK_ORDERS' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
             }}
           >
-            🔨 Production Work Orders ({workOrders.length})
+            Production Work Orders ({workOrders.length})
           </button>
           <button
             type="button"
@@ -816,7 +816,7 @@ export function ManufacturingPage() {
               boxShadow: topTab === 'BOM' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
             }}
           >
-            🧩 Bill of Materials / Recipes ({boms.length})
+            Bill of Materials / Recipes ({boms.length})
           </button>
         </div>
 
@@ -893,7 +893,7 @@ export function ManufacturingPage() {
                 gap: '6px',
               }}
             >
-              <Sparkles size={15} /> ✨ Create New Manufactured Item from Scratch
+              <Plus size={15} /> Create New Product
             </button>
             <button
               type="button"
@@ -915,14 +915,14 @@ export function ManufacturingPage() {
                 gap: '6px',
               }}
             >
-              <Package size={15} /> 🔗 Link to Existing Catalog Product
+              <Package size={15} /> Link to Existing Product
             </button>
           </div>
 
           {woMode === 'NEW_ITEM' ? (
             <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '10px', padding: '14px', display: 'grid', gap: '12px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#066006', fontWeight: 700, fontSize: '13px' }}>
-                <Sparkles size={15} /> New Manufactured Item Specifications
+                <Package size={15} /> New Product Specifications
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '12px' }}>
                 <InputField
@@ -1129,7 +1129,7 @@ export function ManufacturingPage() {
                 gap: '6px',
               }}
             >
-              <Sparkles size={15} /> ✨ Define New Manufactured Item from Scratch
+              <Plus size={15} /> Define New Product
             </button>
             <button
               type="button"
@@ -1151,7 +1151,7 @@ export function ManufacturingPage() {
                 gap: '6px',
               }}
             >
-              <Package size={15} /> 🔗 Link to Existing Product
+              <Package size={15} /> Link to Existing Product
             </button>
           </div>
 
@@ -1167,7 +1167,7 @@ export function ManufacturingPage() {
           {bomMode === 'NEW_ITEM' ? (
             <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '10px', padding: '14px', display: 'grid', gap: '12px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#066006', fontWeight: 700, fontSize: '13px' }}>
-                <Sparkles size={15} /> Manufactured Item Output
+                <Package size={15} /> Manufactured Item Output
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '12px' }}>
                 <InputField
@@ -1410,7 +1410,7 @@ export function ManufacturingPage() {
                 <span style={{ fontSize: '12px', color: '#64748b' }}>Finished Good</span>
                 <div style={{ fontWeight: 800, fontSize: '16px', color: '#0f172a' }}>{selectedWo.product_name}</div>
                 <div style={{ fontSize: '12px', color: '#475569' }}>SKU: {selectedWo.product_sku}</div>
-                <div style={{ fontSize: '12px', color: '#0369a1', marginTop: '2px' }}>🏭 Facility: {selectedWo.warehouse_name}</div>
+                <div style={{ fontSize: '12px', color: '#0369a1', marginTop: '2px' }}>Facility: {selectedWo.warehouse_name}</div>
               </div>
               <div>
                 <span style={{ fontSize: '12px', color: '#64748b' }}>Run Status & Units</span>

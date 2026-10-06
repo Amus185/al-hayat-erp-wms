@@ -9,10 +9,11 @@ interface FormFieldProps {
 }
 
 export function FormField({ label, htmlFor, error, required, children }: FormFieldProps) {
+  const cleanLabel = (label || '').trim().replace(/\s*\*+$/, '');
   return (
     <div className={`form-field ${error ? 'form-field--error' : ''}`}>
       <label className="form-field__label" htmlFor={htmlFor}>
-        {label}
+        {cleanLabel}
         {required && <span className="form-field__required">*</span>}
       </label>
       {children}
@@ -33,7 +34,10 @@ interface InputFieldProps {
   placeholder?: string;
   disabled?: boolean;
   min?: number;
+  max?: number;
   step?: number;
+  onFocus?: (e: React.FocusEvent<HTMLInputElement>) => void;
+  onBlur?: (e: React.FocusEvent<HTMLInputElement>) => void;
 }
 
 export function InputField({
@@ -47,7 +51,10 @@ export function InputField({
   placeholder,
   disabled,
   min,
+  max,
   step,
+  onFocus,
+  onBlur,
 }: InputFieldProps) {
   return (
     <FormField label={label} htmlFor={id} error={error} required={required}>
@@ -66,11 +73,19 @@ export function InputField({
             }
           }
         }}
+        onFocus={(e) => {
+          if (type === 'number') {
+            e.target.select();
+          }
+          onFocus?.(e);
+        }}
+        onBlur={onBlur}
         className="form-input"
         placeholder={placeholder}
         disabled={disabled}
         required={required}
         min={min}
+        max={max}
         step={step}
       />
     </FormField>

@@ -905,7 +905,7 @@ export function SalesPage() {
                         cursor: 'pointer'
                       }}
                     >
-                      {actionProcessing === 'payout' ? <><Loader2 size={12} className="spin-icon" /> Processing…</> : <>💸 Disburse to Technician</>}
+                      {actionProcessing === 'payout' ? <><Loader2 size={12} className="spin-icon" /> Processing…</> : <><DollarSign size={13} /> Disburse to Technician</>}
                     </button>
                   )}
                 </div>
