@@ -2,12 +2,13 @@ import { Hono } from 'hono';
 import { sign, verify } from 'hono/jwt';
 import * as bcrypt from 'bcryptjs';
 import { Env, uuidv4 } from '../db';
+import { PgAdapter } from '../pg-client';
 import { invalidateUserCache } from '../middleware/auth';
 
 const auth = new Hono<{ Bindings: Env }>();
 
 // ── Helper: build the full user payload for token signing ────────────────────
-async function buildUserPayload(db: D1Database, userId: string) {
+async function buildUserPayload(db: PgAdapter, userId: string) {
   const user = await db.prepare(`
     SELECT u.id, u.email, u.full_name, u.branch_id,
            (SELECT r.code FROM roles r JOIN user_roles ur ON ur.role_id = r.id WHERE ur.user_id = u.id LIMIT 1) as role_code,
@@ -126,7 +127,7 @@ auth.post('/refresh', async (c) => {
     `DELETE FROM refresh_tokens 
      WHERE user_id = ? AND token_hash = ? AND expires_at > CURRENT_TIMESTAMP
      RETURNING id`
-  ).bind(decoded.sub, tokenHash).run();
+  ).bind(decoded.sub, tokenHash).all();
 
   if (!result.results || result.results.length === 0) {
     await c.env.DB.prepare('DELETE FROM refresh_tokens WHERE user_id = ?').bind(decoded.sub).run();

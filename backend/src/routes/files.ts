@@ -28,7 +28,7 @@ files.post('/', async (c) => {
     httpMetadata: { contentType: file.type }
   });
 
-  // Save metadata to D1
+  // Save file metadata to database
   await c.env.DB.prepare(`
     INSERT INTO files (id, file_name, file_size, mime_type, object_key, uploaded_by)
     VALUES (?, ?, ?, ?, ?, ?)

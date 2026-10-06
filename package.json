@@ -14,7 +14,9 @@
     "build:backend": "npm --workspace backend run build",
     "build:web": "npm --workspace web run build",
     "build": "npm --workspace backend run build && npm --workspace web run build",
-    "deploy:web": "npm --workspace web run deploy"
+    "deploy:web": "npm --workspace web run deploy",
+    "db:init": "npm --workspace backend run db:init",
+    "db:wipe": "npm --workspace backend run db:wipe"
   }
 }
 

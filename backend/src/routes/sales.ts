@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { Env, uuidv4 } from '../db';
+import { PgAdapter } from '../pg-client';
 import { authMiddleware, requirePermissions, isAdminUser } from '../middleware/auth';
 import { logAudit, createAuditLogStmt } from '../services/audit';
 import {
@@ -22,7 +23,7 @@ sales.use('/*', authMiddleware);
 // Returns: { amount_paid, balance, payment_status }
 // Never stored — always calculated from invoice_payments rows
 // ──────────────────────────────────────────────────────────────────────
-async function getInvoicePaymentSummary(db: D1Database, invoiceId: string, totalAmount: number, discountAmount: number) {
+async function getInvoicePaymentSummary(db: PgAdapter, invoiceId: string, totalAmount: number, discountAmount: number) {
   const res = await db.prepare(
     'SELECT COALESCE(SUM(amount), 0) AS amount_paid FROM invoice_payments WHERE invoice_id = ?'
   ).bind(invoiceId).first();

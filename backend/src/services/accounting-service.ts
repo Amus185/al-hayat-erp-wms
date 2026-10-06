@@ -277,7 +277,7 @@ export async function createAndPostJournalEntry(
         glBalanceMap.set(row.account_id as string, Number(row.running_balance || 0));
       }
     } else {
-      // D1 fallback — simple per-account subquery
+      // Fallback — per-account query
       for (const accountId of accountIds) {
         const row = await db.prepare(
           `SELECT running_balance FROM general_ledger WHERE account_id = ? ORDER BY created_at DESC LIMIT 1`

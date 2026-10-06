@@ -40,7 +40,7 @@ app.get('/', (c) => c.json({
 
 app.get('/api/v1/health', (c) => c.json({
   status: 'ok',
-  dbEngine: globalPgAdapter ? 'postgres' : 'd1',
+  dbEngine: 'postgres',
   timestamp: new Date().toISOString()
 }));
 

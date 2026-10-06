@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { Env, uuidv4 } from '../db';
+import { PgAdapter } from '../pg-client';
 import { authMiddleware, requirePermissions } from '../middleware/auth';
 import { logAudit, createAuditLogStmt } from '../services/audit';
 import { postPurchaseApprovalJournalEntry, postPurchasePaymentJournalEntry } from '../services/accounting-service';
@@ -13,7 +14,7 @@ purchasing.use('/*', authMiddleware);
 // Returns: { amount_paid, net_total, balance, payment_status }
 // ──────────────────────────────────────────────────────────────────────
 async function getPurchaseInvoicePaymentSummary(
-  db: D1Database,
+  db: PgAdapter,
   purchaseInvoiceId: string,
   totalAmount: number,
   discountAmount: number

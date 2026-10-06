@@ -2,8 +2,8 @@ import { Pool } from 'pg';
 import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 
-// Auth & Structural Reference Backup Data from D1 (Step 0 Backup Snapshot)
-export const D1_AUTH_BACKUP = {
+// Auth & Structural Reference Seed Data
+export const DEFAULT_AUTH_SEED = {
   branches: [
     { id: 'branch-hq-main', code: 'BR-HQ', name: 'Al Hayat HQ Showroom', city: 'Hargeisa', address: '26 June District, Main Street', phone: '+252 63 4440001', is_active: 1 },
     { id: 'branch-cl-show', code: 'BR-CL', name: 'Al Hayat CL Branch', city: 'Hargeisa', address: 'Bada Cas Area, Near Market', phone: '+252 63 4440002', is_active: 1 }
@@ -542,11 +542,11 @@ export async function ensurePostgresInit(pool: Pool) {
     `);
 
 
-    // 2. Populate auth & permissions data from D1 Backup
+    // 2. Populate auth & permissions data
     //    ORDER MATTERS: branches/warehouses must exist before users (FK constraint)
 
     // 2a. Branches first
-    for (const row of D1_AUTH_BACKUP.branches) {
+    for (const row of DEFAULT_AUTH_SEED.branches) {
       await client.query(
         `INSERT INTO branches (id, code, name, city, address, phone, is_active)
          VALUES ($1,$2,$3,$4,$5,$6,$7)
@@ -556,7 +556,7 @@ export async function ensurePostgresInit(pool: Pool) {
     }
 
     // 2b. Warehouses
-    for (const row of D1_AUTH_BACKUP.warehouses) {
+    for (const row of DEFAULT_AUTH_SEED.warehouses) {
       await client.query(
         `INSERT INTO warehouses (id, code, name, city, address, phone, is_active)
          VALUES ($1,$2,$3,$4,$5,$6,$7)
@@ -566,7 +566,7 @@ export async function ensurePostgresInit(pool: Pool) {
     }
 
     // 2c. Permissions
-    for (const row of D1_AUTH_BACKUP.permissions) {
+    for (const row of DEFAULT_AUTH_SEED.permissions) {
       await client.query(
         `INSERT INTO permissions (id, code, description) VALUES ($1,$2,$3) ON CONFLICT (id) DO NOTHING`,
         [row.id, row.code, row.description]
@@ -574,7 +574,7 @@ export async function ensurePostgresInit(pool: Pool) {
     }
 
     // 2d. Roles
-    for (const row of D1_AUTH_BACKUP.roles) {
+    for (const row of DEFAULT_AUTH_SEED.roles) {
       await client.query(
         `INSERT INTO roles (id, code, name, description) VALUES ($1,$2,$3,$4) ON CONFLICT (id) DO NOTHING`,
         [row.id, row.code, row.name, row.description]
@@ -582,7 +582,7 @@ export async function ensurePostgresInit(pool: Pool) {
     }
 
     // 2e. Role permissions
-    for (const row of D1_AUTH_BACKUP.role_permissions) {
+    for (const row of DEFAULT_AUTH_SEED.role_permissions) {
       await client.query(
         `INSERT INTO role_permissions (role_id, permission_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`,
         [row.role_id, row.permission_id]
@@ -590,7 +590,7 @@ export async function ensurePostgresInit(pool: Pool) {
     }
 
     // 2f. Users — insert with null branch_id first to avoid FK issues, then update hash
-    for (const row of D1_AUTH_BACKUP.users) {
+    for (const row of DEFAULT_AUTH_SEED.users) {
       // Validate branch_id exists before using it
       let safeBranchId = row.branch_id;
       if (safeBranchId) {
@@ -609,7 +609,7 @@ export async function ensurePostgresInit(pool: Pool) {
     }
 
     // 2g. User roles
-    for (const row of D1_AUTH_BACKUP.user_roles) {
+    for (const row of DEFAULT_AUTH_SEED.user_roles) {
       await client.query(
         `INSERT INTO user_roles (user_id, role_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`,
         [row.user_id, row.role_id]
