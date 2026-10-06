@@ -832,13 +832,18 @@ sales.get('/orders', async (c) => {
   // Compute payment_status and balance for each row that has an invoice
   const enriched = (results || []).map((row: any) => {
     const installFee = Number(row.installation_fee || 0);
-    // If delivery is completed, mark order status as DELIVERED
-    const effectiveStatus = row.delivery_status === 'DELIVERED' ? 'DELIVERED' : row.status;
+    const isPickup = (row.fulfillment_type || 'DELIVERY').toUpperCase() === 'PICKUP';
+    const computedDeliveryStatus = isPickup ? (row.status === 'DRAFT' ? null : 'DELIVERED') : row.delivery_status;
+    const effectiveStatus = isPickup
+      ? (row.status === 'DRAFT' ? 'DRAFT' : 'DELIVERED')
+      : (row.delivery_status === 'DELIVERED' ? 'DELIVERED' : row.status);
 
     if (!row.invoice_id) {
       return {
         ...row,
         status: effectiveStatus,
+        delivery_status: computedDeliveryStatus,
+        fulfillment_type: row.fulfillment_type || 'DELIVERY',
         installation_fee: installFee,
         installer_name: row.installer_name || null,
         installation_status: row.installation_status || 'NONE',
@@ -856,6 +861,8 @@ sales.get('/orders', async (c) => {
     return {
       ...row,
       status: effectiveStatus,
+      delivery_status: computedDeliveryStatus,
+      fulfillment_type: row.fulfillment_type || 'DELIVERY',
       installation_fee: installFee,
       installer_name: row.installer_name || null,
       installation_status: row.installation_status || 'NONE',
@@ -899,7 +906,7 @@ sales.get('/orders/:id', async (c) => {
   }
 
   const { results: lines } = await c.env.DB.prepare(`
-    SELECT sol.*, p.name AS product_name, p.sku AS product_sku, COALESCE(p.product_type, 'STANDARD') AS product_type
+    SELECT sol.*, COALESCE(sol.fulfillment_type, 'DELIVERY') AS fulfillment_type, p.name AS product_name, p.sku AS product_sku, COALESCE(p.product_type, 'STANDARD') AS product_type
     FROM sales_order_lines sol
     LEFT JOIN products p ON p.id = sol.product_id
     WHERE sol.sales_order_id = ?
@@ -937,13 +944,17 @@ sales.get('/orders/:id', async (c) => {
   `).bind(id).all();
   const deliveriesList = dels || [];
   const activeDelivery: any = deliveriesList.find((d: any) => d.status !== 'CANCELLED');
-  const deliveryStatus = activeDelivery ? activeDelivery.status : null;
-  const effectiveStatus = deliveryStatus === 'DELIVERED' ? 'DELIVERED' : order.status;
+  const isPickup = ((order as any).fulfillment_type || 'DELIVERY').toUpperCase() === 'PICKUP';
+  const deliveryStatus = isPickup ? (order.status === 'DRAFT' ? null : 'DELIVERED') : (activeDelivery ? activeDelivery.status : null);
+  const effectiveStatus = isPickup
+    ? (order.status === 'DRAFT' ? 'DRAFT' : 'DELIVERED')
+    : (deliveryStatus === 'DELIVERED' ? 'DELIVERED' : order.status);
 
   return c.json({
     ...order,
     status: effectiveStatus,
     delivery_status: deliveryStatus,
+    fulfillment_type: order.fulfillment_type || 'DELIVERY',
     delivery_id: activeDelivery?.id || null,
     delivery_number: activeDelivery?.delivery_number || null,
     delivered_at: activeDelivery?.delivered_at || null,
@@ -1084,9 +1095,10 @@ sales.post('/orders', requirePermissions(['manage_sales']), async (c) => {
   const initialDeposit = Math.max(0, Number(body.initialDeposit || 0));
   const depositMethod = body.depositPaymentMethod || 'CASH';
 
+  let invReqs: Array<{ productId: string; quantity: number; productName: string }> = [];
   // If credit sale, do immediate stock check so inventory can be deducted at creation
   if (isCreditSale) {
-    const invReqs = await resolveLinesToInventoryRequirements(c.env.DB, body.lines);
+    invReqs = await resolveLinesToInventoryRequirements(c.env.DB, body.lines);
     if (invReqs.length > 0) {
       const reqProductIds = invReqs.map((r) => r.productId);
       const placeholders = reqProductIds.map(() => '?').join(', ');
@@ -1122,18 +1134,19 @@ sales.post('/orders', requirePermissions(['manage_sales']), async (c) => {
   const installerNotes = body.installerNotes ? String(body.installerNotes).trim() : null;
   const installStatus = installFee > 0 ? 'PENDING' : 'NONE';
   const orderStatus = isCreditSale ? 'CONFIRMED' : 'DRAFT';
+  const fulfillmentType = (body.fulfillmentType || body.fulfillment_type || 'DELIVERY').toUpperCase() === 'PICKUP' ? 'PICKUP' : 'DELIVERY';
 
   const stmts = [];
   stmts.push(c.env.DB.prepare(`
     INSERT INTO sales_orders (
       id, order_number, customer_id, branch_id, status, created_by,
       installation_fee, installer_name, installation_status, installer_notes,
-      is_credit_sale, initial_deposit
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      is_credit_sale, initial_deposit, fulfillment_type
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).bind(
     id, orderNumber, body.customerId || null, body.branchId, orderStatus, userId,
     installFee, installerName, installStatus, installerNotes,
-    isCreditSale ? 1 : 0, initialDeposit
+    isCreditSale ? 1 : 0, initialDeposit, fulfillmentType
   ));
 
   let subtotal = 0;
@@ -1144,10 +1157,11 @@ sales.post('/orders', requirePermissions(['manage_sales']), async (c) => {
     const lineTotal = (line.quantity * line.unitPrice) - discountAmount;
     subtotal += (line.quantity * line.unitPrice);
     totalDiscount += discountAmount;
+    const lineFulfillmentType = (line.fulfillmentType || line.fulfillment_type || fulfillmentType).toUpperCase() === 'PICKUP' ? 'PICKUP' : 'DELIVERY';
 
     stmts.push(c.env.DB.prepare(`
-      INSERT INTO sales_order_lines (id, sales_order_id, product_id, quantity, unit_price, discount_amount, line_total) VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).bind(uuidv4(), id, line.productId, line.quantity, line.unitPrice, discountAmount, lineTotal));
+      INSERT INTO sales_order_lines (id, sales_order_id, product_id, quantity, unit_price, discount_amount, line_total, fulfillment_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(uuidv4(), id, line.productId, line.quantity, line.unitPrice, discountAmount, lineTotal, lineFulfillmentType));
   }
 
   const netTotal = subtotal - totalDiscount;
@@ -1159,17 +1173,17 @@ sales.post('/orders', requirePermissions(['manage_sales']), async (c) => {
   let receiptNumber: string | null = null;
 
   if (isCreditSale) {
-    // 1. Deduct inventory immediately from physical stock
-    for (const line of body.lines) {
+    // 1. Deduct inventory immediately from physical stock (resolving components for grouped items)
+    for (const req of invReqs) {
       stmts.push(c.env.DB.prepare(`
         UPDATE inventory_stock SET quantity_on_hand = quantity_on_hand - ?, updated_at = CURRENT_TIMESTAMP
         WHERE product_id = ? AND owner_type = 'BRANCH' AND branch_id = ?
-      `).bind(line.quantity, line.productId, body.branchId));
+      `).bind(req.quantity, req.productId, body.branchId));
 
       stmts.push(c.env.DB.prepare(`
         INSERT INTO inventory_transactions (id, product_id, transaction_type, quantity, source_owner_type, source_branch_id, reference_type, reference_id, created_by)
         VALUES (?, ?, 'SALE_ISSUE', ?, 'BRANCH', ?, 'INVOICE', ?, ?)
-      `).bind(uuidv4(), line.productId, -line.quantity, body.branchId, invoiceId, userId));
+      `).bind(uuidv4(), req.productId, -req.quantity, body.branchId, invoiceId, userId));
     }
 
     // 2. Create invoice
@@ -1620,44 +1634,37 @@ sales.post('/orders/:id/complete', requirePermissions(['manage_sales']), async (
       return c.json({ message: 'Order has no line items.' }, 400);
     }
 
-    // Pre-flight stock check — single query for all products instead of N+1 individual lookups
-    const productIds = lines.map((l: any) => l.product_id as string);
-    const placeholders = productIds.map(() => '?').join(', ');
+    // Pre-flight stock check — resolve lines (including grouped/bundled components) and check branch stock
+    const invReqs = await resolveLinesToInventoryRequirements(c.env.DB, lines);
+    const reqProductIds = Array.from(new Set(invReqs.map((r) => r.productId)));
+    const placeholders = reqProductIds.map(() => '?').join(', ');
 
     const tStock0 = Date.now();
-    const { results: stockRows } = await c.env.DB.prepare(`
-      SELECT s.product_id, s.quantity_on_hand, p.name AS product_name
-      FROM inventory_stock s
-      JOIN products p ON p.id = s.product_id
-      WHERE s.product_id IN (${placeholders}) AND s.owner_type = 'BRANCH' AND s.branch_id = ?
-    `).bind(...productIds, branchId).all();
-    console.log(`[WATERFALL] +${Date.now() - reqStart}ms | Consolidated stock check query completed (${Date.now() - tStock0}ms)`);
-
     const stockLookup = new Map<string, { qtyOnHand: number; name: string }>();
-    for (const row of (stockRows || []) as any[]) {
-      stockLookup.set(row.product_id, {
-        qtyOnHand: Number(row.quantity_on_hand) || 0,
-        name: row.product_name || row.product_id,
-      });
-    }
+    if (reqProductIds.length > 0) {
+      const { results: stockRows } = await c.env.DB.prepare(`
+        SELECT s.product_id, s.quantity_on_hand, p.name AS product_name
+        FROM inventory_stock s
+        JOIN products p ON p.id = s.product_id
+        WHERE s.product_id IN (${placeholders}) AND s.owner_type = 'BRANCH' AND s.branch_id = ?
+      `).bind(...reqProductIds, branchId).all();
+      console.log(`[WATERFALL] +${Date.now() - reqStart}ms | Consolidated stock check query completed (${Date.now() - tStock0}ms)`);
 
-    const insufficientLines: string[] = [];
-    for (const line of lines) {
-      const pid = line.product_id as string;
-      const info = stockLookup.get(pid);
-      const available = info?.qtyOnHand || 0;
-      const requested = line.quantity as number;
-
-      if (available < requested) {
-        insufficientLines.push(`${info?.name || pid}: need ${requested}, available ${available}`);
+      for (const row of (stockRows || []) as any[]) {
+        stockLookup.set(row.product_id, {
+          qtyOnHand: Number(row.quantity_on_hand) || 0,
+          name: row.product_name || row.product_id,
+        });
       }
     }
 
-    if (insufficientLines.length > 0) {
-      const failedPids = lines
-        .filter((l: any) => (stockLookup.get(l.product_id as string)?.qtyOnHand || 0) < Number(l.quantity))
-        .map((l: any) => l.product_id as string);
+    const insufficientReqs = invReqs.filter((req) => {
+      const available = stockLookup.get(req.productId)?.qtyOnHand || 0;
+      return available < req.quantity;
+    });
 
+    if (insufficientReqs.length > 0) {
+      const failedPids = Array.from(new Set(insufficientReqs.map((r) => r.productId)));
       const altHolders = failedPids.map(() => '?').join(', ');
       const { results: altStocks } = await c.env.DB.prepare(`
         SELECT s.product_id, s.quantity_on_hand, COALESCE(w.name, b.name, 'Other Location') AS location_name
@@ -1674,18 +1681,15 @@ sales.post('/orders/:id/complete', requirePermissions(['manage_sales']), async (
         altLocationMap.set(alt.product_id, list);
       }
 
-      const detailedLines = lines
-        .filter((l: any) => (stockLookup.get(l.product_id as string)?.qtyOnHand || 0) < Number(l.quantity))
-        .map((l: any) => {
-          const pid = l.product_id as string;
-          const info = stockLookup.get(pid);
-          const name = info?.name || pid;
-          const available = info?.qtyOnHand || 0;
-          const requested = Number(l.quantity);
-          const alts = altLocationMap.get(pid);
-          const altHint = alts && alts.length > 0 ? ` (Found in other locations: ${alts.join(', ')})` : ' (Out of stock company-wide)';
-          return `${name}: need ${requested}, available ${available} at this branch${altHint}`;
-        });
+      const detailedLines = insufficientReqs.map((req) => {
+        const info = stockLookup.get(req.productId);
+        const name = req.productName || info?.name || req.productId;
+        const available = info?.qtyOnHand || 0;
+        const requested = req.quantity;
+        const alts = altLocationMap.get(req.productId);
+        const altHint = alts && alts.length > 0 ? ` (Found in other locations: ${alts.join(', ')})` : ' (Out of stock company-wide)';
+        return `${name}: need ${requested}, available ${available} at this branch${altHint}`;
+      });
 
       await c.env.DB.prepare("UPDATE sales_orders SET status = ? WHERE id = ?").bind(validSource, orderId).run();
       return c.json({ message: 'Insufficient stock for this sale.', details: detailedLines }, 400);
@@ -1746,7 +1750,6 @@ sales.post('/orders/:id/complete', requirePermissions(['manage_sales']), async (
     `).bind(invoiceId, orderId));
 
     // Deduct inventory
-    const invReqs = await resolveLinesToInventoryRequirements(c.env.DB, lines);
     for (const req of invReqs) {
       const qty = req.quantity;
       stmts.push(c.env.DB.prepare(`

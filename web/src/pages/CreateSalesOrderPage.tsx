@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ShoppingCart, ArrowLeft, Plus, Trash2, Loader2, Wrench, Info, ShieldCheck, AlertTriangle } from 'lucide-react';
+import {
+  ShoppingCart, ArrowLeft, Plus, Trash2, Loader2, Wrench, Info,
+  AlertTriangle, CreditCard, DollarSign, Store, Truck, Package
+} from 'lucide-react';
 import { apiGet, apiPost } from '../api/client';
 import { FormField, InputField, TextareaField } from '../components/FormField';
-import { SearchInput } from '../components/SearchInput';
 import { SearchableSelect } from '../components/SearchableSelect';
 import { ProductItemSelect, type SelectableProduct } from '../components/ProductItemSelect';
 import { Modal } from '../components/Modal';
@@ -12,11 +14,27 @@ import { useToast } from '../contexts/ToastContext';
 interface Customer {
   id: string;
   name: string;
+  phone?: string | null;
+  outstanding_balance?: number;
 }
 
 interface Branch {
   id: string;
   name: string;
+}
+
+interface ProductPriceTier {
+  id?: string;
+  tier_name: string;
+  price: number;
+}
+
+interface ProductGroupItem {
+  id?: string;
+  component_product_id: string;
+  quantity: number;
+  component_name?: string;
+  component_sku?: string;
 }
 
 interface ProductLine {
@@ -25,6 +43,9 @@ interface ProductLine {
   barcode: string;
   name: string;
   sellingPrice: number;
+  productType?: 'STANDARD' | 'GROUPED';
+  priceTiers?: ProductPriceTier[];
+  groupItems?: ProductGroupItem[];
 }
 
 interface StockRecord {
@@ -67,7 +88,15 @@ export function CreateSalesOrderPage() {
   const [branchId, setBranchId] = useState('');
   const [notes, setNotes] = useState('');
 
-  // Service Installation Fee states (Technician pass-through)
+  // Fulfillment Mode: ON HAND / PICKUP vs REQUIRES DELIVERY
+  const [fulfillmentType, setFulfillmentType] = useState<'DELIVERY' | 'PICKUP'>('DELIVERY');
+
+  // Sale Type: CASH_SALE vs DEBT_SALE
+  const [saleType, setSaleType] = useState<'CASH' | 'DEBT'>('CASH');
+  const [initialDeposit, setInitialDeposit] = useState<number>(0);
+  const [depositPaymentMethod, setDepositPaymentMethod] = useState<'CASH' | 'CARD' | 'BANK_TRANSFER'>('CASH');
+
+  // Service Installation Fee states
   const [hasInstallationFee, setHasInstallationFee] = useState(false);
   const [installationFee, setInstallationFee] = useState<number>(40);
   const [installerName, setInstallerName] = useState('');
@@ -82,6 +111,62 @@ export function CreateSalesOrderPage() {
     address: '',
   });
   const [savingCustomer, setSavingCustomer] = useState(false);
+
+  // Selected lines
+  const [lines, setLines] = useState<{
+    productId: string;
+    sku: string;
+    name: string;
+    quantity: number;
+    unitPrice: number;
+    discount: number;
+    productType?: 'STANDARD' | 'GROUPED';
+    priceTiers?: ProductPriceTier[];
+    groupItems?: ProductGroupItem[];
+    selectedTier?: string;
+    fulfillmentType: 'DELIVERY' | 'PICKUP';
+  }[]>([]);
+
+  const [submittingAction, setSubmittingAction] = useState<'complete' | 'draft' | null>(null);
+
+  useEffect(() => {
+    async function loadData() {
+      try {
+        const [custs, brs, productsList, stockList] = await Promise.all([
+          apiGet<Customer[]>('/sales/customers'),
+          apiGet<Branch[]>('/branches'),
+          apiGet<any[]>('/products?status=active'),
+          apiGet<StockRecord[]>('/inventory/stock').catch(() => []),
+        ]);
+
+        setCustomers(custs || []);
+        setBranches(brs || []);
+        setInventoryStocks(stockList || []);
+
+        if (brs && brs.length > 0 && !branchId) {
+          setBranchId(brs[0].id);
+        }
+
+        const flatList: ProductLine[] = [];
+        (productsList || []).filter((p) => p.is_active !== 0).forEach((p) => {
+          flatList.push({
+            id: p.id,
+            sku: p.sku,
+            barcode: p.barcode,
+            name: p.name,
+            sellingPrice: Number(p.selling_price) || 0,
+            productType: p.product_type || 'STANDARD',
+            priceTiers: p.price_tiers || [],
+            groupItems: p.group_items || [],
+          });
+        });
+        setProducts(flatList);
+      } catch (err) {
+        console.error('Failed to load Sales Order creation metadata', err);
+      }
+    }
+    loadData();
+  }, []);
 
   const handleCreateInlineCustomer = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -99,7 +184,6 @@ export function CreateSalesOrderPage() {
       setIsInlineCustomerOpen(false);
       setNewCustomerForm({ name: '', phone: '', email: '', address: '' });
 
-      // Reload customers list & auto select
       const updatedCusts = await apiGet<Customer[]>('/sales/customers');
       setCustomers(updatedCusts || []);
       setCustomerId(created.id);
@@ -110,46 +194,32 @@ export function CreateSalesOrderPage() {
     }
   };
 
-  // Searching products
-  const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState<ProductLine[]>([]);
-
-  // Selected lines
-  const [lines, setLines] = useState<{ productId: string; sku: string; name: string; quantity: number; unitPrice: number; discount: number }[]>([]);
-
-  useEffect(() => {
-    async function loadData() {
-      try {
-        const [custs, brs, productsList, stockList] = await Promise.all([
-          apiGet<Customer[]>('/sales/customers'),
-          apiGet<Branch[]>('/branches'),
-          apiGet<any[]>('/products?status=active'),
-          apiGet<StockRecord[]>('/inventory/stock').catch(() => []),
-        ]);
-        
-        setCustomers(custs || []);
-        setBranches(brs || []);
-        setInventoryStocks(stockList || []);
-
-        const flatList: ProductLine[] = [];
-        (productsList || []).filter((p) => p.is_active !== 0).forEach((p) => {
-          flatList.push({
-            id: p.id,
-            sku: p.sku,
-            barcode: p.barcode,
-            name: p.name,
-            sellingPrice: p.selling_price,
-          });
-        });
-        setProducts(flatList);
-      } catch (err) {
-        console.error('Failed to load Sales Order creation metadata', err);
-      }
-    }
-    loadData();
-  }, []);
-
   const getProductStockInfo = (pid: string, targetBranchId: string) => {
+    const prod = products.find((p) => p.id === pid);
+    if (prod?.productType === 'GROUPED' && prod.groupItems && prod.groupItems.length > 0) {
+      let minBranchSets = Infinity;
+      for (const comp of prod.groupItems) {
+        const compRows = inventoryStocks.filter(
+          (s) => s.product_id === comp.component_product_id && s.owner_type === 'BRANCH' && s.branch_id === targetBranchId
+        );
+        const compAvailable = compRows.reduce(
+          (acc, curr) => acc + (Number(curr.quantity_on_hand) || 0) - (Number(curr.quantity_reserved) || 0),
+          0
+        );
+        const possibleSets = Math.floor(Math.max(0, compAvailable) / (comp.quantity || 1));
+        if (possibleSets < minBranchSets) {
+          minBranchSets = possibleSets;
+        }
+      }
+      const branchQty = minBranchSets === Infinity ? 0 : Math.max(0, minBranchSets);
+
+      return {
+        branchQty,
+        otherLocations: [],
+        totalOtherQty: 0,
+      };
+    }
+
     const branchRows = inventoryStocks.filter(
       (s) => s.product_id === pid && s.owner_type === 'BRANCH' && s.branch_id === targetBranchId
     );
@@ -179,39 +249,6 @@ export function CreateSalesOrderPage() {
   const selectedBranchObj = branches.find((b) => b.id === branchId);
   const selectedBranchName = selectedBranchObj?.name || 'Selected Branch';
 
-  const insufficientItems = branchId
-    ? lines
-        .map((l) => {
-          const sInfo = getProductStockInfo(l.productId, branchId);
-          return {
-            ...l,
-            branchQty: sInfo.branchQty,
-            otherLocations: sInfo.otherLocations,
-            totalOtherQty: sInfo.totalOtherQty,
-            isInsufficient: sInfo.branchQty < l.quantity,
-          };
-        })
-        .filter((item) => item.isInsufficient)
-    : [];
-
-  const hasInsufficientStock = insufficientItems.length > 0;
-
-  // Search filter
-  useEffect(() => {
-    if (!searchQuery) {
-      setSearchResults([]);
-      return;
-    }
-    const q = searchQuery.trim().toLowerCase();
-    const filtered = products.filter(
-      (v) =>
-        (v.sku && String(v.sku).toLowerCase().includes(q)) ||
-        (v.barcode && String(v.barcode).toLowerCase().includes(q)) ||
-        (v.name && String(v.name).toLowerCase().includes(q))
-    );
-    setSearchResults(filtered.slice(0, 5));
-  }, [searchQuery, products]);
-
   const addLine = (v: SelectableProduct | ProductLine) => {
     if (branchId) {
       const sInfo = getProductStockInfo(v.id, branchId);
@@ -239,6 +276,9 @@ export function CreateSalesOrderPage() {
       }
     }
 
+    const prod = products.find((p) => p.id === v.id);
+    const initialPrice = prod?.sellingPrice ?? (v as any).sellingPrice ?? (v as any).price ?? 0;
+
     const existingIndex = lines.findIndex((l) => l.productId === v.id);
     if (existingIndex !== -1) {
       setLines((prev) =>
@@ -251,13 +291,64 @@ export function CreateSalesOrderPage() {
     }
     setLines((prev) => [
       ...prev,
-      { productId: v.id, sku: v.sku, name: v.name, quantity: 1, unitPrice: (v as any).sellingPrice ?? (v as any).price ?? 0, discount: 0 },
+      {
+        productId: v.id,
+        sku: v.sku,
+        name: v.name,
+        quantity: 1,
+        unitPrice: initialPrice,
+        discount: 0,
+        productType: prod?.productType,
+        priceTiers: prod?.priceTiers || [],
+        groupItems: prod?.groupItems || [],
+        selectedTier: '',
+        fulfillmentType: fulfillmentType,
+      },
     ]);
     addToast('success', `Added "${v.name}" to order`);
   };
 
+  const handleFulfillmentTypeChange = (newType: 'DELIVERY' | 'PICKUP') => {
+    setFulfillmentType(newType);
+    setLines((prev) => prev.map((l) => ({ ...l, fulfillmentType: newType })));
+    if (newType === 'PICKUP') {
+      setHasInstallationFee(false);
+    }
+  };
+
+  const updateLineFulfillment = (idx: number, lineType: 'DELIVERY' | 'PICKUP') => {
+    setLines((prev) => {
+      const copy = [...prev];
+      copy[idx] = { ...copy[idx], fulfillmentType: lineType };
+      return copy;
+    });
+  };
+
   const removeLine = (idx: number) => {
     setLines((prev) => prev.filter((_, i) => i !== idx));
+  };
+
+  const handleSelectTier = (idx: number, tierName: string) => {
+    const line = lines[idx];
+    const prod = products.find((p) => p.id === line.productId);
+    let newPrice = line.unitPrice;
+    if (!tierName) {
+      newPrice = prod?.sellingPrice || line.unitPrice;
+    } else {
+      const tier = line.priceTiers?.find((t) => t.tier_name === tierName);
+      if (tier) {
+        newPrice = Number(tier.price) || 0;
+      }
+    }
+    setLines((prev) => {
+      const copy = [...prev];
+      copy[idx] = {
+        ...copy[idx],
+        selectedTier: tierName,
+        unitPrice: newPrice,
+      };
+      return copy;
+    });
   };
 
   const updateLine = (idx: number, field: 'quantity' | 'unitPrice' | 'discount', val: number) => {
@@ -282,17 +373,23 @@ export function CreateSalesOrderPage() {
       copy[idx] = {
         ...copy[idx],
         [field]: field === 'quantity' ? Math.max(1, num) : Math.max(0, num),
+        ...(field === 'unitPrice' ? { selectedTier: 'CUSTOM' } : {}),
       };
       return copy;
     });
   };
 
-  const [submittingAction, setSubmittingAction] = useState<'complete' | 'draft' | null>(null);
+  const subtotalOrder = lines.reduce((acc, curr) => acc + (curr.quantity * curr.unitPrice), 0);
+  const totalDiscount = lines.reduce((acc, curr) => acc + (curr.discount || 0), 0);
+  const merchandiseNet = Math.max(0, subtotalOrder - totalDiscount);
+  const effectiveInstallFee = hasInstallationFee ? Math.max(0, Number(installationFee || 0)) : 0;
+  const grandTotalOrder = merchandiseNet + effectiveInstallFee;
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const effectiveDeposit = saleType === 'DEBT' ? Math.min(grandTotalOrder, Math.max(0, Number(initialDeposit || 0))) : grandTotalOrder;
+  const remainingDebtBalance = Math.max(0, grandTotalOrder - effectiveDeposit);
+
+  const handleSubmit = async (completeNow: boolean) => {
     if (submittingAction) return;
-    const completeNow = (document.getElementById('completeNowFlag') as HTMLInputElement)?.value !== '0';
     if (!customerId) {
       addToast('error', 'Please select a customer');
       return;
@@ -306,49 +403,61 @@ export function CreateSalesOrderPage() {
       return;
     }
 
+    const isCredit = saleType === 'DEBT';
     const payload = {
       customerId,
       branchId,
+      fulfillmentType,
       notes: notes.trim() || undefined,
       installationFee: hasInstallationFee ? Number(installationFee || 0) : 0,
       installerName: hasInstallationFee ? installerName.trim() : null,
       installerNotes: hasInstallationFee ? installerNotes.trim() : null,
+      isCreditSale: isCredit,
+      initialDeposit: isCredit ? effectiveDeposit : 0,
+      depositPaymentMethod,
       lines: lines.map((l) => ({
         productId: l.productId,
         quantity: Number(l.quantity),
         unitPrice: Number(l.unitPrice),
         discountAmount: Number(l.discount || 0),
+        fulfillmentType: l.fulfillmentType,
       })),
     };
 
     try {
       setSubmittingAction(completeNow ? 'complete' : 'draft');
-      const order = await apiPost<any>('/sales/orders', payload);
-      if (completeNow) {
-        try {
-          await apiPost(`/sales/orders/${order.id}/complete`, {});
-          addToast('success', 'Sale completed. Invoice issued and payment recorded.');
-        } catch (err: any) {
-          // If completion fails (e.g. stock validation), cancel the draft order so orphan DRAFT orders don't linger
-          await apiPost(`/sales/orders/${order.id}/cancel`, {}).catch(() => {});
-          throw err;
-        }
-      } else {
+      if (!completeNow) {
+        await apiPost<any>('/sales/orders', { ...payload, isCreditSale: false });
         addToast('success', 'Sales order saved as draft');
+        navigate('/sales');
+        return;
       }
-      navigate('/sales');
+
+      if (isCredit) {
+        await apiPost<any>('/sales/orders', payload);
+        addToast('success', `Credit sale processed. Remaining customer balance: $${remainingDebtBalance.toFixed(2)}`);
+        navigate('/sales');
+        return;
+      }
+
+      // Cash sale: create and complete in full
+      const order = await apiPost<any>('/sales/orders', payload);
+      try {
+        await apiPost(`/sales/orders/${order.id}/complete`, { isCreditSale: false });
+        addToast('success', 'Sale completed in full. Inventory deducted and payment recorded.');
+        navigate('/sales');
+      } catch (completeErr: any) {
+        await apiPost(`/sales/orders/${order.id}/cancel`, {}).catch(() => {});
+        throw completeErr;
+      }
     } catch (err: any) {
-      addToast('error', err?.message || 'Failed to submit Sales Order');
+      addToast('error', err?.message || 'Failed to submit sales order');
     } finally {
       setSubmittingAction(null);
     }
   };
 
-  const subtotalOrder = lines.reduce((acc, curr) => acc + (curr.quantity * curr.unitPrice), 0);
-  const totalDiscount = lines.reduce((acc, curr) => acc + (curr.discount || 0), 0);
-  const merchandiseNet = Math.max(0, subtotalOrder - totalDiscount);
-  const effectiveInstallFee = hasInstallationFee ? Math.max(0, Number(installationFee || 0)) : 0;
-  const grandTotalOrder = merchandiseNet + effectiveInstallFee;
+  const selectedCustomerObj = customers.find((c) => c.id === customerId);
 
   return (
     <div className="module-page">
@@ -364,29 +473,47 @@ export function CreateSalesOrderPage() {
       </section>
 
       <section className="module-header">
-        <div className="module-header__icon">
+        <div className="module-header__icon" style={{ background: '#e9f6e8', color: '#066006' }}>
           <ShoppingCart size={24} />
         </div>
         <div>
-          <p>Revenue Wizard</p>
-          <h2>Draft and Issue New Sales Order (SO)</h2>
+          <p>Sales Management</p>
+          <h2>New Sales Order</h2>
         </div>
         <div></div>
       </section>
 
-      <form onSubmit={handleSubmit} style={{ display: 'grid', gap: '16px' }}>
+      <div style={{ display: 'grid', gap: '16px' }}>
+        {/* Order Setup Header Card */}
         <div className="panel" style={{ padding: '20px' }}>
-          <h3 style={{ margin: '0 0 14px', color: '#066006' }}>Customer & Branch Information</h3>
+          <h3 style={{ margin: '0 0 14px', color: '#066006', fontSize: '16px' }}>Order Details & Fulfillment</h3>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '16px' }}>
+            <FormField label="Retail Branch *">
+              <select
+                className="form-control"
+                value={branchId}
+                onChange={(e) => setBranchId(e.target.value)}
+                style={{ width: '100%', height: '38px', borderRadius: '6px', border: '1px solid #c8d8c8', padding: '0 10px' }}
+              >
+                <option value="">Select Retail Branch</option>
+                {branches.map((b) => (
+                  <option key={b.id} value={b.id}>{b.name}</option>
+                ))}
+              </select>
+            </FormField>
+
             <FormField label="Customer *">
               <div style={{ display: 'flex', gap: '6px' }}>
                 <div style={{ flex: 1 }}>
                   <SearchableSelect
-                    options={customers.map((c) => ({ value: c.id, label: c.name }))}
+                    options={customers.map((c) => ({
+                      value: c.id,
+                      label: `${c.name}${c.outstanding_balance && c.outstanding_balance > 0 ? ` (Debt: $${Number(c.outstanding_balance).toFixed(2)})` : ''}`,
+                    }))}
                     value={customerId}
                     onChange={setCustomerId}
-                    placeholder="Search Customer..."
+                    placeholder="Search or select customer..."
                   />
                 </div>
                 <button
@@ -394,83 +521,159 @@ export function CreateSalesOrderPage() {
                   onClick={() => setIsInlineCustomerOpen(true)}
                   style={{
                     padding: '0 10px',
-                    background: '#ecfdf5',
-                    border: '1px solid #a7f3d0',
-                    color: '#065f46',
-                    borderRadius: '8px',
+                    background: '#eefbee',
+                    border: '1px solid #c8d8c8',
+                    color: '#066006',
+                    borderRadius: '6px',
                     cursor: 'pointer',
                     display: 'flex',
                     alignItems: 'center',
                     gap: '4px',
                     fontSize: '12px',
-                    fontWeight: 700,
+                    fontWeight: 600,
                   }}
                   title="Add New Customer"
                 >
                   <Plus size={14} /> New
                 </button>
               </div>
+              {selectedCustomerObj?.outstanding_balance && selectedCustomerObj.outstanding_balance > 0 ? (
+                <div style={{ fontSize: '11px', color: '#dc2626', marginTop: '4px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  <AlertTriangle size={12} /> Existing unpaid balance: ${Number(selectedCustomerObj.outstanding_balance).toFixed(2)}
+                </div>
+              ) : null}
             </FormField>
 
-            <FormField label="Branch *">
-              <SearchableSelect
-                options={branches.map((b) => ({ value: b.id, label: b.name }))}
-                value={branchId}
-                onChange={setBranchId}
-                placeholder="Search Branch..."
-              />
-            </FormField>
+            {/* Payment Terms Selector */}
+            <div>
+              <label style={{ fontSize: '13px', fontWeight: 600, color: '#1a331e', marginBottom: '6px', display: 'block' }}>
+                Payment Terms *
+              </label>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                <button
+                  type="button"
+                  onClick={() => setSaleType('CASH')}
+                  style={{
+                    padding: '8px 12px',
+                    borderRadius: '6px',
+                    border: saleType === 'CASH' ? '2px solid #0b8f08' : '1px solid #d1e8d1',
+                    background: saleType === 'CASH' ? '#eefbee' : '#ffffff',
+                    color: saleType === 'CASH' ? '#066006' : '#4b5563',
+                    fontWeight: 600,
+                    fontSize: '13px',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '6px',
+                  }}
+                >
+                  <DollarSign size={16} /> Paid in Full
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSaleType('DEBT')}
+                  style={{
+                    padding: '8px 12px',
+                    borderRadius: '6px',
+                    border: saleType === 'DEBT' ? '2px solid #b45309' : '1px solid #d1e8d1',
+                    background: saleType === 'DEBT' ? '#fffbeb' : '#ffffff',
+                    color: saleType === 'DEBT' ? '#92400e' : '#4b5563',
+                    fontWeight: 600,
+                    fontSize: '13px',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '6px',
+                  }}
+                >
+                  <CreditCard size={16} /> Credit / Debt Sale
+                </button>
+              </div>
+            </div>
+
+            {/* Fulfillment Mode Selector */}
+            <div>
+              <label style={{ fontSize: '13px', fontWeight: 600, color: '#1a331e', marginBottom: '6px', display: 'block' }}>
+                Fulfillment Mode *
+              </label>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                <button
+                  type="button"
+                  onClick={() => handleFulfillmentTypeChange('PICKUP')}
+                  style={{
+                    padding: '8px 12px',
+                    borderRadius: '6px',
+                    border: fulfillmentType === 'PICKUP' ? '2px solid #0b8f08' : '1px solid #d1e8d1',
+                    background: fulfillmentType === 'PICKUP' ? '#eefbee' : '#ffffff',
+                    color: fulfillmentType === 'PICKUP' ? '#066006' : '#4b5563',
+                    fontWeight: 600,
+                    fontSize: '13px',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '6px',
+                  }}
+                  title="Customer collects directly at store/counter. No logistics delivery scheduled."
+                >
+                  <Store size={16} /> On Hand / Pickup
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleFulfillmentTypeChange('DELIVERY')}
+                  style={{
+                    padding: '8px 12px',
+                    borderRadius: '6px',
+                    border: fulfillmentType === 'DELIVERY' ? '2px solid #2563eb' : '1px solid #d1e8d1',
+                    background: fulfillmentType === 'DELIVERY' ? '#eff6ff' : '#ffffff',
+                    color: fulfillmentType === 'DELIVERY' ? '#1d4ed8' : '#4b5563',
+                    fontWeight: 600,
+                    fontSize: '13px',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '6px',
+                  }}
+                  title="Order requires truck logistics dispatch and delivery to customer address."
+                >
+                  <Truck size={16} /> Requires Delivery
+                </button>
+              </div>
+            </div>
           </div>
 
-          <div style={{ marginTop: '10px' }}>
+          <div style={{ marginTop: '14px' }}>
             <TextareaField
               label="Order Notes"
               id="soNotes"
-              placeholder="e.g. Scheduled delivery dates, special item packing instructions..."
+              placeholder="e.g. Special packing instructions, delivery notes, or customer requests..."
               value={notes}
               onChange={setNotes}
+              rows={2}
             />
           </div>
         </div>
 
-        {/* Lines selection */}
+        {/* Product Catalog Picker */}
         <div className="panel" style={{ padding: '20px' }}>
-          <h3 style={{ margin: '0 0 14px', color: '#066006' }}>Ordered Items</h3>
-
-          {hasInsufficientStock && (
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '8px',
-                padding: '8px 12px',
-                marginBottom: '14px',
-                background: '#fffbeb',
-                border: '1px solid #fde68a',
-                borderRadius: '6px',
-                fontSize: '12px',
-                color: '#92400e',
-              }}
-            >
-              <AlertTriangle size={15} style={{ color: '#d97706', flexShrink: 0 }} />
-              <span>
-                <strong>Notice:</strong> One or more items have 0 stock at {selectedBranchName}. Click <strong>Save as Draft</strong> to save without immediate stock deduction.
-              </span>
-            </div>
-          )}
-
+          <label style={{ fontSize: '15px', fontWeight: 700, color: '#1a331e', marginBottom: '10px', display: 'block' }}>
+            Add Furniture Items & Bundles
+          </label>
           <ProductItemSelect
             products={products.map((p) => {
-              const stockInfo = branchId ? getProductStockInfo(p.id, branchId) : null;
+              const sInfo = branchId ? getProductStockInfo(p.id, branchId) : null;
               let hint: string | null = null;
-              if (stockInfo) {
-                if (stockInfo.branchQty > 0) {
-                  if (stockInfo.totalOtherQty > 0) {
-                    hint = `(+${stockInfo.totalOtherQty} in other locations)`;
+              if (sInfo) {
+                if (sInfo.branchQty > 0) {
+                  if (sInfo.totalOtherQty > 0) {
+                    hint = `(+${sInfo.totalOtherQty} in other locations)`;
                   }
                 } else {
-                  if (stockInfo.otherLocations.length > 0) {
-                    const locList = stockInfo.otherLocations.map((l) => `${l.qty} at ${l.name}`).join(', ');
+                  if (sInfo.otherLocations.length > 0) {
+                    const locList = sInfo.otherLocations.map((l) => `${l.qty} at ${l.name}`).join(', ');
                     hint = `Available: ${locList}`;
                   } else {
                     hint = 'Out of stock in all locations';
@@ -480,127 +683,160 @@ export function CreateSalesOrderPage() {
 
               return {
                 id: p.id,
-                name: p.name,
                 sku: p.sku,
-                barcode: p.barcode,
+                name: p.name,
                 price: p.sellingPrice,
-                priceLabel: 'Price',
-                stock: stockInfo ? stockInfo.branchQty : undefined,
+                category: p.productType === 'GROUPED' ? 'Bundle' : 'Furniture',
+                stock: sInfo ? sInfo.branchQty : undefined,
                 stockHint: hint,
-                stockWarning: stockInfo ? stockInfo.branchQty === 0 : false,
+                stockWarning: sInfo ? sInfo.branchQty === 0 : false,
               };
             })}
             onSelect={addLine}
-            placeholder="Search products by name, SKU, or barcode..."
+            onSelectProduct={addLine}
             existingLines={lines.map((l) => ({ productId: l.productId, quantity: l.quantity }))}
+            placeholder="Search products by name, SKU, or barcode..."
           />
 
           {/* Table of selected lines */}
           <div style={{ marginTop: '20px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+              <label style={{ fontSize: '14px', fontWeight: 600, color: '#1a331e', margin: 0, display: 'block' }}>
+                Order Line Items ({lines.length})
+              </label>
+              {lines.length > 0 && (
+                <span style={{ fontSize: '12px', color: '#667066' }}>
+                  Tip: Toggle fulfillment per line for small items taken on hand without delivery
+                </span>
+              )}
+            </div>
+
             {lines.length === 0 ? (
-              <div style={{ textAlign: 'center', padding: '24px', color: '#667066', border: '1px dashed #d9e2d9', borderRadius: '8px' }}>
-                No products added to this order. Scan or search for products above.
+              <div style={{ textAlign: 'center', padding: '24px', background: '#fbfdfb', border: '1px dashed #c8d8c8', borderRadius: '8px', color: '#667066' }}>
+                No items selected yet. Choose products or bundles from the catalog above.
               </div>
             ) : (
-              <div>
-                <table>
+              <div style={{ overflowX: 'auto', border: '1px solid #d1e8d1', borderRadius: '8px' }}>
+                <table style={{ width: '100%', fontSize: '13px', borderCollapse: 'collapse' }}>
                   <thead>
-                    <tr>
-                      <th>Product ID</th>
-                      <th>Product Description</th>
-                      <th>Qty</th>
-                      <th>Unit Price ($)</th>
-                      <th>Discount ($)</th>
-                      <th>Line Total ($)</th>
-                      <th>Action</th>
+                    <tr style={{ background: '#f4fbf4', borderBottom: '1px solid #d1e8d1' }}>
+                      <th style={{ padding: '8px 12px', textAlign: 'left', color: '#066006' }}>Item</th>
+                      <th style={{ padding: '8px 12px', textAlign: 'center', width: '135px', color: '#066006' }}>Fulfillment</th>
+                      <th style={{ padding: '8px 12px', textAlign: 'center', width: '90px', color: '#066006' }}>Quantity</th>
+                      <th style={{ padding: '8px 12px', textAlign: 'right', width: '150px', color: '#066006' }}>Unit Price</th>
+                      <th style={{ padding: '8px 12px', textAlign: 'right', width: '100px', color: '#066006' }}>Discount</th>
+                      <th style={{ padding: '8px 12px', textAlign: 'right', width: '110px', color: '#066006' }}>Total</th>
+                      <th style={{ padding: '8px 12px', width: '45px' }}></th>
                     </tr>
                   </thead>
                   <tbody>
-                    {lines.map((l, index) => {
-                      const stockInfo = branchId ? getProductStockInfo(l.productId, branchId) : null;
-                      const hasEnough = stockInfo ? stockInfo.branchQty >= l.quantity : true;
-
+                    {lines.map((l, idx) => {
+                      const rowTotal = (l.quantity * l.unitPrice) - l.discount;
                       return (
-                        <tr key={l.productId}>
-                          <td>{l.sku}</td>
-                          <td>
-                            <div style={{ fontWeight: 600, color: '#0f172a' }}>{l.name}</div>
-                            {stockInfo && (
-                              <div style={{ marginTop: '3px' }}>
-                                <span
-                                  style={{
-                                    display: 'inline-flex',
-                                    alignItems: 'center',
-                                    gap: '4px',
-                                    padding: '2px 7px',
-                                    borderRadius: '4px',
-                                    fontSize: '11px',
-                                    fontWeight: 600,
-                                    background: stockInfo.branchQty > 0 ? '#ecfdf5' : '#fef2f2',
-                                    color: stockInfo.branchQty > 0 ? '#065f46' : '#991b1b',
-                                    border: stockInfo.branchQty > 0 ? '1px solid #a7f3d0' : '1px solid #fecaca',
-                                  }}
-                                >
-                                  {stockInfo.branchQty > 0
-                                    ? `${stockInfo.branchQty} in stock at ${selectedBranchName}`
-                                    : `0 in stock at ${selectedBranchName}`}
-                                </span>
+                        <tr key={l.productId} style={{ borderBottom: '1px solid #edf1ed' }}>
+                          <td style={{ padding: '8px 12px' }}>
+                            <div style={{ fontWeight: 600, color: '#1a331e' }}>{l.name}</div>
+                            <div style={{ fontSize: '11px', color: '#667066' }}>SKU: {l.sku}</div>
+                            {l.productType === 'GROUPED' && l.groupItems && l.groupItems.length > 0 && (
+                              <div style={{ fontSize: '11px', color: '#047857', marginTop: '3px' }}>
+                                Bundle: {l.groupItems.map((g) => `${g.quantity}x ${g.component_name || g.component_sku || 'Item'}`).join(', ')}
                               </div>
                             )}
                           </td>
-                        <td>
-                          <input
-                            type="number"
-                            value={l.quantity}
-                            min={1}
-                            max={branchId ? Math.max(1, stockInfo?.branchQty || 1) : undefined}
-                            onChange={(e) => updateLine(index, 'quantity', Number(e.target.value))}
-                            className="form-input"
-                            style={{ width: '70px', minHeight: '32px', textAlign: 'center' }}
-                          />
-                        </td>
-                        <td>
-                          <input
-                            type="number"
-                            value={l.unitPrice}
-                            min={0}
-                            step="0.01"
-                            onChange={(e) => updateLine(index, 'unitPrice', Number(e.target.value))}
-                            className="form-input"
-                            style={{ width: '100px', minHeight: '32px', textAlign: 'center', backgroundColor: '#f0f0f0' }}
-                            disabled
-                          />
-                        </td>
-                        <td>
-                          <input
-                            type="number"
-                            value={l.discount}
-                            min={0}
-                            step="0.01"
-                            onChange={(e) => updateLine(index, 'discount', Number(e.target.value))}
-                            className="form-input"
-                            style={{ width: '100px', minHeight: '32px', textAlign: 'center' }}
-                            placeholder="0.00"
-                          />
-                        </td>
-                        <td>
-                          <strong style={{ color: l.discount > 0 ? '#066006' : undefined }}>
-                            {((l.quantity * l.unitPrice) - (l.discount || 0)).toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                          </strong>
-                        </td>
-                        <td>
-                          <button type="button" className="btn btn-danger btn-sm" onClick={() => removeLine(index)}>
-                            <Trash2 size={14} />
-                          </button>
-                        </td>
-                      </tr>
+                          <td style={{ padding: '8px 12px', textAlign: 'center' }}>
+                            <button
+                              type="button"
+                              onClick={() => updateLineFulfillment(idx, l.fulfillmentType === 'PICKUP' ? 'DELIVERY' : 'PICKUP')}
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '5px',
+                                padding: '4px 10px',
+                                borderRadius: '16px',
+                                fontSize: '11px',
+                                fontWeight: 600,
+                                border: '1px solid',
+                                cursor: 'pointer',
+                                background: l.fulfillmentType === 'PICKUP' ? '#e9f6e8' : '#eff6ff',
+                                borderColor: l.fulfillmentType === 'PICKUP' ? '#86efac' : '#bfdbfe',
+                                color: l.fulfillmentType === 'PICKUP' ? '#15803d' : '#1d4ed8',
+                              }}
+                              title="Click to toggle: On Hand / Counter Pickup vs Delivery Truck"
+                            >
+                              {l.fulfillmentType === 'PICKUP' ? <Store size={12} /> : <Truck size={12} />}
+                              {l.fulfillmentType === 'PICKUP' ? 'On Hand' : 'Delivery'}
+                            </button>
+                          </td>
+                          <td style={{ padding: '8px 12px', textAlign: 'center' }}>
+                            <input
+                              type="number"
+                              min="1"
+                              value={l.quantity}
+                              onChange={(e) => updateLine(idx, 'quantity', parseInt(e.target.value) || 1)}
+                              style={{ width: '65px', padding: '4px 6px', textAlign: 'center', borderRadius: '4px', border: '1px solid #c8d8c8' }}
+                            />
+                          </td>
+                          <td style={{ padding: '8px 12px', textAlign: 'right' }}>
+                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
+                                <span style={{ fontSize: '12px', color: '#667066' }}>$</span>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step="0.01"
+                                  value={l.unitPrice}
+                                  onChange={(e) => updateLine(idx, 'unitPrice', parseFloat(e.target.value) || 0)}
+                                  style={{ width: '85px', padding: '4px 6px', textAlign: 'right', borderRadius: '4px', border: '1px solid #c8d8c8', fontWeight: 600 }}
+                                />
+                              </div>
+                              {l.priceTiers && l.priceTiers.length > 0 && (
+                                <select
+                                  value={l.selectedTier || ''}
+                                  onChange={(e) => handleSelectTier(idx, e.target.value)}
+                                  style={{ fontSize: '11px', padding: '2px 4px', borderRadius: '4px', border: '1px solid #c8d8c8', maxWidth: '125px' }}
+                                >
+                                  <option value="">Base (${(products.find(p => p.id === l.productId)?.sellingPrice ?? l.unitPrice).toFixed(2)})</option>
+                                  {l.priceTiers.map((t) => (
+                                    <option key={t.tier_name} value={t.tier_name}>
+                                      {t.tier_name} (${Number(t.price).toFixed(2)})
+                                    </option>
+                                  ))}
+                                  {l.selectedTier === 'CUSTOM' && <option value="CUSTOM">Custom</option>}
+                                </select>
+                              )}
+                            </div>
+                          </td>
+                          <td style={{ padding: '8px 12px', textAlign: 'right' }}>
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={l.discount}
+                              onChange={(e) => updateLine(idx, 'discount', parseFloat(e.target.value) || 0)}
+                              style={{ width: '75px', padding: '4px 6px', textAlign: 'right', borderRadius: '4px', border: '1px solid #c8d8c8' }}
+                            />
+                          </td>
+                          <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 600, color: '#0b8f08' }}>
+                            ${rowTotal.toFixed(2)}
+                          </td>
+                          <td style={{ padding: '8px 12px', textAlign: 'center' }}>
+                            <button
+                              type="button"
+                              onClick={() => removeLine(idx)}
+                              style={{ border: 'none', background: 'none', color: '#dc2626', cursor: 'pointer', padding: '4px' }}
+                              title="Remove item"
+                            >
+                              <Trash2 size={16} />
+                            </button>
+                          </td>
+                        </tr>
                       );
                     })}
                   </tbody>
                 </table>
 
-                {/* Summary Panel */}
-                <div style={{ display: 'flex', justifyContent: 'flex-end', borderTop: '2px solid #edf1ed', paddingTop: '16px', marginTop: '16px' }}>
+                {/* Summary Row */}
+                <div style={{ display: 'flex', justifyContent: 'flex-end', borderTop: '2px solid #edf1ed', padding: '16px' }}>
                   <div style={{ minWidth: '340px', display: 'grid', gap: '8px' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '14px', color: '#444' }}>
                       <span>Merchandise Subtotal</span>
@@ -613,7 +849,7 @@ export function CreateSalesOrderPage() {
                       </div>
                     )}
                     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '14px', fontWeight: 600, color: '#166534', borderTop: '1px dashed #e2e8f0', paddingTop: '6px' }}>
-                      <span>Company Sales Revenue</span>
+                      <span>Merchandise Net</span>
                       <span>${merchandiseNet.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
                     </div>
                     {hasInstallationFee && (
@@ -628,6 +864,19 @@ export function CreateSalesOrderPage() {
                       <span>Customer Total Due</span>
                       <span>${grandTotalOrder.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
                     </div>
+
+                    {saleType === 'DEBT' && (
+                      <div style={{ marginTop: '8px', padding: '10px', background: '#fffbeb', borderRadius: '6px', border: '1px solid #fef3c7' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', color: '#92400e', marginBottom: '6px' }}>
+                          <span>Upfront Deposit Paid:</span>
+                          <span style={{ fontWeight: 700 }}>${effectiveDeposit.toFixed(2)}</span>
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '14px', fontWeight: 800, color: '#b45309' }}>
+                          <span>Remaining Debt Added:</span>
+                          <span>${remainingDebtBalance.toFixed(2)}</span>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
@@ -656,7 +905,7 @@ export function CreateSalesOrderPage() {
                   Service Installation Fee
                 </h3>
                 <p style={{ margin: '2px 0 0', fontSize: '13px', color: '#64748b' }}>
-                  Collected from customer and paid to technician.
+                  Optional technician assembly & setup charge.
                 </p>
               </div>
             </div>
@@ -673,7 +922,7 @@ export function CreateSalesOrderPage() {
           </div>
 
           {hasInstallationFee && (
-            <div style={{ display: 'grid', gridTemplateColumns: '180px 1fr 1fr', gap: '14px', paddingTop: '12px', borderTop: '1px solid #fef08a' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '14px', paddingTop: '12px', borderTop: '1px solid #fef08a' }}>
               <InputField
                 label="Fee Amount ($) *"
                 id="installFeeAmount"
@@ -691,7 +940,7 @@ export function CreateSalesOrderPage() {
                 id="installerName"
                 value={installerName}
                 onChange={setInstallerName}
-                placeholder="e.g. Jamaal Installer, Hassan Electrician..."
+                placeholder="e.g. Jamaal Installer..."
               />
 
               <InputField
@@ -699,21 +948,22 @@ export function CreateSalesOrderPage() {
                 id="installerNotes"
                 value={installerNotes}
                 onChange={setInstallerNotes}
-                placeholder="e.g. Assemble dining table & 6 chairs on delivery"
+                placeholder="e.g. Assemble dining table on delivery"
               />
             </div>
           )}
         </div>
 
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+        {/* Action Buttons */}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', paddingBottom: '30px' }}>
           <button type="button" className="btn btn-secondary" onClick={() => navigate('/sales')} disabled={!!submittingAction}>
             Cancel
           </button>
           <button
-            type="submit"
+            type="button"
             className="btn btn-secondary"
             disabled={lines.length === 0 || !!submittingAction}
-            onClick={() => (document.getElementById('completeNowFlag') as HTMLInputElement).value = '0'}
+            onClick={() => handleSubmit(false)}
           >
             {submittingAction === 'draft' ? (
               <><Loader2 size={14} className="spin-icon" /> Saving Draft…</>
@@ -722,27 +972,25 @@ export function CreateSalesOrderPage() {
             )}
           </button>
           <button
-            type="submit"
+            type="button"
             className="btn btn-primary"
-            disabled={lines.length === 0 || !!submittingAction || hasInsufficientStock}
-            title={hasInsufficientStock ? `Cannot complete immediately: some items have 0 stock at ${selectedBranchName}. Save as Draft or transfer stock first.` : ''}
-            onClick={() => (document.getElementById('completeNowFlag') as HTMLInputElement).value = '1'}
+            disabled={lines.length === 0 || !!submittingAction}
+            onClick={() => handleSubmit(true)}
             style={{
-              background: hasInsufficientStock ? '#9ca3af' : 'linear-gradient(135deg, #0b8f08, #066006)',
+              background: 'linear-gradient(135deg, #0b8f08, #066006)',
               display: 'flex',
               alignItems: 'center',
-              cursor: hasInsufficientStock ? 'not-allowed' : 'pointer',
-              opacity: hasInsufficientStock ? 0.6 : 1,
+              cursor: 'pointer',
             }}
           >
             {submittingAction === 'complete' ? (
               <><Loader2 size={14} className="spin-icon" /> Processing Sale…</>
             ) : (
-              'Create & Complete'
+              saleType === 'DEBT' ? 'Confirm & Record Debt Sale' : 'Complete Sale & Take Payment'
             )}
           </button>
         </div>
-      </form>
+      </div>
 
       {/* Inline Customer Creation Modal */}
       <Modal isOpen={isInlineCustomerOpen} onClose={() => setIsInlineCustomerOpen(false)} title="Add New Customer" size="sm" width="sm">
@@ -777,7 +1025,7 @@ export function CreateSalesOrderPage() {
             id="custAddr"
             value={newCustomerForm.address}
             onChange={(val) => setNewCustomerForm((prev) => ({ ...prev, address: val }))}
-            placeholder="Mogadishu, Somalia..."
+            placeholder="Hargeisa, Somaliland..."
             rows={2}
           />
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '6px' }}>
@@ -821,7 +1069,6 @@ export function CreateSalesOrderPage() {
               border: '1px solid #e2e8f0',
             }}
           >
-            {/* SweetAlert Circular Warning Badge */}
             <div
               style={{
                 width: '64px',

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { ShoppingCart, Plus, Trash2, Loader2, Wrench, Info, AlertTriangle, CreditCard, DollarSign, Wallet } from 'lucide-react';
+import { ShoppingCart, Plus, Trash2, Loader2, Wrench, Info, AlertTriangle, CreditCard, DollarSign, Wallet, Store, Truck, Package } from 'lucide-react';
 import { apiGet, apiPost } from '../api/client';
 import { FormField, InputField, TextareaField } from './FormField';
 import { SearchInput } from './SearchInput';
@@ -90,6 +90,9 @@ export function CreateSalesOrderModal({ isOpen, onClose, onOrderCreated }: Creat
   const [branchId, setBranchId] = useState('');
   const [notes, setNotes] = useState('');
 
+  // Fulfillment Mode: ON HAND / PICKUP vs REQUIRES DELIVERY
+  const [fulfillmentType, setFulfillmentType] = useState<'DELIVERY' | 'PICKUP'>('DELIVERY');
+
   // Sale Type: CASH_SALE vs DEBT_SALE
   const [saleType, setSaleType] = useState<'CASH' | 'DEBT'>('CASH');
   const [initialDeposit, setInitialDeposit] = useState<number>(0);
@@ -127,6 +130,7 @@ export function CreateSalesOrderModal({ isOpen, onClose, onOrderCreated }: Creat
     priceTiers?: ProductPriceTier[];
     groupItems?: ProductGroupItem[];
     selectedTier?: string;
+    fulfillmentType: 'DELIVERY' | 'PICKUP';
   }[]>([]);
   const [submitting, setSubmitting] = useState(false);
 
@@ -304,9 +308,26 @@ export function CreateSalesOrderModal({ isOpen, onClose, onOrderCreated }: Creat
         priceTiers: prod?.priceTiers || [],
         groupItems: prod?.groupItems || [],
         selectedTier: '',
+        fulfillmentType: fulfillmentType,
       },
     ]);
     addToast('success', `Added "${v.name}" to order`);
+  };
+
+  const handleFulfillmentTypeChange = (newType: 'DELIVERY' | 'PICKUP') => {
+    setFulfillmentType(newType);
+    setLines((prev) => prev.map((l) => ({ ...l, fulfillmentType: newType })));
+    if (newType === 'PICKUP') {
+      setHasInstallationFee(false);
+    }
+  };
+
+  const updateLineFulfillment = (idx: number, lineType: 'DELIVERY' | 'PICKUP') => {
+    setLines((prev) => {
+      const copy = [...prev];
+      copy[idx] = { ...copy[idx], fulfillmentType: lineType };
+      return copy;
+    });
   };
 
   const removeLine = (idx: number) => {
@@ -392,6 +413,7 @@ export function CreateSalesOrderModal({ isOpen, onClose, onOrderCreated }: Creat
     const payload = {
       customerId,
       branchId,
+      fulfillmentType,
       notes: notes.trim() || undefined,
       installationFee: hasInstallationFee ? Number(installationFee || 0) : 0,
       installerName: hasInstallationFee ? installerName.trim() : null,
@@ -404,6 +426,7 @@ export function CreateSalesOrderModal({ isOpen, onClose, onOrderCreated }: Creat
         quantity: Number(l.quantity),
         unitPrice: Number(l.unitPrice),
         discountAmount: Number(l.discount || 0),
+        fulfillmentType: l.fulfillmentType,
       })),
     };
 
@@ -559,6 +582,57 @@ export function CreateSalesOrderModal({ isOpen, onClose, onOrderCreated }: Creat
               </button>
             </div>
           </div>
+
+          {/* Fulfillment Mode Selector */}
+          <div>
+            <label style={{ fontSize: '13px', fontWeight: 600, color: '#1a331e', marginBottom: '6px', display: 'block' }}>
+              Fulfillment Mode *
+            </label>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+              <button
+                type="button"
+                onClick={() => handleFulfillmentTypeChange('PICKUP')}
+                style={{
+                  padding: '8px 12px',
+                  borderRadius: '6px',
+                  border: fulfillmentType === 'PICKUP' ? '2px solid #0b8f08' : '1px solid #d1e8d1',
+                  background: fulfillmentType === 'PICKUP' ? '#eefbee' : '#ffffff',
+                  color: fulfillmentType === 'PICKUP' ? '#066006' : '#4b5563',
+                  fontWeight: 600,
+                  fontSize: '13px',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '6px',
+                }}
+                title="Customer collects directly at store/counter. No logistics delivery scheduled."
+              >
+                <Store size={16} /> On Hand / Pickup
+              </button>
+              <button
+                type="button"
+                onClick={() => handleFulfillmentTypeChange('DELIVERY')}
+                style={{
+                  padding: '8px 12px',
+                  borderRadius: '6px',
+                  border: fulfillmentType === 'DELIVERY' ? '2px solid #2563eb' : '1px solid #d1e8d1',
+                  background: fulfillmentType === 'DELIVERY' ? '#eff6ff' : '#ffffff',
+                  color: fulfillmentType === 'DELIVERY' ? '#1d4ed8' : '#4b5563',
+                  fontWeight: 600,
+                  fontSize: '13px',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '6px',
+                }}
+                title="Order requires truck logistics dispatch and delivery to customer address."
+              >
+                <Truck size={16} /> Requires Delivery
+              </button>
+            </div>
+          </div>
         </div>
 
         {/* Product Catalog Picker */}
@@ -605,9 +679,16 @@ export function CreateSalesOrderModal({ isOpen, onClose, onOrderCreated }: Creat
 
         {/* Order Items Table */}
         <div>
-          <label style={{ fontSize: '14px', fontWeight: 600, color: '#1a331e', marginBottom: '8px', display: 'block' }}>
-            Order Line Items ({lines.length})
-          </label>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+            <label style={{ fontSize: '14px', fontWeight: 600, color: '#1a331e', margin: 0, display: 'block' }}>
+              Order Line Items ({lines.length})
+            </label>
+            {lines.length > 0 && (
+              <span style={{ fontSize: '12px', color: '#667066' }}>
+                Tip: Toggle fulfillment per line for small items taken on hand without delivery
+              </span>
+            )}
+          </div>
           {lines.length === 0 ? (
             <div style={{ textAlign: 'center', padding: '24px', background: '#fbfdfb', border: '1px dashed #c8d8c8', borderRadius: '8px', color: '#667066' }}>
               No items selected yet. Choose products from the catalog above.
@@ -618,6 +699,7 @@ export function CreateSalesOrderModal({ isOpen, onClose, onOrderCreated }: Creat
                 <thead>
                   <tr style={{ background: '#f4fbf4', borderBottom: '1px solid #d1e8d1' }}>
                     <th style={{ padding: '8px 12px', textAlign: 'left', color: '#066006' }}>Item</th>
+                    <th style={{ padding: '8px 12px', textAlign: 'center', width: '135px', color: '#066006' }}>Fulfillment</th>
                     <th style={{ padding: '8px 12px', textAlign: 'center', width: '90px', color: '#066006' }}>Quantity</th>
                     <th style={{ padding: '8px 12px', textAlign: 'right', width: '150px', color: '#066006' }}>Unit Price</th>
                     <th style={{ padding: '8px 12px', textAlign: 'right', width: '100px', color: '#066006' }}>Discount</th>
@@ -638,6 +720,30 @@ export function CreateSalesOrderModal({ isOpen, onClose, onOrderCreated }: Creat
                               Bundle: {l.groupItems.map((g) => `${g.quantity}x ${g.component_name || g.component_sku || 'Item'}`).join(', ')}
                             </div>
                           )}
+                        </td>
+                        <td style={{ padding: '8px 12px', textAlign: 'center' }}>
+                          <button
+                            type="button"
+                            onClick={() => updateLineFulfillment(idx, l.fulfillmentType === 'PICKUP' ? 'DELIVERY' : 'PICKUP')}
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '5px',
+                              padding: '4px 10px',
+                              borderRadius: '16px',
+                              fontSize: '11px',
+                              fontWeight: 600,
+                              border: '1px solid',
+                              cursor: 'pointer',
+                              background: l.fulfillmentType === 'PICKUP' ? '#e9f6e8' : '#eff6ff',
+                              borderColor: l.fulfillmentType === 'PICKUP' ? '#86efac' : '#bfdbfe',
+                              color: l.fulfillmentType === 'PICKUP' ? '#15803d' : '#1d4ed8',
+                            }}
+                            title="Click to toggle: On Hand / Counter Pickup vs Delivery Truck"
+                          >
+                            {l.fulfillmentType === 'PICKUP' ? <Store size={12} /> : <Truck size={12} />}
+                            {l.fulfillmentType === 'PICKUP' ? 'On Hand' : 'Delivery'}
+                          </button>
                         </td>
                         <td style={{ padding: '8px 12px', textAlign: 'center' }}>
                           <input

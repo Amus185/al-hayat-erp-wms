@@ -163,9 +163,9 @@ export function DeliveriesPage() {
   const [deliveryRuns, setDeliveryRuns] = useState<DeliveryRun[]>([]);
   const [loadingRuns, setLoadingRuns] = useState(false);
 
-  const loadData = async () => {
+  const loadData = async (silent = false) => {
     try {
-      setLoading(true);
+      if (!silent) setLoading(true);
       const [delRes, statsRes] = await Promise.all([
         apiGet<Delivery[]>('/deliveries'),
         apiGet<Stats>('/deliveries/stats'),
@@ -175,7 +175,7 @@ export function DeliveriesPage() {
     } catch (err: any) {
       addToast('error', err?.message || 'Failed to load deliveries');
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 
@@ -192,20 +192,26 @@ export function DeliveriesPage() {
           apiGet<any[]>('/sales/customers'),
           apiGet<any[]>('/branches'),
         ]);
-        setSalesOrders(ordersRes || []);
+        // Only orders requiring delivery should appear for delivery dispatch
+        const deliveryOrders = (ordersRes || []).filter(
+          (o) => (o.fulfillment_type || 'DELIVERY').toUpperCase() !== 'PICKUP'
+        );
+        setSalesOrders(deliveryOrders);
         setCustomers(custsRes || []);
         setBranches(branchesRes || []);
 
         // If URL has ?orderId=..., open create modal pre-filled
         const orderIdParam = searchParams.get('orderId');
         if (orderIdParam) {
-          const matched = (ordersRes || []).find((o) => o.id === orderIdParam);
-          if (matched) {
-            if (matched.status === 'DELIVERED' || matched.delivery_status === 'DELIVERED') {
-              addToast('info', `Order ${matched.order_number} is already marked as DELIVERED.`);
-              setSearchQuery(matched.delivery_number || matched.order_number || '');
+          const rawMatch = (ordersRes || []).find((o) => o.id === orderIdParam);
+          if (rawMatch && (rawMatch.fulfillment_type || 'DELIVERY').toUpperCase() === 'PICKUP') {
+            addToast('info', `Order ${rawMatch.order_number} is marked as On Hand / Pickup (no delivery truck required).`);
+          } else if (rawMatch) {
+            if (rawMatch.status === 'DELIVERED' || rawMatch.delivery_status === 'DELIVERED') {
+              addToast('info', `Order ${rawMatch.order_number} is already marked as DELIVERED.`);
+              setSearchQuery(rawMatch.delivery_number || rawMatch.order_number || '');
             } else {
-              handleOpenCreateWithOrder(matched);
+              handleOpenCreateWithOrder(rawMatch);
             }
           }
         }
@@ -414,18 +420,32 @@ export function DeliveriesPage() {
     if (!confirmed) return;
     try {
       setSubmitting(true);
+      // Optimistic update
+      setDeliveries((prev) =>
+        prev.map((item) =>
+          item.id === d.id
+            ? { ...item, status: 'DISPATCHED', dispatched_at: new Date().toISOString() }
+            : item
+        )
+      );
+      setStats((prev) => ({
+        ...prev,
+        pending: Math.max(0, prev.pending - 1),
+        dispatched: prev.dispatched + 1,
+      }));
+
       await apiPost(`/deliveries/${d.id}/dispatch`, {
         driverName: d.driver_name,
         vehiclePlate: d.vehicle_plate,
       });
       addToast('success', `Delivery #${d.delivery_number} marked as DISPATCHED!`);
       if (isDetailsOpen && selectedDelivery?.id === d.id) {
-        const full = await apiGet<Delivery>(`/deliveries/${d.id}`);
-        if (full) setSelectedDelivery(full);
+        setSelectedDelivery((prev) => prev ? { ...prev, status: 'DISPATCHED', dispatched_at: new Date().toISOString() } : null);
       }
-      loadData();
+      loadData(true);
     } catch (err: any) {
       addToast('error', err?.message || 'Failed to dispatch delivery');
+      loadData(true);
     } finally {
       setSubmitting(false);
     }
@@ -441,18 +461,32 @@ export function DeliveriesPage() {
     if (!confirmed) return;
     try {
       setSubmitting(true);
+      // Optimistic update
+      setDeliveries((prev) =>
+        prev.map((item) =>
+          item.id === d.id
+            ? { ...item, status: 'DELIVERED', delivered_at: new Date().toISOString() }
+            : item
+        )
+      );
+      setStats((prev) => ({
+        ...prev,
+        dispatched: Math.max(0, prev.dispatched - 1),
+        deliveredToday: prev.deliveredToday + 1,
+      }));
+
       await apiPost(`/deliveries/${d.id}/complete`, {
         recipientSignatureName: d.customer_name,
         notes: 'Delivered in good condition and accepted by customer.',
       });
       addToast('success', `Delivery #${d.delivery_number} completed & confirmed!`);
       if (isDetailsOpen && selectedDelivery?.id === d.id) {
-        const full = await apiGet<Delivery>(`/deliveries/${d.id}`);
-        if (full) setSelectedDelivery(full);
+        setSelectedDelivery((prev) => prev ? { ...prev, status: 'DELIVERED', delivered_at: new Date().toISOString() } : null);
       }
-      loadData();
+      loadData(true);
     } catch (err: any) {
       addToast('error', err?.message || 'Failed to complete delivery');
+      loadData(true);
     } finally {
       setSubmitting(false);
     }
@@ -504,6 +538,23 @@ export function DeliveriesPage() {
 
     try {
       setRunSubmitting(true);
+      // Optimistic update
+      setDeliveries((prev) =>
+        prev.map((item) => {
+          if (item.id !== selectedDelivery.id) return item;
+          const newDelivered = (item.delivered_boxes || 0) + boxes;
+          const total = item.total_boxes || 1;
+          const newRemaining = Math.max(0, total - newDelivered);
+          const newStatus = newRemaining === 0 ? 'DELIVERED' : 'PARTIALLY_DELIVERED';
+          return {
+            ...item,
+            delivered_boxes: newDelivered,
+            remaining_boxes: newRemaining,
+            status: newStatus as any,
+          };
+        })
+      );
+
       await apiPost(`/deliveries/${selectedDelivery.id}/runs`, {
         boxesDelivered: boxes,
         handledBy: runForm.handledBy?.trim() || undefined,
@@ -520,9 +571,10 @@ export function DeliveriesPage() {
       if (full) setSelectedDelivery(full);
       if (runs) setDeliveryRuns(runs);
 
-      loadData();
+      loadData(true);
     } catch (err: any) {
       addToast('error', err?.message || 'Failed to record delivery run');
+      loadData(true);
     } finally {
       setRunSubmitting(false);
     }
@@ -542,16 +594,43 @@ export function DeliveriesPage() {
     if (!selectedDelivery) return;
     try {
       setSubmitting(true);
-      await apiPost(`/deliveries/${selectedDelivery.id}/dispatch`, dispatchForm);
+      const delId = selectedDelivery.id;
+      // Optimistic update
+      setDeliveries((prev) =>
+        prev.map((item) =>
+          item.id === delId
+            ? {
+                ...item,
+                status: 'DISPATCHED',
+                dispatched_at: new Date().toISOString(),
+                driver_name: dispatchForm.driverName || item.driver_name,
+                vehicle_plate: dispatchForm.vehiclePlate || item.vehicle_plate,
+              }
+            : item
+        )
+      );
+      setStats((prev) => ({
+        ...prev,
+        pending: Math.max(0, prev.pending - 1),
+        dispatched: prev.dispatched + 1,
+      }));
+
+      await apiPost(`/deliveries/${delId}/dispatch`, dispatchForm);
       addToast('success', `Delivery ${selectedDelivery.delivery_number} marked as DISPATCHED!`);
       setIsDispatchOpen(false);
       if (isDetailsOpen) {
-        const full = await apiGet<Delivery>(`/deliveries/${selectedDelivery.id}`);
-        setSelectedDelivery(full);
+        setSelectedDelivery((prev) => prev ? {
+          ...prev,
+          status: 'DISPATCHED',
+          dispatched_at: new Date().toISOString(),
+          driver_name: dispatchForm.driverName || prev.driver_name,
+          vehicle_plate: dispatchForm.vehiclePlate || prev.vehicle_plate,
+        } : null);
       }
-      loadData();
+      loadData(true);
     } catch (err: any) {
       addToast('error', err?.message || 'Failed to dispatch delivery');
+      loadData(true);
     } finally {
       setSubmitting(false);
     }
@@ -571,19 +650,44 @@ export function DeliveriesPage() {
     if (!selectedDelivery) return;
     try {
       setSubmitting(true);
-      await apiPost(`/deliveries/${selectedDelivery.id}/complete`, {
+      const delId = selectedDelivery.id;
+      // Optimistic update
+      setDeliveries((prev) =>
+        prev.map((item) =>
+          item.id === delId
+            ? {
+                ...item,
+                status: 'DELIVERED',
+                delivered_at: new Date().toISOString(),
+                recipient_signature_name: completeForm.recipientName || item.customer_name,
+              }
+            : item
+        )
+      );
+      setStats((prev) => ({
+        ...prev,
+        dispatched: Math.max(0, prev.dispatched - 1),
+        deliveredToday: prev.deliveredToday + 1,
+      }));
+
+      await apiPost(`/deliveries/${delId}/complete`, {
         recipientSignatureName: completeForm.recipientName,
         notes: completeForm.notes,
       });
       addToast('success', `Delivery ${selectedDelivery.delivery_number} completed & confirmed!`);
       setIsCompleteOpen(false);
       if (isDetailsOpen) {
-        const full = await apiGet<Delivery>(`/deliveries/${selectedDelivery.id}`);
-        setSelectedDelivery(full);
+        setSelectedDelivery((prev) => prev ? {
+          ...prev,
+          status: 'DELIVERED',
+          delivered_at: new Date().toISOString(),
+          recipient_signature_name: completeForm.recipientName || prev.customer_name,
+        } : null);
       }
-      loadData();
+      loadData(true);
     } catch (err: any) {
       addToast('error', err?.message || 'Failed to complete delivery');
+      loadData(true);
     } finally {
       setSubmitting(false);
     }

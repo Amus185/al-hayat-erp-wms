@@ -145,10 +145,10 @@ export async function ensurePostgresInit(pool: Pool) {
         id TEXT PRIMARY KEY, code TEXT UNIQUE, name TEXT NOT NULL, contact_person TEXT, email TEXT, phone TEXT, address TEXT, city TEXT, created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
       );
       CREATE TABLE IF NOT EXISTS sales_orders (
-        id TEXT PRIMARY KEY, order_number TEXT UNIQUE NOT NULL, customer_id TEXT REFERENCES customers(id), branch_id TEXT NOT NULL REFERENCES branches(id), status TEXT NOT NULL DEFAULT 'DRAFT', quotation_id TEXT, total_amount DOUBLE PRECISION NOT NULL DEFAULT 0, notes TEXT, created_by TEXT REFERENCES users(id), confirmed_by TEXT REFERENCES users(id), confirmed_at TIMESTAMP WITH TIME ZONE, created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+        id TEXT PRIMARY KEY, order_number TEXT UNIQUE NOT NULL, customer_id TEXT REFERENCES customers(id), branch_id TEXT NOT NULL REFERENCES branches(id), status TEXT NOT NULL DEFAULT 'DRAFT', quotation_id TEXT, total_amount DOUBLE PRECISION NOT NULL DEFAULT 0, notes TEXT, created_by TEXT REFERENCES users(id), confirmed_by TEXT REFERENCES users(id), confirmed_at TIMESTAMP WITH TIME ZONE, fulfillment_type TEXT NOT NULL DEFAULT 'DELIVERY', created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
       );
       CREATE TABLE IF NOT EXISTS sales_order_lines (
-        id TEXT PRIMARY KEY, sales_order_id TEXT NOT NULL REFERENCES sales_orders(id) ON DELETE CASCADE, product_id TEXT NOT NULL REFERENCES products(id), quantity INTEGER NOT NULL, unit_price DOUBLE PRECISION NOT NULL, discount_amount DOUBLE PRECISION NOT NULL DEFAULT 0, line_total DOUBLE PRECISION NOT NULL DEFAULT 0
+        id TEXT PRIMARY KEY, sales_order_id TEXT NOT NULL REFERENCES sales_orders(id) ON DELETE CASCADE, product_id TEXT NOT NULL REFERENCES products(id), quantity INTEGER NOT NULL, unit_price DOUBLE PRECISION NOT NULL, discount_amount DOUBLE PRECISION NOT NULL DEFAULT 0, line_total DOUBLE PRECISION NOT NULL DEFAULT 0, fulfillment_type TEXT NOT NULL DEFAULT 'DELIVERY'
       );
       CREATE TABLE IF NOT EXISTS quotations (
         id TEXT PRIMARY KEY, quotation_number TEXT UNIQUE NOT NULL, customer_id TEXT REFERENCES customers(id), branch_id TEXT NOT NULL REFERENCES branches(id), status TEXT NOT NULL DEFAULT 'DRAFT', valid_until TIMESTAMP WITH TIME ZONE, total_amount DOUBLE PRECISION NOT NULL DEFAULT 0, notes TEXT, created_by TEXT REFERENCES users(id), created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -278,6 +278,8 @@ export async function ensurePostgresInit(pool: Pool) {
       ALTER TABLE sales_orders ADD COLUMN IF NOT EXISTS installer_name TEXT;
       ALTER TABLE sales_orders ADD COLUMN IF NOT EXISTS installation_status TEXT DEFAULT 'NONE';
       ALTER TABLE sales_orders ADD COLUMN IF NOT EXISTS installer_notes TEXT;
+      ALTER TABLE sales_orders ADD COLUMN IF NOT EXISTS fulfillment_type TEXT NOT NULL DEFAULT 'DELIVERY';
+      ALTER TABLE sales_order_lines ADD COLUMN IF NOT EXISTS fulfillment_type TEXT NOT NULL DEFAULT 'DELIVERY';
       ALTER TABLE invoices ADD COLUMN IF NOT EXISTS installation_fee DOUBLE PRECISION NOT NULL DEFAULT 0;
 
       -- Deliveries System Tables

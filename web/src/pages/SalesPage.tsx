@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   ShoppingCart, Plus, UserPlus, Eye, CheckCircle, CheckCircle2, Clock,
   DollarSign, Zap, Printer, CreditCard, History, ChevronDown, ChevronUp, Loader2, Trash2,
-  Truck, Wrench, ShieldCheck,
+  Truck, Wrench, ShieldCheck, Store,
 } from 'lucide-react';
 import { apiGet, apiPost, apiDelete } from '../api/client';
 import { getCached, setCached } from '../api/cache';
@@ -40,6 +40,7 @@ interface SalesOrder {
   created_at: string;
   customer_name?: string;
   branch_name?: string;
+  fulfillment_type?: string;
   invoice_id?: string | null;
   invoice_total?: number;
   invoice_discount?: number;
@@ -519,12 +520,34 @@ export function SalesPage() {
     {
       key: 'customer_name',
       label: 'Customer & Branch',
-      render: (row) => (
-        <div>
-          <div style={{ fontWeight: 600, color: '#0f172a' }}>{row.customer_name || 'Customer'}</div>
-          <div style={{ fontSize: '11px', color: '#64748b' }}>{row.branch_name || 'Branch'}</div>
-        </div>
-      ),
+      render: (row) => {
+        const isPickup = (row.fulfillment_type || 'DELIVERY').toUpperCase() === 'PICKUP';
+        return (
+          <div>
+            <div style={{ fontWeight: 600, color: '#0f172a' }}>{row.customer_name || 'Customer'}</div>
+            <div style={{ fontSize: '11px', color: '#64748b', display: 'flex', alignItems: 'center', gap: '6px', marginTop: '2px' }}>
+              <span>{row.branch_name || 'Branch'}</span>
+              <span
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '3px',
+                  padding: '1px 6px',
+                  borderRadius: '10px',
+                  fontSize: '10px',
+                  fontWeight: 600,
+                  background: isPickup ? '#ecfdf5' : '#eff6ff',
+                  color: isPickup ? '#065f46' : '#1e40af',
+                  border: isPickup ? '1px solid #a7f3d0' : '1px solid #bfdbfe',
+                }}
+              >
+                {isPickup ? <Store size={10} /> : <Truck size={10} />}
+                {isPickup ? 'On Hand' : 'Delivery'}
+              </span>
+            </div>
+          </div>
+        );
+      },
     },
     {
       key: 'created_at',
@@ -586,6 +609,7 @@ export function SalesPage() {
       key: 'actions',
       label: 'Actions',
       render: (row) => {
+        const isPickup = (row.fulfillment_type || 'DELIVERY').toUpperCase() === 'PICKUP';
         const isDelivered = row.status === 'DELIVERED' || row.delivery_status === 'DELIVERED';
         const isDispatched = row.delivery_status === 'DISPATCHED';
         const isScheduled = row.delivery_status === 'SCHEDULED' || row.delivery_status === 'PENDING';
@@ -597,7 +621,25 @@ export function SalesPage() {
             </button>
 
             {/* Delivery State Action Button */}
-            {isDelivered ? (
+            {isPickup ? (
+              <span
+                style={{
+                  color: '#15803d',
+                  background: '#f0fdf4',
+                  border: '1px solid #86efac',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  padding: '4px 8px',
+                  borderRadius: '6px',
+                  fontSize: '11px',
+                  fontWeight: 600,
+                }}
+                title="Counter Pickup: Items taken directly on hand at retail showroom"
+              >
+                <Store size={13} /> On Hand
+              </span>
+            ) : isDelivered ? (
               <button
                 type="button"
                 className="btn btn-secondary btn-sm"
@@ -819,10 +861,32 @@ export function SalesPage() {
         {selectedOrder && (
           <div style={{ display: 'grid', gap: '18px' }}>
             {/* Metadata Summary */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px', fontSize: '13px', background: '#f7f9f7', padding: '12px', borderRadius: '8px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '14px', fontSize: '13px', background: '#f7f9f7', padding: '12px', borderRadius: '8px' }}>
               <div>
                 <span style={{ color: '#667066' }}>Customer Name:</span>
                 <p style={{ margin: '2px 0 0', fontWeight: '700' }}>{selectedOrder.customer_name || 'Walk-in Customer'}</p>
+              </div>
+              <div>
+                <span style={{ color: '#667066' }}>Fulfillment Mode:</span>
+                <div style={{ marginTop: '2px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <span
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      padding: '2px 8px',
+                      borderRadius: '12px',
+                      fontSize: '11px',
+                      fontWeight: 700,
+                      background: (selectedOrder.fulfillment_type || 'DELIVERY').toUpperCase() === 'PICKUP' ? '#e9f6e8' : '#eff6ff',
+                      color: (selectedOrder.fulfillment_type || 'DELIVERY').toUpperCase() === 'PICKUP' ? '#15803d' : '#1d4ed8',
+                      border: (selectedOrder.fulfillment_type || 'DELIVERY').toUpperCase() === 'PICKUP' ? '1px solid #86efac' : '1px solid #bfdbfe',
+                    }}
+                  >
+                    {(selectedOrder.fulfillment_type || 'DELIVERY').toUpperCase() === 'PICKUP' ? <Store size={12} /> : <Truck size={12} />}
+                    {(selectedOrder.fulfillment_type || 'DELIVERY').toUpperCase() === 'PICKUP' ? 'On Hand / Counter Pickup' : 'Requires Truck Delivery'}
+                  </span>
+                </div>
               </div>
               <div>
                 <span style={{ color: '#667066' }}>Order Status:</span>
@@ -931,6 +995,7 @@ export function SalesPage() {
                   <thead>
                     <tr>
                       <th>Product</th>
+                      <th style={{ textAlign: 'center', width: '120px' }}>Fulfillment</th>
                       <th>Quantity</th>
                       <th>Unit Price</th>
                       <th>Subtotal</th>
@@ -939,7 +1004,31 @@ export function SalesPage() {
                   <tbody>
                     {selectedOrder.lines?.map((line: any) => (
                       <tr key={line.id}>
-                        <td><strong>{line.product_name}</strong><br /><span style={{ color: '#667066', fontSize: '12px' }}>{line.product_sku}</span></td>
+                        <td>
+                          <strong>{line.product_name}</strong>
+                          {line.product_type === 'GROUPED' && (
+                            <span style={{ marginLeft: '6px', fontSize: '10px', background: '#dcfce7', color: '#166534', padding: '1px 5px', borderRadius: '4px', fontWeight: 600 }}>
+                              Bundle
+                            </span>
+                          )}
+                          <br />
+                          <span style={{ color: '#667066', fontSize: '12px' }}>{line.product_sku}</span>
+                        </td>
+                        <td style={{ textAlign: 'center' }}>
+                          <span
+                            style={{
+                              fontSize: '11px',
+                              padding: '2px 8px',
+                              borderRadius: '12px',
+                              fontWeight: 600,
+                              background: (line.fulfillment_type || 'DELIVERY').toUpperCase() === 'PICKUP' ? '#e9f6e8' : '#eff6ff',
+                              color: (line.fulfillment_type || 'DELIVERY').toUpperCase() === 'PICKUP' ? '#15803d' : '#1d4ed8',
+                              border: (line.fulfillment_type || 'DELIVERY').toUpperCase() === 'PICKUP' ? '1px solid #86efac' : '1px solid #bfdbfe',
+                            }}
+                          >
+                            {(line.fulfillment_type || 'DELIVERY').toUpperCase() === 'PICKUP' ? 'On Hand' : 'Delivery'}
+                          </span>
+                        </td>
                         <td>{line.quantity}</td>
                         <td>${Number(line.unit_price).toLocaleString()}</td>
                         <td><strong>${(line.quantity * line.unit_price).toLocaleString()}</strong></td>
