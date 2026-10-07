@@ -199,7 +199,14 @@ export function AccountingPage() {
         setAccounts(aList || []);
         setBranches(bList || []);
         setDashboard(dashData || null);
-        if (pList?.length) setSelectedPeriod(pList[0].id);
+        if (pList?.length) {
+          const today = new Date().toISOString().split('T')[0];
+          const activePeriod = pList.find((p: any) => p.status === 'OPEN' && p.start_date <= today && p.end_date >= today)
+            || pList.find((p: any) => p.start_date <= today && p.end_date >= today)
+            || pList.find((p: any) => p.status === 'OPEN')
+            || pList[0];
+          setSelectedPeriod(activePeriod.id);
+        }
       } catch (e) {
         addToast('error', 'Failed to load accounting data');
       } finally {
@@ -1004,13 +1011,21 @@ export function AccountingPage() {
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
                   <StmtCard title='ASSETS'>
                     <StmtRow label='CURRENT ASSETS' value='' bold />
-                    {(balanceSheet.assets || []).filter((a: any) => ['1010', '1020', '1021', '1030', '1031'].includes(a.code)).map((a: any) => (
+                    {(balanceSheet.assets || []).filter((a: any) => a.code.startsWith('10')).map((a: any) => (
                       <StmtRow key={a.id} label={a.account_name} value={fmt(a.balance)} indent={1} />
                     ))}
                     <StmtRow label='FIXED ASSETS' value='' bold />
-                    {(balanceSheet.assets || []).filter((a: any) => ['1500', '1501', '1600', '1601'].includes(a.code)).map((a: any) => (
+                    {(balanceSheet.assets || []).filter((a: any) => a.code.startsWith('15') || a.code.startsWith('16')).map((a: any) => (
                       <StmtRow key={a.id} label={a.account_name} value={a.code === '1501' ? `(${fmt(Math.abs(a.balance))})` : fmt(a.balance)} indent={1} color={a.code === '1501' ? RED : '#374151'} />
                     ))}
+                    {(balanceSheet.assets || []).filter((a: any) => !a.code.startsWith('10') && !a.code.startsWith('15') && !a.code.startsWith('16')).length > 0 && (
+                      <>
+                        <StmtRow label='OTHER ASSETS' value='' bold />
+                        {(balanceSheet.assets || []).filter((a: any) => !a.code.startsWith('10') && !a.code.startsWith('15') && !a.code.startsWith('16')).map((a: any) => (
+                          <StmtRow key={a.id} label={a.account_name} value={fmt(a.balance)} indent={1} />
+                        ))}
+                      </>
+                    )}
                     <StmtRow label='TOTAL ASSETS' value={fmt(balanceSheet.totals?.total_assets || 0)} bold color={G} separator />
                   </StmtCard>
                   <div>

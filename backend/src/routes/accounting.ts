@@ -484,14 +484,26 @@ accounting.get('/trial-balance', requirePermissions(['view_reports']), async (c)
 // ══════════════════════════════════════════════════════════
 accounting.get('/income-statement', requirePermissions(['view_reports']), async (c) => {
   const periodId = c.req.query('period_id') || null;
-  const params: any[] = [];
+
+  let selectedPeriod: any = null;
+  if (periodId) {
+    selectedPeriod = await c.env.DB.prepare('SELECT * FROM fiscal_periods WHERE id = ?').bind(periodId).first();
+  }
+
   let periodFilter = '';
-  if (periodId) { periodFilter = 'AND je.fiscal_period_id = ?'; params.push(periodId); }
+  const params: any[] = [];
+  if (selectedPeriod?.start_date && selectedPeriod?.end_date) {
+    periodFilter = 'AND (je.fiscal_period_id = ? OR (je.entry_date >= ? AND je.entry_date <= ?))';
+    params.push(selectedPeriod.id, selectedPeriod.start_date, selectedPeriod.end_date);
+  } else if (periodId) {
+    periodFilter = 'AND je.fiscal_period_id = ?';
+    params.push(periodId);
+  }
 
   // Revenue per branch
   const { results: revenue } = await c.env.DB.prepare(`
     SELECT coa.name, coa.code, coa.account_type, b.name AS branch_name, b.id AS branch_id,
-           COALESCE(SUM(jel.credit_amount - jel.debit_amount), 0) AS amount
+           COALESCE(SUM(CASE WHEN je.id IS NOT NULL THEN (jel.credit_amount - jel.debit_amount) ELSE 0 END), 0) AS amount
     FROM chart_of_accounts coa
     LEFT JOIN journal_entry_lines jel ON jel.account_id = coa.id
     LEFT JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status = 'POSTED' ${periodFilter}
@@ -504,7 +516,7 @@ accounting.get('/income-statement', requirePermissions(['view_reports']), async 
   // COGS per branch
   const { results: cogs } = await c.env.DB.prepare(`
     SELECT coa.name, coa.code, coa.account_type, b.name AS branch_name, b.id AS branch_id,
-           COALESCE(SUM(jel.debit_amount - jel.credit_amount), 0) AS amount
+           COALESCE(SUM(CASE WHEN je.id IS NOT NULL THEN (jel.debit_amount - jel.credit_amount) ELSE 0 END), 0) AS amount
     FROM chart_of_accounts coa
     LEFT JOIN journal_entry_lines jel ON jel.account_id = coa.id
     LEFT JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status = 'POSTED' ${periodFilter}
@@ -517,7 +529,7 @@ accounting.get('/income-statement', requirePermissions(['view_reports']), async 
   // Expenses per branch
   const { results: expenses } = await c.env.DB.prepare(`
     SELECT coa.name, coa.code, coa.account_type, b.name AS branch_name, b.id AS branch_id,
-           COALESCE(SUM(jel.debit_amount - jel.credit_amount), 0) AS amount
+           COALESCE(SUM(CASE WHEN je.id IS NOT NULL THEN (jel.debit_amount - jel.credit_amount) ELSE 0 END), 0) AS amount
     FROM chart_of_accounts coa
     LEFT JOIN journal_entry_lines jel ON jel.account_id = coa.id
     LEFT JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status = 'POSTED' ${periodFilter}
@@ -565,49 +577,133 @@ accounting.get('/income-statement', requirePermissions(['view_reports']), async 
 // ══════════════════════════════════════════════════════════
 accounting.get('/balance-sheet', requirePermissions(['view_reports']), async (c) => {
   const periodId = c.req.query('period_id') || null;
-  const params: any[] = [];
-  let periodFilter = '';
-  if (periodId) { periodFilter = 'AND je.fiscal_period_id = ?'; params.push(periodId); }
+
+  let selectedPeriod: any = null;
+  if (periodId) {
+    selectedPeriod = await c.env.DB.prepare('SELECT * FROM fiscal_periods WHERE id = ?').bind(periodId).first();
+  }
+
+  // Cumulative balance sheet as-of period end date
+  let asOfFilter = '';
+  const asOfParams: any[] = [];
+  if (selectedPeriod?.end_date) {
+    asOfFilter = 'AND (je.fiscal_period_id = ? OR je.entry_date <= ?)';
+    asOfParams.push(selectedPeriod.id, selectedPeriod.end_date);
+  } else if (periodId) {
+    asOfFilter = 'AND je.fiscal_period_id = ?';
+    asOfParams.push(periodId);
+  }
 
   const { results: accounts } = await c.env.DB.prepare(`
     SELECT coa.id, coa.code, coa.name AS account_name, coa.account_type, coa.normal_balance,
            b.name AS branch_name, b.id AS branch_id,
-           COALESCE(SUM(jel.debit_amount), 0) AS total_debit,
-           COALESCE(SUM(jel.credit_amount), 0) AS total_credit,
+           COALESCE(SUM(CASE WHEN je.id IS NOT NULL THEN jel.debit_amount ELSE 0 END), 0) AS total_debit,
+           COALESCE(SUM(CASE WHEN je.id IS NOT NULL THEN jel.credit_amount ELSE 0 END), 0) AS total_credit,
            CASE
              WHEN coa.normal_balance = 'DEBIT'
-               THEN COALESCE(SUM(jel.debit_amount), 0) - COALESCE(SUM(jel.credit_amount), 0)
+               THEN COALESCE(SUM(CASE WHEN je.id IS NOT NULL THEN jel.debit_amount ELSE 0 END), 0) - COALESCE(SUM(CASE WHEN je.id IS NOT NULL THEN jel.credit_amount ELSE 0 END), 0)
              ELSE
-               COALESCE(SUM(jel.credit_amount), 0) - COALESCE(SUM(jel.debit_amount), 0)
+               COALESCE(SUM(CASE WHEN je.id IS NOT NULL THEN jel.credit_amount ELSE 0 END), 0) - COALESCE(SUM(CASE WHEN je.id IS NOT NULL THEN jel.debit_amount ELSE 0 END), 0)
            END AS balance
     FROM chart_of_accounts coa
     LEFT JOIN journal_entry_lines jel ON jel.account_id = coa.id
-    LEFT JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status = 'POSTED' ${periodFilter}
+    LEFT JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status = 'POSTED' ${asOfFilter}
     LEFT JOIN branches b ON b.id = jel.branch_id
     WHERE coa.account_type IN ('ASSET', 'LIABILITY', 'EQUITY') AND coa.is_active = 1
     GROUP BY coa.id, coa.code, coa.name, coa.account_type, coa.normal_balance, b.id, b.name
     ORDER BY coa.code ASC
-  `).bind(...params).all();
+  `).bind(...asOfParams).all();
 
   const rows = accounts || [];
   const assets = rows.filter((r: any) => r.account_type === 'ASSET');
   const liabilities = rows.filter((r: any) => r.account_type === 'LIABILITY');
   const equity = rows.filter((r: any) => r.account_type === 'EQUITY');
 
-  // Calculate Current Period Net Income (unclosed revenue & expense accounts for the period)
-  const netIncomeRes = await c.env.DB.prepare(`
-    SELECT 
-      COALESCE(SUM(CASE WHEN coa.account_type = 'REVENUE' THEN (jel.credit_amount - jel.debit_amount) ELSE 0 END), 0) -
-      COALESCE(SUM(CASE WHEN coa.account_type IN ('COGS', 'EXPENSE') THEN (jel.debit_amount - jel.credit_amount) ELSE 0 END), 0) AS net_income
-    FROM chart_of_accounts coa
-    JOIN journal_entry_lines jel ON jel.account_id = coa.id
-    JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status = 'POSTED' ${periodFilter}
-    WHERE coa.account_type IN ('REVENUE', 'COGS', 'EXPENSE')
-  `).bind(...params).first() as any;
+  // Calculate Net Income:
+  // 1. Current Period Net Income (nominal transactions inside this period)
+  // 2. Prior Period Unclosed Net Income (nominal transactions strictly before this period that roll into Retained Earnings)
+  let currentPeriodNetIncome = 0;
+  let priorUnclosedNetIncome = 0;
 
-  const currentPeriodNetIncome = Number(netIncomeRes?.net_income || 0);
+  if (selectedPeriod?.start_date && selectedPeriod?.end_date) {
+    const netIncomeRes = await c.env.DB.prepare(`
+      SELECT 
+        COALESCE(SUM(CASE WHEN coa.account_type = 'REVENUE' THEN (jel.credit_amount - jel.debit_amount) ELSE 0 END), 0) -
+        COALESCE(SUM(CASE WHEN coa.account_type IN ('COGS', 'EXPENSE') THEN (jel.debit_amount - jel.credit_amount) ELSE 0 END), 0) AS net_income
+      FROM chart_of_accounts coa
+      JOIN journal_entry_lines jel ON jel.account_id = coa.id
+      JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status = 'POSTED'
+        AND (je.fiscal_period_id = ? OR (je.entry_date >= ? AND je.entry_date <= ?))
+      WHERE coa.account_type IN ('REVENUE', 'COGS', 'EXPENSE')
+    `).bind(selectedPeriod.id, selectedPeriod.start_date, selectedPeriod.end_date).first() as any;
+    currentPeriodNetIncome = Number(netIncomeRes?.net_income || 0);
 
-  const equityList = [...equity];
+    const priorRes = await c.env.DB.prepare(`
+      SELECT 
+        COALESCE(SUM(CASE WHEN coa.account_type = 'REVENUE' THEN (jel.credit_amount - jel.debit_amount) ELSE 0 END), 0) -
+        COALESCE(SUM(CASE WHEN coa.account_type IN ('COGS', 'EXPENSE') THEN (jel.debit_amount - jel.credit_amount) ELSE 0 END), 0) AS prior_net_income
+      FROM chart_of_accounts coa
+      JOIN journal_entry_lines jel ON jel.account_id = coa.id
+      JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status = 'POSTED'
+        AND je.entry_date < ?
+        AND (je.fiscal_period_id IS NULL OR je.fiscal_period_id != ?)
+      WHERE coa.account_type IN ('REVENUE', 'COGS', 'EXPENSE')
+    `).bind(selectedPeriod.start_date, selectedPeriod.id).first() as any;
+    priorUnclosedNetIncome = Number(priorRes?.prior_net_income || 0);
+  } else if (periodId) {
+    const netIncomeRes = await c.env.DB.prepare(`
+      SELECT 
+        COALESCE(SUM(CASE WHEN coa.account_type = 'REVENUE' THEN (jel.credit_amount - jel.debit_amount) ELSE 0 END), 0) -
+        COALESCE(SUM(CASE WHEN coa.account_type IN ('COGS', 'EXPENSE') THEN (jel.debit_amount - jel.credit_amount) ELSE 0 END), 0) AS net_income
+      FROM chart_of_accounts coa
+      JOIN journal_entry_lines jel ON jel.account_id = coa.id
+      JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status = 'POSTED' AND je.fiscal_period_id = ?
+      WHERE coa.account_type IN ('REVENUE', 'COGS', 'EXPENSE')
+    `).bind(periodId).first() as any;
+    currentPeriodNetIncome = Number(netIncomeRes?.net_income || 0);
+  } else {
+    const netIncomeRes = await c.env.DB.prepare(`
+      SELECT 
+        COALESCE(SUM(CASE WHEN coa.account_type = 'REVENUE' THEN (jel.credit_amount - jel.debit_amount) ELSE 0 END), 0) -
+        COALESCE(SUM(CASE WHEN coa.account_type IN ('COGS', 'EXPENSE') THEN (jel.debit_amount - jel.credit_amount) ELSE 0 END), 0) AS net_income
+      FROM chart_of_accounts coa
+      JOIN journal_entry_lines jel ON jel.account_id = coa.id
+      JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status = 'POSTED'
+      WHERE coa.account_type IN ('REVENUE', 'COGS', 'EXPENSE')
+    `).first() as any;
+    currentPeriodNetIncome = Number(netIncomeRes?.net_income || 0);
+  }
+
+  // Adjust Retained Earnings if prior periods had unclosed net income
+  let equityList = equity.map((e: any) => {
+    if (e.code === '3020' && Math.abs(priorUnclosedNetIncome) > 0.0001) {
+      const priorBal = Number(e.balance) + priorUnclosedNetIncome;
+      return {
+        ...e,
+        balance: priorBal,
+        total_credit: Number(e.total_credit) + (priorUnclosedNetIncome > 0 ? priorUnclosedNetIncome : 0),
+        total_debit: Number(e.total_debit) + (priorUnclosedNetIncome < 0 ? Math.abs(priorUnclosedNetIncome) : 0),
+      };
+    }
+    return e;
+  });
+
+  if (Math.abs(priorUnclosedNetIncome) > 0.0001 && !equityList.some((e: any) => e.code === '3020')) {
+    equityList.push({
+      id: 'equity-prior-unclosed-retained-earnings',
+      code: '3020',
+      account_name: 'Retained Earnings (Prior Unclosed Periods)',
+      account_type: 'EQUITY',
+      normal_balance: 'CREDIT',
+      branch_name: null,
+      branch_id: null,
+      total_debit: priorUnclosedNetIncome < 0 ? Math.abs(priorUnclosedNetIncome) : 0,
+      total_credit: priorUnclosedNetIncome > 0 ? priorUnclosedNetIncome : 0,
+      balance: priorUnclosedNetIncome,
+    });
+  }
+
+  // Append Current Period Net Income to equity list
   if (Math.abs(currentPeriodNetIncome) > 0.0001 || equityList.length === 0) {
     equityList.push({
       id: 'equity-current-period-net-income',
@@ -625,7 +721,7 @@ accounting.get('/balance-sheet', requirePermissions(['view_reports']), async (c)
 
   const totalAssets = assets.reduce((s: number, r: any) => s + Number(r.balance), 0);
   const totalLiabilities = liabilities.reduce((s: number, r: any) => s + Number(r.balance), 0);
-  const totalEquity = equity.reduce((s: number, r: any) => s + Number(r.balance), 0) + currentPeriodNetIncome;
+  const totalEquity = equityList.reduce((s: number, r: any) => s + Number(r.balance), 0);
 
   return c.json({
     period_id: periodId,
@@ -692,56 +788,66 @@ accounting.get('/cash-flow', requirePermissions(['view_reports']), async (c) => 
 // ══════════════════════════════════════════════════════════
 accounting.get('/owners-equity', requirePermissions(['view_reports']), async (c) => {
   const periodId = c.req.query('period_id') || null;
-  const params: any[] = [];
-  let periodFilter = '';
-  if (periodId) { periodFilter = 'AND je.fiscal_period_id = ?'; params.push(periodId); }
+
+  let selectedPeriod: any = null;
+  if (periodId) {
+    selectedPeriod = await c.env.DB.prepare('SELECT * FROM fiscal_periods WHERE id = ?').bind(periodId).first();
+  }
+
+  let asOfFilter = '';
+  const asOfParams: any[] = [];
+  if (selectedPeriod?.end_date) {
+    asOfFilter = 'AND (je.fiscal_period_id = ? OR je.entry_date <= ?)';
+    asOfParams.push(selectedPeriod.id, selectedPeriod.end_date);
+  } else if (periodId) {
+    asOfFilter = 'AND je.fiscal_period_id = ?';
+    asOfParams.push(periodId);
+  }
 
   const { results: equityRows } = await c.env.DB.prepare(`
     SELECT coa.id, coa.code, coa.name AS account_name, coa.account_type, coa.normal_balance,
-           COALESCE(SUM(jel.debit_amount), 0) AS total_debit,
-           COALESCE(SUM(jel.credit_amount), 0) AS total_credit,
+           COALESCE(SUM(CASE WHEN je.id IS NOT NULL THEN jel.debit_amount ELSE 0 END), 0) AS total_debit,
+           COALESCE(SUM(CASE WHEN je.id IS NOT NULL THEN jel.credit_amount ELSE 0 END), 0) AS total_credit,
            CASE
              WHEN coa.normal_balance = 'DEBIT'
-               THEN COALESCE(SUM(jel.debit_amount), 0) - COALESCE(SUM(jel.credit_amount), 0)
+               THEN COALESCE(SUM(CASE WHEN je.id IS NOT NULL THEN jel.debit_amount ELSE 0 END), 0) - COALESCE(SUM(CASE WHEN je.id IS NOT NULL THEN jel.credit_amount ELSE 0 END), 0)
              ELSE
-               COALESCE(SUM(jel.credit_amount), 0) - COALESCE(SUM(jel.debit_amount), 0)
+               COALESCE(SUM(CASE WHEN je.id IS NOT NULL THEN jel.credit_amount ELSE 0 END), 0) - COALESCE(SUM(CASE WHEN je.id IS NOT NULL THEN jel.debit_amount ELSE 0 END), 0)
            END AS balance
     FROM chart_of_accounts coa
     LEFT JOIN journal_entry_lines jel ON jel.account_id = coa.id
-    LEFT JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status = 'POSTED' ${periodFilter}
-    WHERE coa.account_type = 'EQUITY' AND coa.is_active = 1
+    LEFT JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status = 'POSTED' ${asOfFilter}
+    WHERE coa.account_type IN ('EQUITY') AND coa.is_active = 1
     GROUP BY coa.id, coa.code, coa.name, coa.account_type, coa.normal_balance
     ORDER BY coa.code ASC
-  `).bind(...params).all();
+  `).bind(...asOfParams).all();
 
   const rows = equityRows || [];
   const capital = rows.find((r: any) => r.code === '3010');
-  const retained = rows.find((r: any) => r.code === '3020');
   const drawings = rows.find((r: any) => r.code === '3040');
 
-  // Net income from income statement
-  let netIncomeParams: any[] = [];
-  let netIncomePFilter = '';
-  if (periodId) { netIncomePFilter = 'AND je.fiscal_period_id = ?'; netIncomeParams.push(periodId); }
-  const { results: revenueRows } = await c.env.DB.prepare(`
-    SELECT COALESCE(SUM(jel.credit_amount - jel.debit_amount), 0) AS total
+  // Net income for the period
+  let periodFilter = '';
+  const pParams: any[] = [];
+  if (selectedPeriod?.start_date && selectedPeriod?.end_date) {
+    periodFilter = 'AND (je.fiscal_period_id = ? OR (je.entry_date >= ? AND je.entry_date <= ?))';
+    pParams.push(selectedPeriod.id, selectedPeriod.start_date, selectedPeriod.end_date);
+  } else if (periodId) {
+    periodFilter = 'AND je.fiscal_period_id = ?';
+    pParams.push(periodId);
+  }
+
+  const { results: netIncomeRows } = await c.env.DB.prepare(`
+    SELECT 
+      COALESCE(SUM(CASE WHEN coa.account_type = 'REVENUE' THEN (jel.credit_amount - jel.debit_amount) ELSE 0 END), 0) -
+      COALESCE(SUM(CASE WHEN coa.account_type IN ('COGS', 'EXPENSE') THEN (jel.debit_amount - jel.credit_amount) ELSE 0 END), 0) AS net_income
     FROM chart_of_accounts coa
     JOIN journal_entry_lines jel ON jel.account_id = coa.id
-    JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status = 'POSTED' ${netIncomePFilter}
-    WHERE coa.account_type = 'REVENUE'
-  `).bind(...netIncomeParams).all();
-  const { results: expenseRows } = await c.env.DB.prepare(`
-    SELECT COALESCE(SUM(jel.debit_amount - jel.credit_amount), 0) AS total
-    FROM chart_of_accounts coa
-    JOIN journal_entry_lines jel ON jel.account_id = coa.id
-    JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status = 'POSTED' ${netIncomePFilter}
-    WHERE coa.account_type IN ('EXPENSE', 'COGS')
-  `).bind(...netIncomeParams).all();
+    JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status = 'POSTED' ${periodFilter}
+    WHERE coa.account_type IN ('REVENUE', 'COGS', 'EXPENSE')
+  `).bind(...pParams).all();
 
-  const totalRevenue = Number((revenueRows?.[0] as any)?.total || 0);
-  const totalExpenses = Number((expenseRows?.[0] as any)?.total || 0);
-  const netIncome = totalRevenue - totalExpenses;
-
+  const netIncome = Number((netIncomeRows?.[0] as any)?.net_income || 0);
   const beginCapital = Number(capital?.balance || 0);
   const drawingsAmt = Number(drawings?.balance || 0);
   const endingEquity = beginCapital + netIncome - drawingsAmt;

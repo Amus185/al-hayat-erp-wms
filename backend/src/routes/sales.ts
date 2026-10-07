@@ -1236,7 +1236,7 @@ sales.post('/orders', requirePermissions(['manage_sales']), async (c) => {
       const entryDate = new Date().toISOString().split('T')[0];
       const [sharedFiscalPeriodId, sharedCoaMap] = await Promise.all([
         fetchOpenFiscalPeriodId(c.env.DB, entryDate),
-        fetchCoaMapForCodes(c.env.DB, ['1010', '1020', '2050', '4010']),
+        fetchCoaMapForCodes(c.env.DB, ['1010', '1020', '1030', '2050', '4010', '5010']),
       ]);
 
       const cogsAmount = await calculateOrderCogs(c.env.DB, id);
@@ -1778,7 +1778,7 @@ sales.post('/orders/:id/complete', requirePermissions(['manage_sales']), async (
       const tGlPre0 = Date.now();
       const [sharedFiscalPeriodId, sharedCoaMap] = await Promise.all([
         fetchOpenFiscalPeriodId(c.env.DB, entryDate),
-        fetchCoaMapForCodes(c.env.DB, ['1010', '1020', '2050', '4010']),
+        fetchCoaMapForCodes(c.env.DB, ['1010', '1020', '1030', '2050', '4010', '5010']),
       ]);
       console.log(`[WATERFALL] +${Date.now() - reqStart}ms | GL pre-fetch (fiscal period + 4 CoA codes) completed (${Date.now() - tGlPre0}ms)`);
 
