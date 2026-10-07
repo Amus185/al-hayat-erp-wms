@@ -9,7 +9,7 @@ import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis,
   CartesianGrid, Tooltip, Legend, PieChart, Pie, Cell,
 } from 'recharts';
-import { apiGet, apiPost, apiPatch } from '../api/client';
+import { apiGet, apiPost, apiPatch, invalidateApiCache } from '../api/client';
 import { DataTable, type Column } from '../components/DataTable';
 import { MetricCard } from '../components/MetricCard';
 import { PageSkeleton } from '../components/LoadingSpinner';
@@ -131,6 +131,7 @@ export function AccountingPage() {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
 
   // Shared data
   const [periods, setPeriods] = useState<any[]>([]);
@@ -267,6 +268,25 @@ export function AccountingPage() {
   useEffect(() => {
     if (!loading && activeTab === 'trial-balance') loadTabData('trial-balance', selectedPeriod);
   }, [trialType]);
+
+  // ── Refresh Handler ──────────────────────────────────────────────
+  async function handleRefresh() {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      invalidateApiCache('/accounting');
+      await Promise.all([
+        loadTabData(activeTab, selectedPeriod),
+        apiGet<any[]>('/accounting/fiscal-periods').then(pList => { if (pList?.length) setPeriods(pList); }).catch(() => {}),
+        apiGet<any[]>('/accounting/chart-of-accounts').then(aList => { if (aList?.length) setAccounts(aList); }).catch(() => {}),
+      ]);
+      addToast('success', 'Accounting data refreshed');
+    } catch (e) {
+      addToast('error', 'Failed to refresh data');
+    } finally {
+      setRefreshing(false);
+    }
+  }
 
   // ── Submit Journal Entry ─────────────────────────────────────────
   async function submitJE() {
@@ -588,9 +608,34 @@ export function AccountingPage() {
         <option value=''>All Periods</option>
         {periods.map((p: any) => <option key={p.id} value={p.id}>{p.name} ({p.status})</option>)}
       </select>
-      <button onClick={() => loadTabData(activeTab, selectedPeriod)}
-        style={{ background: G + '18', border: 'none', color: G, borderRadius: '8px', padding: '8px 14px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', fontWeight: 600 }}>
-        <RefreshCw size={13} />Refresh
+      <button
+        onClick={handleRefresh}
+        disabled={refreshing}
+        title="Refresh accounting data"
+        style={{
+          background: G + '18',
+          border: 'none',
+          color: G,
+          borderRadius: '8px',
+          padding: '8px 14px',
+          cursor: refreshing ? 'not-allowed' : 'pointer',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '6px',
+          fontSize: '13px',
+          fontWeight: 600,
+          opacity: refreshing ? 0.7 : 1,
+          transition: 'all 0.15s ease'
+        }}
+      >
+        <RefreshCw
+          size={13}
+          style={{
+            animation: refreshing ? 'spin 0.8s linear infinite' : 'none',
+            display: 'inline-block'
+          }}
+        />
+        {refreshing ? 'Refreshing...' : 'Refresh'}
       </button>
     </div>
   );
