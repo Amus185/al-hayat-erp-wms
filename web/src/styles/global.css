@@ -1589,7 +1589,7 @@ tbody tr:hover { background: var(--primary-lighter); }
   background: var(--bar-color, #16a34a);
   transform-origin: left center;
   border-radius: 0 0 0 6px;
-  animation: erptoast-progress var(--bar-duration, 4000ms) linear forwards;
+  animation: erptoast-progress var(--bar-duration, 1000ms) linear forwards;
 }
 
 .erptoast__bar--paused {
@@ -1601,10 +1601,6 @@ tbody tr:hover { background: var(--primary-lighter); }
   to   { transform: scaleX(0); }
 }
 
-
-
-
-/* ─── Card & Grid System ─────────────────────────────── */
 /* ─── Card & Grid System ─────────────────────────────── */
 .card-grid {
   display: grid;

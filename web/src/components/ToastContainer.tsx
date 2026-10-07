@@ -92,7 +92,7 @@ interface ToastItemProps {
 }
 
 function ToastItem({ toast, onRemove }: ToastItemProps) {
-  const { type, message, duration = 4000 } = toast;
+  const { type, message, duration = 1000 } = toast;
   const cfg = CONFIG[type];
   const [exiting, setExiting] = useState(false);
   const [paused, setPaused] = useState(false);
