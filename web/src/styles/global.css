@@ -1434,6 +1434,191 @@ tbody tr:hover { background: var(--primary-lighter); }
   z-index: 99999 !important;
 }
 
+/* ── Modern Enterprise Toast Notifications (Linear / Stripe / Vercel Aesthetic) ── */
+.swal2-container.swal2-top-end,
+.swal2-container.swal2-top-right {
+  padding: 16px 20px 0 0 !important;
+  pointer-events: none !important;
+}
+
+.swal2-popup.swal2-toast.swal2-modern-toast {
+  pointer-events: auto !important;
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center !important;
+  background: rgba(255, 255, 255, 0.98) !important;
+  backdrop-filter: blur(20px) saturate(180%) !important;
+  -webkit-backdrop-filter: blur(20px) saturate(180%) !important;
+  border: 1px solid rgba(15, 23, 42, 0.08) !important;
+  border-radius: 14px !important;
+  padding: 11px 15px !important;
+  box-shadow: 
+    0 12px 28px -4px rgba(15, 23, 42, 0.12),
+    0 4px 10px -2px rgba(15, 23, 42, 0.06),
+    0 0 0 1px rgba(15, 23, 42, 0.04) !important;
+  position: relative !important;
+  overflow: hidden !important;
+  min-width: 320px !important;
+  max-width: 450px !important;
+  width: auto !important;
+  margin-bottom: 10px !important;
+  animation: swalModernToastIn 0.32s cubic-bezier(0.16, 1, 0.3, 1) forwards !important;
+  box-sizing: border-box !important;
+}
+
+@keyframes swalModernToastIn {
+  0% {
+    opacity: 0;
+    transform: translateY(-12px) scale(0.96);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* Suppress default SweetAlert icon on modern toast */
+.swal2-popup.swal2-modern-toast .swal2-icon {
+  display: none !important;
+}
+
+/* Clean HTML Container */
+.swal2-popup.swal2-modern-toast .swal2-html-container.swal2-modern-toast-html {
+  margin: 0 !important;
+  padding: 0 !important;
+  width: 100% !important;
+  overflow: visible !important;
+  text-align: left !important;
+}
+
+.swal2-modern-toast-inner {
+  display: flex !important;
+  align-items: center !important;
+  gap: 12px !important;
+  width: 100% !important;
+}
+
+.swal2-modern-toast-content {
+  flex: 1 1 auto !important;
+  min-width: 0 !important;
+}
+
+.swal2-modern-toast-message {
+  display: inline-block !important;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
+  font-size: 13.5px !important;
+  font-weight: 550 !important;
+  color: #0f172a !important;
+  line-height: 1.42 !important;
+  letter-spacing: -0.01em !important;
+  word-break: break-word !important;
+}
+
+/* Modern SVG Icon Badges */
+.swal2-toast-icon-badge {
+  width: 32px !important;
+  height: 32px !important;
+  min-width: 32px !important;
+  border-radius: 9px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  flex-shrink: 0 !important;
+}
+
+/* Success: Emerald */
+.swal2-toast-icon-badge--success {
+  background: linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%) !important;
+  color: #059669 !important;
+  border: 1px solid rgba(16, 185, 129, 0.28) !important;
+  box-shadow: 0 2px 6px rgba(16, 185, 129, 0.15) !important;
+}
+
+/* Error: Crimson */
+.swal2-toast-icon-badge--error {
+  background: linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%) !important;
+  color: #dc2626 !important;
+  border: 1px solid rgba(239, 68, 68, 0.28) !important;
+  box-shadow: 0 2px 6px rgba(239, 68, 68, 0.15) !important;
+}
+
+/* Warning: Amber */
+.swal2-toast-icon-badge--warning {
+  background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%) !important;
+  color: #d97706 !important;
+  border: 1px solid rgba(245, 158, 11, 0.28) !important;
+  box-shadow: 0 2px 6px rgba(245, 158, 11, 0.15) !important;
+}
+
+/* Info: Indigo / Blue */
+.swal2-toast-icon-badge--info {
+  background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%) !important;
+  color: #2563eb !important;
+  border: 1px solid rgba(59, 130, 246, 0.28) !important;
+  box-shadow: 0 2px 6px rgba(59, 130, 246, 0.15) !important;
+}
+
+/* Modern Minimalist Close Button */
+.swal2-popup.swal2-modern-toast .swal2-close.swal2-modern-toast-close {
+  position: static !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  margin-left: 8px !important;
+  margin-right: -4px !important;
+  width: 22px !important;
+  height: 22px !important;
+  min-width: 22px !important;
+  border-radius: 6px !important;
+  color: #94a3b8 !important;
+  font-family: inherit !important;
+  font-size: 16px !important;
+  line-height: 1 !important;
+  transition: all 0.15s ease !important;
+  background: transparent !important;
+  border: none !important;
+  cursor: pointer !important;
+  padding: 0 !important;
+  box-shadow: none !important;
+}
+
+.swal2-popup.swal2-modern-toast .swal2-close.swal2-modern-toast-close:hover {
+  color: #0f172a !important;
+  background: rgba(0, 0, 0, 0.06) !important;
+}
+
+/* Sleek Hairline Gradient Progress Bar */
+.swal2-popup.swal2-modern-toast .swal2-timer-progress-bar.swal2-modern-toast-progress {
+  position: absolute !important;
+  bottom: 0 !important;
+  left: 0 !important;
+  height: 2.5px !important;
+  opacity: 0.9 !important;
+  border-bottom-left-radius: 14px !important;
+  border-bottom-right-radius: 14px !important;
+}
+
+.swal2-toast--success .swal2-timer-progress-bar {
+  background: linear-gradient(90deg, #10b981, #059669) !important;
+  box-shadow: 0 0 6px rgba(16, 185, 129, 0.4) !important;
+}
+
+.swal2-toast--error .swal2-timer-progress-bar {
+  background: linear-gradient(90deg, #f43f5e, #dc2626) !important;
+  box-shadow: 0 0 6px rgba(239, 68, 68, 0.4) !important;
+}
+
+.swal2-toast--warning .swal2-timer-progress-bar {
+  background: linear-gradient(90deg, #f59e0b, #d97706) !important;
+  box-shadow: 0 0 6px rgba(245, 158, 11, 0.4) !important;
+}
+
+.swal2-toast--info .swal2-timer-progress-bar {
+  background: linear-gradient(90deg, #3b82f6, #2563eb) !important;
+  box-shadow: 0 0 6px rgba(59, 130, 246, 0.4) !important;
+}
+
+
 /* ─── Card & Grid System ─────────────────────────────── */
 .card-grid {
   display: grid;

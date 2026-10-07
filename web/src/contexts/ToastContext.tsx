@@ -31,7 +31,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     (type: ToastType, message: string, duration = 4000) => {
       const id = `toast-${++toastCounter}`;
       setToasts((prev) => [...prev, { id, type, message, duration }]);
-      showToast(message, type);
+      showToast(message, type, duration);
       if (duration > 0) {
         setTimeout(() => removeToast(id), duration);
       }
