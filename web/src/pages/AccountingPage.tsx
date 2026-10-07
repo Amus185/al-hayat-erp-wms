@@ -956,16 +956,37 @@ export function AccountingPage() {
                     </StmtCard>
 
                     <StmtCard title='Revenue Breakdown'>
-                      {(incomeStmt.revenue || []).length > 0 ? (
-                        <ResponsiveContainer width='100%' height={180}>
-                          <PieChart>
-                            <Pie data={incomeStmt.revenue} dataKey='amount' nameKey='name' cx='50%' cy='50%' outerRadius={70} label={({ name, percent }: any) => `${name?.slice(0, 12)}: ${(percent * 100).toFixed(0)}%`}>
-                              {(incomeStmt.revenue || []).map((_: any, i: number) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
-                            </Pie>
-                            <Tooltip formatter={(v: number) => fmt(v)} />
-                          </PieChart>
-                        </ResponsiveContainer>
-                      ) : <p style={{ padding: '20px', color: '#9ca3af', textAlign: 'center' }}>No revenue data posted yet.</p>}
+                      {(() => {
+                        const activeRevenue = (incomeStmt.revenue || []).filter((r: any) => Number(r.amount || 0) > 0);
+                        if (activeRevenue.length === 0) {
+                          return <p style={{ padding: '20px', color: '#9ca3af', textAlign: 'center' }}>No revenue data posted yet.</p>;
+                        }
+                        return (
+                          <div style={{ padding: '8px' }}>
+                            <ResponsiveContainer width='100%' height={190}>
+                              <PieChart>
+                                <Pie
+                                  data={activeRevenue}
+                                  dataKey='amount'
+                                  nameKey='name'
+                                  cx='50%'
+                                  cy='50%'
+                                  outerRadius={65}
+                                  innerRadius={25}
+                                  paddingAngle={activeRevenue.length > 1 ? 3 : 0}
+                                  label={({ name, percent }: any) => `${name}: ${(percent * 100).toFixed(0)}%`}
+                                  labelLine={{ stroke: '#64748b', strokeWidth: 1 }}
+                                >
+                                  {activeRevenue.map((_: any, i: number) => (
+                                    <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
+                                  ))}
+                                </Pie>
+                                <Tooltip formatter={(v: number) => [fmt(v), 'Revenue']} />
+                              </PieChart>
+                            </ResponsiveContainer>
+                          </div>
+                        );
+                      })()}
                     </StmtCard>
                   </div>
                 </div>

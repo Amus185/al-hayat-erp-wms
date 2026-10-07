@@ -594,15 +594,44 @@ accounting.get('/balance-sheet', requirePermissions(['view_reports']), async (c)
   const liabilities = rows.filter((r: any) => r.account_type === 'LIABILITY');
   const equity = rows.filter((r: any) => r.account_type === 'EQUITY');
 
+  // Calculate Current Period Net Income (unclosed revenue & expense accounts for the period)
+  const netIncomeRes = await c.env.DB.prepare(`
+    SELECT 
+      COALESCE(SUM(CASE WHEN coa.account_type = 'REVENUE' THEN (jel.credit_amount - jel.debit_amount) ELSE 0 END), 0) -
+      COALESCE(SUM(CASE WHEN coa.account_type IN ('COGS', 'EXPENSE') THEN (jel.debit_amount - jel.credit_amount) ELSE 0 END), 0) AS net_income
+    FROM chart_of_accounts coa
+    JOIN journal_entry_lines jel ON jel.account_id = coa.id
+    JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status = 'POSTED' ${periodFilter}
+    WHERE coa.account_type IN ('REVENUE', 'COGS', 'EXPENSE')
+  `).bind(...params).first() as any;
+
+  const currentPeriodNetIncome = Number(netIncomeRes?.net_income || 0);
+
+  const equityList = [...equity];
+  if (Math.abs(currentPeriodNetIncome) > 0.0001 || equityList.length === 0) {
+    equityList.push({
+      id: 'equity-current-period-net-income',
+      code: '3990',
+      account_name: 'Current Period Net Income',
+      account_type: 'EQUITY',
+      normal_balance: 'CREDIT',
+      branch_name: null,
+      branch_id: null,
+      total_debit: currentPeriodNetIncome < 0 ? Math.abs(currentPeriodNetIncome) : 0,
+      total_credit: currentPeriodNetIncome > 0 ? currentPeriodNetIncome : 0,
+      balance: currentPeriodNetIncome,
+    });
+  }
+
   const totalAssets = assets.reduce((s: number, r: any) => s + Number(r.balance), 0);
   const totalLiabilities = liabilities.reduce((s: number, r: any) => s + Number(r.balance), 0);
-  const totalEquity = equity.reduce((s: number, r: any) => s + Number(r.balance), 0);
+  const totalEquity = equity.reduce((s: number, r: any) => s + Number(r.balance), 0) + currentPeriodNetIncome;
 
   return c.json({
     period_id: periodId,
     assets,
     liabilities,
-    equity,
+    equity: equityList,
     totals: {
       total_assets: totalAssets,
       total_liabilities: totalLiabilities,
