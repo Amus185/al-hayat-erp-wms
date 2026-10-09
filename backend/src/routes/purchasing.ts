@@ -3,7 +3,7 @@ import { Env, uuidv4 } from '../db';
 import { PgAdapter } from '../pg-client';
 import { authMiddleware, requirePermissions } from '../middleware/auth';
 import { logAudit, createAuditLogStmt } from '../services/audit';
-import { postPurchaseApprovalJournalEntry, postPurchasePaymentJournalEntry } from '../services/accounting-service';
+import { prepareJournalEntryPosting } from '../services/accounting-service';
 
 const purchasing = new Hono<{ Bindings: Env; Variables: { jwtPayload: any } }>();
 
@@ -598,21 +598,25 @@ purchasing.post('/receipts', requirePermissions(['manage_purchasing']), async (c
     batchValue
   }));
 
-  await c.env.DB.batch(stmts);
-
-  // 4. Automatically post double-entry GL journal entry for the received batch
-  try {
-    if (batchValue > 0) {
-      await postPurchaseApprovalJournalEntry(
-        c,
-        { id: po.id as string, po_number: po.po_number || po.id, branch_id: po.branch_id },
-        batchValue,
-        userId
-      );
-    }
-  } catch (glErr) {
-    console.warn('Accounting entry warning for goods receipt:', glErr);
+  // The receipt, physical stock and inventory accounting must commit together.
+  // Receipt ID (not PO ID) is the idempotency key because a PO can be received
+  // in multiple batches.
+  if (batchValue > 0) {
+    const preparedJournal = await prepareJournalEntryPosting(c, {
+      description: `Purchase Goods Received #${receiptNumber}`,
+      referenceType: 'PURCHASE',
+      referenceId: receiptId,
+      branchId: po.branch_id || null,
+      userId,
+      lines: [
+        { accountCode: '1030', debitAmount: batchValue, creditAmount: 0 },
+        { accountCode: '2010', debitAmount: 0, creditAmount: batchValue },
+      ],
+    });
+    stmts.push(...preparedJournal.statements);
   }
+
+  await c.env.DB.batch(stmts);
 
   const { results: receiptRows } = await c.env.DB.prepare('SELECT * FROM goods_receipts WHERE id = ?').bind(receiptId).all();
   return c.json({ success: true, receipt: receiptRows?.[0], newStatus }, 201);
@@ -698,19 +702,21 @@ purchasing.post('/invoices/:id/payments', requirePermissions(['manage_purchasing
     amount, paymentMethod, paymentDate, isFullyPaid
   }));
 
-  await c.env.DB.batch(stmts);
+  const paymentJournal = await prepareJournalEntryPosting(c, {
+    description: `Payment to Supplier for Invoice #${invoice.invoice_number || invoice.id}`,
+    referenceType: 'PURCHASE',
+    referenceId: paymentId,
+    entryDate: paymentDate,
+    branchId: invoice.branch_id || null,
+    userId,
+    lines: [
+      { accountCode: '2010', debitAmount: amount, creditAmount: 0 },
+      { accountCode: '1010', debitAmount: 0, creditAmount: amount },
+    ],
+  });
+  stmts.push(...paymentJournal.statements);
 
-  // Automatically post double-entry GL journal entry for Purchase Payment (Must succeed)
-  try {
-    await postPurchasePaymentJournalEntry(
-      c,
-      { id: paymentId, amount, paymentDate },
-      { id: invoice.id, invoice_number: invoice.invoice_number || invoice.id, branch_id: invoice.branch_id },
-      userId
-    );
-  } catch (glErr) {
-    console.warn('Accounting entry warning for purchase payment:', glErr);
-  }
+  await c.env.DB.batch(stmts);
 
   // Return updated summary
   const newSummary = await getPurchaseInvoicePaymentSummary(

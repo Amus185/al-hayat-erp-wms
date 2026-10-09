@@ -147,12 +147,22 @@ export async function getAccountIdByCode(
 
 /**
  * Dynamic Inventory Costing Extension Point
- * Computes Cost of Goods Sold (COGS) for a sales order using product cost prices.
- * Extension point for FIFO / Weighted Average Valuation.
+ * Computes Cost of Goods Sold (COGS) for a sales order using the weighted
+ * actual unit cost of completed goods receipts. Product cost is only a
+ * fallback for opening stock or products with no receipt history.
  */
 export async function calculateOrderCogs(db: any, orderId: string): Promise<number> {
   const { results: lines } = await db.prepare(`
-    SELECT sol.quantity, sol.product_id, p.cost_price, COALESCE(p.product_type, 'STANDARD') AS product_type
+    SELECT sol.quantity, sol.product_id,
+           COALESCE((
+             SELECT SUM(COALESCE(grl.line_total, grl.quantity_received * grl.unit_cost)) /
+                    NULLIF(SUM(grl.quantity_received), 0)
+             FROM goods_receipt_lines grl
+             JOIN goods_receipts gr ON gr.id = grl.goods_receipt_id
+             WHERE grl.product_id = sol.product_id
+               AND COALESCE(gr.status, 'COMPLETED') != 'CANCELLED'
+           ), p.cost_price, 0) AS cost_price,
+           COALESCE(p.product_type, 'STANDARD') AS product_type
     FROM sales_order_lines sol
     JOIN products p ON p.id = sol.product_id
     WHERE sol.sales_order_id = ?
@@ -163,7 +173,15 @@ export async function calculateOrderCogs(db: any, orderId: string): Promise<numb
     const qty = Number(line.quantity || 0);
     if (line.product_type === 'GROUPED') {
       const { results: components } = await db.prepare(`
-        SELECT pgi.quantity, cp.cost_price
+        SELECT pgi.quantity,
+               COALESCE((
+                 SELECT SUM(COALESCE(grl.line_total, grl.quantity_received * grl.unit_cost)) /
+                        NULLIF(SUM(grl.quantity_received), 0)
+                 FROM goods_receipt_lines grl
+                 JOIN goods_receipts gr ON gr.id = grl.goods_receipt_id
+                 WHERE grl.product_id = cp.id
+                   AND COALESCE(gr.status, 'COMPLETED') != 'CANCELLED'
+               ), cp.cost_price, 0) AS cost_price
         FROM product_group_items pgi
         JOIN products cp ON cp.id = pgi.component_product_id
         WHERE pgi.parent_product_id = ?
@@ -186,10 +204,10 @@ export async function calculateOrderCogs(db: any, orderId: string): Promise<numb
  * Creates a balanced Journal Entry, inserts its lines, and posts directly to
  * General Ledger. Idempotent: returns existing ID if already posted.
  */
-export async function createAndPostJournalEntry(
+export async function prepareJournalEntryPosting(
   c: any,
   params: PostJournalParams
-): Promise<string | null> {
+): Promise<{ entryId: string | null; statements: any[] }> {
   const db = c.env.DB;
 
   // ── Idempotency Check: Prevent duplicate postings ─────────────────────────
@@ -198,15 +216,12 @@ export async function createAndPostJournalEntry(
       "SELECT id FROM journal_entries WHERE reference_type = ? AND reference_id = ? AND status = 'POSTED' LIMIT 1"
     ).bind(params.referenceType, params.referenceId).first().catch(() => null);
     if (existing?.id) {
-      // Verify it actually has lines (not an orphan from a previous failed batch)
       const lineCount = await db.prepare(
         'SELECT COUNT(*) AS cnt FROM journal_entry_lines WHERE journal_entry_id = ?'
       ).bind(existing.id).first().catch(() => null);
-      const hasLines = Number((lineCount as any)?.cnt || 0) > 0;
-      if (hasLines) {
-        return existing.id as string; // Genuine duplicate — skip
+      if (Number((lineCount as any)?.cnt || 0) > 0) {
+        return { entryId: existing.id as string, statements: [] };
       }
-      // Orphan header (no lines) — delete it and re-post
       await db.prepare('DELETE FROM journal_entries WHERE id = ?').bind(existing.id).run().catch(() => {});
     }
   }
@@ -267,7 +282,9 @@ export async function createAndPostJournalEntry(
     });
   }
 
-  if (resolvedLines.length === 0) return null;
+  if (resolvedLines.length === 0 || Math.abs(totalDebit - totalCredit) > 0.0001) {
+    throw new Error(`Journal entry is not balanced or has no valid lines: ${params.description}`);
+  }
 
   // ── Running balance pre-fetch ─────────────────────────────────────────────
   // Fetch the latest running_balance for each account in this entry.
@@ -388,8 +405,22 @@ export async function createAndPostJournalEntry(
     );
   }
 
-  await db.batch(stmts);
-  return entryId;
+  return { entryId, statements: stmts };
+}
+
+/**
+ * Creates and posts a journal entry in its own transaction. Use
+ * prepareJournalEntryPosting when it must commit with another business event.
+ */
+export async function createAndPostJournalEntry(
+  c: any,
+  params: PostJournalParams
+): Promise<string | null> {
+  const prepared = await prepareJournalEntryPosting(c, params);
+  if (prepared.statements.length > 0) {
+    await c.env.DB.batch(prepared.statements);
+  }
+  return prepared.entryId;
 }
 
 
@@ -541,7 +572,8 @@ export async function postManufacturingCompletionJournalEntry(
 /**
  * Journal Entry for Installation Fee Paid to Technician
  * DR: Technician Installation Fees Payable (2050)
- * CR: Cash & Cash Equivalents (1010)
+ * CR: Cash & Cash Equivalents (1010), or Accounts Payable (2010) when the
+ * expense payment method records a supplier balance.
  */
 export async function postInstallationPayoutJournalEntry(
   c: any,
@@ -600,10 +632,12 @@ export async function postCustomerPaymentJournalEntry(
  */
 export async function postExpenseJournalEntry(
   c: any,
-  expense: { id: string; title: string; amount: number; category: string; expense_date: string; branch_id?: string },
+  expense: { id: string; title: string; amount: number; category: string; expense_date: string; branch_id?: string; payment_method?: string },
   userId?: string
 ) {
   const expenseCode = ['Rent', 'Salaries', 'Utilities', 'Maintenance'].includes(expense.category) ? '6010' : '6050';
+  const method = String(expense.payment_method || 'CASH').toUpperCase();
+  const payable = ['CREDIT', 'ON_ACCOUNT', 'UNPAID', 'PAYABLE'].includes(method);
 
   return createAndPostJournalEntry(c, {
     description: `Expense Paid: ${expense.title} (${expense.category})`,
@@ -614,7 +648,7 @@ export async function postExpenseJournalEntry(
     userId,
     lines: [
       { accountCode: expenseCode, debitAmount: expense.amount, creditAmount: 0 },
-      { accountCode: '1010', debitAmount: 0, creditAmount: expense.amount },
+      { accountCode: payable ? '2010' : '1010', debitAmount: 0, creditAmount: expense.amount },
     ],
   });
 }
@@ -774,6 +808,104 @@ export async function reconcileMissingSalesJournalEntries(c: any): Promise<numbe
     console.error('reconcileMissingSalesJournalEntries error:', err);
   }
   return count;
+}
+
+/**
+ * Backfills only goods receipts whose value is absent from 1030. Legacy
+ * entries were keyed to a purchase order, so their value is allocated to the
+ * earliest receipts first. Ambiguous partial values are reported, never
+ * guessed or posted as a balancing adjustment.
+ */
+export async function reconcileMissingReceiptJournalEntries(c: any): Promise<{
+  created: number;
+  coveredByLegacyEntries: number;
+  exceptions: { receipt_id: string; receipt_number: string; receipt_value: number; legacy_unallocated_value: number }[];
+}> {
+  const db = c.env.DB;
+  const { results: receiptRows } = await db.prepare(`
+    SELECT gr.id, gr.receipt_number, gr.purchase_order_id, gr.received_at,
+           po.po_number, po.branch_id,
+           COALESCE(SUM(grl.line_total), 0) AS receipt_value
+    FROM goods_receipts gr
+    JOIN purchase_orders po ON po.id = gr.purchase_order_id
+    JOIN goods_receipt_lines grl ON grl.goods_receipt_id = gr.id
+    WHERE COALESCE(gr.status, 'COMPLETED') != 'CANCELLED'
+    GROUP BY gr.id, gr.receipt_number, gr.purchase_order_id, gr.received_at, po.po_number, po.branch_id
+    ORDER BY gr.purchase_order_id, gr.received_at, gr.id
+  `).all();
+
+  let created = 0;
+  let coveredByLegacyEntries = 0;
+  const exceptions: { receipt_id: string; receipt_number: string; receipt_value: number; legacy_unallocated_value: number }[] = [];
+  const legacyRemaining = new Map<string, number>();
+
+  for (const receipt of (receiptRows || []) as any[]) {
+    const value = Number(receipt.receipt_value || 0);
+    if (value <= 0) continue;
+
+    const ownJournal = await db.prepare(`
+      SELECT COALESCE(SUM(jel.debit_amount - jel.credit_amount), 0) AS inventory_value
+      FROM journal_entries je
+      JOIN journal_entry_lines jel ON jel.journal_entry_id = je.id
+      JOIN chart_of_accounts coa ON coa.id = jel.account_id
+      WHERE je.status = 'POSTED' AND je.reference_type = 'PURCHASE'
+        AND je.reference_id = ? AND coa.code = '1030'
+    `).bind(receipt.id).first() as any;
+    const ownValue = Number(ownJournal?.inventory_value || 0);
+    if (Math.abs(ownValue - value) < 0.01) continue;
+    if (Math.abs(ownValue) > 0.01) {
+      exceptions.push({
+        receipt_id: receipt.id,
+        receipt_number: receipt.receipt_number,
+        receipt_value: value,
+        legacy_unallocated_value: ownValue,
+      });
+      continue;
+    }
+
+    if (!legacyRemaining.has(receipt.purchase_order_id)) {
+      const legacy = await db.prepare(`
+        SELECT COALESCE(SUM(jel.debit_amount - jel.credit_amount), 0) AS inventory_value
+        FROM journal_entries je
+        JOIN journal_entry_lines jel ON jel.journal_entry_id = je.id
+        JOIN chart_of_accounts coa ON coa.id = jel.account_id
+        WHERE je.status = 'POSTED' AND je.reference_type = 'PURCHASE'
+          AND je.reference_id = ? AND coa.code = '1030'
+      `).bind(receipt.purchase_order_id).first() as any;
+      legacyRemaining.set(receipt.purchase_order_id, Number(legacy?.inventory_value || 0));
+    }
+
+    const remainingLegacy = legacyRemaining.get(receipt.purchase_order_id) || 0;
+    if (remainingLegacy >= value - 0.01) {
+      legacyRemaining.set(receipt.purchase_order_id, remainingLegacy - value);
+      coveredByLegacyEntries++;
+      continue;
+    }
+    if (remainingLegacy > 0.01) {
+      exceptions.push({
+        receipt_id: receipt.id,
+        receipt_number: receipt.receipt_number,
+        receipt_value: value,
+        legacy_unallocated_value: remainingLegacy,
+      });
+      continue;
+    }
+
+    const entryId = await createAndPostJournalEntry(c, {
+      description: `Historical Goods Receipt #${receipt.receipt_number}`,
+      referenceType: 'PURCHASE',
+      referenceId: receipt.id,
+      branchId: receipt.branch_id || null,
+      entryDate: String(receipt.received_at).slice(0, 10),
+      lines: [
+        { accountCode: '1030', debitAmount: value, creditAmount: 0 },
+        { accountCode: '2010', debitAmount: 0, creditAmount: value },
+      ],
+    });
+    if (entryId) created++;
+  }
+
+  return { created, coveredByLegacyEntries, exceptions };
 }
 
 // ─── ASSETS & INVESTMENTS GL POSTING FUNCTIONS ──────────────────────────

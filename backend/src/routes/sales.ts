@@ -11,6 +11,7 @@ import {
   calculateOrderCogs,
   postInstallationPayoutJournalEntry,
   createAndPostJournalEntry,
+  prepareJournalEntryPosting,
   reverseJournalEntry,
 } from '../services/accounting-service';
 
@@ -1767,50 +1768,54 @@ sales.post('/orders/:id/complete', requirePermissions(['manage_sales']), async (
     stmts.push(c.env.DB.prepare("UPDATE sales_orders SET status = ?, is_credit_sale = ? WHERE id = ?").bind(orderFinalStatus, isCreditSale || !isFullPay ? 1 : 0, orderId));
     stmts.push(createAuditLogStmt(c, 'SALES_ORDER_COMPLETE', 'sales_orders', orderId, { status: validSource }, { status: orderFinalStatus, invoiceId, total: grandTotal, amountPaid, remainingBalance }));
 
+    // Invoice, stock issue, revenue/COGS, and any customer payment are one
+    // accounting event. A journal failure therefore rolls back the sale.
+    const entryDate = new Date().toISOString().split('T')[0];
+    const [sharedFiscalPeriodId, sharedCoaMap] = await Promise.all([
+      fetchOpenFiscalPeriodId(c.env.DB, entryDate),
+      fetchCoaMapForCodes(c.env.DB, ['1010', '1020', '1030', '2050', '4010', '5010']),
+    ]);
+    const cogsAmount = await calculateOrderCogs(c.env.DB, order.id as string);
+    const saleJournal = await prepareJournalEntryPosting(c, {
+      description: `Sales Order Completed & Invoiced #${(order as any).order_number || order.id}`,
+      referenceType: 'SALE',
+      referenceId: order.id as string,
+      branchId: (order as any).branch_id ? String((order as any).branch_id) : null,
+      userId,
+      prefetchedFiscalPeriodId: sharedFiscalPeriodId || undefined,
+      prefetchedCoaMap: sharedCoaMap,
+      lines: [
+        { accountCode: '1020', debitAmount: total + installFee, creditAmount: 0 },
+        { accountCode: '4010', debitAmount: 0, creditAmount: total },
+        ...(installFee > 0 ? [{ accountCode: '2050', debitAmount: 0, creditAmount: installFee }] : []),
+        ...(cogsAmount > 0 ? [
+          { accountCode: '5010', debitAmount: cogsAmount, creditAmount: 0 },
+          { accountCode: '1030', debitAmount: 0, creditAmount: cogsAmount },
+        ] : []),
+      ],
+    });
+    stmts.push(...saleJournal.statements);
+
+    if (amountPaid > 0) {
+      const paymentJournal = await prepareJournalEntryPosting(c, {
+        description: `Customer Payment Received for Order #${(order as any).order_number || order.id}`,
+        referenceType: 'SALE',
+        referenceId: invoiceId,
+        branchId: (order as any).branch_id ? String((order as any).branch_id) : null,
+        userId,
+        prefetchedFiscalPeriodId: sharedFiscalPeriodId || undefined,
+        prefetchedCoaMap: sharedCoaMap,
+        lines: [
+          { accountCode: '1010', debitAmount: amountPaid, creditAmount: 0 },
+          { accountCode: '1020', debitAmount: 0, creditAmount: amountPaid },
+        ],
+      });
+      stmts.push(...paymentJournal.statements);
+    }
+
     const tBatch0 = Date.now();
     await c.env.DB.batch(stmts);
     console.log(`[WATERFALL] +${Date.now() - reqStart}ms | Main sale write batch (${stmts.length} stmts) completed (${Date.now() - tBatch0}ms)`);
-
-    // Automatically post double-entry GL journal entries for Sale Completion & Payment
-    try {
-      const entryDate = new Date().toISOString().split('T')[0];
-
-      const tGlPre0 = Date.now();
-      const [sharedFiscalPeriodId, sharedCoaMap] = await Promise.all([
-        fetchOpenFiscalPeriodId(c.env.DB, entryDate),
-        fetchCoaMapForCodes(c.env.DB, ['1010', '1020', '1030', '2050', '4010', '5010']),
-      ]);
-      console.log(`[WATERFALL] +${Date.now() - reqStart}ms | GL pre-fetch (fiscal period + 4 CoA codes) completed (${Date.now() - tGlPre0}ms)`);
-
-      const tGl1_0 = Date.now();
-      const cogsAmount = await calculateOrderCogs(c.env.DB, order.id as string);
-      await postSaleJournalEntry(
-        c,
-        { id: order.id as string, order_number: (order as any).order_number as string || (order.id as string), branch_id: (order as any).branch_id ? String((order as any).branch_id) : undefined },
-        total,
-        cogsAmount,
-        userId,
-        sharedFiscalPeriodId || undefined,
-        sharedCoaMap,
-        installFee
-      );
-      console.log(`[WATERFALL] +${Date.now() - reqStart}ms | postSaleJournalEntry completed (${Date.now() - tGl1_0}ms)`);
-
-      if (amountPaid > 0) {
-        const tGl2_0 = Date.now();
-        await postCustomerPaymentJournalEntry(
-          c,
-          { id: invoiceId, amount: amountPaid },
-          { id: order.id as string, order_number: (order as any).order_number as string || (order.id as string), branch_id: (order as any).branch_id as string },
-          userId,
-          sharedFiscalPeriodId,
-          sharedCoaMap
-        );
-        console.log(`[WATERFALL] +${Date.now() - reqStart}ms | postCustomerPaymentJournalEntry completed (${Date.now() - tGl2_0}ms)`);
-      }
-    } catch (glErr) {
-      console.error('Non-fatal GL posting error:', glErr);
-    }
 
     console.log(`[WATERFALL] +${Date.now() - reqStart}ms | Complete sale request finished! Sending JSON response.`);
     return c.json({ success: true, invoiceId, total, amountPaid, balance: remainingBalance, receipt_number: receiptNumber });
@@ -1849,7 +1854,7 @@ sales.post('/invoices/:id/payments', requirePermissions(['manage_sales']), async
 
   // Fetch invoice
   const invoice = await c.env.DB.prepare(
-    'SELECT i.*, so.id AS order_id FROM invoices i JOIN sales_orders so ON so.id = i.sales_order_id WHERE i.id = ?'
+    'SELECT i.*, so.id AS order_id, so.branch_id FROM invoices i JOIN sales_orders so ON so.id = i.sales_order_id WHERE i.id = ?'
   ).bind(invoiceId).first();
   if (!invoice) return c.json({ message: 'Invoice not found.' }, 404);
 
@@ -1894,19 +1899,21 @@ sales.post('/invoices/:id/payments', requirePermissions(['manage_sales']), async
     amount, paymentMethod, paymentDate, isFullyPaid
   }));
 
-  await c.env.DB.batch(stmts);
+  const paymentJournal = await prepareJournalEntryPosting(c, {
+    description: `Customer Payment Received for Invoice #${(invoice as any).invoice_number || invoiceId}`,
+    referenceType: 'SALE',
+    referenceId: paymentId,
+    entryDate: paymentDate,
+    branchId: (invoice as any).branch_id || null,
+    userId,
+    lines: [
+      { accountCode: '1010', debitAmount: amount, creditAmount: 0 },
+      { accountCode: '1020', debitAmount: 0, creditAmount: amount },
+    ],
+  });
+  stmts.push(...paymentJournal.statements);
 
-  // Automatically post double-entry GL journal entry for Customer Payment
-  try {
-    await postCustomerPaymentJournalEntry(
-      c,
-      { id: paymentId, amount, paymentDate },
-      { id: (invoice as any).order_id, order_number: (invoice as any).invoice_number || (invoice as any).id, branch_id: (invoice as any).branch_id },
-      userId
-    );
-  } catch (accErr) {
-    console.error('Failed to post customer payment accounting entry:', accErr);
-  }
+  await c.env.DB.batch(stmts);
 
   // Return updated summary
   const newSummary = await getInvoicePaymentSummary(

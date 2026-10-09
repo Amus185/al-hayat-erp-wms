@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { Env, uuidv4 } from '../db';
 import { authMiddleware, requirePermissions, isAdminUser } from '../middleware/auth';
 import { createAuditLogStmt } from '../services/audit';
-import { postExpenseJournalEntry } from '../services/accounting-service';
+import { prepareJournalEntryPosting } from '../services/accounting-service';
 
 const expenses = new Hono<{ Bindings: Env; Variables: { jwtPayload: any } }>();
 
@@ -105,6 +105,22 @@ expenses.post('/', requirePermissions(['manage_purchasing']), async (c) => {
 
   const id = uuidv4();
 
+  const expenseAccount = ['Rent', 'Salaries', 'Utilities', 'Maintenance'].includes(body.category.trim()) ? '6010' : '6050';
+  const method = String(body.payment_method || 'CASH').toUpperCase();
+  const payable = ['CREDIT', 'ON_ACCOUNT', 'UNPAID', 'PAYABLE'].includes(method);
+  const preparedJournal = await prepareJournalEntryPosting(c, {
+    description: `Expense Paid: ${body.title.trim()} (${body.category.trim()})`,
+    referenceType: 'EXPENSE',
+    referenceId: id,
+    entryDate: body.expense_date,
+    branchId: branchId || null,
+    userId,
+    lines: [
+      { accountCode: expenseAccount, debitAmount: body.amount, creditAmount: 0 },
+      { accountCode: payable ? '2010' : '1010', debitAmount: 0, creditAmount: body.amount },
+    ],
+  });
+
   await c.env.DB.batch([
     c.env.DB.prepare(`
       INSERT INTO expenses (id, title, amount, category, expense_date, branch_id, payment_method, notes, recorded_by)
@@ -117,17 +133,8 @@ expenses.post('/', requirePermissions(['manage_purchasing']), async (c) => {
     createAuditLogStmt(c, 'EXPENSE_CREATE', 'expenses', id, null, {
       title: body.title, amount: body.amount, category: body.category, branch_id: branchId
     }),
+    ...preparedJournal.statements,
   ]);
-
-  // Auto-post double-entry journal to Accounting (Must succeed or expense creation fails)
-  await postExpenseJournalEntry(c, {
-    id,
-    title: body.title.trim(),
-    amount: body.amount,
-    category: body.category.trim(),
-    expense_date: body.expense_date,
-    branch_id: branchId || undefined,
-  }, userId);
 
   const row = await c.env.DB.prepare('SELECT * FROM expenses WHERE id = ?').bind(id).first();
   return c.json(row, 201);

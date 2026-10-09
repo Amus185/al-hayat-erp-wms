@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { Env } from '../db';
 import { authMiddleware, requirePermissions } from '../middleware/auth';
-import { reconcileMissingSalesJournalEntries } from '../services/accounting-service';
+import { reconcileMissingReceiptJournalEntries, reconcileMissingSalesJournalEntries } from '../services/accounting-service';
 
 const accounting = new Hono<{ Bindings: Env }>();
 
@@ -1171,9 +1171,100 @@ accounting.post('/closing-entries', requirePermissions(['manage_purchasing']), a
 // ══════════════════════════════════════════════════════════
 // DASHBOARD SUMMARY & GL RECONCILIATION
 // ══════════════════════════════════════════════════════════
+accounting.get('/audit/transaction-flow', requirePermissions(['view_reports']), async (c) => {
+  const [journalLines, accountTotals, receipts, stock, missingReceiptJournals] = await Promise.all([
+    c.env.DB.prepare(`
+      WITH affected_entries AS (
+        SELECT DISTINCT je.id
+        FROM journal_entries je
+        JOIN journal_entry_lines jel ON jel.journal_entry_id = je.id
+        JOIN chart_of_accounts coa ON coa.id = jel.account_id
+        WHERE je.status = 'POSTED'
+          AND (coa.code IN ('1010', '1020', '1030', '4010', '5010') OR coa.account_type = 'EXPENSE')
+      )
+      SELECT je.id AS journal_entry_id, je.entry_number, je.entry_date, je.description,
+             je.reference_type, je.reference_id, je.total_debit, je.total_credit,
+             coa.code AS account_code, coa.name AS account_name,
+             jel.debit_amount, jel.credit_amount, jel.line_order
+      FROM journal_entries je
+      JOIN affected_entries ae ON ae.id = je.id
+      JOIN journal_entry_lines jel ON jel.journal_entry_id = je.id
+      JOIN chart_of_accounts coa ON coa.id = jel.account_id
+      ORDER BY je.entry_date, je.created_at, je.entry_number, jel.line_order
+    `).all(),
+    c.env.DB.prepare(`
+      SELECT coa.code, coa.name AS account_name,
+             COALESCE(SUM(jel.debit_amount), 0) AS debits,
+             COALESCE(SUM(jel.credit_amount), 0) AS credits,
+             CASE WHEN coa.normal_balance = 'DEBIT'
+               THEN COALESCE(SUM(jel.debit_amount - jel.credit_amount), 0)
+               ELSE COALESCE(SUM(jel.credit_amount - jel.debit_amount), 0)
+             END AS balance
+      FROM chart_of_accounts coa
+      LEFT JOIN journal_entry_lines jel ON jel.account_id = coa.id
+      LEFT JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status = 'POSTED'
+      WHERE coa.code IN ('1010', '1020', '1030', '4010', '5010') OR coa.account_type = 'EXPENSE'
+      GROUP BY coa.id, coa.code, coa.name, coa.normal_balance
+      ORDER BY coa.code
+    `).all(),
+    c.env.DB.prepare(`
+      SELECT gr.id AS receipt_id, gr.receipt_number, gr.purchase_order_id, gr.received_at,
+             COALESCE(SUM(grl.quantity_received), 0) AS quantity_received,
+             COALESCE(SUM(grl.line_total), 0) AS receipt_value
+      FROM goods_receipts gr
+      LEFT JOIN goods_receipt_lines grl ON grl.goods_receipt_id = gr.id
+      WHERE COALESCE(gr.status, 'COMPLETED') != 'CANCELLED'
+      GROUP BY gr.id, gr.receipt_number, gr.purchase_order_id, gr.received_at
+      ORDER BY gr.received_at, gr.id
+    `).all(),
+    c.env.DB.prepare(`
+      SELECT COALESCE(SUM(s.quantity_on_hand), 0) AS quantity_on_hand,
+             COALESCE(SUM(s.quantity_on_hand * p.cost_price), 0) AS value_at_product_cost
+      FROM inventory_stock s
+      JOIN products p ON p.id = s.product_id
+    `).first(),
+    c.env.DB.prepare(`
+      SELECT gr.id AS receipt_id, gr.receipt_number, gr.purchase_order_id,
+             COALESCE(SUM(grl.line_total), 0) AS receipt_value
+      FROM goods_receipts gr
+      JOIN goods_receipt_lines grl ON grl.goods_receipt_id = gr.id
+      WHERE COALESCE(gr.status, 'COMPLETED') != 'CANCELLED'
+        AND NOT EXISTS (
+          SELECT 1 FROM journal_entries je
+          WHERE je.status = 'POSTED' AND je.reference_type = 'PURCHASE' AND je.reference_id = gr.id
+        )
+      GROUP BY gr.id, gr.receipt_number, gr.purchase_order_id
+      ORDER BY gr.receipt_number
+    `).all(),
+  ]);
+
+  const inventoryGl = (accountTotals.results || []).find((row: any) => row.code === '1030') as any;
+  const receiptValue = (receipts.results || []).reduce((sum: number, row: any) => sum + Number(row.receipt_value || 0), 0);
+  const stockValue = Number((stock as any)?.value_at_product_cost || 0);
+
+  return c.json({
+    journal_entries: journalLines.results || [],
+    account_totals: accountTotals.results || [],
+    operational_inventory: {
+      receipts: receipts.results || [],
+      total_received_value: receiptValue,
+      quantity_on_hand: Number((stock as any)?.quantity_on_hand || 0),
+      value_at_product_cost: stockValue,
+      gl_1030_balance: Number(inventoryGl?.balance || 0),
+      difference_to_gl: stockValue - Number(inventoryGl?.balance || 0),
+    },
+    receipts_missing_their_own_journal: missingReceiptJournals.results || [],
+  });
+});
+
 accounting.post('/reconcile-journals', requirePermissions(['manage_purchasing']), async (c) => {
   const count = await reconcileMissingSalesJournalEntries(c);
   return c.json({ success: true, reconciled_entries: count });
+});
+
+accounting.post('/reconcile-inventory-accounting', requirePermissions(['manage_purchasing']), async (c) => {
+  const result = await reconcileMissingReceiptJournalEntries(c);
+  return c.json({ success: true, ...result });
 });
 
 accounting.get('/dashboard', requirePermissions(['view_reports']), async (c) => {
