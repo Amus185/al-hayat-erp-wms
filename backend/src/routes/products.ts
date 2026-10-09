@@ -72,12 +72,29 @@ products.post('/', requirePermissions(['manage_inventory']), async (c) => {
   const sell = Number(body.sellingPrice || 0);
   if (cost < 0) return c.json({ message: 'Cost price cannot be negative.' }, 400);
   if (sell < 0) return c.json({ message: 'Selling price cannot be negative.' }, 400);
-  if (cost > sell) return c.json({ message: 'Cost price cannot be greater than selling price.' }, 400);
 
   const productType = (body.productType === 'GROUPED' || body.product_type === 'GROUPED') ? 'GROUPED' : 'STANDARD';
-  const groupItems: Array<{ componentProductId: string; quantity: number }> = Array.isArray(body.groupItems)
+
+  // Only enforce cost <= sell for STANDARD products.
+  // Grouped/bundle products can legitimately sell below the sum of component costs (bundle discount).
+  if (productType === 'STANDARD' && cost > sell) {
+    return c.json({ message: 'Cost price cannot be greater than selling price.' }, 400);
+  }
+
+  const rawGroupItems: Array<{ componentProductId: string; quantity: number }> = Array.isArray(body.groupItems)
     ? body.groupItems
     : (Array.isArray(body.group_items) ? body.group_items : []);
+
+  // Deduplicate component IDs — same component added twice would violate the UNIQUE constraint
+  const seenComponentIds = new Set<string>();
+  const groupItems = rawGroupItems.filter(item => {
+    const cId = item.componentProductId || (item as any).component_product_id;
+    if (!cId) return false;
+    if (seenComponentIds.has(cId)) return false;
+    seenComponentIds.add(cId);
+    return true;
+  });
+
   const priceTiers: Array<{ tierName: string; price: number }> = Array.isArray(body.priceTiers)
     ? body.priceTiers
     : (Array.isArray(body.price_tiers) ? body.price_tiers : []);
@@ -159,12 +176,19 @@ products.post('/', requirePermissions(['manage_inventory']), async (c) => {
     ));
   }
 
-  // 3. Insert grouped items if GROUPED
+  // 3. Insert grouped items if GROUPED — validate each component exists first
   if (productType === 'GROUPED') {
     for (const item of groupItems) {
       const cId = item.componentProductId || (item as any).component_product_id;
       const cQty = Math.max(1, Number(item.quantity || 1));
       if (!cId) continue;
+
+      // Verify the component product actually exists in the DB (guard against stale UI cache)
+      const componentExists = await c.env.DB.prepare('SELECT id FROM products WHERE id = ?').bind(cId).first();
+      if (!componentExists) {
+        return c.json({ message: `Component product "${cId}" not found. It may have been deleted. Please refresh and try again.` }, 422);
+      }
+
       stmts.push(c.env.DB.prepare(`
         INSERT INTO product_group_items (id, parent_product_id, component_product_id, quantity)
         VALUES (?, ?, ?, ?)
@@ -190,11 +214,26 @@ products.post('/', requirePermissions(['manage_inventory']), async (c) => {
   }));
 
   // Atomic batch execution
-  await c.env.DB.batch(stmts);
+  try {
+    await c.env.DB.batch(stmts);
+  } catch (batchErr: any) {
+    // Log the precise DB error so Railway logs capture it
+    console.error('[PRODUCT_CREATE] Batch failed:', JSON.stringify({
+      message: batchErr?.message,
+      detail: batchErr?.detail,
+      constraint: batchErr?.constraint,
+      table: batchErr?.table,
+      schema: batchErr?.schema,
+      productType,
+      groupItemCount: groupItems.length,
+    }));
+    throw batchErr; // re-throw so Hono returns 500
+  }
 
+  // Fix: Use explicit table alias `p` — `p.*` from `FROM products` (no alias) is invalid PostgreSQL
   const product = await c.env.DB.prepare(`
     SELECT p.*, COALESCE(p.is_active, 1) AS is_active, COALESCE(p.product_type, 'STANDARD') AS product_type
-    FROM products WHERE id = ?
+    FROM products p WHERE p.id = ?
   `).bind(productId).first();
   return c.json(product, 201);
 });
