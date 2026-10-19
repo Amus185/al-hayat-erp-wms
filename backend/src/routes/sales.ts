@@ -1619,7 +1619,7 @@ sales.post('/orders/:id/complete', requirePermissions(['manage_sales']), async (
     const existingInvoice = await c.env.DB.prepare('SELECT id FROM invoices WHERE sales_order_id = ?').bind(orderId).first();
     console.log(`[WATERFALL] +${Date.now() - reqStart}ms | Duplicate invoice check completed (${Date.now() - tDup0}ms)`);
     if (existingInvoice) {
-      await c.env.DB.prepare("UPDATE sales_orders SET status = ?").bind(validSource).run();
+      await c.env.DB.prepare("UPDATE sales_orders SET status = ? WHERE id = ?").bind(validSource, orderId).run();
       return c.json({ message: 'An invoice already exists for this order.' }, 409);
     }
 
