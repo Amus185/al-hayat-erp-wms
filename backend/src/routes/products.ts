@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { Env, uuidv4 } from '../db';
 import { authMiddleware, requirePermissions, isAdminUser } from '../middleware/auth';
 import { logAudit, createAuditLogStmt } from '../services/audit';
+import { prepareOpeningStock, type OpeningStockItem } from '../services/accounting-service';
 
 const products = new Hono<{ Bindings: Env; Variables: { jwtPayload: any } }>();
 
@@ -174,6 +175,11 @@ products.post('/', requirePermissions(['manage_inventory']), async (c) => {
     `).bind(
       stockId, productId, ownerType, warehouseId, branchId, initialQty
     ));
+    // The initial quantity is opening stock: record it as a movement and post
+    // its value (Dr Inventory / Cr Owner's Capital) in the stock's branch.
+    if (initialQty > 0) {
+      stmts.push(...await prepareOpeningStock(c, [{ productId, quantity: initialQty, unitCost: cost, ownerType, warehouseId, branchId }], c.get('jwtPayload')?.sub || null));
+    }
   }
 
   // 3. Insert grouped items if GROUPED — validate each component exists first
@@ -299,6 +305,7 @@ products.post('/bulk', requirePermissions(['manage_inventory']), async (c) => {
   const stmts: any[] = [];
   let createdCount = 0;
   const skipped: Array<{ sku: string; barcode: string | null; reason: string }> = [];
+  const openingItems: OpeningStockItem[] = [];
 
   for (const item of items) {
     if (!item?.sku || !item?.name) {
@@ -405,10 +412,13 @@ products.post('/bulk', requirePermissions(['manage_inventory']), async (c) => {
         INSERT INTO inventory_stock (id, product_id, owner_type, warehouse_id, branch_id, quantity_on_hand, quantity_reserved)
         VALUES (?, ?, ?, ?, ?, ?, 0)
       `).bind(uuidv4(), productId, locType, targetWhId, targetBrId, initStock));
+      openingItems.push({ productId, quantity: initStock, unitCost: cost, ownerType: locType, warehouseId: targetWhId, branchId: targetBrId });
     }
 
     createdCount++;
   }
+
+  stmts.push(...await prepareOpeningStock(c, openingItems, c.get('jwtPayload')?.sub || null));
 
   if (stmts.length > 0) {
     await c.env.DB.batch(stmts);

@@ -11,7 +11,7 @@ export interface JournalLineInput {
 
 export interface PostJournalParams {
   description: string;
-  referenceType: 'PURCHASE' | 'SALE' | 'TRANSFER' | 'EXPENSE' | 'DEPRECIATION' | 'CLOSING' | 'INVENTORY_ADJUSTMENT' | 'MANUAL' | 'MANUFACTURING';
+  referenceType: 'PURCHASE' | 'SALE' | 'TRANSFER' | 'EXPENSE' | 'DEPRECIATION' | 'CLOSING' | 'INVENTORY_ADJUSTMENT' | 'MANUAL' | 'MANUFACTURING' | 'OPENING';
   referenceId?: string | null;
   branchId?: string | null;
   entryDate?: string;
@@ -1029,3 +1029,56 @@ export async function postPropertySaleJournalEntry(c: any, salePrice: number, bo
 // Decision for app layer: if you want fiscal period caching, add it in the
 // period-management route when status changes to 'CLOSED', and call
 // invalidateFiscalPeriodCache() there. For now, it stays a live DB read.
+
+export interface OpeningStockItem {
+  productId: string;
+  quantity: number;            // may be negative (more issued than ever recorded)
+  unitCost: number;
+  ownerType: 'BRANCH' | 'WAREHOUSE';
+  warehouseId: string | null;
+  branchId: string | null;
+}
+
+/**
+ * Opening stock: record each quantity as an OPENING_STOCK movement and post its
+ * value into the books — Dr 1030 Inventory / Cr 3010 Owner's Capital — one
+ * balanced entry per branch (warehouse stock = company-level). Without this,
+ * stock entered with a product had no value in the ledger, so selling it drove
+ * Inventory negative.
+ */
+export async function prepareOpeningStock(
+  c: any,
+  items: OpeningStockItem[],
+  userId: string | null,
+  entryDate?: string
+): Promise<any[]> {
+  const db = c.env.DB;
+  const stmts: any[] = [];
+  const valueByBranch = new Map<string | null, number>();
+  for (const it of items) {
+    if (!it.quantity) continue;
+    stmts.push(db.prepare(`
+      INSERT INTO inventory_transactions (id, product_id, transaction_type, quantity, destination_owner_type, destination_warehouse_id, destination_branch_id, reference_type, notes, created_by)
+      VALUES (?, ?, 'OPENING_STOCK', ?, ?, ?, ?, 'OPENING_BALANCE', 'Opening stock', ?)
+    `).bind(uuidv4(), it.productId, it.quantity, it.ownerType, it.warehouseId, it.branchId, userId));
+    const key = it.ownerType === 'BRANCH' ? it.branchId : null;
+    valueByBranch.set(key, (valueByBranch.get(key) || 0) + it.quantity * Number(it.unitCost || 0));
+  }
+  for (const [branchId, raw] of valueByBranch) {
+    const value = Math.round(raw * 100) / 100;
+    if (Math.abs(value) < 0.005) continue;
+    const prepared = await prepareJournalEntryPosting(c, {
+      description: 'Opening stock value',
+      referenceType: 'OPENING',
+      referenceId: uuidv4(),
+      branchId,
+      entryDate,
+      userId,
+      lines: value > 0
+        ? [{ accountCode: '1030', debitAmount: value, creditAmount: 0 }, { accountCode: '3010', debitAmount: 0, creditAmount: value }]
+        : [{ accountCode: '3010', debitAmount: -value, creditAmount: 0 }, { accountCode: '1030', debitAmount: 0, creditAmount: -value }],
+    });
+    stmts.push(...prepared.statements);
+  }
+  return stmts;
+}

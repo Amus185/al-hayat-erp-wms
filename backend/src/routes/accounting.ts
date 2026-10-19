@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { Env } from '../db';
 import { authMiddleware, requirePermissions } from '../middleware/auth';
-import { prepareJournalReversal, prepareJournalEntryPosting, fetchOpenFiscalPeriodId, reconcileMissingReceiptJournalEntries, reconcileMissingSalesJournalEntries } from '../services/accounting-service';
+import { prepareJournalReversal, prepareJournalEntryPosting, prepareOpeningStock, fetchOpenFiscalPeriodId, reconcileMissingReceiptJournalEntries, reconcileMissingSalesJournalEntries } from '../services/accounting-service';
 import { resolveBranchScope, branchSql, inScope, assertAllBranchAccess, resolveWriteBranch, ScopeError, type BranchScope } from '../services/branch-scope';
 
 // Every report below is computed from journal lines restricted to the caller's
@@ -505,40 +505,37 @@ accounting.get('/income-statement', requirePermissions(['view_reports']), async 
 
   // Revenue per branch
   const { results: revenue } = await c.env.DB.prepare(`
-    SELECT coa.name, coa.code, coa.account_type, b.name AS branch_name, b.id AS branch_id,
+    SELECT coa.name, coa.code, coa.account_type,
            COALESCE(SUM(CASE WHEN je.id IS NOT NULL THEN (jel.credit_amount - jel.debit_amount) ELSE 0 END), 0) AS amount
     FROM chart_of_accounts coa
     LEFT JOIN journal_entry_lines jel ON jel.account_id = coa.id ${bf}
     LEFT JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status IN ('POSTED', 'REVERSED') ${periodFilter}
-    LEFT JOIN branches b ON b.id = jel.branch_id
     WHERE coa.account_type = 'REVENUE'
-    GROUP BY coa.id, coa.name, coa.code, b.id, b.name
+    GROUP BY coa.id, coa.name, coa.code
     ORDER BY coa.code ASC
   `).bind(...params).all();
 
   // COGS per branch
   const { results: cogs } = await c.env.DB.prepare(`
-    SELECT coa.name, coa.code, coa.account_type, b.name AS branch_name, b.id AS branch_id,
+    SELECT coa.name, coa.code, coa.account_type,
            COALESCE(SUM(CASE WHEN je.id IS NOT NULL THEN (jel.debit_amount - jel.credit_amount) ELSE 0 END), 0) AS amount
     FROM chart_of_accounts coa
     LEFT JOIN journal_entry_lines jel ON jel.account_id = coa.id ${bf}
     LEFT JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status IN ('POSTED', 'REVERSED') ${periodFilter}
-    LEFT JOIN branches b ON b.id = jel.branch_id
     WHERE coa.account_type = 'COGS' OR (coa.account_type = 'EXPENSE' AND coa.code LIKE '5%')
-    GROUP BY coa.id, coa.name, coa.code, b.id, b.name
+    GROUP BY coa.id, coa.name, coa.code
     ORDER BY coa.code ASC
   `).bind(...params).all();
 
   // Expenses per branch
   const { results: expenses } = await c.env.DB.prepare(`
-    SELECT coa.name, coa.code, coa.account_type, b.name AS branch_name, b.id AS branch_id,
+    SELECT coa.name, coa.code, coa.account_type,
            COALESCE(SUM(CASE WHEN je.id IS NOT NULL THEN (jel.debit_amount - jel.credit_amount) ELSE 0 END), 0) AS amount
     FROM chart_of_accounts coa
     LEFT JOIN journal_entry_lines jel ON jel.account_id = coa.id ${bf}
     LEFT JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status IN ('POSTED', 'REVERSED') ${periodFilter}
-    LEFT JOIN branches b ON b.id = jel.branch_id
     WHERE coa.account_type = 'EXPENSE' AND coa.code NOT LIKE '5%'
-    GROUP BY coa.id, coa.name, coa.code, b.id, b.name
+    GROUP BY coa.id, coa.name, coa.code
     ORDER BY coa.code ASC
   `).bind(...params).all();
 
@@ -601,7 +598,7 @@ accounting.get('/balance-sheet', requirePermissions(['view_reports']), async (c)
 
   const { results: accounts } = await c.env.DB.prepare(`
     SELECT coa.id, coa.code, coa.name AS account_name, coa.account_type, coa.normal_balance,
-           b.name AS branch_name, b.id AS branch_id,
+
            COALESCE(SUM(CASE WHEN je.id IS NOT NULL THEN jel.debit_amount ELSE 0 END), 0) AS total_debit,
            COALESCE(SUM(CASE WHEN je.id IS NOT NULL THEN jel.credit_amount ELSE 0 END), 0) AS total_credit,
            CASE
@@ -613,9 +610,8 @@ accounting.get('/balance-sheet', requirePermissions(['view_reports']), async (c)
     FROM chart_of_accounts coa
     LEFT JOIN journal_entry_lines jel ON jel.account_id = coa.id ${bf}
     LEFT JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status IN ('POSTED', 'REVERSED') ${asOfFilter}
-    LEFT JOIN branches b ON b.id = jel.branch_id
     WHERE coa.account_type IN ('ASSET', 'LIABILITY', 'EQUITY') AND coa.is_active = 1
-    GROUP BY coa.id, coa.code, coa.name, coa.account_type, coa.normal_balance, b.id, b.name
+    GROUP BY coa.id, coa.code, coa.name, coa.account_type, coa.normal_balance
     ORDER BY coa.code ASC
   `).bind(...asOfParams).all();
 
@@ -1275,6 +1271,182 @@ accounting.get('/dashboard', requirePermissions(['view_reports']), async (c) => 
     fiscal_periods: Number((periods as any)?.cnt || 0),
     chart_of_accounts: Number((accounts as any)?.cnt || 0),
   });
+});
+
+// ══════════════════════════════════════════════════════════
+// BRANCH SUMMARY — every branch's books side by side
+// ══════════════════════════════════════════════════════════
+accounting.get('/branch-summary', requirePermissions(['view_reports']), async (c) => {
+  const scope = await resolveBranchScope(c);
+  const bf = branchSql(scope, 'jel.branch_id');
+  const periodId = c.req.query('period_id') || null;
+  const period = periodId ? await c.env.DB.prepare('SELECT * FROM fiscal_periods WHERE id = ?').bind(periodId).first() as any : null;
+  const day = (d: any) => String(d instanceof Date ? d.toISOString() : d).slice(0, 10);
+  const pf = period ? `AND (je.fiscal_period_id = ? OR (je.entry_date >= ? AND je.entry_date <= ?))` : '';
+  const pParams = period ? [period.id, day(period.start_date), day(period.end_date)] : [];
+
+  // Profit and loss for the period (same rules as the income statement)
+  const { results: pl } = await c.env.DB.prepare(`
+    SELECT jel.branch_id,
+      COALESCE(SUM(CASE WHEN coa.account_type = 'REVENUE' THEN jel.credit_amount - jel.debit_amount ELSE 0 END), 0) AS revenue,
+      COALESCE(SUM(CASE WHEN coa.account_type IN ('EXPENSE', 'COGS') AND coa.code LIKE '5%' THEN jel.debit_amount - jel.credit_amount ELSE 0 END), 0) AS cogs,
+      COALESCE(SUM(CASE WHEN coa.account_type = 'EXPENSE' AND coa.code NOT LIKE '5%' THEN jel.debit_amount - jel.credit_amount ELSE 0 END), 0) AS expenses
+    FROM journal_entry_lines jel
+    JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status IN ('POSTED', 'REVERSED') ${pf}
+    JOIN chart_of_accounts coa ON coa.id = jel.account_id
+    WHERE 1=1 ${bf}
+    GROUP BY jel.branch_id
+  `).bind(...pParams).all() as { results: any[] };
+
+  // Balances to date
+  const { results: bal } = await c.env.DB.prepare(`
+    SELECT jel.branch_id,
+      COALESCE(SUM(CASE WHEN coa.code = '1010' THEN jel.debit_amount - jel.credit_amount ELSE 0 END), 0) AS cash,
+      COALESCE(SUM(CASE WHEN coa.code = '1020' THEN jel.debit_amount - jel.credit_amount ELSE 0 END), 0) AS receivables,
+      COALESCE(SUM(CASE WHEN coa.code = '1030' THEN jel.debit_amount - jel.credit_amount ELSE 0 END), 0) AS inventory,
+      COALESCE(SUM(CASE WHEN coa.code = '2010' THEN jel.credit_amount - jel.debit_amount ELSE 0 END), 0) AS payables
+    FROM journal_entry_lines jel
+    JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status IN ('POSTED', 'REVERSED')
+    JOIN chart_of_accounts coa ON coa.id = jel.account_id
+    WHERE 1=1 ${bf}
+    GROUP BY jel.branch_id
+  `).all() as { results: any[] };
+
+  const { results: branchRows } = await c.env.DB.prepare(
+    `SELECT id, name FROM branches WHERE 1=1 ${scope.kind === 'BRANCH' ? branchSql(scope, 'id') : scope.kind === 'UNASSIGNED' ? 'AND FALSE' : ''} ORDER BY name`
+  ).all() as { results: any[] };
+  const keys: Array<{ id: string | null; name: string }> = branchRows.map((b) => ({ id: b.id, name: b.name }));
+  if (scope.kind !== 'BRANCH') keys.push({ id: null, name: 'Company-level (no branch)' });
+
+  const pick = (rows: any[], id: string | null) => rows.find((r) => (r.branch_id ?? null) === id) || {};
+  const branches = keys.map(({ id, name }) => {
+    const p = pick(pl, id), b = pick(bal, id);
+    const revenue = Number(p.revenue || 0), cogs = Number(p.cogs || 0), expenses = Number(p.expenses || 0);
+    return {
+      branch_id: id, branch_name: name,
+      revenue, cogs, gross_profit: revenue - cogs, expenses, net_income: revenue - cogs - expenses,
+      cash: Number(b.cash || 0), receivables: Number(b.receivables || 0), inventory: Number(b.inventory || 0), payables: Number(b.payables || 0),
+    };
+  });
+  const sum = (k: string) => branches.reduce((s, r: any) => s + r[k], 0);
+  return c.json({
+    branches,
+    totals: Object.fromEntries(['revenue', 'cogs', 'gross_profit', 'expenses', 'net_income', 'cash', 'receivables', 'inventory', 'payables'].map((k) => [k, sum(k)])),
+  });
+});
+
+// ══════════════════════════════════════════════════════════
+// OPENING BALANCES — opening stock value and opening cash per branch
+// ══════════════════════════════════════════════════════════
+// Stock quantities that no movement explains (on hand − all recorded
+// movements into/out of that location) are opening stock that never reached
+// the ledger. Posting them records an OPENING_STOCK movement and
+// Dr 1030 / Cr 3010, after which the quantity is explained (idempotent).
+const UNEXPLAINED_STOCK_SQL = `
+  WITH stock AS (
+    SELECT product_id, MAX(owner_type) AS owner_type, warehouse_id, branch_id, SUM(quantity_on_hand) AS on_hand
+    FROM inventory_stock GROUP BY product_id, warehouse_id, branch_id
+  ), moves AS (
+    SELECT product_id,
+      CASE WHEN quantity < 0 AND source_owner_type IS NOT NULL THEN source_warehouse_id ELSE COALESCE(destination_warehouse_id, dest_warehouse_id) END AS warehouse_id,
+      CASE WHEN quantity < 0 AND source_owner_type IS NOT NULL THEN source_branch_id ELSE COALESCE(destination_branch_id, dest_branch_id) END AS branch_id,
+      SUM(quantity) AS moved
+    FROM inventory_transactions GROUP BY 1, 2, 3
+  )
+  SELECT s.product_id, s.owner_type, s.warehouse_id, s.branch_id, p.cost_price,
+         s.on_hand - COALESCE(m.moved, 0) AS unexplained
+  FROM stock s
+  JOIN products p ON p.id = s.product_id
+  LEFT JOIN moves m ON m.product_id = s.product_id AND m.warehouse_id IS NOT DISTINCT FROM s.warehouse_id AND m.branch_id IS NOT DISTINCT FROM s.branch_id
+  WHERE COALESCE(p.product_type, 'STANDARD') = 'STANDARD' AND s.on_hand - COALESCE(m.moved, 0) <> 0`;
+
+async function unexplainedStock(db: any) {
+  const { results } = await db.prepare(UNEXPLAINED_STOCK_SQL).all();
+  return (results || []).map((r: any) => ({
+    productId: r.product_id,
+    quantity: Number(r.unexplained),
+    unitCost: Number(r.cost_price || 0),
+    ownerType: (r.owner_type === 'BRANCH' ? 'BRANCH' : 'WAREHOUSE') as 'BRANCH' | 'WAREHOUSE',
+    warehouseId: r.warehouse_id ?? null,
+    branchId: r.owner_type === 'BRANCH' ? (r.branch_id ?? null) : null,
+  }));
+}
+
+accounting.get('/opening-balances', requirePermissions(['view_reports']), async (c) => {
+  assertAllBranchAccess((c as any).get('jwtPayload'));
+  const items = await unexplainedStock(c.env.DB);
+  const { results: branchRows } = await c.env.DB.prepare('SELECT id, name FROM branches ORDER BY name').all() as { results: any[] };
+  const { results: posted } = await c.env.DB.prepare(`
+    SELECT je.branch_id,
+      COALESCE(SUM(CASE WHEN coa.code = '1010' THEN jel.debit_amount - jel.credit_amount ELSE 0 END), 0) AS opening_cash,
+      COALESCE(SUM(CASE WHEN coa.code = '1030' THEN jel.debit_amount - jel.credit_amount ELSE 0 END), 0) AS opening_stock
+    FROM journal_entries je
+    JOIN journal_entry_lines jel ON jel.journal_entry_id = je.id
+    JOIN chart_of_accounts coa ON coa.id = jel.account_id
+    WHERE je.reference_type = 'OPENING' AND je.status = 'POSTED'
+    GROUP BY je.branch_id
+  `).all() as { results: any[] };
+  const rows = [...branchRows.map((b) => ({ id: b.id as string | null, name: b.name as string })), { id: null, name: 'Company-level (warehouses / no branch)' }];
+  return c.json(rows.map(({ id, name }) => {
+    const mine = items.filter((i: any) => (i.ownerType === 'BRANCH' ? i.branchId : null) === id);
+    const p: any = posted.find((r) => (r.branch_id ?? null) === id) || {};
+    return {
+      branch_id: id ?? 'UNASSIGNED', branch_name: name,
+      unrecorded_stock_value: Math.round(mine.reduce((s: number, i: any) => s + i.quantity * i.unitCost, 0) * 100) / 100,
+      unrecorded_stock_lines: mine.length,
+      opening_cash_posted: Number(p.opening_cash || 0),
+      opening_stock_posted: Number(p.opening_stock || 0),
+    };
+  }));
+});
+
+accounting.post('/opening-balances', requirePermissions(['view_reports']), async (c) => {
+  assertAllBranchAccess((c as any).get('jwtPayload'));
+  const body = await c.req.json<{ branch_id: string; entry_date?: string; opening_cash?: number; include_stock?: boolean }>();
+  const userId = (c as any).get('jwtPayload')?.sub || null;
+  const branchId = body.branch_id && body.branch_id !== 'UNASSIGNED' ? await resolveWriteBranch(c, body.branch_id) : null;
+  const cash = Number(body.opening_cash || 0);
+  if (cash < 0) return c.json({ error: 'Opening cash cannot be negative.' }, 400);
+
+  let entryDate = body.entry_date;
+  if (!entryDate) {
+    const fp = await c.env.DB.prepare(
+      "SELECT start_date FROM fiscal_periods WHERE status = 'OPEN' AND CURRENT_DATE BETWEEN start_date AND end_date ORDER BY start_date LIMIT 1"
+    ).first() as any;
+    entryDate = fp ? String(fp.start_date instanceof Date ? fp.start_date.toISOString() : fp.start_date).slice(0, 10) : new Date().toISOString().slice(0, 10);
+  }
+
+  const items = body.include_stock
+    ? (await unexplainedStock(c.env.DB)).filter((i: any) => (i.ownerType === 'BRANCH' ? i.branchId : null) === branchId)
+    : [];
+  const stockValue = Math.round(items.reduce((s: number, i: any) => s + i.quantity * i.unitCost, 0) * 100) / 100;
+  if (!items.length && cash <= 0) return c.json({ error: 'Nothing to post for this branch.' }, 400);
+
+  // Serialize opening-balance posts; a concurrent/double submit re-checks the
+  // unrecorded stock after the lock and rolls back if it was already posted.
+  const scopeSql = branchId ? `s.branch_id = ? AND s.owner_type = 'BRANCH'` : `s.owner_type <> 'BRANCH'`;
+  const stmts: any[] = [
+    c.env.DB.prepare("SELECT pg_advisory_xact_lock(hashtext('opening-balances'))"),
+  ];
+  if (items.length) {
+    stmts.push(c.env.DB.prepare(`
+      SELECT 1 WHERE ROUND(COALESCE((SELECT SUM(s.unexplained * s.cost_price) FROM (${UNEXPLAINED_STOCK_SQL}) s WHERE ${scopeSql}), 0)::numeric, 2) = ROUND(?::numeric, 2)
+    `).bind(...(branchId ? [branchId] : []), stockValue).mustAffect('Opening stock for this branch was just posted. Please refresh.'));
+    stmts.push(...await prepareOpeningStock(c, items, userId, entryDate));
+  }
+  if (cash > 0) {
+    const prepared = await prepareJournalEntryPosting(c, {
+      description: 'Opening cash balance',
+      referenceType: 'OPENING',
+      referenceId: `opening-cash:${branchId ?? 'UNASSIGNED'}`,
+      branchId, entryDate, userId,
+      lines: [{ accountCode: '1010', debitAmount: cash, creditAmount: 0 }, { accountCode: '3010', debitAmount: 0, creditAmount: cash }],
+    });
+    if (!prepared.statements.length) return c.json({ error: 'An opening cash balance is already posted for this branch. Reverse it first to change it.' }, 409);
+    stmts.push(...prepared.statements);
+  }
+  await c.env.DB.batch(stmts);
+  return c.json({ success: true, branch_id: branchId ?? 'UNASSIGNED', entry_date: entryDate, opening_stock_value: stockValue, opening_cash: cash });
 });
 
 export default accounting;

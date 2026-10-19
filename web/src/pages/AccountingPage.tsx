@@ -15,6 +15,7 @@ import { MetricCard } from '../components/MetricCard';
 import { PageSkeleton } from '../components/LoadingSpinner';
 import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
+import { confirmAction } from '../utils/swal';
 
 // ─── Theme ──────────────────────────────────────────────────────────
 const G = '#066006';
@@ -138,6 +139,9 @@ export function AccountingPage() {
     ? url
     : `${url}${url.includes('?') ? '&' : '?'}branch_id=${encodeURIComponent(branchFilter)}`;
   const [activeTab, setActiveTab] = useState('dashboard');
+  const [branchSummary, setBranchSummary] = useState<any>(null);
+  const [openingRows, setOpeningRows] = useState<any[]>([]);
+  const [openingCash, setOpeningCash] = useState<Record<string, string>>({});
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -147,6 +151,10 @@ export function AccountingPage() {
   const [accounts, setAccounts] = useState<any[]>([]);
   const [branches, setBranches] = useState<any[]>([]);
   const [selectedPeriod, setSelectedPeriod] = useState('');
+  const branchName = (id: string | null) => branches.find((b: any) => b.id === id)?.name;
+  const scopeLabel = canChooseBranch
+    ? (branchFilter === 'ALL' ? 'All branches (consolidated)' : branchFilter === 'UNASSIGNED' ? 'Company-level (no branch)' : (branchName(branchFilter) || 'Selected branch'))
+    : (branchName(myBranchId) || 'Your branch');
 
   // Tab-specific data
   const [dashboard, setDashboard] = useState<any>(null);
@@ -231,8 +239,12 @@ export function AccountingPage() {
     const p = period ? `?period_id=${period}` : '';
     try {
       if (tab === 'dashboard') {
-        const d = await apiGet<any>(withBranch(`/accounting/dashboard${p}`)).catch(() => null);
+        const [d, s] = await Promise.all([
+          apiGet<any>(withBranch(`/accounting/dashboard${p}`)).catch(() => null),
+          apiGet<any>(withBranch(`/accounting/branch-summary${p}`)).catch(() => null),
+        ]);
         setDashboard(d);
+        setBranchSummary(s);
       } else if (tab === 'journal') {
         const rows = await apiGet<any[]>(withBranch(`/accounting/journal-entries${period ? `?period_id=${period}` : ''}`)).catch(() => []);
         setJournalEntries(rows || []);
@@ -257,6 +269,9 @@ export function AccountingPage() {
       } else if (tab === 'inventory') {
         const rows = await apiGet<any[]>(withBranch(`/accounting/inventory-counts${p}`)).catch(() => []);
         setInvCounts(rows || []);
+      } else if (tab === 'opening') {
+        const rows = canChooseBranch ? await apiGet<any[]>('/accounting/opening-balances').catch(() => []) : [];
+        setOpeningRows(rows || []);
       } else if (tab === 'depreciation') {
         const rows = await apiGet<any[]>(withBranch('/accounting/depreciation')).catch(() => []);
         setDepreciation(rows || []);
@@ -485,6 +500,31 @@ export function AccountingPage() {
     }
   }
 
+  async function postOpening(r: any) {
+    if (submitting) return;
+    const cash = Number(openingCash[r.branch_id] || 0);
+    const stock = Number(r.unrecorded_stock_value || 0);
+    if (stock === 0 && !(cash > 0)) return;
+    const ok = await confirmAction(
+      `Post opening balances for ${r.branch_name}?`,
+      `Stock value: ${fmt(stock)} · Opening cash: ${fmt(cash)}. This posts journal entries against Owner's Capital.`,
+      'Post', 'question'
+    );
+    if (!ok) return;
+    setSubmitting(true);
+    try {
+      await apiPost('/accounting/opening-balances', { branch_id: r.branch_id, include_stock: stock !== 0, opening_cash: cash });
+      addToast('success', `Opening balances posted for ${r.branch_name}`);
+      setOpeningCash((prev) => ({ ...prev, [r.branch_id]: '' }));
+      invalidateApiCache('/accounting');
+      await loadTabData('opening', selectedPeriod);
+    } catch (e: any) {
+      addToast('error', e?.message || 'Failed to post opening balances');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   async function openLedgerDrill(account: any) {
     try {
       const rows = await apiGet<any[]>(withBranch(`/accounting/general-ledger?account_id=${account.account_id || account.id}`));
@@ -501,7 +541,7 @@ export function AccountingPage() {
     { label: 'Dashboard', items: [{ key: 'dashboard', label: 'KPI Overview' }] },
     { label: 'Accounting', items: [{ key: 'journal', label: 'Journal Entries' }, { key: 'ledger', label: 'General Ledger' }, { key: 'trial-balance', label: 'Journal Items & Trial Balance' }, { key: 'coa', label: 'Chart of Accounts' }] },
     { label: 'Reporting', items: [{ key: 'income', label: 'Income Statement' }, { key: 'balance-sheet', label: 'Balance Sheet' }, { key: 'cash-flow', label: 'Cash Flow' }, { key: 'equity', label: 'Executive Summary' }] },
-    { label: 'Management', items: [{ key: 'inventory', label: 'Physical Inventory Counts' }, { key: 'depreciation', label: 'Asset Depreciation' }, { key: 'journal', label: 'Year-End Closing' }] },
+    { label: 'Management', items: [{ key: 'inventory', label: 'Physical Inventory Counts' }, { key: 'depreciation', label: 'Asset Depreciation' }, { key: 'opening', label: 'Opening Balances' }, { key: 'journal', label: 'Year-End Closing' }] },
   ];
 
 
@@ -742,7 +782,7 @@ export function AccountingPage() {
             { label: 'Dashboard', items: [{ key: 'dashboard', label: 'KPI Overview' }] },
             { label: 'Accounting', items: [{ key: 'journal', label: 'Journal Entries' }, { key: 'ledger', label: 'General Ledger' }, { key: 'trial-balance', label: 'Journal Items & Trial Balance' }, { key: 'coa', label: 'Chart of Accounts' }] },
             { label: 'Reporting', items: [{ key: 'income', label: 'Income Statement' }, { key: 'balance-sheet', label: 'Balance Sheet' }, { key: 'cash-flow', label: 'Cash Flow' }, { key: 'equity', label: 'Executive Summary' }] },
-            { label: 'Management', items: [{ key: 'inventory', label: 'Physical Inventory Counts' }, { key: 'depreciation', label: 'Asset Depreciation' }] },
+            { label: 'Management', items: [{ key: 'inventory', label: 'Physical Inventory Counts' }, { key: 'depreciation', label: 'Asset Depreciation' }, { key: 'opening', label: 'Opening Balances' }] },
           ].map((menu) => {
             const isOpen = openMenu === menu.label;
             const isActive = menu.items.some((item) => item.key === activeTab);
@@ -865,6 +905,48 @@ export function AccountingPage() {
                 </div>
               </div>
 
+
+              {/* Each branch's books side by side */}
+              {branchSummary?.branches?.length > 0 && (
+                <div style={{ background: '#fff', borderRadius: '14px', border: '1px solid #e5ede5', padding: '20px', marginBottom: '20px', boxShadow: '0 1px 4px rgba(0,0,0,0.06)', overflowX: 'auto' as const }}>
+                  <h3 style={{ margin: '0 0 4px', fontSize: '15px', fontWeight: 700, color: '#1a2e1a' }}>By branch</h3>
+                  <p style={{ margin: '0 0 12px', fontSize: '12px', color: '#6b7280' }}>
+                    Profit &amp; loss for the selected period; cash, receivables and inventory to date. "Company-level" holds purchasing, warehouse stock and costs recorded without a branch.
+                  </p>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px', minWidth: '760px' }}>
+                    <thead>
+                      <tr>
+                        {['Branch', 'Revenue', 'Cost of goods', 'Expenses', 'Net income', 'Cash', 'Receivables', 'Inventory'].map((h) => (
+                          <th key={h} style={{ textAlign: h === 'Branch' ? 'left' : 'right', padding: '8px 10px', color: '#6b7280', fontWeight: 600, borderBottom: '1px solid #e5ede5' }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {branchSummary.branches.map((r: any) => (
+                        <tr key={r.branch_id ?? 'company'}>
+                          <td style={{ textAlign: 'left' as const, padding: '9px 10px', borderBottom: '1px solid #f0f4f0' }}>
+                            {canChooseBranch
+                              ? <button type='button' onClick={() => setBranchFilter(r.branch_id ?? 'UNASSIGNED')} title='Show this branch only' style={{ background: 'none', border: 'none', padding: 0, color: G, fontWeight: 700, cursor: 'pointer', textAlign: 'left' }}>{r.branch_name}</button>
+                              : <strong>{r.branch_name}</strong>}
+                          </td>
+                          {[r.revenue, r.cogs, r.expenses, r.net_income, r.cash, r.receivables, r.inventory].map((v: number, i: number) => (
+                            <td key={i} style={{ ...{ textAlign: 'right' as const, padding: '9px 10px', borderBottom: '1px solid #f0f4f0', fontFamily: 'monospace' }, color: v < 0 ? RED : '#111827' }}>{fmt(v)}</td>
+                          ))}
+                        </tr>
+                      ))}
+                      {branchSummary.branches.length > 1 && (
+                        <tr>
+                          <td style={{ ...{ textAlign: 'left' as const, padding: '9px 10px', borderBottom: '1px solid #f0f4f0' }, fontWeight: 800 }}>Total</td>
+                          {['revenue', 'cogs', 'expenses', 'net_income', 'cash', 'receivables', 'inventory'].map((k) => (
+                            <td key={k} style={{ ...{ textAlign: 'right' as const, padding: '9px 10px', borderBottom: '1px solid #f0f4f0', fontFamily: 'monospace' }, fontWeight: 800, color: branchSummary.totals[k] < 0 ? RED : '#111827' }}>{fmt(branchSummary.totals[k])}</td>
+                          ))}
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
               {/* Income vs Expense Bar */}
               {dashboard && (
                 <div style={{ background: '#fff', borderRadius: '14px', border: '1px solid #e5ede5', padding: '20px', marginBottom: '20px', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
@@ -928,7 +1010,8 @@ export function AccountingPage() {
           {/* ── GENERAL LEDGER ────────────────────────────────────── */}
           {activeTab === 'ledger' && (
             <div>
-              <SectionHeader icon={BookOpen} title='General Ledger' sub='Running balance per account (posted entries only)' />
+              <SectionHeader icon={BookOpen} title='General Ledger' sub={`Running balance per account (posted entries only) · ${scopeLabel}`} />
+              <PeriodBar />
               <div style={{ display: 'flex', gap: '12px', marginBottom: '20px', flexWrap: 'wrap', alignItems: 'center' }}>
                 <select value={ledgerAccountId} onChange={(e) => setLedgerAccountId(e.target.value)}
                   style={{ ...selectStyle, maxWidth: '320px', background: '#f0faf0', borderColor: G + '44' }}>
@@ -947,7 +1030,7 @@ export function AccountingPage() {
           {/* ── TRIAL BALANCE ─────────────────────────────────────── */}
           {activeTab === 'trial-balance' && (
             <div>
-              <SectionHeader icon={Scale} title='Trial Balance' sub='Verify debits equal credits across all accounts' />
+              <SectionHeader icon={Scale} title='Trial Balance' sub={`Verify debits equal credits across all accounts · ${scopeLabel}`} />
               <div style={{ display: 'flex', gap: '12px', marginBottom: '20px', flexWrap: 'wrap', alignItems: 'center' }}>
                 <PeriodBar />
                 <div style={{ display: 'flex', background: '#f0f4f0', borderRadius: '10px', padding: '3px', gap: '2px' }}>
@@ -991,7 +1074,7 @@ export function AccountingPage() {
               {incomeStmt ? (
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
                   <div>
-                    <StmtCard title='Consolidated Income Statement'>
+                    <StmtCard title={`Income Statement — ${scopeLabel}`}>
                       <StmtRow label='Sales Revenue' value={fmt(incomeStmt.summary.total_revenue)} bold color={G} />
                       <StmtRow label='Less: Cost of Goods Sold' value={`(${fmt(incomeStmt.summary.total_cogs)})`} color={RED} />
                       <StmtRow label='Gross Profit' value={fmt(incomeStmt.summary.gross_profit)} bold color={incomeStmt.summary.gross_profit >= 0 ? G : RED} separator />
@@ -1070,7 +1153,7 @@ export function AccountingPage() {
           {/* ── BALANCE SHEET ─────────────────────────────────────── */}
           {activeTab === 'balance-sheet' && (
             <div>
-              <SectionHeader icon={Building2} title='Balance Sheet' sub="Assets = Liabilities + Owner's Equity" />
+              <SectionHeader icon={Building2} title='Balance Sheet' sub={`Assets = Liabilities + Owner's Equity · ${scopeLabel}`} />
 
               <PeriodBar />
               {balanceSheet ? (
@@ -1128,7 +1211,7 @@ export function AccountingPage() {
               <PeriodBar />
               {cashFlow ? (
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
-                  <StmtCard title='Statement of Cash Flows (Direct Method)'>
+                  <StmtCard title={`Statement of Cash Flows (Direct Method) — ${scopeLabel}`}>
                     <StmtRow label='OPERATING ACTIVITIES' value='' bold />
                     {(cashFlow.operating_activities || []).map((a: any, i: number) => (
                       <StmtRow key={i} label={`Cash ${a.reference_type || 'Transaction'}`} value={fmt(a.cash_in - a.cash_out)} indent={1} color={(a.cash_in - a.cash_out) >= 0 ? G : RED} />
@@ -1168,7 +1251,7 @@ export function AccountingPage() {
               <PeriodBar />
               {ownersEquity ? (
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
-                  <StmtCard title="Statement of Owner's Equity">
+                  <StmtCard title={`Statement of Owner's Equity — ${scopeLabel}`}>
                     <StmtRow label='Beginning Capital' value={fmt(ownersEquity.statement?.beginning_capital || 0)} />
                     <StmtRow label='Add: Net Income for Period' value={`+ ${fmt(ownersEquity.statement?.add_net_income || 0)}`} indent={1} color={G} />
                     <StmtRow label='Less: Owner Drawings' value={`− ${fmt(ownersEquity.statement?.less_drawings || 0)}`} indent={1} color={AMBER} />
@@ -1226,6 +1309,58 @@ export function AccountingPage() {
           )}
 
           {/* ── DEPRECIATION ──────────────────────────────────────── */}
+
+          {/* ── OPENING BALANCES ─────────────────────────────────── */}
+          {activeTab === 'opening' && (
+            <div>
+              <SectionHeader icon={Calendar} title='Opening Balances' sub={"Each branch's starting cash and the value of stock that was entered without a cost in the books"} />
+              {!canChooseBranch ? (
+                <p style={{ color: '#6b7280' }}>Only administrators and accountants can record opening balances.</p>
+              ) : (
+                <>
+                  <div style={{ background: BLUE + '10', borderRadius: '10px', padding: '12px 16px', marginBottom: '16px', border: `1px solid ${BLUE}33`, fontSize: '13px', color: '#1e3a5f', lineHeight: 1.5 }}>
+                    <strong>Stock value</strong> is found automatically: quantities on hand that no purchase, transfer or sale explains, valued at each product's cost price.
+                    Posting records <strong>Dr Inventory / Cr Owner's Capital</strong> (and <strong>Dr Cash / Cr Owner's Capital</strong> for opening cash), dated the start of the current fiscal year, in that branch's books.
+                  </div>
+                  <div style={{ background: '#fff', borderRadius: '14px', border: '1px solid #e5ede5', padding: '20px', marginBottom: '20px', boxShadow: '0 1px 4px rgba(0,0,0,0.06)', overflowX: 'auto' as const }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px', minWidth: '720px' }}>
+                      <thead>
+                        <tr>
+                          {['Branch', 'Stock value not yet in the books', 'Opening cash posted', 'Opening cash to record', ''].map((h, i) => (
+                            <th key={i} style={{ textAlign: i === 0 ? 'left' : 'right', padding: '8px 10px', color: '#6b7280', fontWeight: 600, borderBottom: '1px solid #e5ede5' }}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {openingRows.map((r: any) => (
+                          <tr key={r.branch_id}>
+                            <td style={{ textAlign: 'left' as const, padding: '9px 10px', borderBottom: '1px solid #f0f4f0' }}><strong>{r.branch_name}</strong></td>
+                            <td style={{ textAlign: 'right' as const, padding: '9px 10px', borderBottom: '1px solid #f0f4f0', fontFamily: 'monospace' }}>{fmt(r.unrecorded_stock_value)}{r.unrecorded_stock_lines ? <span style={{ color: '#9ca3af', fontSize: '11px' }}> ({r.unrecorded_stock_lines} items)</span> : null}</td>
+                            <td style={{ textAlign: 'right' as const, padding: '9px 10px', borderBottom: '1px solid #f0f4f0', fontFamily: 'monospace' }}>{fmt(r.opening_cash_posted)}</td>
+                            <td style={{ textAlign: 'right' as const, padding: '9px 10px', borderBottom: '1px solid #f0f4f0', fontFamily: 'monospace' }}>
+                              <input type='number' min='0' step='0.01' placeholder='0.00' aria-label={`Opening cash for ${r.branch_name}`}
+                                disabled={r.opening_cash_posted > 0}
+                                value={openingCash[r.branch_id] ?? ''}
+                                onChange={(e) => setOpeningCash((prev) => ({ ...prev, [r.branch_id]: e.target.value }))}
+                                style={{ ...selectStyle, maxWidth: '140px', textAlign: 'right' }} />
+                            </td>
+                            <td style={{ textAlign: 'right' as const, padding: '9px 10px', borderBottom: '1px solid #f0f4f0', fontFamily: 'monospace' }}>
+                              <button type='button' onClick={() => postOpening(r)}
+                                disabled={submitting || (r.unrecorded_stock_value === 0 && !(Number(openingCash[r.branch_id]) > 0))}
+                                style={{ background: G, border: 'none', color: '#fff', borderRadius: '8px', padding: '7px 14px', cursor: 'pointer', fontWeight: 700, opacity: submitting || (r.unrecorded_stock_value === 0 && !(Number(openingCash[r.branch_id]) > 0)) ? 0.45 : 1 }}>
+                                Post
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
           {activeTab === 'depreciation' && (
             <div>
               <SectionHeader icon={Calendar} title='Depreciation Schedules' sub='Fixed asset depreciation allocation per fiscal period'

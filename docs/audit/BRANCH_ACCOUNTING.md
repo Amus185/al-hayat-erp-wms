@@ -144,3 +144,27 @@ Fixtures:
 5. **Branch-level scope outside finance** (transfers, stock adjustments, deliveries, inventory reports) still uses the older `isAdminUser()` rule (RC-3). Warehouse managers without a branch depend on it, so changing it needs a decision about warehouse-scoped roles first.
 6. Single Railway replica assumed for immediate cache invalidation. With several replicas, a scope change takes up to 5 minutes on the other replicas.
 7. The data in production has not been inspected (no access). Every production-specific statement above is **unverified** until R17–R23 are run.
+
+## 8. Follow-up: per-branch books made visible, and opening balances (2026-10-19)
+
+**What was wrong in production** (from the screens you shared, reproduced exactly on a local copy):
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| "Cash & Cash Equivalents" listed twice on the balance sheet (−$4,848 and −$44,666) | Balance sheet and income statement grouped each account by branch, with no branch label | One row per account; the branch is chosen with the selector. Statement titles now say which scope you're viewing (no more "Consolidated" on a branch view) |
+| Branch accounting not visible | You could only see one branch at a time by switching the selector | **"By branch" table** on the dashboard (`GET /accounting/branch-summary`): revenue, cost of goods, expenses, net income, cash, receivables and inventory per branch plus company-level, with a total row. Click a branch to filter. The selector is also on the General Ledger tab now |
+| Inventory −$960 | Stock entered when creating or importing products was never valued in the books, so selling it took cost out of an empty account | New products and imports post opening stock (Dr 1030 / Cr 3010) in the stock's branch, with an `OPENING_STOCK` movement. **Accounting → Management → Opening Balances** finds stock that no movement explains, valued at cost, and posts it per branch once |
+| Cash negative | No opening cash or owner's capital was ever recorded | Same **Opening Balances** screen: enter each branch's opening cash (Dr 1010 / Cr 3010), once per branch |
+| Company-level cash −$44,666 | Salaries $44,444 and Maintenance $222 were saved without a branch | Your decision: edit those expenses to set a branch, or record company-level opening cash |
+
+**Evidence:**
+- `tests/branch-books.test.ts`: 6 tests, **0/6 on the deployed code, 6/6 now**. One failure on the deployed code was literally the balance sheet listing `1010, 1010, 1010`.
+- Full suite: **59/59**.
+- Live UI check on a local database built to match your data: same figures as production, then after posting HQ's opening balances (stock $2,880 = 4 products × 3 units × $240, plus an example $60,000 cash) the balance sheet showed one Cash line, Inventory **+$1,920**, Owner's Capital $62,880, balanced.
+
+**Running it in production** (admin or accountant):
+1. Take a database backup.
+2. Open Accounting → Management → Opening Balances.
+3. Check each branch's "stock value not yet in the books". It's the quantity on hand that no purchase, transfer or sale explains, valued at each product's **current** cost price, so correct cost prices first if they are wrong.
+4. Enter each branch's real opening cash.
+5. Post. Entries are dated the start of the current fiscal year.
