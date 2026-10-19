@@ -11,7 +11,7 @@ No penetration testing was performed against production; everything below comes 
 | 2 | **After** the deploy, change the `admin@alhayat.com` password from the Users page. | The seeded password is in the public repository's history. Assume it is known. |
 | 3 | Railway → `al-hayat-erp-wms` → Variables: confirm `JWT_ACCESS_SECRET` and `JWT_REFRESH_SECRET` exist, are ≥ 32 random bytes, and differ from each other and from the dev strings in `backend/src/index.ts`. If they were missing, set them; that also logs everyone out. | SEC-07: when unset, the code falls back to secrets published in the repo, so anyone can mint admin tokens. |
 | 4 | Rotate the Postgres password (Railway → Postgres → Variables), then redeploy the API. | It was shared in chat during this session. |
-| 5 | Review active users (reconciliation query R16). Deactivate unknown or stale accounts. Give every non-admin user a branch. | SEC-06: users without a branch see and act on all branches. |
+| 5 | Review active users (reconciliation query R16). Deactivate unknown or stale accounts. Give every non-admin user a branch: after this deploy, users with no branch and no admin/accountant role are refused access to accounting, receivables, expenses and sales. | SEC-06: users without a branch see and act on all branches. |
 | 6 | Seeded branch users `branch.hq@alhayat.com` and `branch.cl@alhayat.com` have placeholder hashes. Deactivate them if unused, or regenerate their credentials (Branches → Regenerate). | They are re-created on any fresh database. |
 
 ## 2. Authentication & sessions
@@ -30,17 +30,9 @@ No penetration testing was performed against production; everything below comes 
 ## 3. Authorization & tenant (branch) isolation
 
 - **Model:** permission codes inside the JWT. A user is "admin-scoped" when `role = 'admin'` **or `branch_id IS NULL`** (`isAdminUser`).
-- **SEC-05 (open, P1):** branch scoping exists only on order list/detail/delete and order/transfer creation. Every other mutation takes a record ID without checking that it belongs to the caller's branch:
-  - sales confirm, invoice, pay, complete, cancel; payments, debts, customers
-  - transfers approve, dispatch, receive
-  - stock adjustments (any `branchId`/`warehouseId` accepted)
-  - expense edit/delete
-  - deliveries
-  - reports filters (partially scoped)
-
-  **Fix plan:** a helper `assertBranchAccess(c, branchId)` that returns 403 when the caller is branch-scoped and the record's branch differs. Call it after each record lookup. Add a test per route (the todo test in `security.test.ts` is the template).
-- **SEC-06 (open, P1):** replace "`branch_id IS NULL` means all branches" with an explicit role or permission (e.g. `view_all_branches`). Migrate existing admin users first.
-- **Separation of duties (open, P2):** `manage_purchasing` grants fiscal-period open/close, chart-of-accounts edits, manual journal entries, closing entries, reconciliation and expenses. Recommendation: a dedicated `manage_accounting` permission.
+- **SEC-05 (partially fixed, P1):** branch isolation is now enforced on the server for every accounting endpoint, receivables, customer payments and charges, expenses, financial reports, and every sales order/invoice action. Another branch's record returns 403 or 404; a manipulated `branch_id` returns 403 (tests in `branch-accounting.test.ts` and `security.test.ts`; design in [BRANCH_ACCOUNTING.md](BRANCH_ACCOUNTING.md)). **Still open:** transfers approve/dispatch/receive, stock adjustments for another branch, deliveries.
+- **SEC-06 (partially fixed, P1):** authorization (branch, roles, permissions) now comes from the database on every request, not from token claims, so changes apply immediately. In the finance and sales scope, a user with no branch and no admin/accountant role is refused. The old "no branch = all branches" rule (`isAdminUser`) still governs transfers, stock and warehouse features, because warehouse managers have no branch. Replacing it needs an explicit warehouse/all-branches permission.
+- **Separation of duties (partially fixed, P2):** fiscal periods, chart of accounts, depreciation, closing and journal backfills now require admin or accountant. `manage_purchasing` still grants manual journal entries (now confined to the user's own branch) and expenses.
 - **Fixed:** SEC-02 (zero-permission users could read the audit log), SEC-03 (branch deletion detached users into all-branch scope), SEC-04 (customer deletion cascaded away financial history), SAL-01 (any sales user could hard-delete invoiced orders), INV-08 (product deletion erased history).
 - **Other IDOR (open):** notifications create/delete for any user (SEC-10); `PATCH /users/:id` wipes omitted fields (SEC-12).
 

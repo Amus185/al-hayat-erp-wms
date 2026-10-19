@@ -14,6 +14,7 @@ import { DataTable, type Column } from '../components/DataTable';
 import { MetricCard } from '../components/MetricCard';
 import { PageSkeleton } from '../components/LoadingSpinner';
 import { useToast } from '../contexts/ToastContext';
+import { useAuth } from '../contexts/AuthContext';
 
 // ─── Theme ──────────────────────────────────────────────────────────
 const G = '#066006';
@@ -128,6 +129,14 @@ const selectStyle: React.CSSProperties = { ...inputStyle, appearance: 'none' };
 // ══════════════════════════════════════════════════════════════════
 export function AccountingPage() {
   const { addToast } = useToast();
+  const { user, branchId: myBranchId } = useAuth();
+  // Admins/accountants: consolidated view by default, filterable per branch.
+  // Everyone else is pinned to their branch by the server (this is display only).
+  const canChooseBranch = user?.role === 'admin' || user?.role === 'accountant';
+  const [branchFilter, setBranchFilter] = useState('ALL');
+  const withBranch = (url: string) => (!canChooseBranch || branchFilter === 'ALL')
+    ? url
+    : `${url}${url.includes('?') ? '&' : '?'}branch_id=${encodeURIComponent(branchFilter)}`;
   const [activeTab, setActiveTab] = useState('dashboard');
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -222,44 +231,44 @@ export function AccountingPage() {
     const p = period ? `?period_id=${period}` : '';
     try {
       if (tab === 'dashboard') {
-        const d = await apiGet<any>(`/accounting/dashboard${p}`).catch(() => null);
+        const d = await apiGet<any>(withBranch(`/accounting/dashboard${p}`)).catch(() => null);
         setDashboard(d);
       } else if (tab === 'journal') {
-        const rows = await apiGet<any[]>(`/accounting/journal-entries${period ? `?period_id=${period}` : ''}`).catch(() => []);
+        const rows = await apiGet<any[]>(withBranch(`/accounting/journal-entries${period ? `?period_id=${period}` : ''}`)).catch(() => []);
         setJournalEntries(rows || []);
       } else if (tab === 'ledger') {
-        const rows = await apiGet<any[]>(`/accounting/general-ledger${ledgerAccountId ? `?account_id=${ledgerAccountId}` : ''}`).catch(() => []);
+        const rows = await apiGet<any[]>(withBranch(`/accounting/general-ledger${ledgerAccountId ? `?account_id=${ledgerAccountId}` : ''}`)).catch(() => []);
         setLedger(rows || []);
       } else if (tab === 'trial-balance') {
-        const d = await apiGet<any>(`/accounting/trial-balance?type=${trialType}${period ? `&period_id=${period}` : ''}`).catch(() => null);
+        const d = await apiGet<any>(withBranch(`/accounting/trial-balance?type=${trialType}${period ? `&period_id=${period}` : ''}`)).catch(() => null);
         setTrialBalance(d);
       } else if (tab === 'income') {
-        const d = await apiGet<any>(`/accounting/income-statement${p}`).catch(() => null);
+        const d = await apiGet<any>(withBranch(`/accounting/income-statement${p}`)).catch(() => null);
         setIncomeStmt(d);
       } else if (tab === 'balance-sheet') {
-        const d = await apiGet<any>(`/accounting/balance-sheet${p}`).catch(() => null);
+        const d = await apiGet<any>(withBranch(`/accounting/balance-sheet${p}`)).catch(() => null);
         setBalanceSheet(d);
       } else if (tab === 'cash-flow') {
-        const d = await apiGet<any>(`/accounting/cash-flow${p}`).catch(() => null);
+        const d = await apiGet<any>(withBranch(`/accounting/cash-flow${p}`)).catch(() => null);
         setCashFlow(d);
       } else if (tab === 'equity') {
-        const d = await apiGet<any>(`/accounting/owners-equity${p}`).catch(() => null);
+        const d = await apiGet<any>(withBranch(`/accounting/owners-equity${p}`)).catch(() => null);
         setOwnersEquity(d);
       } else if (tab === 'inventory') {
-        const rows = await apiGet<any[]>(`/accounting/inventory-counts${p}`).catch(() => []);
+        const rows = await apiGet<any[]>(withBranch(`/accounting/inventory-counts${p}`)).catch(() => []);
         setInvCounts(rows || []);
       } else if (tab === 'depreciation') {
-        const rows = await apiGet<any[]>('/accounting/depreciation').catch(() => []);
+        const rows = await apiGet<any[]>(withBranch('/accounting/depreciation')).catch(() => []);
         setDepreciation(rows || []);
       }
     } catch (e) {
       addToast('error', 'Failed to load data');
     }
-  }, [ledgerAccountId, trialType]);
+  }, [ledgerAccountId, trialType, branchFilter]);
 
   useEffect(() => {
     if (!loading) loadTabData(activeTab, selectedPeriod);
-  }, [activeTab, selectedPeriod, loading]);
+  }, [activeTab, selectedPeriod, loading, branchFilter]);
 
   useEffect(() => {
     if (!loading && activeTab === 'ledger') loadTabData('ledger', selectedPeriod);
@@ -478,7 +487,7 @@ export function AccountingPage() {
 
   async function openLedgerDrill(account: any) {
     try {
-      const rows = await apiGet<any[]>(`/accounting/general-ledger?account_id=${account.account_id || account.id}`);
+      const rows = await apiGet<any[]>(withBranch(`/accounting/general-ledger?account_id=${account.account_id || account.id}`));
       setLedgerDrill({ account, rows: rows || [] });
     } catch (e) {
       addToast('error', 'Failed to load account activity');
@@ -608,6 +617,18 @@ export function AccountingPage() {
         <option value=''>All Periods</option>
         {periods.map((p: any) => <option key={p.id} value={p.id}>{p.name} ({p.status})</option>)}
       </select>
+      {canChooseBranch ? (
+        <select value={branchFilter} onChange={(e) => setBranchFilter(e.target.value)} aria-label='Branch'
+          style={{ ...selectStyle, maxWidth: '240px', background: '#f0faf0', borderColor: G + '44' }}>
+          <option value='ALL'>All branches (consolidated)</option>
+          {branches.map((b: any) => <option key={b.id} value={b.id}>{b.name}</option>)}
+          <option value='UNASSIGNED'>Company-level (no branch)</option>
+        </select>
+      ) : (
+        <span style={{ fontSize: '13px', fontWeight: 600, color: G, background: G + '14', borderRadius: '8px', padding: '7px 12px' }}>
+          Branch: {branches.find((b: any) => b.id === myBranchId)?.name || 'Your branch'}
+        </span>
+      )}
       <button
         onClick={handleRefresh}
         disabled={refreshing}

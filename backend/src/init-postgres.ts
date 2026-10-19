@@ -371,6 +371,7 @@ export async function ensurePostgresInit(pool: Pool) {
         created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
       );
 
+      ALTER TABLE customer_payments ADD COLUMN IF NOT EXISTS branch_id TEXT REFERENCES branches(id);
       ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS total_boxes INTEGER NOT NULL DEFAULT 1;
       ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS delivered_boxes INTEGER NOT NULL DEFAULT 0;
       ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS remaining_boxes INTEGER NOT NULL DEFAULT 1;
@@ -680,6 +681,10 @@ export async function ensurePostgresInit(pool: Pool) {
       { id: 'coa-6080', code: '6080', name: 'Livestock Expenses',             account_type: 'EXPENSE',   normal_balance: 'DEBIT'  },
       { id: 'coa-2050', code: '2050', name: 'Technician Installation Fees Payable', account_type: 'LIABILITY', normal_balance: 'CREDIT' },
       { id: 'coa-1070', code: '1070', name: 'Work in Progress (WIP Manufacturing)', account_type: 'ASSET', normal_balance: 'DEBIT'  },
+      // Inter-branch clearing: stock moved between branches is posted out of the
+      // sender's books and into the receiver's through this account; it nets to
+      // zero in the consolidated view.
+      { id: 'coa-1090', code: '1090', name: 'Inter-Branch Clearing', account_type: 'ASSET', normal_balance: 'DEBIT' },
     ];
 
 
@@ -709,6 +714,108 @@ export async function ensurePostgresInit(pool: Pool) {
     console.log('✅ PostgreSQL Master Schema & Auth Data Migration Verified on Startup!');
   } catch (err) {
     console.error('❌ Error initializing PostgreSQL master schema:', err);
+  } finally {
+    client.release();
+  }
+
+  await ensureBranchAttribution(pool);
+}
+
+/**
+ * Branch attribution of financial records (idempotent, runs on boot).
+ * 1. A trigger keeps every journal line in the same branch as its entry, so
+ *    branch reports can never pick up part of another branch's entry.
+ * 2. Historical rows with no branch are backfilled ONLY when the source
+ *    document proves the branch (sale order, invoice, payment, debt, expense,
+ *    stock movement, or the entry a reversal reverses). Purchasing,
+ *    manufacturing, depreciation and closing are company-level by policy and
+ *    stay NULL ("unassigned"). Anything else stays NULL for review
+ *    (docs/audit/reconciliation_queries.sql, R17–R19).
+ * Runs in its own transaction; a failure is logged and leaves data unchanged.
+ */
+export async function ensureBranchAttribution(pool: Pool) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(`
+      CREATE OR REPLACE FUNCTION enforce_journal_line_branch() RETURNS trigger AS $fn$
+      BEGIN
+        IF NEW.branch_id IS DISTINCT FROM (SELECT branch_id FROM journal_entries WHERE id = NEW.journal_entry_id) THEN
+          RAISE EXCEPTION 'Journal line branch (%) must match its journal entry''s branch', COALESCE(NEW.branch_id, 'none');
+        END IF;
+        RETURN NEW;
+      END
+      $fn$ LANGUAGE plpgsql;
+      DROP TRIGGER IF EXISTS trg_journal_line_branch ON journal_entry_lines;
+      CREATE TRIGGER trg_journal_line_branch BEFORE INSERT OR UPDATE OF branch_id, journal_entry_id ON journal_entry_lines
+        FOR EACH ROW EXECUTE FUNCTION enforce_journal_line_branch();
+    `);
+
+    // Customer payments: branch of the invoice's order or of the charge paid.
+    await client.query(`
+      UPDATE customer_payments cp SET branch_id = src.branch_id
+      FROM (
+        SELECT cp2.id, COALESCE(so.branch_id, cd.branch_id) AS branch_id
+        FROM customer_payments cp2
+        LEFT JOIN invoices i ON i.id = cp2.invoice_id
+        LEFT JOIN sales_orders so ON so.id = i.sales_order_id
+        LEFT JOIN customer_debts cd ON cd.id = cp2.manual_debt_id
+        WHERE cp2.branch_id IS NULL
+      ) src
+      WHERE cp.id = src.id AND src.branch_id IS NOT NULL
+    `);
+
+    // Journal entries with no branch anywhere, provable from their source document.
+    const backfilled = await client.query(`
+      WITH cand AS (
+        SELECT je.id, COALESCE(
+          (SELECT so.branch_id FROM sales_orders so
+             WHERE je.reference_type = 'SALE'
+               AND je.reference_id IN (so.id, so.id || '-pay', so.id || '-install-pay') LIMIT 1),
+          (SELECT so.branch_id FROM invoices i JOIN sales_orders so ON so.id = i.sales_order_id
+             WHERE je.reference_type = 'SALE' AND je.reference_id = i.id),
+          (SELECT so.branch_id FROM invoice_payments ip JOIN invoices i ON i.id = ip.invoice_id JOIN sales_orders so ON so.id = i.sales_order_id
+             WHERE je.reference_type = 'SALE' AND je.reference_id = ip.id),
+          (SELECT cp.branch_id FROM customer_payments cp
+             WHERE je.reference_type = 'SALE' AND je.reference_id = cp.id),
+          (SELECT cd.branch_id FROM customer_debts cd
+             WHERE je.reference_type = 'SALE' AND je.reference_id = cd.id),
+          (SELECT e.branch_id FROM expenses e
+             WHERE je.reference_type = 'EXPENSE' AND je.reference_id = e.id),
+          (SELECT COALESCE(it.destination_branch_id, it.source_branch_id) FROM inventory_transactions it
+             WHERE je.reference_type = 'INVENTORY_ADJUSTMENT' AND je.reference_id = it.id)
+        ) AS branch_id
+        FROM journal_entries je
+        WHERE je.branch_id IS NULL
+          AND NOT EXISTS (SELECT 1 FROM journal_entry_lines l WHERE l.journal_entry_id = je.id AND l.branch_id IS NOT NULL)
+      )
+      UPDATE journal_entries je SET branch_id = cand.branch_id
+      FROM cand WHERE cand.id = je.id AND cand.branch_id IS NOT NULL
+    `);
+    // Reversals follow the entry they reverse
+    await client.query(`
+      UPDATE journal_entries r SET branch_id = o.branch_id
+      FROM journal_entries o
+      WHERE r.reference_type = 'MANUAL' AND r.reference_id = o.id
+        AND r.branch_id IS NULL AND o.branch_id IS NOT NULL
+        AND NOT EXISTS (SELECT 1 FROM journal_entry_lines l WHERE l.journal_entry_id = r.id AND l.branch_id IS NOT NULL)
+    `);
+    // Unbranched lines take their entry's branch; GL rows follow their line
+    await client.query(`
+      UPDATE journal_entry_lines l SET branch_id = je.branch_id
+      FROM journal_entries je
+      WHERE l.journal_entry_id = je.id AND l.branch_id IS NULL AND je.branch_id IS NOT NULL
+    `);
+    await client.query(`
+      UPDATE general_ledger gl SET branch_id = l.branch_id
+      FROM journal_entry_lines l
+      WHERE gl.line_id = l.id AND gl.branch_id IS DISTINCT FROM l.branch_id
+    `);
+    await client.query('COMMIT');
+    if (backfilled.rowCount) console.log(`✅ Branch attribution backfilled for ${backfilled.rowCount} journal entries`);
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('❌ Branch attribution migration failed (no data changed):', err);
   } finally {
     client.release();
   }

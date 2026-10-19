@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { Env, uuidv4 } from '../db';
 import { PgAdapter } from '../pg-client';
 import { authMiddleware, requirePermissions, isAdminUser } from '../middleware/auth';
+import { resolveBranchScope, resolveWriteBranch, branchSql, inScope, ScopeError, type BranchScope } from '../services/branch-scope';
 import { logAudit, createAuditLogStmt } from '../services/audit';
 import {
   prepareSaleJournalEntry,
@@ -41,7 +42,7 @@ async function getInvoicePaymentSummary(db: PgAdapter, invoiceId: string, totalA
 // SHARED HELPER — compute customer unified financial balances
 // Balance = Unpaid furniture sales + unpaid manual charges - unallocated account payments
 // ──────────────────────────────────────────────────────────────────────
-export async function calculateCustomerFinancials(db: any, customerId: string) {
+export async function calculateCustomerFinancials(db: any, customerId: string, scope: BranchScope = { kind: 'ALL' }) {
   const invoiceRes = await db.prepare(`
     SELECT 
       COALESCE(SUM(
@@ -51,21 +52,21 @@ export async function calculateCustomerFinancials(db: any, customerId: string) {
       ), 0) AS unpaid_sales
     FROM sales_orders so
     JOIN invoices i ON i.sales_order_id = so.id
-    WHERE so.customer_id = ? AND so.status != 'CANCELLED' AND i.status != 'CANCELLED'
+    WHERE so.customer_id = ? AND so.status != 'CANCELLED' AND i.status != 'CANCELLED' ${branchSql(scope, 'so.branch_id')}
   `).bind(customerId).first().catch(() => ({ unpaid_sales: 0 }));
   const unpaidSales = Number(invoiceRes?.unpaid_sales || 0);
 
   const manualRes = await db.prepare(`
     SELECT COALESCE(SUM(remaining_balance), 0) AS unpaid_manual
     FROM customer_debts
-    WHERE customer_id = ? AND status != 'CANCELLED'
+    WHERE customer_id = ? AND status != 'CANCELLED' ${branchSql(scope, 'branch_id')}
   `).bind(customerId).first().catch(() => ({ unpaid_manual: 0 }));
   const unpaidManual = Number(manualRes?.unpaid_manual || 0);
 
   const accountRes = await db.prepare(`
     SELECT COALESCE(SUM(amount), 0) AS unallocated
     FROM customer_payments
-    WHERE customer_id = ? AND allocation_type = 'ACCOUNT'
+    WHERE customer_id = ? AND allocation_type = 'ACCOUNT' ${branchSql(scope, 'branch_id')}
   `).bind(customerId).first().catch(() => ({ unallocated: 0 }));
   const unallocated = Number(accountRes?.unallocated || 0);
 
@@ -82,13 +83,14 @@ export async function calculateCustomerFinancials(db: any, customerId: string) {
 // CUSTOMERS
 // ──────────────────────────────────────────────────────────────────────
 sales.get('/customers', async (c) => {
+  const scope = await resolveBranchScope(c);
   const query = `
     SELECT 
       c.*,
       COALESCE((
         SELECT COUNT(*) 
         FROM sales_orders so 
-        WHERE so.customer_id = c.id AND so.status != 'CANCELLED'
+        WHERE so.customer_id = c.id AND so.status != 'CANCELLED' ${branchSql(scope, 'so.branch_id')}
       ), 0) AS total_orders,
       COALESCE((
         SELECT SUM(
@@ -99,7 +101,7 @@ sales.get('/customers', async (c) => {
         )
         FROM sales_orders so
         LEFT JOIN invoices i ON i.sales_order_id = so.id
-        WHERE so.customer_id = c.id AND so.status != 'CANCELLED'
+        WHERE so.customer_id = c.id AND so.status != 'CANCELLED' ${branchSql(scope, 'so.branch_id')}
       ), 0) AS total_spent,
       COALESCE((
         SELECT SUM(
@@ -109,17 +111,17 @@ sales.get('/customers', async (c) => {
         )
         FROM sales_orders so
         JOIN invoices i ON i.sales_order_id = so.id
-        WHERE so.customer_id = c.id AND so.status != 'CANCELLED' AND i.status != 'CANCELLED'
+        WHERE so.customer_id = c.id AND so.status != 'CANCELLED' AND i.status != 'CANCELLED' ${branchSql(scope, 'so.branch_id')}
       ), 0) AS unpaid_sales_balance,
       COALESCE((
         SELECT SUM(cd.remaining_balance)
         FROM customer_debts cd
-        WHERE cd.customer_id = c.id AND cd.status != 'CANCELLED'
+        WHERE cd.customer_id = c.id AND cd.status != 'CANCELLED' ${branchSql(scope, 'cd.branch_id')}
       ), 0) AS unpaid_manual_balance,
       COALESCE((
         SELECT SUM(cp.amount)
         FROM customer_payments cp
-        WHERE cp.customer_id = c.id AND cp.allocation_type = 'ACCOUNT'
+        WHERE cp.customer_id = c.id AND cp.allocation_type = 'ACCOUNT' ${branchSql(scope, 'cp.branch_id')}
       ), 0) AS unallocated_payments
     FROM customers c
     ORDER BY c.created_at DESC
@@ -192,6 +194,7 @@ sales.delete('/customers/:id', requirePermissions(['manage_sales']), async (c) =
 // DEBT DASHBOARD & OVERVIEW
 // ──────────────────────────────────────────────────────────────────────
 sales.get('/debts/summary', async (c) => {
+  const scope = await resolveBranchScope(c);
   const invoiceRes = await c.env.DB.prepare(`
     SELECT 
       so.customer_id,
@@ -202,33 +205,33 @@ sales.get('/debts/summary', async (c) => {
       ), 0) AS unpaid_sales
     FROM sales_orders so
     JOIN invoices i ON i.sales_order_id = so.id
-    WHERE so.status != 'CANCELLED' AND i.status != 'CANCELLED' AND so.customer_id IS NOT NULL
+    WHERE so.status != 'CANCELLED' AND i.status != 'CANCELLED' AND so.customer_id IS NOT NULL ${branchSql(scope, 'so.branch_id')}
     GROUP BY so.customer_id
   `).all();
 
   const manualRes = await c.env.DB.prepare(`
     SELECT customer_id, COALESCE(SUM(remaining_balance), 0) AS unpaid_manual
     FROM customer_debts
-    WHERE status != 'CANCELLED'
+    WHERE status != 'CANCELLED' ${branchSql(scope, 'branch_id')}
     GROUP BY customer_id
   `).all().catch(() => ({ results: [] }));
 
   const acctRes = await c.env.DB.prepare(`
     SELECT customer_id, COALESCE(SUM(amount), 0) AS unallocated
     FROM customer_payments
-    WHERE allocation_type = 'ACCOUNT'
+    WHERE allocation_type = 'ACCOUNT' ${branchSql(scope, 'branch_id')}
     GROUP BY customer_id
   `).all().catch(() => ({ results: [] }));
 
   const totalCollectedRes = await c.env.DB.prepare(`
     SELECT COALESCE(SUM(amount), 0) AS total_collected
     FROM customer_payments
-    WHERE notes IS NULL 
+    WHERE (notes IS NULL 
        OR (
          notes NOT LIKE '%Full payment via Complete Sale%' 
          AND notes NOT LIKE '%Deposit / Partial payment via Complete Sale%' 
          AND notes NOT LIKE '%Upfront Deposit at Checkout%'
-       )
+       )) ${branchSql(scope, 'branch_id')}
   `).first().catch(() => ({ total_collected: 0 }));
 
   const customerBalances = new Map<string, number>();
@@ -264,6 +267,7 @@ sales.get('/debts/summary', async (c) => {
 });
 
 sales.get('/debts', async (c) => {
+  const scope = await resolveBranchScope(c);
   const { search, status } = c.req.query();
 
   const query = `
@@ -277,24 +281,24 @@ sales.get('/debts', async (c) => {
         )
         FROM sales_orders so
         JOIN invoices i ON i.sales_order_id = so.id
-        WHERE so.customer_id = c.id AND so.status != 'CANCELLED' AND i.status != 'CANCELLED'
+        WHERE so.customer_id = c.id AND so.status != 'CANCELLED' AND i.status != 'CANCELLED' ${branchSql(scope, 'so.branch_id')}
       ), 0) AS unpaid_sales_balance,
       COALESCE((
         SELECT SUM(cd.remaining_balance)
         FROM customer_debts cd
-        WHERE cd.customer_id = c.id AND cd.status != 'CANCELLED'
+        WHERE cd.customer_id = c.id AND cd.status != 'CANCELLED' ${branchSql(scope, 'cd.branch_id')}
       ), 0) AS unpaid_manual_balance,
       COALESCE((
         SELECT SUM(cp.amount)
         FROM customer_payments cp
-        WHERE cp.customer_id = c.id AND cp.allocation_type = 'ACCOUNT'
+        WHERE cp.customer_id = c.id AND cp.allocation_type = 'ACCOUNT' ${branchSql(scope, 'cp.branch_id')}
       ), 0) AS unallocated_payments,
       COALESCE((
         SELECT MAX(payment_date)
         FROM (
-          SELECT payment_date FROM invoice_payments ip JOIN invoices i ON i.id = ip.invoice_id JOIN sales_orders so ON so.id = i.sales_order_id WHERE so.customer_id = c.id
+          SELECT payment_date FROM invoice_payments ip JOIN invoices i ON i.id = ip.invoice_id JOIN sales_orders so ON so.id = i.sales_order_id WHERE so.customer_id = c.id ${branchSql(scope, 'so.branch_id')}
           UNION ALL
-          SELECT payment_date FROM customer_payments cp WHERE cp.customer_id = c.id
+          SELECT payment_date FROM customer_payments cp WHERE cp.customer_id = c.id ${branchSql(scope, 'cp.branch_id')}
         )
       ), NULL) AS last_payment_date
     FROM customers c
@@ -348,12 +352,13 @@ sales.get('/debts', async (c) => {
 // MANUAL CUSTOMER DEBTS
 // ──────────────────────────────────────────────────────────────────────
 sales.get('/customers/:id/debts', async (c) => {
+  const scope = await resolveBranchScope(c);
   const customerId = c.req.param('id');
   const { results } = await c.env.DB.prepare(`
     SELECT cd.*, u.full_name AS created_by_name
     FROM customer_debts cd
     LEFT JOIN users u ON u.id = cd.created_by
-    WHERE cd.customer_id = ?
+    WHERE cd.customer_id = ? ${branchSql(scope, 'cd.branch_id')}
     ORDER BY cd.debt_date DESC, cd.created_at DESC
   `).bind(customerId).all();
   return c.json(results || []);
@@ -367,6 +372,8 @@ sales.post('/customers/:id/debts', requirePermissions(['manage_sales']), async (
   const customer = await c.env.DB.prepare('SELECT id, name FROM customers WHERE id = ?').bind(customerId).first();
   if (!customer) return c.json({ message: 'Customer not found.' }, 404);
 
+  // Branch users always charge in their own branch; admins choose (or company-level).
+  const debtBranch = await resolveWriteBranch(c, body.branchId);
   const amount = Number(body.amount);
   if (!amount || amount <= 0) return c.json({ message: 'Debt amount must be greater than zero.' }, 400);
   if (!body.description || !body.description.trim()) {
@@ -393,7 +400,7 @@ sales.post('/customers/:id/debts', requirePermissions(['manage_sales']), async (
     amount,
     amount,
     debtDate,
-    body.branchId || null,
+    debtBranch,
     userId
   ));
 
@@ -411,7 +418,7 @@ sales.post('/customers/:id/debts', requirePermissions(['manage_sales']), async (
     referenceType: 'SALE',
     referenceId: id,
     entryDate: String(debtDate).split('T')[0],
-    branchId: body.branchId || null,
+    branchId: debtBranch,
     userId,
     lines: [
       { accountCode: '1020', debitAmount: amount, creditAmount: 0 },
@@ -430,11 +437,12 @@ sales.post('/customers/:id/debts', requirePermissions(['manage_sales']), async (
 // UNIFIED CUSTOMER BALANCE & LEDGER
 // ──────────────────────────────────────────────────────────────────────
 sales.get('/customers/:id/balance', async (c) => {
+  const scope = await resolveBranchScope(c);
   const customerId = c.req.param('id');
   const customer = await c.env.DB.prepare('SELECT * FROM customers WHERE id = ?').bind(customerId).first() as any;
   if (!customer) return c.json({ message: 'Customer not found.' }, 404);
 
-  const fin = await calculateCustomerFinancials(c.env.DB, customerId);
+  const fin = await calculateCustomerFinancials(c.env.DB, customerId, scope);
   return c.json({
     customer_id: customer.id,
     customer_name: customer.name,
@@ -443,6 +451,7 @@ sales.get('/customers/:id/balance', async (c) => {
 });
 
 sales.get('/customers/:id/ledger', async (c) => {
+  const scope = await resolveBranchScope(c);
   const customerId = c.req.param('id');
   const customer = await c.env.DB.prepare('SELECT * FROM customers WHERE id = ?').bind(customerId).first() as any;
   if (!customer) return c.json({ message: 'Customer not found.' }, 404);
@@ -454,7 +463,7 @@ sales.get('/customers/:id/ledger', async (c) => {
            i.issued_at, i.status
     FROM invoices i
     JOIN sales_orders so ON so.id = i.sales_order_id
-    WHERE so.customer_id = ? AND so.status != 'CANCELLED' AND i.status != 'CANCELLED'
+    WHERE so.customer_id = ? AND so.status != 'CANCELLED' AND i.status != 'CANCELLED' ${branchSql(scope, 'so.branch_id')}
   `).bind(customerId).all();
 
   // 2. Invoice payments
@@ -464,14 +473,14 @@ sales.get('/customers/:id/ledger', async (c) => {
     FROM invoice_payments ip
     JOIN invoices i ON i.id = ip.invoice_id
     JOIN sales_orders so ON so.id = i.sales_order_id
-    WHERE so.customer_id = ? AND so.status != 'CANCELLED' AND i.status != 'CANCELLED'
+    WHERE so.customer_id = ? AND so.status != 'CANCELLED' AND i.status != 'CANCELLED' ${branchSql(scope, 'so.branch_id')}
   `).bind(customerId).all();
 
   // 3. Manual debts
   const { results: manualDebts } = await c.env.DB.prepare(`
     SELECT cd.id, cd.debt_number, cd.description, cd.category, cd.amount, cd.remaining_balance, cd.debt_date, cd.status
     FROM customer_debts cd
-    WHERE cd.customer_id = ? AND cd.status != 'CANCELLED'
+    WHERE cd.customer_id = ? AND cd.status != 'CANCELLED' ${branchSql(scope, 'cd.branch_id')}
   `).bind(customerId).all().catch(() => ({ results: [] }));
 
   // 4. Non-invoice customer payments (manual debt & general account payments)
@@ -480,7 +489,7 @@ sales.get('/customers/:id/ledger', async (c) => {
            cd.debt_number, cd.description AS debt_description
     FROM customer_payments cp
     LEFT JOIN customer_debts cd ON cd.id = cp.manual_debt_id
-    WHERE cp.customer_id = ? AND cp.allocation_type != 'INVOICE'
+    WHERE cp.customer_id = ? AND cp.allocation_type != 'INVOICE' ${branchSql(scope, 'cp.branch_id')}
   `).bind(customerId).all().catch(() => ({ results: [] }));
 
   interface RawLedgerEntry {
@@ -616,7 +625,12 @@ sales.post('/payments', requirePermissions(['manage_sales']), async (c) => {
   const customer = await c.env.DB.prepare('SELECT * FROM customers WHERE id = ?').bind(customerId).first() as any;
   if (!customer) return c.json({ message: 'Customer not found.' }, 404);
 
-  const prevFin = await calculateCustomerFinancials(c.env.DB, customerId);
+  // Branch scope: a payment settles a document of the caller's branch and is
+  // booked in the branch of that document (never the cashier's by default).
+  const scope = await resolveBranchScope(c, 'ALL');
+  let paymentBranch: string | null = null;
+
+  const prevFin = await calculateCustomerFinancials(c.env.DB, customerId, scope);
   const previousBalance = prevFin.current_balance;
 
   const receiptNumber = `RCP-${Date.now().toString().slice(-6)}-${Math.floor(100 + Math.random() * 900)}`;
@@ -634,7 +648,8 @@ sales.post('/payments', requirePermissions(['manage_sales']), async (c) => {
       WHERE i.id = ? AND so.customer_id = ?
     `).bind(invoiceId, customerId).first() as any;
 
-    if (!invoice) return c.json({ message: 'Invoice not found for this customer.' }, 404);
+    if (!invoice || !inScope(scope, invoice.branch_id)) return c.json({ message: 'Invoice not found for this customer.' }, 404);
+    paymentBranch = invoice.branch_id || null;
 
     billNumber = invoice.order_number || invoice.invoice_number;
     const grossTotal = (Number(invoice.total_amount || 0) - Number(invoice.discount_amount || 0)) + Number(invoice.installation_fee || 0);
@@ -680,9 +695,9 @@ sales.post('/payments', requirePermissions(['manage_sales']), async (c) => {
     }
 
     stmts.push(c.env.DB.prepare(`
-      INSERT INTO customer_payments (id, receipt_number, customer_id, allocation_type, invoice_id, amount, payment_method, payment_date, previous_balance, remaining_balance, notes, recorded_by)
-      VALUES (?, ?, ?, 'INVOICE', ?, ?, ?, CURRENT_TIMESTAMP, ?, ?, ?, ?)
-    `).bind(paymentId, receiptNumber, customerId, invoiceId, payAmount, paymentMethod || 'CASH', previousBalance, Math.max(0, previousBalance - payAmount), notes?.trim() || null, userId));
+      INSERT INTO customer_payments (id, receipt_number, customer_id, allocation_type, invoice_id, amount, payment_method, payment_date, previous_balance, remaining_balance, notes, recorded_by, branch_id)
+      VALUES (?, ?, ?, 'INVOICE', ?, ?, ?, CURRENT_TIMESTAMP, ?, ?, ?, ?, ?)
+    `).bind(paymentId, receiptNumber, customerId, invoiceId, payAmount, paymentMethod || 'CASH', previousBalance, Math.max(0, previousBalance - payAmount), notes?.trim() || null, userId, paymentBranch));
 
   } else if (allocationType === 'MANUAL_DEBT') {
     if (!manualDebtId) return c.json({ message: 'Manual debt ID is required.' }, 400);
@@ -690,7 +705,8 @@ sales.post('/payments', requirePermissions(['manage_sales']), async (c) => {
       'SELECT * FROM customer_debts WHERE id = ? AND customer_id = ?'
     ).bind(manualDebtId, customerId).first() as any;
 
-    if (!debt) return c.json({ message: 'Manual charge record not found for this customer.' }, 404);
+    if (!debt || !inScope(scope, debt.branch_id)) return c.json({ message: 'Manual charge record not found for this customer.' }, 404);
+    paymentBranch = debt.branch_id || null;
     billNumber = debt.debt_number;
 
     const curDebtBal = Number(debt.remaining_balance || 0);
@@ -710,16 +726,18 @@ sales.post('/payments', requirePermissions(['manage_sales']), async (c) => {
     `).bind(payAmount, payAmount, manualDebtId, payAmount).mustAffect('Payment exceeds the remaining charge (another payment was just recorded). Please refresh.'));
 
     stmts.push(c.env.DB.prepare(`
-      INSERT INTO customer_payments (id, receipt_number, customer_id, allocation_type, manual_debt_id, amount, payment_method, payment_date, previous_balance, remaining_balance, notes, recorded_by)
-      VALUES (?, ?, ?, 'MANUAL_DEBT', ?, ?, ?, CURRENT_TIMESTAMP, ?, ?, ?, ?)
-    `).bind(paymentId, receiptNumber, customerId, manualDebtId, payAmount, paymentMethod || 'CASH', previousBalance, Math.max(0, previousBalance - payAmount), notes?.trim() || null, userId));
+      INSERT INTO customer_payments (id, receipt_number, customer_id, allocation_type, manual_debt_id, amount, payment_method, payment_date, previous_balance, remaining_balance, notes, recorded_by, branch_id)
+      VALUES (?, ?, ?, 'MANUAL_DEBT', ?, ?, ?, CURRENT_TIMESTAMP, ?, ?, ?, ?, ?)
+    `).bind(paymentId, receiptNumber, customerId, manualDebtId, payAmount, paymentMethod || 'CASH', previousBalance, Math.max(0, previousBalance - payAmount), notes?.trim() || null, userId, paymentBranch));
 
   } else {
-    // General account payment
+    // General account payment: no document to follow, so it belongs to the
+    // receiving branch (branch users: their own; admins: chosen or company-level).
+    paymentBranch = await resolveWriteBranch(c, body.branchId);
     stmts.push(c.env.DB.prepare(`
-      INSERT INTO customer_payments (id, receipt_number, customer_id, allocation_type, amount, payment_method, payment_date, previous_balance, remaining_balance, notes, recorded_by)
-      VALUES (?, ?, ?, 'ACCOUNT', ?, ?, CURRENT_TIMESTAMP, ?, ?, ?, ?)
-    `).bind(paymentId, receiptNumber, customerId, payAmount, paymentMethod || 'CASH', previousBalance, Math.max(0, previousBalance - payAmount), notes?.trim() || 'General Customer Account Payment', userId));
+      INSERT INTO customer_payments (id, receipt_number, customer_id, allocation_type, amount, payment_method, payment_date, previous_balance, remaining_balance, notes, recorded_by, branch_id)
+      VALUES (?, ?, ?, 'ACCOUNT', ?, ?, CURRENT_TIMESTAMP, ?, ?, ?, ?, ?)
+    `).bind(paymentId, receiptNumber, customerId, payAmount, paymentMethod || 'CASH', previousBalance, Math.max(0, previousBalance - payAmount), notes?.trim() || 'General Customer Account Payment', userId, paymentBranch));
   }
 
   stmts.push(createAuditLogStmt(c, 'CUSTOMER_PAYMENT_RECORD', 'customer_payments', paymentId, null, {
@@ -734,7 +752,7 @@ sales.post('/payments', requirePermissions(['manage_sales']), async (c) => {
   const paymentJournal = await prepareCustomerPaymentJournalEntry(
     c,
     { id: paymentId, amount: payAmount, paymentDate: new Date().toISOString().split('T')[0] },
-    { id: customerId, order_number: billNumber || `CUST-${customerId.slice(0, 6)}` },
+    { id: customerId, order_number: billNumber || `CUST-${customerId.slice(0, 6)}`, branch_id: paymentBranch },
     userId
   );
   stmts.push(...paymentJournal.statements);
@@ -767,6 +785,7 @@ sales.post('/payments', requirePermissions(['manage_sales']), async (c) => {
 });
 
 sales.get('/payments/:receiptNumber/receipt', async (c) => {
+  const scope = await resolveBranchScope(c);
   const receiptNumber = c.req.param('receiptNumber');
   const payment = await c.env.DB.prepare(`
     SELECT cp.*, c.name AS customer_name, c.phone AS customer_phone, c.email AS customer_email, c.address AS customer_address,
@@ -774,7 +793,7 @@ sales.get('/payments/:receiptNumber/receipt', async (c) => {
     FROM customer_payments cp
     JOIN customers c ON c.id = cp.customer_id
     LEFT JOIN users u ON u.id = cp.recorded_by
-    WHERE cp.receipt_number = ?
+    WHERE cp.receipt_number = ? ${branchSql(scope, 'cp.branch_id')}
   `).bind(receiptNumber).first() as any;
 
   if (!payment) return c.json({ message: 'Receipt not found.' }, 404);
@@ -789,7 +808,7 @@ sales.get('/payments/:receiptNumber/receipt', async (c) => {
 sales.get('/orders', async (c) => {
   const { search, status, paymentStatus, dateFrom, dateTo, customer_id, customerId } = c.req.query();
   const payload = c.get('jwtPayload');
-  const scopedBranchId = isAdminUser(payload) ? null : payload.branch_id;
+  const scopedBranchId = await scopedSalesBranch(c);
 
   let query = `
     SELECT so.*, c.name AS customer_name, c.phone AS customer_phone, c.address AS customer_address, c.city AS customer_city,
@@ -899,7 +918,7 @@ sales.get('/orders', async (c) => {
 sales.get('/orders/:id', async (c) => {
   const id = c.req.param('id');
   const payload = c.get('jwtPayload');
-  const scopedBranchId = isAdminUser(payload) ? null : payload.branch_id;
+  const scopedBranchId = await scopedSalesBranch(c);
 
   const { results: orders } = await c.env.DB.prepare(`
     SELECT so.*, c.name AS customer_name, c.phone AS customer_phone, c.address AS customer_address, c.city AS customer_city,
@@ -979,6 +998,28 @@ sales.get('/orders/:id', async (c) => {
     payments,
   });
 });
+
+// Strict branch scope for sales and receivables (services/branch-scope.ts):
+// branch-scoped users see their branch only; admins/accountants see all;
+// users with neither a branch nor an all-branch role are refused (403).
+async function scopedSalesBranch(c: any): Promise<string | null> {
+  const scope = await resolveBranchScope(c, 'ALL');
+  return scope.kind === 'BRANCH' ? scope.branchId : null;
+}
+
+async function assertOrderInScope(c: any, orderId: string | undefined) {
+  const branchId = await scopedSalesBranch(c);
+  if (!branchId) return;
+  const order = await c.env.DB.prepare('SELECT branch_id FROM sales_orders WHERE id = ?').bind(orderId).first();
+  if (order && order.branch_id !== branchId) throw new ScopeError(403, 'Access denied: order belongs to another branch.');
+}
+
+async function assertInvoiceInScope(c: any, invoiceId: string | undefined) {
+  const branchId = await scopedSalesBranch(c);
+  if (!branchId) return;
+  const inv = await c.env.DB.prepare('SELECT so.branch_id FROM invoices i JOIN sales_orders so ON so.id = i.sales_order_id WHERE i.id = ?').bind(invoiceId).first();
+  if (inv && inv.branch_id !== branchId) throw new ScopeError(403, 'Access denied: invoice belongs to another branch.');
+}
 
 // Settle the remaining balance of an order's invoice (installation fee
 // included): payment row + its ledger entry + PAID statuses, in one batch.
@@ -1105,9 +1146,8 @@ sales.post('/orders', requirePermissions(['manage_sales']), async (c) => {
   const userId = payload.sub;
 
   // Branch isolation — branch users can only create orders for their own branch
-  if (!isAdminUser(payload)) {
-    body.branchId = payload.branch_id;
-  }
+  const writeScope = await resolveBranchScope(c, 'ALL');
+  if (writeScope.kind === 'BRANCH') body.branchId = writeScope.branchId;
 
   // Validate branch
   if (!body.branchId) return c.json({ message: 'Branch is required.' }, 400);
@@ -1272,9 +1312,9 @@ sales.post('/orders', requirePermissions(['manage_sales']), async (c) => {
 
       if (body.customerId) {
         stmts.push(c.env.DB.prepare(`
-          INSERT INTO customer_payments (id, receipt_number, customer_id, allocation_type, invoice_id, amount, payment_method, payment_date, previous_balance, remaining_balance, notes, recorded_by)
-          VALUES (?, ?, ?, 'INVOICE', ?, ?, ?, CURRENT_TIMESTAMP, ?, ?, 'Upfront Deposit at Checkout', ?)
-        `).bind(paymentId, receiptNumber, body.customerId, invoiceId, deposit, depositMethod, grandTotal, remaining, userId));
+          INSERT INTO customer_payments (id, receipt_number, customer_id, allocation_type, invoice_id, amount, payment_method, payment_date, previous_balance, remaining_balance, notes, recorded_by, branch_id)
+          VALUES (?, ?, ?, 'INVOICE', ?, ?, ?, CURRENT_TIMESTAMP, ?, ?, 'Upfront Deposit at Checkout', ?, ?)
+        `).bind(paymentId, receiptNumber, body.customerId, invoiceId, deposit, depositMethod, grandTotal, remaining, userId, body.branchId));
       }
     }
 
@@ -1315,6 +1355,7 @@ sales.post('/orders', requirePermissions(['manage_sales']), async (c) => {
 // ──────────────────────────────────────────────────────────────────────
 sales.post('/orders/:id/confirm', requirePermissions(['manage_sales']), async (c) => {
   const id = c.req.param('id');
+  await assertOrderInScope(c, id);
 
   // CAS: only transition from DRAFT
   const cas = await c.env.DB.prepare(
@@ -1338,6 +1379,7 @@ sales.post('/orders/:id/confirm', requirePermissions(['manage_sales']), async (c
 // ──────────────────────────────────────────────────────────────────────
 sales.post('/orders/:id/invoice', requirePermissions(['manage_sales']), async (c) => {
   const orderId = c.req.param('id');
+  await assertOrderInScope(c, orderId);
   const userId = c.get('jwtPayload').sub;
 
   // CAS: only transition from CONFIRMED
@@ -1517,6 +1559,7 @@ sales.post('/orders/:id/invoice', requirePermissions(['manage_sales']), async (c
 // ──────────────────────────────────────────────────────────────────────
 sales.post('/orders/:id/pay', requirePermissions(['manage_sales']), async (c) => {
   const orderId = c.req.param('id');
+  await assertOrderInScope(c, orderId);
   const userId = c.get('jwtPayload').sub;
 
   // CAS: atomically claim the order from INVOICED → PAYING
@@ -1557,6 +1600,7 @@ sales.post('/orders/:id/complete', requirePermissions(['manage_sales']), async (
   const reqStart = (c as any).reqStartTime || Date.now();
   console.log(`[WATERFALL] +${Date.now() - reqStart}ms | sales.post('/orders/:id/complete') handler start`);
   const orderId = c.req.param('id');
+  await assertOrderInScope(c, orderId);
   const userId = c.get('jwtPayload').sub;
 
   const tOrder0 = Date.now();
@@ -1716,9 +1760,9 @@ sales.post('/orders/:id/complete', requirePermissions(['manage_sales']), async (
 
       if ((order as any).customer_id) {
         stmts.push(c.env.DB.prepare(`
-          INSERT INTO customer_payments (id, receipt_number, customer_id, allocation_type, invoice_id, amount, payment_method, payment_date, previous_balance, remaining_balance, notes, recorded_by)
-          VALUES (?, ?, ?, 'INVOICE', ?, ?, ?, CURRENT_TIMESTAMP, ?, ?, ?, ?)
-        `).bind(uuidv4(), receiptNumber, (order as any).customer_id, invoiceId, amountPaid, paymentMethod, grandTotal, remainingBalance, isFullPay ? 'Full payment via Complete Sale' : 'Deposit / Partial payment via Complete Sale', userId));
+          INSERT INTO customer_payments (id, receipt_number, customer_id, allocation_type, invoice_id, amount, payment_method, payment_date, previous_balance, remaining_balance, notes, recorded_by, branch_id)
+          VALUES (?, ?, ?, 'INVOICE', ?, ?, ?, CURRENT_TIMESTAMP, ?, ?, ?, ?, ?)
+        `).bind(uuidv4(), receiptNumber, (order as any).customer_id, invoiceId, amountPaid, paymentMethod, grandTotal, remainingBalance, isFullPay ? 'Full payment via Complete Sale' : 'Deposit / Partial payment via Complete Sale', userId, (order as any).branch_id || null));
       }
     }
 
@@ -1811,6 +1855,7 @@ sales.post('/orders/:id/complete', requirePermissions(['manage_sales']), async (
 // ──────────────────────────────────────────────────────────────────────
 sales.post('/invoices/:id/payments', requirePermissions(['manage_sales']), async (c) => {
   const invoiceId = c.req.param('id');
+  await assertInvoiceInScope(c, invoiceId);
   if (!invoiceId) return c.json({ message: 'Invoice id is required.' }, 400);
   const userId = c.get('jwtPayload').sub;
   const body = await c.req.json();
@@ -1907,6 +1952,7 @@ sales.post('/invoices/:id/payments', requirePermissions(['manage_sales']), async
 // ──────────────────────────────────────────────────────────────────────
 sales.get('/invoices/:id/payments', async (c) => {
   const invoiceId = c.req.param('id');
+  await assertInvoiceInScope(c, invoiceId);
 
   const invoice = await c.env.DB.prepare(
     'SELECT id, total_amount, discount_amount FROM invoices WHERE id = ?'
@@ -1946,7 +1992,7 @@ sales.get('/invoices/:id/payments', async (c) => {
 // ──────────────────────────────────────────────────────────────────────
 sales.get('/summary', async (c) => {
   const payload = c.get('jwtPayload');
-  const scopedBranchId = isAdminUser(payload) ? null : payload.branch_id;
+  const scopedBranchId = await scopedSalesBranch(c);
 
   // Total outstanding — scoped to branch if branch user
   let summaryQuery = `
@@ -2001,6 +2047,7 @@ sales.get('/summary', async (c) => {
 // ──────────────────────────────────────────────────────────────────────
 sales.get('/invoices/:id/print', async (c) => {
   const invoiceId = c.req.param('id');
+  await assertInvoiceInScope(c, invoiceId);
 
   const invoice = await c.env.DB.prepare(`
     SELECT i.*, so.order_number, so.branch_id,
@@ -2072,6 +2119,7 @@ sales.get('/invoices/:id/print', async (c) => {
 // ──────────────────────────────────────────────────────────────────────
 sales.post('/orders/:id/installation-payout', requirePermissions(['manage_sales']), async (c) => {
   const orderId = c.req.param('id');
+  await assertOrderInScope(c, orderId);
   const userId = c.get('jwtPayload').sub;
   const body = await c.req.json().catch(() => ({}));
 
@@ -2121,6 +2169,7 @@ sales.post('/orders/:id/installation-payout', requirePermissions(['manage_sales'
 // ──────────────────────────────────────────────────────────────────────
 sales.post('/orders/:id/cancel', requirePermissions(['manage_sales']), async (c) => {
   const orderId = c.req.param('id');
+  await assertOrderInScope(c, orderId);
   const userId = c.get('jwtPayload').sub;
   const body = await c.req.json().catch(() => ({}));
   const reason = body.reason?.trim() || 'Order cancelled by authorized staff';
@@ -2216,7 +2265,7 @@ sales.delete('/orders/:id', requirePermissions(['manage_sales']), async (c) => {
   const id = c.req.param('id');
   const payload = c.get('jwtPayload');
   const admin = isAdminUser(payload);
-  const scopedBranchId = admin ? null : payload.branch_id;
+  const scopedBranchId = await scopedSalesBranch(c);
 
   const order = await c.env.DB.prepare('SELECT * FROM sales_orders WHERE id = ?').bind(id).first();
   if (!order) return c.json({ message: 'Sales order not found' }, 404);

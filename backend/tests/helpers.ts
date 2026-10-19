@@ -110,6 +110,16 @@ export async function setupTestApp() {
     return Math.round(rows[0].bal * 100) / 100;
   }
 
+  /** A real user row with a real role, so the server derives scope from the database. */
+  async function createUser(opts: { branchId: string | null; roleId: string; role: string }) {
+    const id = randomUUID();
+    await q(`INSERT INTO users (id, email, password_hash, full_name, branch_id) VALUES ($1, $2, 'x', $3, $4)`,
+      [id, `${id}@test.local`, `User ${opts.role}`, opts.branchId]);
+    await q('INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2)', [id, opts.roleId]);
+    const token = await tokenFor({ sub: id, branch_id: opts.branchId, role: opts.role, permissions: ALL_PERMISSIONS });
+    return { id, token };
+  }
+
   async function journalCount() {
     return Number((await q('SELECT COUNT(*) AS n FROM journal_entries'))[0].n);
   }
@@ -123,5 +133,5 @@ export async function setupTestApp() {
     await a.end();
   }
 
-  return { app, api, q, pool, tokenFor, adminToken, createProduct, setStock, stockOf, createCustomer, accountBalance, journalCount, teardown, ensurePostgresInit };
+  return { app, api, q, pool, tokenFor, adminToken, createUser, createProduct, setStock, stockOf, createCustomer, accountBalance, journalCount, teardown, ensurePostgresInit };
 }

@@ -109,6 +109,10 @@ app.onError((err, c) => {
   if (err.name === 'ConflictError') {
     return c.json({ message: err.message, status: 409 }, 409);
   }
+  if (err.name === 'ScopeError') {
+    const status = (err as any).status === 400 ? 400 : 403;
+    return c.json({ message: err.message, status }, status);
+  }
   const errorPayload = {
     level: 'error',
     timestamp: new Date().toISOString(),

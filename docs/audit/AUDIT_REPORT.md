@@ -1,7 +1,7 @@
 # Al Hayat ERP+WMS — Production Audit Report
 
 **Audit date:** 2026-10-19  ·  **Code audited:** `origin/main` at `cc1bd1a` (plus the fixes in this change set)
-**Companion documents:** [AUDIT_CHECKLIST.md](AUDIT_CHECKLIST.md) · [ACCOUNTING_RECONCILIATION.md](ACCOUNTING_RECONCILIATION.md) · [SECURITY_AND_PRODUCTION_READINESS.md](SECURITY_AND_PRODUCTION_READINESS.md) · [reconciliation_queries.sql](reconciliation_queries.sql)
+**Companion documents:** [BRANCH_ACCOUNTING.md](BRANCH_ACCOUNTING.md) · [AUDIT_CHECKLIST.md](AUDIT_CHECKLIST.md) · [ACCOUNTING_RECONCILIATION.md](ACCOUNTING_RECONCILIATION.md) · [SECURITY_AND_PRODUCTION_READINESS.md](SECURITY_AND_PRODUCTION_READINESS.md) · [reconciliation_queries.sql](reconciliation_queries.sql)
 
 ---
 
@@ -29,13 +29,14 @@ The most serious items:
 **What was done:**
 - 30 defects are fixed in code (plus SAL-00, fixed and pushed earlier in `cc1bd1a`).
 - 26 of the 30 are confirmed by 28 regression tests that **fail on the production code and pass with the fixes** (5 pass / 28 fail before → 33 pass / 0 fail after).
+- **Branch-specific accounting** (follow-up task): every branch has its own books inside the single ledger. Admins and accountants get a consolidated view with a branch filter, branch users are isolated server-side, and new finding ACC-26 is fixed. 19 new tests (2/17 pass/fail before → 19/19). Details: [BRANCH_ACCOUNTING.md](BRANCH_ACCOUNTING.md).
 - DB-01 and OPS-01 are verified by direct execution.
 - INV-04 (oversell race; it did not interleave in-process) and ACC-11 are fixed on code evidence.
 - Read-only reconciliation queries are provided to measure historical damage in the production database.
 - Riskier remediations and policy decisions are documented with plans, not changed.
 
 **Production-readiness verdict:** not yet. The fixes remove the confirmed corruption paths, but these remain open:
-- branch isolation on write endpoints (SEC-05/06)
+- branch isolation outside finance (transfers, stock, deliveries) and the "no branch = all branches" rule (SEC-05/06 remainder)
 - the JWT secret check (SEC-07)
 - the cancellation/refund policy (ACC-15)
 - floating-point money (ACC-20)
@@ -116,16 +117,17 @@ Status legend: **FIXED** = code changed and the regression test passes · **OPEN
 | ACC-13 | P2 | Confirmed | FIXED | Stock adjustment valued zero-cost products at an **invented 10/unit** (test: +20 to inventory), and posted after commit. **Fix:** actual cost only, same transaction. | `routes/inventory.ts`, `accounting-service.ts` |
 | ACC-14 | P1 | Confirmed | FIXED | Double-submitted supplier payment was recorded twice (supplier paid 200 against a 100 invoice). **Fix:** row lock + balance re-check. | `routes/purchasing.ts` |
 | ACC-15 | P1 | Confirmed (by reading) | OPEN | **Cancellation/refund policy is undefined.** Cancel reverses the sale journal and checkout-time payment journals (keyed to the invoice id), but not payments taken later (keyed to payment ids). The cancelled invoice and its payments then drop out of the customer's balance, so money the customer paid is neither refunded nor shown as credit. Decision needed: refund (Dr AR/Cr Cash + refund record) vs store credit (keep as unallocated payment). | `routes/sales.ts` cancel |
-| ACC-16 | P2 | Probable | OPEN | `general_ledger.running_balance` is computed read-then-write. Concurrent postings, or two entries in one batch touching the same account, store wrong running balances. Only the cash-flow "ending cash" figure reads it. Recommend deriving balances with `SUM()`. | `accounting-service.ts` |
+| ACC-16 | P2 | Probable | PARTIALLY FIXED | `general_ledger.running_balance` is computed read-then-write. Concurrent postings, or two entries in one batch touching the same account, store wrong running balances. Only the cash-flow "ending cash" figure reads it. Recommend deriving balances with `SUM()`. | `accounting-service.ts` | **Update:** the cash-flow ending balance is now the sum of scoped cash lines; `running_balance` is no longer read by any report.
 | ACC-17 | P2 | Confirmed (by reading) | OPEN | Manufacturing labor is never journaled (no labor/payroll account), and work-order completion overwrites the product's global `cost_price`. | `routes/manufacturing.ts` |
 | ACC-18 | P2 | Confirmed | OPEN | Opening stock entered at product creation or bulk import creates stock with **no movement row and no journal**. Stock valuation ≠ ledger 1030, and the movement history doesn't explain balances (reconciliation R7/R8). Recommend an "opening balance" posting (Dr 1030 / Cr Owner's Capital 3010) behind an explicit policy decision. | `routes/products.ts` |
 | ACC-19 | P2 | Confirmed (by reading) | OPEN | Mixed costing: COGS uses all-time weighted receipt cost; adjustments use `products.cost_price`; manufacturing overwrites `cost_price`. | service / routes |
 | ACC-20 | P2 | Confirmed (by reading) | OPEN | Money is `DOUBLE PRECISION` everywhere, with tolerance comparisons (±0.001). Migrating to `NUMERIC(14,2)` is a schema change; see the plan in ACCOUNTING_RECONCILIATION §6. | schema |
-| ACC-21 | P2 | Confirmed (by reading) | OPEN | Manual journal creation is non-atomic (header, then lines) and accepts negative amounts or lines with both debit and credit. Entry numbers come from `COUNT(*)+1` and collide under concurrency. Fiscal periods, chart of accounts and manual journals need only `manage_purchasing`. | `routes/accounting.ts` |
-| ACC-22 | P2 | Confirmed (by reading) | OPEN | Year-end closing is non-atomic, does not set the period CLOSED, skips accounts with contra balances (`HAVING > 0`) and inactive accounts. Depreciation posts outside the transaction, swallows errors, and stores a running balance equal to the amount. | `routes/accounting.ts` |
+| ACC-21 | P2 | Confirmed (by reading) | PARTIALLY FIXED | Manual journal creation is now atomic and single-branch, and posting assigns the fiscal period and refuses closed periods. Still open: negative amounts / lines with both debit and credit are accepted; entry numbers come from `COUNT(*)+1` (collide under concurrency); separation of duties (`manage_purchasing`). |
+| ACC-22 | P2 | Confirmed | PARTIALLY FIXED | Year-end closing is now per branch, atomic, refuses a non-OPEN period, closes contra balances and period-less entries, and locks the period (test). Depreciation still posts outside the transaction, swallows errors, and stores a running balance equal to the amount. |
 | ACC-23 | P2 | Confirmed (by reading) | OPEN | Assets module: every posting uses `reference_type MANUAL` (no idempotency, retries duplicate), postings are outside the transaction, a property can be sold twice, the sale gain goes to Rental Income (4020), and deleting a property erases its rental payments and expenses while the journals remain. | `routes/assets.ts` |
 | ACC-24 | P2 | Confirmed (by reading) | OPEN | Operational revenue ≠ ledger revenue in reports. Sales/branch reports count CONFIRMED orders that have no invoice. `GET /branches` revenue excludes DELIVERED orders because delivery overwrites `sales_orders.status` (payment and fulfilment share one status column). | `routes/reports.ts`, `routes/branches.ts` |
 | ACC-25 | P2 | Confirmed (by reading) | OPEN | `getInvoicePaymentSummary` (order detail, `/invoices/:id/payments`) excludes the installation fee, while customer balances include it. | `routes/sales.ts` |
+| ACC-26 | P2 | Confirmed | FIXED | Manually posted journals got no fiscal period, so period closing never closed them (left a balance in 6050 in the live UI check). Posting now assigns the period covering the entry date; closing also includes period-less entries dated in the period (test: closing zeroes 6050 in both branches). | `routes/accounting.ts` |
 
 ### 4.2 Sales, inventory, purchasing, transfers
 
@@ -157,8 +159,8 @@ Details and remediation plans are in [SECURITY_AND_PRODUCTION_READINESS.md](SECU
 |---|---|---|---|---|
 | SEC-01 | P0 | Confirmed | FIXED (code); **action needed** | Boot-time seed upsert reset the admin password, version and active flag on every restart; the password was documented in the public repo. **The production admin password must be changed after this fix is deployed** (before it, a restart would revert the change). |
 | SEC-07 | P0 | Unverified | OPEN | JWT secrets fall back to public development strings when the env vars are missing. Verify on Railway; then make startup fail closed. |
-| SEC-05 | P1 | Confirmed | OPEN (todo test) | Branch isolation is enforced only on order list/detail/delete and on create. Confirm, invoice, pay, complete, cancel, payments, debts, transfers approve/dispatch/receive, stock adjustments, expense edit/delete and deliveries accept any branch's record IDs. |
-| SEC-06 | P1 | Confirmed (by reading) | OPEN | `isAdminUser()` treats any user with `branch_id = NULL` as all-branch. Users created without a branch, or whose branch was cleared, see and act on everything. |
+| SEC-05 | P1 | Confirmed | PARTIALLY FIXED | Branch isolation is now enforced server-side for **all accounting endpoints, receivables, payments, expenses and every sales order/invoice action** (tests in `branch-accounting.test.ts`, `security.test.ts`). Still open: transfers approve/dispatch/receive, stock adjustments for another branch, deliveries. |
+| SEC-06 | P1 | Confirmed | PARTIALLY FIXED | `isAdminUser()` treats any user with `branch_id = NULL` as all-branch. **Finance, receivables, sales and expenses** now use the strict scope (no branch + no admin/accountant role → 403) and live database scope instead of token claims. The old rule remains for transfers, stock and warehouse features (warehouse managers have no branch). See BRANCH_ACCOUNTING §7. |
 | SEC-03 | P1 | Confirmed | FIXED | Deleting a branch set its users' `branch_id = NULL`, which escalated them to all-branch scope. Now refused while users are assigned. |
 | SEC-04 | P1 | Confirmed | FIXED | Deleting a customer cascade-deleted their debts and payments while the journals remained. Now refused when any financial history exists; deletion is audited. |
 | SEC-02 | P2 | Confirmed | FIXED | Users with zero permissions could read the full audit log (`&& permissions.length > 0` bypass). |
@@ -181,11 +183,24 @@ Details and remediation plans are in [SECURITY_AND_PRODUCTION_READINESS.md](SECU
 | OPS-01 | P3 | Confirmed | FIXED | `npm run typecheck` failed (stale `@cloudflare/workers-types` reference); added `npm test`. |
 | OPS-02 | P1 | — | OPEN | No CI, no automated tests in CI, no migration tool, no verified backups or restores, the health check does not touch the database, and per-request `[WATERFALL]` debug logging is always on. See SECURITY doc. |
 | FE-01 | P3 | Confirmed (by reading) | OPEN | Payment and receipt forms rely only on a disabled button against double-submits. The server now enforces it (ACC-10/14, INV-05/06). |
-| FE-02 | — | — | NOT VERIFIED | Web build not verified locally: this machine's `node_modules` predates the `recharts` dependency (`npm install` needed). The web code was not changed. |
+| FE-02 | — | Confirmed | RESOLVED | The web app builds in `C:al-hayat-erp-wms` (`vite build` succeeds; 0 type errors apart from missing third-party `@types`). The earlier failure was the OneDrive copy's outdated `node_modules`. |
 
 ---
 
 ## 5. Changes made (this change set)
+
+**Branch accounting change set (second pass):**
+- `services/branch-scope.ts` (new): strict branch scope.
+- `middleware/auth.ts`: live database scope.
+- Scoped: the accounting, sales, expenses and reports routes.
+- `transfers.ts`: inter-branch clearing journals.
+- `init-postgres.ts`: `customer_payments.branch_id`, account 1090, line-branch trigger, provable-only backfill.
+- `AccountingPage.tsx`: branch selector.
+- New tests: `tests/branch-accounting.test.ts`.
+
+Full description in [BRANCH_ACCOUNTING.md](BRANCH_ACCOUNTING.md).
+
+**First pass:**
 
 **Shared primitive.** `PgPreparedStatement.mustAffect(message)` (`pg-client.ts`): inside `batch()`, a statement that affects or returns zero rows rolls back the whole transaction with a `ConflictError`, which the API returns as **HTTP 409**. All state-machine claims, guarded stock decrements and payment re-checks use it. The error handler maps it in `index.ts`.
 
@@ -221,7 +236,7 @@ Result: passes (0 errors).
 ```bash
 cd backend && TEST_DATABASE_URL=postgresql://postgres:<pw>@localhost:5432/postgres npm test
 ```
-Result: **34 tests, 33 pass, 0 fail, 1 todo** (SEC-05). Against the production code: 5 pass, 28 fail, 1 todo.
+Result (after branch accounting): **53 tests, 53 pass, 0 fail, 0 todo**. First audit pass: 34 tests, 33 pass, 1 todo; against the production code: 5 pass, 28 fail. Branch accounting suite against the code before that change: 2 pass, 17 fail.
 
 The test server must be a local, disposable PostgreSQL. The harness refuses non-local hosts and creates and drops its own databases.
 
@@ -238,6 +253,6 @@ Reconciliation SQL: all 16 queries execute read-only on test databases. On data 
    - Rotate the Postgres password that was shared in chat.
 2. **Measure the damage:** run [reconciliation_queries.sql](reconciliation_queries.sql) against production (read-only) and review R3/R4 (duplicate cash), R5 (installation-fee AR), R10 (reversals), R11 (WIP), R12 (expenses), R13–R15 (over-payments, over-receipts, restores). Repair only with approved correcting journal entries (ACCOUNTING_RECONCILIATION §5).
 3. **Decide policies:** cancellation refund vs store credit (ACC-15); opening-stock valuation (ACC-18); labor costing (ACC-17).
-4. **Branch isolation on writes** (SEC-05/06): a shared `assertBranchAccess(payload, recordBranchId)` applied to every mutating route, and an explicit `scope: ALL` flag instead of `branch_id IS NULL`. Also escape the print views (SEC-14).
+4. **Branch isolation outside finance** (SEC-05 remainder: transfers, stock adjustments, deliveries, stock reports) and replacing `isAdminUser()`'s "no branch = all branches" rule (SEC-06) once warehouse-scoped roles are decided. Also escape the print views (SEC-14). Finance and sales are done: see [BRANCH_ACCOUNTING.md](BRANCH_ACCOUNTING.md).
 5. **Operational hardening:** CI running typecheck and tests; a migration tool with versioned migrations (and stopping boot-time data rewrites, DB-02); a database-aware health check; turning off `[WATERFALL]` logs; verified backups and a restore drill (SECURITY doc).
 6. **Data model:** NUMERIC money (ACC-20); `inventory_stock` uniqueness (INV-09); separate `payment_status` and `fulfillment_status` (ACC-24).

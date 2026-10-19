@@ -1,6 +1,15 @@
 import { Hono } from 'hono';
 import { Env } from '../db';
 import { authMiddleware, requirePermissions, isAdminUser } from '../middleware/auth';
+import { resolveBranchScope, ScopeError } from '../services/branch-scope';
+
+// Financial (sales-based) reports use the strict branch scope: branch users
+// see their branch; admins/accountants see all or filter with ?branch_id=.
+async function salesReportBranch(c: any): Promise<string | null> {
+  const scope = await resolveBranchScope(c);
+  if (scope.kind === 'UNASSIGNED') throw new ScopeError(400, 'Sales reports are per branch; choose a branch or All branches.');
+  return scope.kind === 'BRANCH' ? scope.branchId : null;
+}
 
 const reports = new Hono<{ Bindings: Env; Variables: { jwtPayload: any } }>();
 
@@ -79,7 +88,7 @@ reports.get('/low-stock', async (c) => {
 // 2. Branch Performance
 reports.get('/branch-performance', async (c) => {
   const payload = c.get('jwtPayload');
-  const scopedBranchId = isAdminUser(payload) ? null : payload.branch_id;
+  const scopedBranchId = await salesReportBranch(c);
   const days = getDaysParam(c);
   const daysModifier = `-${days} days`;
 
@@ -240,7 +249,7 @@ reports.get('/inventory-valuation', async (c) => {
 // 4. Sales & Profit Analysis
 reports.get('/sales-profit', async (c) => {
   const payload = c.get('jwtPayload');
-  const scopedBranchId = isAdminUser(payload) ? null : payload.branch_id;
+  const scopedBranchId = await salesReportBranch(c);
   const days = getDaysParam(c);
   const daysModifier = `-${days} days`;
 
@@ -351,7 +360,7 @@ reports.get('/sales-profit', async (c) => {
 // 5. Quote Conversion
 reports.get('/quote-conversion', async (c) => {
   const payload = c.get('jwtPayload');
-  const scopedBranchId = isAdminUser(payload) ? null : payload.branch_id;
+  const scopedBranchId = await salesReportBranch(c);
   const days = getDaysParam(c);
   const daysModifier = `-${days} days`;
 
@@ -514,7 +523,7 @@ reports.get('/supplier-performance', async (c) => {
 // 7. Receivables / Cash Flow Aging
 reports.get('/receivables', async (c) => {
   const payload = c.get('jwtPayload');
-  const scopedBranchId = isAdminUser(payload) ? null : payload.branch_id;
+  const scopedBranchId = await salesReportBranch(c);
 
   let query = `
     SELECT 

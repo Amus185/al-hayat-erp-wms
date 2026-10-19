@@ -281,6 +281,13 @@ export async function prepareJournalEntryPosting(
     totalDebit += debit;
     totalCredit += credit;
 
+    // One entry = one branch: branch reports filter on lines, so a line in a
+    // different branch would split the entry across two sets of books.
+    const entryBranch = params.branchId || null;
+    if (line.branchId && line.branchId !== entryBranch) {
+      throw new Error(`Journal entry "${params.description}" mixes branches (${entryBranch ?? 'unassigned'} / ${line.branchId}); post one entry per branch.`);
+    }
+
     resolvedLines.push({
       lineId: uuidv4(),
       accountId: acc.id,
@@ -288,7 +295,7 @@ export async function prepareJournalEntryPosting(
       description: line.description || params.description,
       debitAmount: debit,
       creditAmount: credit,
-      branchId: line.branchId || params.branchId || null,
+      branchId: entryBranch,
       lineOrder: i + 1,
     });
   }

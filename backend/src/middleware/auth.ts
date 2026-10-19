@@ -6,43 +6,66 @@ export type JwtPayload = {
   sub: string;
   email: string;
   name: string;
+  // The fields below are re-derived from the database on every request
+  // (see authMiddleware); the copies inside the token are never trusted.
   permissions: string[];
-  // Branch scoping — null means admin (sees all data)
   branch_id: string | null;
-  role: string;           // 'admin' | 'branch_user' | 'manager' | etc.
+  role: string;           // 'admin' when the user holds the admin role, else their first role
+  roles?: string[];
   pwd_ver: number;        // password_version — invalidated on credential regen
 };
 
-// ── In-Memory Password Version Cache (5-Minute TTL) ──────────────────────────
-interface CachedUserPwdVer {
+// ── In-memory user cache (5-minute TTL) ──────────────────────────────────────
+// Holds the user's live authorization scope so a changed branch, role or
+// permission applies on the next request instead of when the token expires.
+// Invalidated immediately on user updates (single Railway replica).
+interface CachedUser {
   pwdVer: number;
   isActive: boolean;
+  branchId: string | null;
+  roles: string[];
+  permissions: string[];
   expiresAt: number;
 }
 
-const userPwdVerCache = new Map<string, CachedUserPwdVer>();
+const userCache = new Map<string, CachedUser>();
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
-export function getCachedPwdVer(userId: string): { pwdVer: number; isActive: boolean } | null {
-  const entry = userPwdVerCache.get(userId);
+function getCachedUser(userId: string): CachedUser | null {
+  const entry = userCache.get(userId);
   if (!entry) return null;
   if (Date.now() > entry.expiresAt) {
-    userPwdVerCache.delete(userId);
+    userCache.delete(userId);
     return null;
   }
-  return { pwdVer: entry.pwdVer, isActive: entry.isActive };
-}
-
-export function setCachedPwdVer(userId: string, pwdVer: number, isActive = true) {
-  userPwdVerCache.set(userId, {
-    pwdVer,
-    isActive,
-    expiresAt: Date.now() + CACHE_TTL_MS,
-  });
+  return entry;
 }
 
 export function invalidateUserCache(userId: string) {
-  userPwdVerCache.delete(userId);
+  userCache.delete(userId);
+}
+
+async function loadUser(db: any, userId: string): Promise<CachedUser | null> {
+  const user = await db.prepare(`
+    SELECT u.password_version, u.is_active, u.branch_id,
+           (SELECT STRING_AGG(DISTINCT r.code, ',') FROM user_roles ur JOIN roles r ON r.id = ur.role_id WHERE ur.user_id = u.id) AS roles,
+           (SELECT STRING_AGG(DISTINCT p.code, ',') FROM user_roles ur
+              JOIN role_permissions rp ON rp.role_id = ur.role_id
+              JOIN permissions p ON p.id = rp.permission_id
+            WHERE ur.user_id = u.id) AS permissions
+    FROM users u WHERE u.id = ?
+  `).bind(userId).first();
+  if (!user) return null;
+  const entry: CachedUser = {
+    pwdVer: (user.password_version as number) ?? 1,
+    isActive: Boolean(user.is_active),
+    branchId: (user.branch_id as string | null) ?? null,
+    roles: user.roles ? String(user.roles).split(',') : [],
+    permissions: user.permissions ? String(user.permissions).split(',') : [],
+    expiresAt: Date.now() + CACHE_TTL_MS,
+  };
+  userCache.set(userId, entry);
+  return entry;
 }
 
 export const authMiddleware = async (c: Context<{ Bindings: Env }>, next: Next) => {
@@ -61,35 +84,10 @@ export const authMiddleware = async (c: Context<{ Bindings: Env }>, next: Next) 
     const payload = await verify(token, c.env.JWT_ACCESS_SECRET, 'HS256') as JwtPayload;
     console.log(`[WATERFALL] +${Date.now() - reqStart}ms | authMiddleware JWT verified (${Date.now() - t0}ms)`);
 
-    // Fast-path: Check in-memory cache first (<1ms)
-    const tCache0 = Date.now();
-    let cached = getCachedPwdVer(payload.sub);
-
+    // Live scope: cache hit (<1ms) or one DB read per user per 5 minutes
+    const cached = getCachedUser(payload.sub) ?? await loadUser(c.env.DB, payload.sub);
     if (!cached) {
-      // Cache miss: query DB once per 5 minutes per user
-      try {
-        const tDb0 = Date.now();
-        const user = await c.env.DB.prepare(
-          'SELECT password_version, is_active FROM users WHERE id = ?'
-        ).bind(payload.sub).first();
-        console.log(`[WATERFALL] +${Date.now() - reqStart}ms | authMiddleware DB pwd_ver lookup miss (${Date.now() - tDb0}ms)`);
-
-        if (!user) {
-          return c.json({ message: 'User not found or deactivated' }, 401);
-        }
-
-        const dbPwdVer = (user.password_version as number) ?? 1;
-        const isActive = Boolean(user.is_active);
-
-        setCachedPwdVer(payload.sub, dbPwdVer, isActive);
-        cached = { pwdVer: dbPwdVer, isActive };
-      } catch (dbErr: any) {
-        if (!dbErr?.message?.includes('password_version')) throw dbErr;
-        // Graceful fallback if column missing
-        cached = { pwdVer: payload.pwd_ver ?? 1, isActive: true };
-      }
-    } else {
-      console.log(`[WATERFALL] +${Date.now() - reqStart}ms | authMiddleware pwd_ver cache hit (<1ms)`);
+      return c.json({ message: 'User not found or deactivated' }, 401);
     }
 
     if (!cached.isActive) {
@@ -99,6 +97,12 @@ export const authMiddleware = async (c: Context<{ Bindings: Env }>, next: Next) 
     if (payload.pwd_ver !== undefined && cached.pwdVer !== payload.pwd_ver) {
       return c.json({ message: 'Credentials have been regenerated. Please log in again.' }, 401);
     }
+
+    // Authorization comes from the database, never from token claims.
+    payload.branch_id = cached.branchId;
+    payload.permissions = cached.permissions;
+    payload.roles = cached.roles;
+    payload.role = cached.roles.includes('admin') ? 'admin' : (cached.roles[0] || 'branch_user');
 
     c.set('jwtPayload', payload);
     await next();

@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { Env, uuidv4 } from '../db';
-import { authMiddleware, requirePermissions, isAdminUser } from '../middleware/auth';
+import { authMiddleware, requirePermissions } from '../middleware/auth';
+import { resolveBranchScope, resolveWriteBranch, branchSql, inScope } from '../services/branch-scope';
 import { createAuditLogStmt } from '../services/audit';
 import { prepareExpenseJournal, prepareJournalReversal } from '../services/accounting-service';
 
@@ -12,7 +13,7 @@ expenses.use('/*', authMiddleware);
 expenses.get('/', requirePermissions(['view_reports']), async (c) => {
   const { category, dateFrom, dateTo, branch_id } = c.req.query();
   const payload = c.get('jwtPayload');
-  const scopedBranchId = isAdminUser(payload) ? null : payload.branch_id;
+  const scope = await resolveBranchScope(c);
 
   let query = `
     SELECT e.*, b.name AS branch_name, u.full_name AS recorded_by_name
@@ -23,13 +24,7 @@ expenses.get('/', requirePermissions(['view_reports']), async (c) => {
   `;
   const params: any[] = [];
 
-  if (scopedBranchId) {
-    query += ` AND e.branch_id = ?`;
-    params.push(scopedBranchId);
-  } else if (branch_id) {
-    query += ` AND e.branch_id = ?`;
-    params.push(branch_id);
-  }
+  query += branchSql(scope, 'e.branch_id');
 
   if (category) {
     query += ` AND e.category = ?`;
@@ -56,7 +51,7 @@ expenses.get('/', requirePermissions(['view_reports']), async (c) => {
 expenses.get('/summary', requirePermissions(['view_reports']), async (c) => {
   const { dateFrom, dateTo } = c.req.query();
   const payload = c.get('jwtPayload');
-  const scopedBranchId = isAdminUser(payload) ? null : payload.branch_id;
+  const scope = await resolveBranchScope(c);
 
   let query = `
     SELECT
@@ -68,7 +63,7 @@ expenses.get('/summary', requirePermissions(['view_reports']), async (c) => {
   `;
   const params: any[] = [];
 
-  if (scopedBranchId) { query += ` AND branch_id = ?`; params.push(scopedBranchId); }
+  query += branchSql(scope, 'branch_id');
   if (dateFrom) { query += ` AND expense_date >= ?`; params.push(dateFrom); }
   if (dateTo) { query += ` AND expense_date <= ?`; params.push(dateTo); }
 
@@ -100,8 +95,7 @@ expenses.post('/', requirePermissions(['manage_purchasing']), async (c) => {
   const payload = c.get('jwtPayload');
   const userId = payload.sub;
   // Branch scoping: branch users can only create expenses for their own branch
-  const scopedBranchId = isAdminUser(payload) ? null : payload.branch_id;
-  const branchId = scopedBranchId || body.branch_id || null;
+  const branchId = await resolveWriteBranch(c, body.branch_id);
 
   const id = uuidv4();
 
@@ -139,7 +133,7 @@ expenses.patch('/:id', requirePermissions(['manage_purchasing']), async (c) => {
   }>>();
 
   const existing = await c.env.DB.prepare('SELECT * FROM expenses WHERE id = ?').bind(id).first();
-  if (!existing) return c.json({ message: 'Expense not found.' }, 404);
+  if (!existing || !inScope(await resolveBranchScope(c, 'ALL'), (existing as any).branch_id)) return c.json({ message: 'Expense not found.' }, 404);
 
   const fields: string[] = [];
   const vals: any[] = [];
@@ -148,7 +142,7 @@ expenses.patch('/:id', requirePermissions(['manage_purchasing']), async (c) => {
   if (body.amount !== undefined) { fields.push('amount = ?'); vals.push(body.amount); }
   if (body.category !== undefined) { fields.push('category = ?'); vals.push(body.category); }
   if (body.expense_date !== undefined) { fields.push('expense_date = ?'); vals.push(body.expense_date); }
-  if (body.branch_id !== undefined) { fields.push('branch_id = ?'); vals.push(body.branch_id); }
+  if (body.branch_id !== undefined) { body.branch_id = (await resolveWriteBranch(c, body.branch_id)) as any; fields.push('branch_id = ?'); vals.push(body.branch_id); }
   if (body.payment_method !== undefined) { fields.push('payment_method = ?'); vals.push(body.payment_method); }
   if (body.notes !== undefined) { fields.push('notes = ?'); vals.push(body.notes); }
 
@@ -188,7 +182,7 @@ expenses.patch('/:id', requirePermissions(['manage_purchasing']), async (c) => {
 expenses.delete('/:id', requirePermissions(['manage_purchasing']), async (c) => {
   const { id } = c.req.param();
   const existing = await c.env.DB.prepare('SELECT * FROM expenses WHERE id = ?').bind(id).first();
-  if (!existing) return c.json({ message: 'Expense not found.' }, 404);
+  if (!existing || !inScope(await resolveBranchScope(c, 'ALL'), (existing as any).branch_id)) return c.json({ message: 'Expense not found.' }, 404);
 
   const je = await c.env.DB.prepare(
     "SELECT id FROM journal_entries WHERE reference_type = 'EXPENSE' AND reference_id = ? AND status = 'POSTED' ORDER BY created_at DESC LIMIT 1"

@@ -1,7 +1,21 @@
 import { Hono } from 'hono';
 import { Env } from '../db';
 import { authMiddleware, requirePermissions } from '../middleware/auth';
-import { prepareJournalReversal, reconcileMissingReceiptJournalEntries, reconcileMissingSalesJournalEntries } from '../services/accounting-service';
+import { prepareJournalReversal, prepareJournalEntryPosting, fetchOpenFiscalPeriodId, reconcileMissingReceiptJournalEntries, reconcileMissingSalesJournalEntries } from '../services/accounting-service';
+import { resolveBranchScope, branchSql, inScope, assertAllBranchAccess, resolveWriteBranch, ScopeError, type BranchScope } from '../services/branch-scope';
+
+// Every report below is computed from journal lines restricted to the caller's
+// branch scope (see services/branch-scope.ts). An entry belongs to exactly one
+// branch (enforced on write and by a database trigger); lines are the unit of
+// attribution, so a stray line can never pull another branch's money in.
+const MIXED_ENTRY_SQL = `EXISTS (SELECT 1 FROM journal_entry_lines x WHERE x.journal_entry_id = je.id AND x.branch_id IS DISTINCT FROM je.branch_id)`;
+
+async function loadScopedEntry(c: any, id: string, scope: BranchScope) {
+  const entry = await c.env.DB.prepare(`SELECT je.*, ${MIXED_ENTRY_SQL} AS mixed FROM journal_entries je WHERE je.id = ?`).bind(id).first() as any;
+  if (!entry) return null;
+  if (scope.kind !== 'ALL' && (entry.mixed || !inScope(scope, entry.branch_id))) return null;
+  return entry;
+}
 
 const accounting = new Hono<{ Bindings: Env }>();
 
@@ -33,6 +47,7 @@ accounting.get('/fiscal-periods', requirePermissions(['view_reports']), async (c
 });
 
 accounting.post('/fiscal-periods', requirePermissions(['manage_purchasing']), async (c) => {
+  assertAllBranchAccess((c as any).get('jwtPayload'));
   const body = await c.req.json<{
     name: string;
     period_type?: string;
@@ -59,6 +74,7 @@ accounting.post('/fiscal-periods', requirePermissions(['manage_purchasing']), as
 });
 
 accounting.patch('/fiscal-periods/:id/status', requirePermissions(['manage_purchasing']), async (c) => {
+  assertAllBranchAccess((c as any).get('jwtPayload'));
   const { id } = c.req.param();
   const { status } = await c.req.json<{ status: string }>();
   if (!['OPEN', 'CLOSED', 'LOCKED'].includes(status)) {
@@ -94,6 +110,7 @@ accounting.get('/chart-of-accounts', requirePermissions(['view_reports']), async
 });
 
 accounting.post('/chart-of-accounts', requirePermissions(['manage_purchasing']), async (c) => {
+  assertAllBranchAccess((c as any).get('jwtPayload'));
   const body = await c.req.json<{
     code: string;
     name: string;
@@ -127,6 +144,7 @@ accounting.post('/chart-of-accounts', requirePermissions(['manage_purchasing']),
 });
 
 accounting.patch('/chart-of-accounts/:id', requirePermissions(['manage_purchasing']), async (c) => {
+  assertAllBranchAccess((c as any).get('jwtPayload'));
   const { id } = c.req.param();
   const body = await c.req.json<{ name?: string; description?: string; is_active?: number }>();
   const fields: string[] = [];
@@ -145,9 +163,9 @@ accounting.patch('/chart-of-accounts/:id', requirePermissions(['manage_purchasin
 // JOURNAL ENTRIES
 // ══════════════════════════════════════════════════════════
 accounting.get('/journal-entries', requirePermissions(['view_reports']), async (c) => {
+  const scope = await resolveBranchScope(c);
   const status = c.req.query('status') || null;
   const periodId = c.req.query('period_id') || null;
-  const branchId = c.req.query('branch_id') || null;
   const limit = Math.min(parseInt(c.req.query('limit') || '50', 10), 200);
   const offset = parseInt(c.req.query('offset') || '0', 10);
 
@@ -164,7 +182,8 @@ accounting.get('/journal-entries', requirePermissions(['view_reports']), async (
   const params: any[] = [];
   if (status) { query += ' AND je.status = ?'; params.push(status); }
   if (periodId) { query += ' AND je.fiscal_period_id = ?'; params.push(periodId); }
-  if (branchId) { query += ' AND je.branch_id = ?'; params.push(branchId); }
+  query += branchSql(scope, 'je.branch_id');
+  if (scope.kind !== 'ALL') query += ` AND NOT ${MIXED_ENTRY_SQL}`;
   query += ' ORDER BY je.entry_date DESC, je.created_at DESC LIMIT ? OFFSET ?';
   params.push(limit, offset);
 
@@ -174,6 +193,8 @@ accounting.get('/journal-entries', requirePermissions(['view_reports']), async (
 
 accounting.get('/journal-entries/:id', requirePermissions(['view_reports']), async (c) => {
   const { id } = c.req.param();
+  const scope = await resolveBranchScope(c);
+  if (!await loadScopedEntry(c, id, scope)) return c.json({ error: 'Journal entry not found' }, 404);
   const entry = await c.env.DB.prepare(`
     SELECT je.*, fp.name AS period_name, b.name AS branch_name,
            u.full_name AS created_by_name, pu.full_name AS posted_by_name
@@ -230,6 +251,18 @@ accounting.post('/journal-entries', requirePermissions(['manage_purchasing']), a
     return c.json({ error: `Journal entry is not balanced. Debits (${totalDebit.toFixed(2)}) ≠ Credits (${totalCredit.toFixed(2)})` }, 422);
   }
 
+  // The entry's branch comes from the caller's scope (branch users: always
+  // their own). Every line must belong to that same branch.
+  const branchId = await resolveWriteBranch(c, body.branch_id);
+  for (const line of body.lines) {
+    if (line.branch_id && line.branch_id !== branchId) {
+      if (body.branch_id || !branchId) {
+        return c.json({ error: 'All lines of a journal entry must belong to the entry\'s branch. Post one entry per branch.' }, 400);
+      }
+      throw new ScopeError(403, 'You can only record transactions for your own branch.');
+    }
+  }
+
   // Get next sequence for entry number
   const countRes = await c.env.DB.prepare('SELECT COUNT(*) AS cnt FROM journal_entries').first() as any;
   const seq = (Number(countRes?.cnt || 0)) + 1;
@@ -238,28 +271,24 @@ accounting.post('/journal-entries', requirePermissions(['manage_purchasing']), a
   const userId = (c as any).get('jwtPayload')?.sub || null;
 
   try {
-    await c.env.DB.prepare(`
-      INSERT INTO journal_entries
-        (id, entry_number, fiscal_period_id, entry_date, description, reference_type, reference_id,
-         branch_id, status, total_debit, total_credit, notes, created_by)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'DRAFT', ?, ?, ?, ?)
-    `).bind(entryId, entryNumber,
-      body.fiscal_period_id || null, body.entry_date, body.description,
-      body.reference_type || null, body.reference_id || null,
-      body.branch_id || null, totalDebit, totalCredit, body.notes || null, userId).run();
-
-    // Insert lines
-    const lineStmts = body.lines.map((line, idx) => {
-      const lineId = generateId();
-      return c.env.DB.prepare(`
+    // Header and lines in one transaction (no header-without-lines on failure)
+    await c.env.DB.batch([
+      c.env.DB.prepare(`
+        INSERT INTO journal_entries
+          (id, entry_number, fiscal_period_id, entry_date, description, reference_type, reference_id,
+           branch_id, status, total_debit, total_credit, notes, created_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'DRAFT', ?, ?, ?, ?)
+      `).bind(entryId, entryNumber,
+        body.fiscal_period_id || null, body.entry_date, body.description,
+        body.reference_type || null, body.reference_id || null,
+        branchId, totalDebit, totalCredit, body.notes || null, userId),
+      ...body.lines.map((line, idx) => c.env.DB.prepare(`
         INSERT INTO journal_entry_lines
           (id, journal_entry_id, account_id, description, debit_amount, credit_amount, branch_id, line_order)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `).bind(lineId, entryId, line.account_id, line.description || null,
-        line.debit_amount || 0, line.credit_amount || 0, line.branch_id || null, idx);
-    });
-
-    await c.env.DB.batch(lineStmts);
+      `).bind(generateId(), entryId, line.account_id, line.description || null,
+        line.debit_amount || 0, line.credit_amount || 0, branchId, idx)),
+    ]);
 
     const row = await c.env.DB.prepare('SELECT * FROM journal_entries WHERE id = ?').bind(entryId).first();
     return c.json(row, 201);
@@ -277,10 +306,12 @@ accounting.post('/journal-entries', requirePermissions(['manage_purchasing']), a
 
 accounting.post('/journal-entries/:id/post', requirePermissions(['manage_purchasing']), async (c) => {
   const { id } = c.req.param();
-  const entry = await c.env.DB.prepare('SELECT * FROM journal_entries WHERE id = ?').bind(id).first() as any;
+  const entry = await loadScopedEntry(c, id, await resolveBranchScope(c, 'ALL'));
   if (!entry) return c.json({ error: 'Journal entry not found' }, 404);
   if (entry.status === 'POSTED') return c.json({ error: 'Entry is already posted' }, 409);
   if (entry.status === 'REVERSED') return c.json({ error: 'Reversed entries cannot be re-posted' }, 409);
+  // A closed period covering the entry date refuses the posting
+  const postingPeriodId = await fetchOpenFiscalPeriodId(c.env.DB, String(entry.entry_date instanceof Date ? entry.entry_date.toISOString() : entry.entry_date).slice(0, 10));
 
   const userId = (c as any).get('jwtPayload')?.sub || null;
   const now = new Date().toISOString();
@@ -325,8 +356,8 @@ accounting.post('/journal-entries/:id/post', requirePermissions(['manage_purchas
   await c.env.DB.batch([
     ...resolvedGlStmts,
     c.env.DB.prepare(`
-      UPDATE journal_entries SET status = 'POSTED', posted_by = ?, posted_at = ?, updated_at = ? WHERE id = ?
-    `).bind(userId, now, now, id)
+      UPDATE journal_entries SET status = 'POSTED', fiscal_period_id = COALESCE(fiscal_period_id, ?), posted_by = ?, posted_at = ?, updated_at = ? WHERE id = ?
+    `).bind(postingPeriodId, userId, now, now, id)
   ]);
 
   const updated = await c.env.DB.prepare('SELECT * FROM journal_entries WHERE id = ?').bind(id).first();
@@ -335,7 +366,7 @@ accounting.post('/journal-entries/:id/post', requirePermissions(['manage_purchas
 
 accounting.post('/journal-entries/:id/reverse', requirePermissions(['manage_purchasing']), async (c) => {
   const { id } = c.req.param();
-  const entry = await c.env.DB.prepare('SELECT * FROM journal_entries WHERE id = ?').bind(id).first() as any;
+  const entry = await loadScopedEntry(c, id, await resolveBranchScope(c, 'ALL'));
   if (!entry) return c.json({ error: 'Entry not found' }, 404);
   if (entry.status === 'REVERSED') return c.json({ error: 'This entry has already been reversed. A reversal entry was created when it was first reversed.' }, 409);
   if (entry.status !== 'POSTED') return c.json({ error: `Cannot reverse an entry with status "${entry.status}". Only POSTED entries can be reversed.` }, 409);
@@ -354,8 +385,8 @@ accounting.post('/journal-entries/:id/reverse', requirePermissions(['manage_purc
 // GENERAL LEDGER
 // ══════════════════════════════════════════════════════════
 accounting.get('/general-ledger', requirePermissions(['view_reports']), async (c) => {
+  const scope = await resolveBranchScope(c);
   const accountId = c.req.query('account_id') || null;
-  const branchId = c.req.query('branch_id') || null;
   const fromDate = c.req.query('from_date') || null;
   const toDate = c.req.query('to_date') || null;
 
@@ -370,7 +401,7 @@ accounting.get('/general-ledger', requirePermissions(['view_reports']), async (c
   `;
   const params: any[] = [];
   if (accountId) { query += ' AND gl.account_id = ?'; params.push(accountId); }
-  if (branchId) { query += ' AND gl.branch_id = ?'; params.push(branchId); }
+  query += branchSql(scope, 'gl.branch_id');
   if (fromDate) { query += ' AND gl.entry_date >= ?'; params.push(fromDate); }
   if (toDate) { query += ' AND gl.entry_date <= ?'; params.push(toDate); }
   query += ' ORDER BY gl.account_id ASC, gl.entry_date ASC, gl.created_at ASC';
@@ -385,6 +416,7 @@ accounting.get('/general-ledger', requirePermissions(['view_reports']), async (c
 // TRIAL BALANCE (Computed live from journal entry lines)
 // ══════════════════════════════════════════════════════════
 accounting.get('/trial-balance', requirePermissions(['view_reports']), async (c) => {
+  const scope = await resolveBranchScope(c);
   const periodId = c.req.query('period_id') || null;
   const type = (c.req.query('type') || 'UNADJUSTED').toUpperCase(); // UNADJUSTED | ADJUSTED | POST_CLOSING
 
@@ -425,7 +457,7 @@ accounting.get('/trial-balance', requirePermissions(['view_reports']), async (c)
     FROM journal_entries je
     JOIN journal_entry_lines jel ON jel.journal_entry_id = je.id
     JOIN chart_of_accounts coa ON coa.id = jel.account_id
-    WHERE ${statusFilter} ${typeFilter} ${periodFilter}
+    WHERE ${statusFilter} ${typeFilter} ${periodFilter} ${branchSql(scope, 'jel.branch_id')}
       AND coa.is_active = 1
     GROUP BY coa.id, coa.code, coa.name, coa.account_type, coa.normal_balance
     HAVING SUM(jel.debit_amount) > 0 OR SUM(jel.credit_amount) > 0
@@ -452,6 +484,8 @@ accounting.get('/trial-balance', requirePermissions(['view_reports']), async (c)
 // INCOME STATEMENT (Periodic Inventory — COGS via physical count)
 // ══════════════════════════════════════════════════════════
 accounting.get('/income-statement', requirePermissions(['view_reports']), async (c) => {
+  const scope = await resolveBranchScope(c);
+  const bf = branchSql(scope, 'jel.branch_id');
   const periodId = c.req.query('period_id') || null;
 
   let selectedPeriod: any = null;
@@ -474,7 +508,7 @@ accounting.get('/income-statement', requirePermissions(['view_reports']), async 
     SELECT coa.name, coa.code, coa.account_type, b.name AS branch_name, b.id AS branch_id,
            COALESCE(SUM(CASE WHEN je.id IS NOT NULL THEN (jel.credit_amount - jel.debit_amount) ELSE 0 END), 0) AS amount
     FROM chart_of_accounts coa
-    LEFT JOIN journal_entry_lines jel ON jel.account_id = coa.id
+    LEFT JOIN journal_entry_lines jel ON jel.account_id = coa.id ${bf}
     LEFT JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status IN ('POSTED', 'REVERSED') ${periodFilter}
     LEFT JOIN branches b ON b.id = jel.branch_id
     WHERE coa.account_type = 'REVENUE'
@@ -487,7 +521,7 @@ accounting.get('/income-statement', requirePermissions(['view_reports']), async 
     SELECT coa.name, coa.code, coa.account_type, b.name AS branch_name, b.id AS branch_id,
            COALESCE(SUM(CASE WHEN je.id IS NOT NULL THEN (jel.debit_amount - jel.credit_amount) ELSE 0 END), 0) AS amount
     FROM chart_of_accounts coa
-    LEFT JOIN journal_entry_lines jel ON jel.account_id = coa.id
+    LEFT JOIN journal_entry_lines jel ON jel.account_id = coa.id ${bf}
     LEFT JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status IN ('POSTED', 'REVERSED') ${periodFilter}
     LEFT JOIN branches b ON b.id = jel.branch_id
     WHERE coa.account_type = 'COGS' OR (coa.account_type = 'EXPENSE' AND coa.code LIKE '5%')
@@ -500,7 +534,7 @@ accounting.get('/income-statement', requirePermissions(['view_reports']), async 
     SELECT coa.name, coa.code, coa.account_type, b.name AS branch_name, b.id AS branch_id,
            COALESCE(SUM(CASE WHEN je.id IS NOT NULL THEN (jel.debit_amount - jel.credit_amount) ELSE 0 END), 0) AS amount
     FROM chart_of_accounts coa
-    LEFT JOIN journal_entry_lines jel ON jel.account_id = coa.id
+    LEFT JOIN journal_entry_lines jel ON jel.account_id = coa.id ${bf}
     LEFT JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status IN ('POSTED', 'REVERSED') ${periodFilter}
     LEFT JOIN branches b ON b.id = jel.branch_id
     WHERE coa.account_type = 'EXPENSE' AND coa.code NOT LIKE '5%'
@@ -513,7 +547,7 @@ accounting.get('/income-statement', requirePermissions(['view_reports']), async 
     SELECT ipc.*, b.name AS branch_name
     FROM inventory_period_counts ipc
     LEFT JOIN branches b ON b.id = ipc.branch_id
-    WHERE ipc.status = 'APPROVED' ${periodId ? 'AND ipc.fiscal_period_id = ?' : ''}
+    WHERE ipc.status = 'APPROVED' ${branchSql(scope, 'ipc.branch_id')} ${periodId ? 'AND ipc.fiscal_period_id = ?' : ''}
     ORDER BY ipc.count_date DESC
   `).bind(...(periodId ? [periodId] : [])).all();
 
@@ -545,6 +579,8 @@ accounting.get('/income-statement', requirePermissions(['view_reports']), async 
 // BALANCE SHEET
 // ══════════════════════════════════════════════════════════
 accounting.get('/balance-sheet', requirePermissions(['view_reports']), async (c) => {
+  const scope = await resolveBranchScope(c);
+  const bf = branchSql(scope, 'jel.branch_id');
   const periodId = c.req.query('period_id') || null;
 
   let selectedPeriod: any = null;
@@ -575,7 +611,7 @@ accounting.get('/balance-sheet', requirePermissions(['view_reports']), async (c)
                COALESCE(SUM(CASE WHEN je.id IS NOT NULL THEN jel.credit_amount ELSE 0 END), 0) - COALESCE(SUM(CASE WHEN je.id IS NOT NULL THEN jel.debit_amount ELSE 0 END), 0)
            END AS balance
     FROM chart_of_accounts coa
-    LEFT JOIN journal_entry_lines jel ON jel.account_id = coa.id
+    LEFT JOIN journal_entry_lines jel ON jel.account_id = coa.id ${bf}
     LEFT JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status IN ('POSTED', 'REVERSED') ${asOfFilter}
     LEFT JOIN branches b ON b.id = jel.branch_id
     WHERE coa.account_type IN ('ASSET', 'LIABILITY', 'EQUITY') AND coa.is_active = 1
@@ -600,7 +636,7 @@ accounting.get('/balance-sheet', requirePermissions(['view_reports']), async (c)
         COALESCE(SUM(CASE WHEN coa.account_type = 'REVENUE' THEN (jel.credit_amount - jel.debit_amount) ELSE 0 END), 0) -
         COALESCE(SUM(CASE WHEN coa.account_type IN ('COGS', 'EXPENSE') THEN (jel.debit_amount - jel.credit_amount) ELSE 0 END), 0) AS net_income
       FROM chart_of_accounts coa
-      JOIN journal_entry_lines jel ON jel.account_id = coa.id
+      JOIN journal_entry_lines jel ON jel.account_id = coa.id ${bf}
       JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status IN ('POSTED', 'REVERSED')
         AND (je.fiscal_period_id = ? OR (je.entry_date >= ? AND je.entry_date <= ?))
       WHERE coa.account_type IN ('REVENUE', 'COGS', 'EXPENSE')
@@ -612,7 +648,7 @@ accounting.get('/balance-sheet', requirePermissions(['view_reports']), async (c)
         COALESCE(SUM(CASE WHEN coa.account_type = 'REVENUE' THEN (jel.credit_amount - jel.debit_amount) ELSE 0 END), 0) -
         COALESCE(SUM(CASE WHEN coa.account_type IN ('COGS', 'EXPENSE') THEN (jel.debit_amount - jel.credit_amount) ELSE 0 END), 0) AS prior_net_income
       FROM chart_of_accounts coa
-      JOIN journal_entry_lines jel ON jel.account_id = coa.id
+      JOIN journal_entry_lines jel ON jel.account_id = coa.id ${bf}
       JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status IN ('POSTED', 'REVERSED')
         AND je.entry_date < ?
         AND (je.fiscal_period_id IS NULL OR je.fiscal_period_id != ?)
@@ -625,7 +661,7 @@ accounting.get('/balance-sheet', requirePermissions(['view_reports']), async (c)
         COALESCE(SUM(CASE WHEN coa.account_type = 'REVENUE' THEN (jel.credit_amount - jel.debit_amount) ELSE 0 END), 0) -
         COALESCE(SUM(CASE WHEN coa.account_type IN ('COGS', 'EXPENSE') THEN (jel.debit_amount - jel.credit_amount) ELSE 0 END), 0) AS net_income
       FROM chart_of_accounts coa
-      JOIN journal_entry_lines jel ON jel.account_id = coa.id
+      JOIN journal_entry_lines jel ON jel.account_id = coa.id ${bf}
       JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status IN ('POSTED', 'REVERSED') AND je.fiscal_period_id = ?
       WHERE coa.account_type IN ('REVENUE', 'COGS', 'EXPENSE')
     `).bind(periodId).first() as any;
@@ -636,7 +672,7 @@ accounting.get('/balance-sheet', requirePermissions(['view_reports']), async (c)
         COALESCE(SUM(CASE WHEN coa.account_type = 'REVENUE' THEN (jel.credit_amount - jel.debit_amount) ELSE 0 END), 0) -
         COALESCE(SUM(CASE WHEN coa.account_type IN ('COGS', 'EXPENSE') THEN (jel.debit_amount - jel.credit_amount) ELSE 0 END), 0) AS net_income
       FROM chart_of_accounts coa
-      JOIN journal_entry_lines jel ON jel.account_id = coa.id
+      JOIN journal_entry_lines jel ON jel.account_id = coa.id ${bf}
       JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status IN ('POSTED', 'REVERSED')
       WHERE coa.account_type IN ('REVENUE', 'COGS', 'EXPENSE')
     `).first() as any;
@@ -711,6 +747,8 @@ accounting.get('/balance-sheet', requirePermissions(['view_reports']), async (c)
 // CASH FLOW STATEMENT (Direct Method — from journal entries)
 // ══════════════════════════════════════════════════════════
 accounting.get('/cash-flow', requirePermissions(['view_reports']), async (c) => {
+  const scope = await resolveBranchScope(c);
+  const bf = branchSql(scope, 'jel.branch_id');
   const periodId = c.req.query('period_id') || null;
   const params: any[] = [];
   let periodFilter = '';
@@ -725,7 +763,7 @@ accounting.get('/cash-flow', requirePermissions(['view_reports']), async (c) => 
       COALESCE(SUM(jel.credit_amount), 0) AS cash_out
     FROM journal_entry_lines jel
     JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status IN ('POSTED', 'REVERSED') ${periodFilter}
-    WHERE jel.account_id = ?
+    WHERE jel.account_id = ? ${bf}
     GROUP BY je.reference_type
   `).bind(...params, cashAcctId).all();
 
@@ -733,11 +771,13 @@ accounting.get('/cash-flow', requirePermissions(['view_reports']), async (c) => 
   const cashOut = (cashRows || []).reduce((s: number, r: any) => s + Number(r.cash_out), 0);
   const netCash = cashIn - cashOut;
 
-  // Cash balance from GL
+  // Ending cash = all posted cash lines in scope (not the stored running
+  // balance, which is company-wide and not concurrency-safe)
   const balRes = await c.env.DB.prepare(`
-    SELECT running_balance FROM general_ledger
-    WHERE account_id = ?
-    ORDER BY created_at DESC LIMIT 1
+    SELECT COALESCE(SUM(jel.debit_amount - jel.credit_amount), 0) AS running_balance
+    FROM journal_entry_lines jel
+    JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status IN ('POSTED', 'REVERSED')
+    WHERE jel.account_id = ? ${bf}
   `).bind(cashAcctId).first() as any;
 
   return c.json({
@@ -756,6 +796,8 @@ accounting.get('/cash-flow', requirePermissions(['view_reports']), async (c) => 
 // OWNER'S EQUITY STATEMENT
 // ══════════════════════════════════════════════════════════
 accounting.get('/owners-equity', requirePermissions(['view_reports']), async (c) => {
+  const scope = await resolveBranchScope(c);
+  const bf = branchSql(scope, 'jel.branch_id');
   const periodId = c.req.query('period_id') || null;
 
   let selectedPeriod: any = null;
@@ -784,7 +826,7 @@ accounting.get('/owners-equity', requirePermissions(['view_reports']), async (c)
                COALESCE(SUM(CASE WHEN je.id IS NOT NULL THEN jel.credit_amount ELSE 0 END), 0) - COALESCE(SUM(CASE WHEN je.id IS NOT NULL THEN jel.debit_amount ELSE 0 END), 0)
            END AS balance
     FROM chart_of_accounts coa
-    LEFT JOIN journal_entry_lines jel ON jel.account_id = coa.id
+    LEFT JOIN journal_entry_lines jel ON jel.account_id = coa.id ${bf}
     LEFT JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status IN ('POSTED', 'REVERSED') ${asOfFilter}
     WHERE coa.account_type IN ('EQUITY') AND coa.is_active = 1
     GROUP BY coa.id, coa.code, coa.name, coa.account_type, coa.normal_balance
@@ -811,7 +853,7 @@ accounting.get('/owners-equity', requirePermissions(['view_reports']), async (c)
       COALESCE(SUM(CASE WHEN coa.account_type = 'REVENUE' THEN (jel.credit_amount - jel.debit_amount) ELSE 0 END), 0) -
       COALESCE(SUM(CASE WHEN coa.account_type IN ('COGS', 'EXPENSE') THEN (jel.debit_amount - jel.credit_amount) ELSE 0 END), 0) AS net_income
     FROM chart_of_accounts coa
-    JOIN journal_entry_lines jel ON jel.account_id = coa.id
+    JOIN journal_entry_lines jel ON jel.account_id = coa.id ${bf}
     JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status IN ('POSTED', 'REVERSED') ${periodFilter}
     WHERE coa.account_type IN ('REVENUE', 'COGS', 'EXPENSE')
   `).bind(...pParams).all();
@@ -837,6 +879,7 @@ accounting.get('/owners-equity', requirePermissions(['view_reports']), async (c)
 // PHYSICAL INVENTORY COUNTS (Periodic System)
 // ══════════════════════════════════════════════════════════
 accounting.get('/inventory-counts', requirePermissions(['view_reports']), async (c) => {
+  const scope = await resolveBranchScope(c);
   const periodId = c.req.query('period_id') || null;
   let query = `
     SELECT ipc.*, fp.name AS period_name, b.name AS branch_name, w.name AS warehouse_name,
@@ -851,6 +894,7 @@ accounting.get('/inventory-counts', requirePermissions(['view_reports']), async 
   `;
   const params: any[] = [];
   if (periodId) { query += ' AND ipc.fiscal_period_id = ?'; params.push(periodId); }
+  query += branchSql(scope, 'ipc.branch_id');
   query += ' ORDER BY ipc.count_date DESC';
 
   const stmt = c.env.DB.prepare(query);
@@ -874,12 +918,13 @@ accounting.post('/inventory-counts', requirePermissions(['manage_purchasing']), 
 
   const id = generateId();
   const userId = (c as any).get('jwtPayload')?.sub || null;
+  const branchId = await resolveWriteBranch(c, body.branch_id);
 
   await c.env.DB.prepare(`
     INSERT INTO inventory_period_counts
       (id, fiscal_period_id, branch_id, warehouse_id, count_date, total_value, notes, counted_by, status)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'DRAFT')
-  `).bind(id, body.fiscal_period_id, body.branch_id || null, body.warehouse_id || null,
+  `).bind(id, body.fiscal_period_id, branchId, branchId ? null : (body.warehouse_id || null),
     body.count_date, body.total_value, body.notes || null, userId).run();
 
   const row = await c.env.DB.prepare('SELECT * FROM inventory_period_counts WHERE id = ?').bind(id).first();
@@ -889,6 +934,9 @@ accounting.post('/inventory-counts', requirePermissions(['manage_purchasing']), 
 accounting.patch('/inventory-counts/:id/approve', requirePermissions(['manage_purchasing']), async (c) => {
   const { id } = c.req.param();
   const userId = (c as any).get('jwtPayload')?.sub || null;
+  const scope = await resolveBranchScope(c, 'ALL');
+  const count = await c.env.DB.prepare('SELECT branch_id FROM inventory_period_counts WHERE id = ?').bind(id).first() as any;
+  if (!count || !inScope(scope, count.branch_id)) return c.json({ error: 'Inventory count not found' }, 404);
   await c.env.DB.prepare(`
     UPDATE inventory_period_counts SET status = 'APPROVED', approved_by = ? WHERE id = ?
   `).bind(userId, id).run();
@@ -900,6 +948,8 @@ accounting.patch('/inventory-counts/:id/approve', requirePermissions(['manage_pu
 // DEPRECIATION SCHEDULES
 // ══════════════════════════════════════════════════════════
 accounting.get('/depreciation', requirePermissions(['view_reports']), async (c) => {
+  // Depreciation schedules are company-level fixed assets (no branch).
+  if ((await resolveBranchScope(c)).kind === 'BRANCH') return c.json([]);
   const { results } = await c.env.DB.prepare(`
     SELECT ds.*, fp.name AS period_name,
            aa.name AS asset_account_name, ad.name AS accum_dep_account_name,
@@ -916,6 +966,7 @@ accounting.get('/depreciation', requirePermissions(['view_reports']), async (c) 
 });
 
 accounting.post('/depreciation', requirePermissions(['manage_purchasing']), async (c) => {
+  assertAllBranchAccess((c as any).get('jwtPayload'));
   const body = await c.req.json<{
     asset_name: string;
     asset_account_id?: string;
@@ -987,166 +1038,91 @@ accounting.post('/depreciation', requirePermissions(['manage_purchasing']), asyn
 // AUTO-GENERATE CLOSING ENTRIES (Year-End)
 // ══════════════════════════════════════════════════════════
 accounting.post('/closing-entries', requirePermissions(['manage_purchasing']), async (c) => {
+  assertAllBranchAccess((c as any).get('jwtPayload'));
   const { fiscal_period_id } = await c.req.json<{ fiscal_period_id: string }>();
   if (!fiscal_period_id) return c.json({ error: 'fiscal_period_id is required' }, 400);
 
   const period = await c.env.DB.prepare('SELECT * FROM fiscal_periods WHERE id = ?').bind(fiscal_period_id).first() as any;
   if (!period) return c.json({ error: 'Fiscal period not found' }, 404);
+  if (period.status !== 'OPEN') return c.json({ error: `Fiscal period is already ${period.status}.` }, 409);
 
   const userId = (c as any).get('jwtPayload')?.sub || null;
+  const closeDate = String(period.end_date instanceof Date ? period.end_date.toISOString() : period.end_date).slice(0, 10);
 
-  // Pre-flight: verify required closing accounts exist in chart_of_accounts
-  const [incomeSummaryAcc, retainedEarningsAcc] = await Promise.all([
-    c.env.DB.prepare("SELECT id FROM chart_of_accounts WHERE id = 'coa-3030' AND is_active = 1").first(),
-    c.env.DB.prepare("SELECT id FROM chart_of_accounts WHERE id = 'coa-3020' AND is_active = 1").first(),
-  ]);
-  if (!incomeSummaryAcc) {
-    return c.json({
-      error: 'Income Summary account (code 3030) is missing from your Chart of Accounts. Please add it before running closing entries.',
-    }, 400);
-  }
-  if (!retainedEarningsAcc) {
-    return c.json({
-      error: 'Retained Earnings account (code 3020) is missing from your Chart of Accounts. Please add it before running closing entries.',
-    }, 400);
-  }
-
-  // Get all revenue account balances for this period
-  const { results: revenues } = await c.env.DB.prepare(`
-    SELECT coa.id AS account_id, coa.code, coa.name,
-           COALESCE(SUM(jel.credit_amount - jel.debit_amount), 0) AS balance
-    FROM chart_of_accounts coa
-    JOIN journal_entry_lines jel ON jel.account_id = coa.id
+  // Nominal account balances for the period, per branch (NULL = company-level).
+  // Contra balances are closed too (previously skipped, leaving residue).
+  const { results: balances } = await c.env.DB.prepare(`
+    SELECT jel.branch_id, coa.code, coa.name, coa.account_type,
+           COALESCE(SUM(jel.debit_amount - jel.credit_amount), 0) AS debit_balance
+    FROM journal_entry_lines jel
     JOIN journal_entries je ON je.id = jel.journal_entry_id
-      AND je.status IN ('POSTED', 'REVERSED') AND je.fiscal_period_id = ?
-    WHERE coa.account_type = 'REVENUE' AND coa.is_active = 1
-    GROUP BY coa.id, coa.code, coa.name
-    HAVING COALESCE(SUM(jel.credit_amount - jel.debit_amount), 0) > 0
-  `).bind(fiscal_period_id).all() as { results: any[] };
+      AND je.status IN ('POSTED', 'REVERSED') AND (je.fiscal_period_id = ? OR (je.fiscal_period_id IS NULL AND je.entry_date BETWEEN ? AND ?))
+    JOIN chart_of_accounts coa ON coa.id = jel.account_id
+    WHERE coa.account_type IN ('REVENUE', 'EXPENSE', 'COGS')
+    GROUP BY jel.branch_id, coa.code, coa.name, coa.account_type
+    HAVING ABS(SUM(jel.debit_amount - jel.credit_amount)) > 0.005
+  `).bind(fiscal_period_id, String(period.start_date instanceof Date ? period.start_date.toISOString() : period.start_date).slice(0, 10), closeDate).all() as { results: any[] };
 
-  const { results: expenses } = await c.env.DB.prepare(`
-    SELECT coa.id AS account_id, coa.code, coa.name,
-           COALESCE(SUM(jel.debit_amount - jel.credit_amount), 0) AS balance
-    FROM chart_of_accounts coa
-    JOIN journal_entry_lines jel ON jel.account_id = coa.id
-    JOIN journal_entries je ON je.id = jel.journal_entry_id
-      AND je.status IN ('POSTED', 'REVERSED') AND je.fiscal_period_id = ?
-    WHERE coa.account_type IN ('EXPENSE', 'COGS') AND coa.is_active = 1
-    GROUP BY coa.id, coa.code, coa.name
-    HAVING COALESCE(SUM(jel.debit_amount - jel.credit_amount), 0) > 0
-  `).bind(fiscal_period_id).all() as { results: any[] };
-
-  const totalRevenue = (revenues || []).reduce((s: number, r: any) => s + Number(r.balance), 0);
-  const totalExpenses = (expenses || []).reduce((s: number, r: any) => s + Number(r.balance), 0);
-  const netIncome = totalRevenue - totalExpenses;
-
-  const closeDate = period.end_date;
-  const countRes = await c.env.DB.prepare('SELECT COUNT(*) AS cnt FROM journal_entries').first() as any;
-  let seq = Number(countRes?.cnt || 0);
-
-  const createdEntries: any[] = [];
-
-  // Entry 1: Close Revenues → Income Summary
-  if ((revenues || []).length > 0) {
-    seq++;
-    const je1Id = generateId();
-    const lines1 = [
-      ...(revenues || []).map((r: any, i: number) => ({
-        id: generateId(), account_id: r.account_id, description: `Close Revenue: ${r.name}`,
-        debit_amount: Number(r.balance), credit_amount: 0, order: i
-      })),
-      {
-        id: generateId(), account_id: 'coa-3030', description: 'Income Summary — Revenue Closed',
-        debit_amount: 0, credit_amount: totalRevenue, order: (revenues || []).length
-      }
-    ];
-
-    await c.env.DB.prepare(`
-      INSERT INTO journal_entries
-        (id, entry_number, fiscal_period_id, entry_date, description, reference_type, status, total_debit, total_credit, created_by)
-      VALUES (?, ?, ?, ?, 'Close Revenue Accounts to Income Summary', 'CLOSING', 'POSTED', ?, ?, ?)
-    `).bind(je1Id, generateEntryNumber(seq), fiscal_period_id, closeDate, totalRevenue, totalRevenue, userId).run();
-
-    const lineStmts1 = lines1.map((l: any) => c.env.DB.prepare(`
-      INSERT INTO journal_entry_lines (id, journal_entry_id, account_id, description, debit_amount, credit_amount, line_order)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).bind(l.id, je1Id, l.account_id, l.description, l.debit_amount, l.credit_amount, l.order));
-    await c.env.DB.batch(lineStmts1);
-    createdEntries.push({ entry_number: generateEntryNumber(seq), description: 'Close Revenues', amount: totalRevenue });
+  const byBranch = new Map<string | null, any[]>();
+  for (const row of balances || []) {
+    const key = row.branch_id ?? null;
+    if (!byBranch.has(key)) byBranch.set(key, []);
+    byBranch.get(key)!.push(row);
   }
 
-  // Entry 2: Close Expenses → Income Summary
-  if ((expenses || []).length > 0) {
-    seq++;
-    const je2Id = generateId();
-    const lines2 = [
-      {
-        id: generateId(), account_id: 'coa-3030', description: 'Income Summary — Expenses Closed',
-        debit_amount: totalExpenses, credit_amount: 0, order: 0
-      },
-      ...(expenses || []).map((e: any, i: number) => ({
-        id: generateId(), account_id: e.account_id, description: `Close Expense: ${e.name}`,
-        debit_amount: 0, credit_amount: Number(e.balance), order: i + 1
-      }))
-    ];
-
-    await c.env.DB.prepare(`
-      INSERT INTO journal_entries
-        (id, entry_number, fiscal_period_id, entry_date, description, reference_type, status, total_debit, total_credit, created_by)
-      VALUES (?, ?, ?, ?, 'Close Expense & COGS Accounts to Income Summary', 'CLOSING', 'POSTED', ?, ?, ?)
-    `).bind(je2Id, generateEntryNumber(seq), fiscal_period_id, closeDate, totalExpenses, totalExpenses, userId).run();
-
-    const lineStmts2 = lines2.map((l: any) => c.env.DB.prepare(`
-      INSERT INTO journal_entry_lines (id, journal_entry_id, account_id, description, debit_amount, credit_amount, line_order)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).bind(l.id, je2Id, l.account_id, l.description, l.debit_amount, l.credit_amount, l.order));
-    await c.env.DB.batch(lineStmts2);
-    createdEntries.push({ entry_number: generateEntryNumber(seq), description: 'Close Expenses & COGS', amount: totalExpenses });
+  // One closing entry per branch: zero every nominal account against Income
+  // Summary, then Income Summary to Retained Earnings — all in the branch's
+  // own books, all in one transaction with the period lock.
+  const stmts: any[] = [];
+  const summary: any[] = [];
+  for (const [branchId, rows] of byBranch) {
+    const lines = rows.map((r) => {
+      const bal = Number(r.debit_balance);
+      return { accountCode: String(r.code), description: `Close ${r.name}`, debitAmount: bal < 0 ? -bal : 0, creditAmount: bal > 0 ? bal : 0 };
+    });
+    // net income = credits removed from revenue − debits removed from expenses
+    const netIncome = -rows.reduce((s, r) => s + Number(r.debit_balance), 0);
+    if (Math.abs(netIncome) > 0.005) {
+      lines.push({ accountCode: '3020', description: `Retained Earnings — net ${netIncome > 0 ? 'income' : 'loss'}`,
+        debitAmount: netIncome < 0 ? -netIncome : 0, creditAmount: netIncome > 0 ? netIncome : 0 });
+    }
+    const prepared = await prepareJournalEntryPosting(c, {
+      description: `Period closing ${period.period_name || period.name || fiscal_period_id}`,
+      referenceType: 'CLOSING',
+      referenceId: `${fiscal_period_id}:${branchId ?? 'UNASSIGNED'}`,
+      branchId,
+      entryDate: closeDate,
+      prefetchedFiscalPeriodId: fiscal_period_id,
+      userId,
+      lines,
+    });
+    stmts.push(...prepared.statements);
+    summary.push({ branch_id: branchId, net_income: netIncome });
   }
-
-  // Entry 3: Close Income Summary → Retained Earnings
-  if (Math.abs(netIncome) > 0.01) {
-    seq++;
-    const je3Id = generateId();
-    const isProfit = netIncome > 0;
-    await c.env.DB.prepare(`
-      INSERT INTO journal_entries
-        (id, entry_number, fiscal_period_id, entry_date, description, reference_type, status, total_debit, total_credit, created_by)
-      VALUES (?, ?, ?, ?, 'Close Income Summary to Retained Earnings', 'CLOSING', 'POSTED', ?, ?, ?)
-    `).bind(je3Id, generateEntryNumber(seq), fiscal_period_id, closeDate, Math.abs(netIncome), Math.abs(netIncome), userId).run();
-
-    const summaryLineId = generateId();
-    const retainedLineId = generateId();
-    await c.env.DB.batch([
-      c.env.DB.prepare(`INSERT INTO journal_entry_lines (id, journal_entry_id, account_id, description, debit_amount, credit_amount, line_order) VALUES (?, ?, ?, ?, ?, ?, 0)`)
-        .bind(summaryLineId, je3Id, 'coa-3030', 'Income Summary — Net ' + (isProfit ? 'Income' : 'Loss'),
-          isProfit ? Math.abs(netIncome) : 0, isProfit ? 0 : Math.abs(netIncome)),
-      c.env.DB.prepare(`INSERT INTO journal_entry_lines (id, journal_entry_id, account_id, description, debit_amount, credit_amount, line_order) VALUES (?, ?, ?, ?, ?, ?, 1)`)
-        .bind(retainedLineId, je3Id, 'coa-3020', 'Retained Earnings — Net ' + (isProfit ? 'Income' : 'Loss'),
-          isProfit ? 0 : Math.abs(netIncome), isProfit ? Math.abs(netIncome) : 0)
-    ]);
-    createdEntries.push({ entry_number: generateEntryNumber(seq), description: 'Close Income Summary → Retained Earnings', amount: netIncome });
-  }
+  stmts.push(c.env.DB.prepare("UPDATE fiscal_periods SET status = 'CLOSED' WHERE id = ? AND status = 'OPEN'")
+    .bind(fiscal_period_id).mustAffect('This period was just closed by another request.'));
+  await c.env.DB.batch(stmts);
 
   return c.json({
-    message: 'Year-end closing entries generated successfully',
-    period: period.name,
-    net_income: netIncome,
-    entries_created: createdEntries
+    message: 'Closing entries posted per branch and the period is closed',
+    period: period.period_name || period.name,
+    net_income: summary.reduce((s, b) => s + b.net_income, 0),
+    branches: summary,
   });
 });
 
 // ══════════════════════════════════════════════════════════
-// ══════════════════════════════════════════════════════════
 // DASHBOARD SUMMARY & GL RECONCILIATION
 // ══════════════════════════════════════════════════════════
 accounting.get('/audit/transaction-flow', requirePermissions(['view_reports']), async (c) => {
+  const scope = await resolveBranchScope(c);
+  const bf = branchSql(scope, 'jel.branch_id');
   const [journalLines, accountTotals, receipts, stock, missingReceiptJournals] = await Promise.all([
     c.env.DB.prepare(`
       WITH affected_entries AS (
         SELECT DISTINCT je.id
         FROM journal_entries je
-        JOIN journal_entry_lines jel ON jel.journal_entry_id = je.id
+        JOIN journal_entry_lines jel ON jel.journal_entry_id = je.id ${bf}
         JOIN chart_of_accounts coa ON coa.id = jel.account_id
         WHERE je.status IN ('POSTED', 'REVERSED')
           AND (coa.code IN ('1010', '1020', '1030', '4010', '5010') OR coa.account_type = 'EXPENSE')
@@ -1157,7 +1133,7 @@ accounting.get('/audit/transaction-flow', requirePermissions(['view_reports']), 
              jel.debit_amount, jel.credit_amount, jel.line_order
       FROM journal_entries je
       JOIN affected_entries ae ON ae.id = je.id
-      JOIN journal_entry_lines jel ON jel.journal_entry_id = je.id
+      JOIN journal_entry_lines jel ON jel.journal_entry_id = je.id ${bf}
       JOIN chart_of_accounts coa ON coa.id = jel.account_id
       ORDER BY je.entry_date, je.created_at, je.entry_number, jel.line_order
     `).all(),
@@ -1170,7 +1146,7 @@ accounting.get('/audit/transaction-flow', requirePermissions(['view_reports']), 
                ELSE COALESCE(SUM(jel.credit_amount - jel.debit_amount), 0)
              END AS balance
       FROM chart_of_accounts coa
-      LEFT JOIN journal_entry_lines jel ON jel.account_id = coa.id
+      LEFT JOIN journal_entry_lines jel ON jel.account_id = coa.id ${bf}
       LEFT JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status IN ('POSTED', 'REVERSED')
       WHERE coa.code IN ('1010', '1020', '1030', '4010', '5010') OR coa.account_type = 'EXPENSE'
       GROUP BY coa.id, coa.code, coa.name, coa.normal_balance
@@ -1182,7 +1158,7 @@ accounting.get('/audit/transaction-flow', requirePermissions(['view_reports']), 
              COALESCE(SUM(grl.line_total), 0) AS receipt_value
       FROM goods_receipts gr
       LEFT JOIN goods_receipt_lines grl ON grl.goods_receipt_id = gr.id
-      WHERE COALESCE(gr.status, 'COMPLETED') != 'CANCELLED'
+      WHERE COALESCE(gr.status, 'COMPLETED') != 'CANCELLED' ${scope.kind === 'BRANCH' ? 'AND FALSE' : ''}
       GROUP BY gr.id, gr.receipt_number, gr.purchase_order_id, gr.received_at
       ORDER BY gr.received_at, gr.id
     `).all(),
@@ -1191,13 +1167,14 @@ accounting.get('/audit/transaction-flow', requirePermissions(['view_reports']), 
              COALESCE(SUM(s.quantity_on_hand * p.cost_price), 0) AS value_at_product_cost
       FROM inventory_stock s
       JOIN products p ON p.id = s.product_id
+      WHERE 1=1 ${branchSql(scope, 's.branch_id')}
     `).first(),
     c.env.DB.prepare(`
       SELECT gr.id AS receipt_id, gr.receipt_number, gr.purchase_order_id,
              COALESCE(SUM(grl.line_total), 0) AS receipt_value
       FROM goods_receipts gr
       JOIN goods_receipt_lines grl ON grl.goods_receipt_id = gr.id
-      WHERE COALESCE(gr.status, 'COMPLETED') != 'CANCELLED'
+      WHERE COALESCE(gr.status, 'COMPLETED') != 'CANCELLED' ${scope.kind === 'BRANCH' ? 'AND FALSE' : ''}
         AND NOT EXISTS (
           SELECT 1 FROM journal_entries je
           WHERE je.status = 'POSTED' AND je.reference_type = 'PURCHASE' AND je.reference_id = gr.id
@@ -1227,16 +1204,20 @@ accounting.get('/audit/transaction-flow', requirePermissions(['view_reports']), 
 });
 
 accounting.post('/reconcile-journals', requirePermissions(['manage_purchasing']), async (c) => {
+  assertAllBranchAccess((c as any).get('jwtPayload'));
   const count = await reconcileMissingSalesJournalEntries(c);
   return c.json({ success: true, reconciled_entries: count });
 });
 
 accounting.post('/reconcile-inventory-accounting', requirePermissions(['manage_purchasing']), async (c) => {
+  assertAllBranchAccess((c as any).get('jwtPayload'));
   const result = await reconcileMissingReceiptJournalEntries(c);
   return c.json({ success: true, ...result });
 });
 
 accounting.get('/dashboard', requirePermissions(['view_reports']), async (c) => {
+  const scope = await resolveBranchScope(c);
+  const bf = branchSql(scope, 'jel.branch_id');
   // Read-only: backfilling missing journals is an explicit action (POST /reconcile-journals).
   const rawPeriodId = c.req.query('period_id');
   const periodId = (rawPeriodId && rawPeriodId !== 'ALL' && rawPeriodId !== 'undefined') ? rawPeriodId : null;
@@ -1248,12 +1229,12 @@ accounting.get('/dashboard', requirePermissions(['view_reports']), async (c) => 
   }
 
   const [jeCount, postedCount, revenueRes, expenseRes, periods, accounts, opExpRes] = await Promise.all([
-    c.env.DB.prepare(`SELECT COUNT(*) AS cnt FROM journal_entries WHERE 1=1 ${periodId ? 'AND (fiscal_period_id = ? OR fiscal_period_id IS NULL)' : ''}`).bind(...(periodId ? [periodId] : [])).first(),
-    c.env.DB.prepare(`SELECT COUNT(*) AS cnt FROM journal_entries WHERE status IN ('POSTED', 'REVERSED') ${periodId ? 'AND (fiscal_period_id = ? OR fiscal_period_id IS NULL)' : ''}`).bind(...(periodId ? [periodId] : [])).first(),
+    c.env.DB.prepare(`SELECT COUNT(*) AS cnt FROM journal_entries WHERE 1=1 ${branchSql(scope, 'branch_id')} ${periodId ? 'AND (fiscal_period_id = ? OR fiscal_period_id IS NULL)' : ''}`).bind(...(periodId ? [periodId] : [])).first(),
+    c.env.DB.prepare(`SELECT COUNT(*) AS cnt FROM journal_entries WHERE status IN ('POSTED', 'REVERSED') ${branchSql(scope, 'branch_id')} ${periodId ? 'AND (fiscal_period_id = ? OR fiscal_period_id IS NULL)' : ''}`).bind(...(periodId ? [periodId] : [])).first(),
     c.env.DB.prepare(`
       SELECT COALESCE(SUM(jel.credit_amount - jel.debit_amount), 0) AS total
       FROM chart_of_accounts coa
-      JOIN journal_entry_lines jel ON jel.account_id = coa.id
+      JOIN journal_entry_lines jel ON jel.account_id = coa.id ${bf}
       JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status IN ('POSTED', 'REVERSED') ${pf}
       WHERE coa.account_type = 'REVENUE'
     `).bind(...params).first(),
@@ -1261,7 +1242,7 @@ accounting.get('/dashboard', requirePermissions(['view_reports']), async (c) => 
     c.env.DB.prepare(`
       SELECT COALESCE(SUM(jel.debit_amount - jel.credit_amount), 0) AS total
       FROM chart_of_accounts coa
-      JOIN journal_entry_lines jel ON jel.account_id = coa.id
+      JOIN journal_entry_lines jel ON jel.account_id = coa.id ${bf}
       JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status IN ('POSTED', 'REVERSED') ${pf}
       WHERE coa.account_type IN ('EXPENSE', 'COGS') AND (coa.code LIKE '5%')
     `).bind(...params).first(),
@@ -1271,7 +1252,7 @@ accounting.get('/dashboard', requirePermissions(['view_reports']), async (c) => 
     c.env.DB.prepare(`
       SELECT COALESCE(SUM(jel.debit_amount - jel.credit_amount), 0) AS total
       FROM chart_of_accounts coa
-      JOIN journal_entry_lines jel ON jel.account_id = coa.id
+      JOIN journal_entry_lines jel ON jel.account_id = coa.id ${bf}
       JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status IN ('POSTED', 'REVERSED') ${pf}
       WHERE coa.account_type IN ('EXPENSE', 'COGS') AND (coa.code LIKE '6%')
     `).bind(...params).first(),

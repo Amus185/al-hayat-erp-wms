@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { Env, uuidv4 } from '../db';
 import { authMiddleware, requirePermissions, isAdminUser } from '../middleware/auth';
 import { logAudit, createAuditLogStmt } from '../services/audit';
+import { calculateLinesCogs, prepareJournalEntryPosting } from '../services/accounting-service';
 
 const transfers = new Hono<{ Bindings: Env; Variables: { jwtPayload: any } }>();
 
@@ -439,6 +440,35 @@ transfers.post('/:id/receive', requirePermissions(['manage_transfers']), async (
   `).bind(userId, id));
 
   stmts.push(createAuditLogStmt(c, 'TRANSFER_RECEIVE_COMPLETE', 'transfers', id, { status: 'DISPATCHED' }, { status: 'COMPLETED' }));
+
+  // Inter-branch accounting: the stock's value leaves the sender's books and
+  // enters the receiver's through 1090 Inter-Branch Clearing (one balanced
+  // entry per side, so each branch's books balance and the consolidated
+  // view is unchanged). Warehouses are company-level (no branch).
+  const fromBranch = transfer.source_owner_type === 'BRANCH' ? (transfer.source_branch_id || null) : null;
+  const toOwner = transfer.destination_owner_type || transfer.dest_owner_type;
+  const toBranch = toOwner === 'BRANCH' ? (transfer.destination_branch_id || transfer.dest_branch_id || null) : null;
+  if (fromBranch !== toBranch) {
+    const value = await calculateLinesCogs(c.env.DB, (lines as any[]).map((l) => ({
+      product_id: l.product_id, quantity: Number(l.quantity_dispatched ?? l.quantity_requested ?? l.quantity ?? 0),
+    })));
+    if (value > 0) {
+      const sides: Array<[string | null, string, string, string]> = [
+        [fromBranch, `${id}:out`, '1090', '1030'],
+        [toBranch, `${id}:in`, '1030', '1090'],
+      ];
+      for (const [branchId, ref, debit, credit] of sides) {
+        stmts.push(...(await prepareJournalEntryPosting(c, {
+          description: `Inter-branch stock transfer ${transfer.transfer_number}`,
+          referenceType: 'TRANSFER', referenceId: ref, branchId, userId,
+          lines: [
+            { accountCode: debit, debitAmount: value, creditAmount: 0 },
+            { accountCode: credit, debitAmount: 0, creditAmount: value },
+          ],
+        })).statements);
+      }
+    }
+  }
 
   await c.env.DB.batch(stmts);
   const result = await c.env.DB.prepare('SELECT * FROM transfers WHERE id = ?').bind(id).first();

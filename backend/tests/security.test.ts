@@ -69,13 +69,23 @@ test('a delivery for a cancelled order cannot be completed', async () => {
   assert.equal(so[0].status, 'CANCELLED');
 });
 
-test('a branch user cannot cancel another branch\'s order', { todo: 'Branch isolation is enforced only on order list/detail/delete — see AUDIT_REPORT SEC-05' }, async () => {
+test('a branch user cannot act on another branch\'s orders and invoices', async () => {
   const p = await t.createProduct();
-  await t.setStock(p, 2, { branchId: 'branch-cl-show' });
+  await t.setStock(p, 4, { branchId: 'branch-cl-show' });
   const order = await t.api('POST', '/sales/orders', { branchId: 'branch-cl-show', lines: [{ productId: p, quantity: 1, unitPrice: 100 }] });
-  const id = randomUUID();
-  await t.q(`INSERT INTO users (id, email, password_hash, full_name, branch_id) VALUES ($1, $2, 'x', 'HQ', $3)`, [id, `${id}@t.local`, BRANCH_HQ]);
-  const token = await t.tokenFor({ sub: id, permissions: ['manage_sales'], branch_id: BRANCH_HQ, role: 'branch_user' });
-  const res = await t.api('POST', `/sales/orders/${order.body.id}/cancel`, { reason: 'x' }, token);
-  assert.equal(res.status, 403);
+  const done = await t.api('POST', `/sales/orders/${order.body.id}/complete`, { amountPaid: 0 });
+  const other = await t.api('POST', '/sales/orders', { branchId: 'branch-cl-show', lines: [{ productId: p, quantity: 1, unitPrice: 100 }] });
+  const hq = await t.createUser({ branchId: BRANCH_HQ, roleId: 'role-branch-user', role: 'branch_user' });
+  for (const [method, path, body] of [
+    ['POST', `/sales/orders/${order.body.id}/cancel`, { reason: 'x' }],
+    ['POST', `/sales/orders/${other.body.id}/confirm`, {}],
+    ['POST', `/sales/orders/${other.body.id}/complete`, {}],
+    ['POST', `/sales/invoices/${done.body.invoiceId}/payments`, { amount: 10 }],
+    ['GET', `/sales/invoices/${done.body.invoiceId}/print`, undefined],
+    ['GET', `/sales/orders/${order.body.id}`, undefined],
+  ] as const) {
+    const res = await t.api(method, path, body, hq.token);
+    assert.equal(res.status, 403, `${method} ${path} → ${res.status}`);
+  }
+  assert.equal((await t.q('SELECT status FROM sales_orders WHERE id = $1', [order.body.id]))[0].status, 'CONFIRMED');
 });

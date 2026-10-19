@@ -1,4 +1,4 @@
--- Al Hayat ERP — read-only reconciliation queries (audit 2026-10-19)
+-- Al Hayat ERP - read-only reconciliation queries (audit 2026-10-19)
 -- Every statement is a SELECT. Run them in Railway's Postgres query console
 -- (or psql) and keep the output; nothing here modifies data.
 -- Validated against PostgreSQL 17 test databases built by backend/tests.
@@ -103,7 +103,7 @@ SELECT
      FROM inventory_stock s JOIN products p ON p.id = s.product_id) AS stock_at_cost;
 
 -- R8. Stock balances not explained by the movement ledger (opening stock set
---     at product creation/import has no movement row — ACC-18 — so a
+--     at product creation/import has no movement row - ACC-18 - so a
 --     difference equal to the opening quantity is expected for those).
 WITH moves AS (
   SELECT product_id,
@@ -205,3 +205,70 @@ WHERE so.status = 'CANCELLED'
 SELECT u.email, u.full_name, u.is_active,
        (SELECT STRING_AGG(r.code, ',') FROM user_roles ur JOIN roles r ON r.id = ur.role_id WHERE ur.user_id = u.id) AS roles
 FROM users u WHERE u.branch_id IS NULL ORDER BY u.is_active DESC, u.email;
+
+-- ====================================================================
+-- Branch attribution (branch-specific accounting, 2026-10-19)
+-- See docs/audit/BRANCH_ACCOUNTING.md. Run AFTER deploying, so the startup
+-- backfill has attributed every provable historical record first.
+-- ====================================================================
+
+-- R17. Posted journals with no branch, by type. PURCHASE, MANUFACTURING,
+--      DEPRECIATION, CLOSING and inter-branch TRANSFER legs from a warehouse
+--      are company-level by policy; anything else is in R18.
+SELECT je.reference_type, COUNT(*) AS entries, ROUND(SUM(je.total_debit)::numeric, 2) AS amount
+FROM journal_entries je
+WHERE je.branch_id IS NULL AND je.status IN ('POSTED', 'REVERSED')
+GROUP BY je.reference_type ORDER BY je.reference_type;
+
+-- R18. Branch-type journals the backfill could NOT attribute (needs a human
+--      decision: the source document is missing or has no branch)
+SELECT je.entry_number, je.entry_date, je.reference_type, je.reference_id, je.description, je.total_debit
+FROM journal_entries je
+WHERE je.branch_id IS NULL AND je.status IN ('POSTED', 'REVERSED')
+  AND COALESCE(je.reference_type, 'MANUAL') IN ('SALE', 'EXPENSE', 'INVENTORY_ADJUSTMENT', 'MANUAL')
+ORDER BY je.entry_date;
+
+-- R19. Entries whose lines are attributed to a different branch than the entry
+--      (historical manual entries only; new ones are blocked by a trigger)
+SELECT je.entry_number, je.entry_date, je.branch_id AS entry_branch, jel.branch_id AS line_branch, COUNT(*) AS lines
+FROM journal_entries je
+JOIN journal_entry_lines jel ON jel.journal_entry_id = je.id
+WHERE jel.branch_id IS DISTINCT FROM je.branch_id
+GROUP BY je.entry_number, je.entry_date, je.branch_id, jel.branch_id;
+
+-- R20. Unallocated customer payments with no branch (received before branch
+--      attribution; not provable - decide per receipt)
+SELECT cp.receipt_number, cp.payment_date, cp.amount, c.name AS customer
+FROM customer_payments cp JOIN customers c ON c.id = cp.customer_id
+WHERE cp.branch_id IS NULL
+ORDER BY cp.payment_date;
+
+-- R21. Each branch's books balance (expected: debits = credits in every row)
+SELECT COALESCE(jel.branch_id, 'UNASSIGNED') AS branch,
+       ROUND(SUM(jel.debit_amount)::numeric, 2) AS debits, ROUND(SUM(jel.credit_amount)::numeric, 2) AS credits
+FROM journal_entry_lines jel
+JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status IN ('POSTED', 'REVERSED')
+GROUP BY COALESCE(jel.branch_id, 'UNASSIGNED')
+ORDER BY 1;
+
+-- R22. Completed transfers between different books (branch<->branch, warehouse<->branch)
+--      made before inter-branch clearing journals existed: the stock value is
+--      still in the sender's books
+SELECT t.transfer_number, t.received_at,
+       CASE WHEN t.source_owner_type = 'BRANCH' THEN t.source_branch_id END AS from_branch,
+       CASE WHEN COALESCE(t.destination_owner_type, t.dest_owner_type) = 'BRANCH'
+            THEN COALESCE(t.destination_branch_id, t.dest_branch_id) END AS to_branch
+FROM transfers t
+WHERE t.status = 'COMPLETED'
+  AND NOT EXISTS (SELECT 1 FROM journal_entries je WHERE je.reference_type = 'TRANSFER' AND je.reference_id IN (t.id || ':out', t.id || ':in'))
+  AND (CASE WHEN t.source_owner_type = 'BRANCH' THEN t.source_branch_id END)
+      IS DISTINCT FROM
+      (CASE WHEN COALESCE(t.destination_owner_type, t.dest_owner_type) = 'BRANCH' THEN COALESCE(t.destination_branch_id, t.dest_branch_id) END)
+ORDER BY t.received_at;
+
+-- R23. Posted journals with no fiscal period (ACC-26): before the fix these
+--      escaped period closing
+SELECT entry_number, entry_date, branch_id, reference_type, total_debit
+FROM journal_entries
+WHERE status IN ('POSTED', 'REVERSED') AND fiscal_period_id IS NULL
+ORDER BY entry_date;

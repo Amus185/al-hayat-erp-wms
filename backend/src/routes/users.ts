@@ -164,6 +164,7 @@ users.delete('/:id', async (c) => {
     c.env.DB.prepare('DELETE FROM users WHERE id = ?').bind(id),
     createAuditLogStmt(c, 'USER_DELETE', 'users', id, user, null)
   ]);
+  invalidateUserCache(id);
   return c.json({ success: true });
 });
 

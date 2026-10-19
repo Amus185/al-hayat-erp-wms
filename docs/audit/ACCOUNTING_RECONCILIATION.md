@@ -99,3 +99,28 @@ All money columns are `DOUBLE PRECISION`. Plan:
 4. Re-run the test suite and R1–R16 before and after.
 
 Do not attempt this without a backup and a staging copy of production data.
+
+## 7. Branch-specific accounting (second pass)
+
+Details: [BRANCH_ACCOUNTING.md](BRANCH_ACCOUNTING.md).
+
+**Posting-rule changes:**
+- Every journal entry and all its lines belong to one branch, or to none (company-level). This is enforced in the posting engine and by the database trigger `trg_journal_line_branch`.
+- Customer payments are booked in the branch of the document they settle.
+- Inter-branch stock transfers post sender Dr 1090 / Cr 1030 and receiver Dr 1030 / Cr 1090 at weighted-average cost.
+- Closing posts one entry per branch into that branch's Retained Earnings.
+- Manual entries get the fiscal period covering their date when posted (ACC-26).
+
+**Reconciliation on test data** (real PostgreSQL; branch A = HQ, branch B = CL, plus company-level purchasing):
+
+| Check | Result |
+|---|---|
+| Revenue A / B / company / consolidated | 120 / 340 / 0 / 460: consolidated = sum of parts |
+| Accounts 1010, 1020, 1030, 2010, 4010, 5010, 6010 | Consolidated = A + B + company-level for every account (no duplication) |
+| Each scope's trial balance and balance sheet | Balanced: A, B, company-level, consolidated; also after closing |
+| Dashboard vs income statement (per branch) | Identical net income |
+| Customer balance | Branch A view + branch B view = admin view |
+| Inter-branch transfer (warehouse → A, value 120) | A inventory +120, company-level −120, consolidated unchanged, 1090 = 0 |
+| R21 per-branch debit/credit totals | CL 790 = 790 · HQ 536 = 536 · company-level 191 = 191 |
+
+**Production:** run R17–R23 after deploying. The startup backfill attributes only provable history. R18 and R20 list what needs a human decision; R22 lists transfers made before clearing journals existed.
