@@ -493,7 +493,7 @@ INSERT INTO role_permissions (role_id, permission_id) VALUES
 ('role-branch-user', '66666666-6666-6666-6666-666666666666')
 ON CONFLICT DO NOTHING;
 
--- Default Admin User: admin@alhayat.com / Admin@123
+-- Default Admin User (change the password immediately after first login)
 INSERT INTO users (id, email, password_hash, full_name, is_active, password_version) VALUES 
 ('88888888-8888-8888-8888-888888888888', 'admin@alhayat.com', '$2a$10$lg9bBDFZgleGwjwYDVCp3.iA1AT3n7SltsaQyYMbtvAeOH.CWO7ue', 'Admin User', 1, 1)
 ON CONFLICT (id) DO NOTHING;

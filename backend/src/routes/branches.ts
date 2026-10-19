@@ -323,10 +323,18 @@ branches.delete('/:id', requirePermissions(['manage_users']), requireAdmin, asyn
     }, 400);
   }
 
-  // Safe to delete: remove zero stock records, assigned users, and branch
+  // A user with no branch is treated as an all-branch (admin-scoped) user, so
+  // detaching branch users here would silently widen their access.
+  const users = await c.env.DB.prepare('SELECT COUNT(*) AS count FROM users WHERE branch_id = ?').bind(id).first();
+  if (Number(users?.count || 0) > 0) {
+    return c.json({
+      message: `Cannot delete branch "${(existing as any).name}": ${users?.count} user(s) are assigned to it. Reassign or delete those users first, or deactivate the branch.`
+    }, 400);
+  }
+
+  // Safe to delete: remove zero stock records and the branch
   await c.env.DB.batch([
     c.env.DB.prepare('DELETE FROM inventory_stock WHERE branch_id = ?').bind(id),
-    c.env.DB.prepare('UPDATE users SET branch_id = NULL WHERE branch_id = ?').bind(id),
     c.env.DB.prepare('DELETE FROM branches WHERE id = ?').bind(id),
   ]);
 

@@ -50,18 +50,35 @@ export function convertSqliteToPg(sql: string): string {
   return converted;
 }
 
+/** A guarded batch statement matched no rows; the transaction was rolled back. */
+export class ConflictError extends Error {
+  name = 'ConflictError';
+}
+
 // ─── Prepared Statement ───────────────────────────────────────────────────────
 
 export class PgPreparedStatement {
   constructor(
     private pool: Pool,
     private sql: string,
-    private params: any[] = []
+    private params: any[] = [],
+    private guardMessage: string | null = null
   ) {}
 
   bind(...params: any[]): PgPreparedStatement {
-    return new PgPreparedStatement(this.pool, this.sql, params);
+    return new PgPreparedStatement(this.pool, this.sql, params, this.guardMessage);
   }
+
+  /**
+   * Inside batch(): roll back the whole transaction with a ConflictError when
+   * this statement affects no rows. Used for state-machine claims
+   * (`... WHERE status = ?`) and stock decrements (`... AND quantity_on_hand >= ?`)
+   * so double-submits and concurrent requests cannot both commit.
+   */
+  mustAffect(message: string): PgPreparedStatement {
+    return new PgPreparedStatement(this.pool, this.sql, this.params, message);
+  }
+  getGuardMessage(): string | null { return this.guardMessage; }
 
   async all<T = any>(): Promise<{ results: T[]; success: boolean; meta: any }> {
     const pgSql = convertSqliteToPg(this.sql);
@@ -165,6 +182,8 @@ export class PgAdapter {
       for (const stmt of statements) {
         const pgSql = convertSqliteToPg(stmt.getSql());
         const res = await client.query(pgSql, stmt.getParams());
+        const guardMessage = stmt.getGuardMessage();
+        if (guardMessage && !res.rowCount) throw new ConflictError(guardMessage);
         results.push({
           success: true,
           meta: { changes: res.rowCount ?? 0 },

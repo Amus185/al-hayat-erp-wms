@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { Env, uuidv4 } from '../db';
 import { authMiddleware, requirePermissions, isAdminUser } from '../middleware/auth';
 import { createAuditLogStmt } from '../services/audit';
-import { prepareJournalEntryPosting } from '../services/accounting-service';
+import { prepareExpenseJournal, prepareJournalReversal } from '../services/accounting-service';
 
 const expenses = new Hono<{ Bindings: Env; Variables: { jwtPayload: any } }>();
 
@@ -105,21 +105,10 @@ expenses.post('/', requirePermissions(['manage_purchasing']), async (c) => {
 
   const id = uuidv4();
 
-  const expenseAccount = ['Rent', 'Salaries', 'Utilities', 'Maintenance'].includes(body.category.trim()) ? '6010' : '6050';
-  const method = String(body.payment_method || 'CASH').toUpperCase();
-  const payable = ['CREDIT', 'ON_ACCOUNT', 'UNPAID', 'PAYABLE'].includes(method);
-  const preparedJournal = await prepareJournalEntryPosting(c, {
-    description: `Expense Paid: ${body.title.trim()} (${body.category.trim()})`,
-    referenceType: 'EXPENSE',
-    referenceId: id,
-    entryDate: body.expense_date,
-    branchId: branchId || null,
-    userId,
-    lines: [
-      { accountCode: expenseAccount, debitAmount: body.amount, creditAmount: 0 },
-      { accountCode: payable ? '2010' : '1010', debitAmount: 0, creditAmount: body.amount },
-    ],
-  });
+  const preparedJournal = await prepareExpenseJournal(c, {
+    id, title: body.title.trim(), amount: body.amount, category: body.category.trim(),
+    expense_date: body.expense_date, branch_id: branchId, payment_method: body.payment_method,
+  }, userId);
 
   await c.env.DB.batch([
     c.env.DB.prepare(`
@@ -164,11 +153,33 @@ expenses.patch('/:id', requirePermissions(['manage_purchasing']), async (c) => {
   if (body.notes !== undefined) { fields.push('notes = ?'); vals.push(body.notes); }
 
   if (!fields.length) return c.json({ message: 'No fields to update.' }, 400);
+  if (body.amount !== undefined && !(Number(body.amount) > 0)) return c.json({ message: 'Amount must be greater than 0.' }, 400);
 
   fields.push('updated_at = CURRENT_TIMESTAMP');
   vals.push(id);
 
-  await c.env.DB.prepare(`UPDATE expenses SET ${fields.join(', ')} WHERE id = ?`).bind(...vals).run();
+  const stmts: any[] = [c.env.DB.prepare(`UPDATE expenses SET ${fields.join(', ')} WHERE id = ?`).bind(...vals)];
+
+  // Financial fields changed: reverse the posted journal and post the new one.
+  const ex = existing as any;
+  const updated = { ...ex, ...body };
+  const financialChange = ['amount', 'category', 'expense_date', 'branch_id', 'payment_method']
+    .some((k) => (body as any)[k] !== undefined && String((body as any)[k]) !== String(ex[k]));
+  if (financialChange) {
+    const userId = c.get('jwtPayload').sub;
+    const je = await c.env.DB.prepare(
+      "SELECT id FROM journal_entries WHERE reference_type = 'EXPENSE' AND reference_id = ? AND status = 'POSTED' ORDER BY created_at DESC LIMIT 1"
+    ).bind(id).first();
+    if (je) stmts.push(...await prepareJournalReversal(c, je.id as string, `Expense ${ex.title} edited`, userId));
+    const repost = await prepareExpenseJournal(c, {
+      id, title: updated.title, amount: Number(updated.amount), category: updated.category,
+      expense_date: updated.expense_date, branch_id: updated.branch_id, payment_method: updated.payment_method,
+    }, userId, true);
+    stmts.push(...repost.statements);
+  }
+  stmts.push(createAuditLogStmt(c, 'EXPENSE_UPDATE', 'expenses', id, existing, body));
+
+  await c.env.DB.batch(stmts);
   const row = await c.env.DB.prepare('SELECT * FROM expenses WHERE id = ?').bind(id).first();
   return c.json(row);
 });
@@ -179,9 +190,17 @@ expenses.delete('/:id', requirePermissions(['manage_purchasing']), async (c) => 
   const existing = await c.env.DB.prepare('SELECT * FROM expenses WHERE id = ?').bind(id).first();
   if (!existing) return c.json({ message: 'Expense not found.' }, 404);
 
+  const je = await c.env.DB.prepare(
+    "SELECT id FROM journal_entries WHERE reference_type = 'EXPENSE' AND reference_id = ? AND status = 'POSTED' ORDER BY created_at DESC LIMIT 1"
+  ).bind(id).first();
+  const reversal = je
+    ? await prepareJournalReversal(c, je.id as string, `Expense ${(existing as any).title} deleted`, c.get('jwtPayload').sub)
+    : [];
+
   await c.env.DB.batch([
     c.env.DB.prepare('DELETE FROM expenses WHERE id = ?').bind(id),
     createAuditLogStmt(c, 'EXPENSE_DELETE', 'expenses', id, existing, null),
+    ...reversal,
   ]);
   return c.json({ success: true });
 });

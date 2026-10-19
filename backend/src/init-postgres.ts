@@ -281,6 +281,8 @@ export async function ensurePostgresInit(pool: Pool) {
       ALTER TABLE sales_orders ADD COLUMN IF NOT EXISTS fulfillment_type TEXT NOT NULL DEFAULT 'DELIVERY';
       ALTER TABLE sales_order_lines ADD COLUMN IF NOT EXISTS fulfillment_type TEXT NOT NULL DEFAULT 'DELIVERY';
       ALTER TABLE invoices ADD COLUMN IF NOT EXISTS installation_fee DOUBLE PRECISION NOT NULL DEFAULT 0;
+      ALTER TABLE invoices ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP;
+      ALTER TABLE warehouse_locations ADD COLUMN IF NOT EXISTS barcode TEXT;
 
       -- Deliveries System Tables
       CREATE TABLE IF NOT EXISTS deliveries (
@@ -608,7 +610,8 @@ export async function ensurePostgresInit(pool: Pool) {
       );
     }
 
-    // 2f. Users — insert with null branch_id first to avoid FK issues, then update hash
+    // 2f. Users — seed only when missing. Never overwrite an existing user's
+    // password, version or active flag: this runs on every boot.
     for (const row of DEFAULT_AUTH_SEED.users) {
       // Validate branch_id exists before using it
       let safeBranchId = row.branch_id;
@@ -619,10 +622,7 @@ export async function ensurePostgresInit(pool: Pool) {
       await client.query(
         `INSERT INTO users (id, email, password_hash, full_name, branch_id, is_active, password_version)
          VALUES ($1,$2,$3,$4,$5,$6,$7)
-         ON CONFLICT (email) DO UPDATE SET
-           password_hash = EXCLUDED.password_hash,
-           password_version = EXCLUDED.password_version,
-           is_active = EXCLUDED.is_active`,
+         ON CONFLICT DO NOTHING`,
         [row.id, row.email, row.password_hash, row.full_name, safeBranchId, row.is_active, row.password_version]
       );
     }

@@ -1,4 +1,5 @@
 import { uuidv4 } from '../db';
+import { ConflictError } from '../pg-client';
 
 export interface JournalLineInput {
   accountCode: string; // e.g. '1010', '2010', '4010', '5010'
@@ -20,6 +21,9 @@ export interface PostJournalParams {
   // to eliminate duplicate round-trips. Both are optional for backward-compat.
   prefetchedFiscalPeriodId?: string | null;
   prefetchedCoaMap?: Map<string, { id: string; normal_balance: string }>;
+  // Re-posting after a reversal in the same batch (the old entry is still
+  // POSTED when this is prepared, so the duplicate guard must be skipped).
+  skipIdempotency?: boolean;
 }
 
 // ─── Task 3: Bounded in-memory CoA cache (5-minute TTL) ───────────────────────
@@ -103,23 +107,19 @@ export async function fetchCoaMapForCodes(
  */
 export async function fetchOpenFiscalPeriodId(db: any, entryDate: string): Promise<string | null> {
   const dateStr = entryDate || new Date().toISOString().split('T')[0];
-  let fp = await db
-    .prepare("SELECT id FROM fiscal_periods WHERE status = 'OPEN' AND ? BETWEEN start_date AND end_date LIMIT 1")
+  // A closed/locked period covering the date locks it, even if another
+  // (e.g. annual) period covering the same date is still open.
+  const { results: covering } = await db
+    .prepare("SELECT id, status, period_name FROM fiscal_periods WHERE ? BETWEEN start_date AND end_date ORDER BY start_date DESC")
     .bind(dateStr)
-    .first()
-    .catch(() => null);
+    .all();
+  const locked = (covering || []).find((p: any) => p.status !== 'OPEN');
+  if (locked) {
+    throw new ConflictError(`Fiscal period ${locked.period_name || locked.id} is ${locked.status}; postings dated ${dateStr} are not allowed.`);
+  }
+  if (covering?.length) return covering[0].id as string;
 
-  if (fp?.id) return fp.id as string;
-
-  // Fallback 1: Any open fiscal period
-  fp = await db
-    .prepare("SELECT id FROM fiscal_periods WHERE status = 'OPEN' ORDER BY start_date DESC LIMIT 1")
-    .first()
-    .catch(() => null);
-
-  if (fp?.id) return fp.id as string;
-
-  // Fallback 2: Auto-create annual period for the entry date's year
+  // No period covers the date: auto-create the annual period for that year
   const year = dateStr.split('-')[0] || String(new Date().getFullYear());
   const fpId = `fp-${year}-annual`;
   try {
@@ -152,24 +152,35 @@ export async function getAccountIdByCode(
  * fallback for opening stock or products with no receipt history.
  */
 export async function calculateOrderCogs(db: any, orderId: string): Promise<number> {
-  const { results: lines } = await db.prepare(`
-    SELECT sol.quantity, sol.product_id,
+  const { results } = await db.prepare(
+    'SELECT product_id, quantity FROM sales_order_lines WHERE sales_order_id = ?'
+  ).bind(orderId).all();
+  return calculateLinesCogs(db, results || []);
+}
+
+/** COGS for order lines that may not be saved yet (prepared before the batch). */
+export async function calculateLinesCogs(db: any, orderLines: Array<{ product_id: string; quantity: number }>): Promise<number> {
+  if (!orderLines.length) return 0;
+  const ids = Array.from(new Set(orderLines.map((l) => l.product_id)));
+  const { results: products } = await db.prepare(`
+    SELECT p.id,
            COALESCE((
              SELECT SUM(COALESCE(grl.line_total, grl.quantity_received * grl.unit_cost)) /
                     NULLIF(SUM(grl.quantity_received), 0)
              FROM goods_receipt_lines grl
              JOIN goods_receipts gr ON gr.id = grl.goods_receipt_id
-             WHERE grl.product_id = sol.product_id
+             WHERE grl.product_id = p.id
                AND COALESCE(gr.status, 'COMPLETED') != 'CANCELLED'
            ), p.cost_price, 0) AS cost_price,
            COALESCE(p.product_type, 'STANDARD') AS product_type
-    FROM sales_order_lines sol
-    JOIN products p ON p.id = sol.product_id
-    WHERE sol.sales_order_id = ?
-  `).bind(orderId).all().catch(() => ({ results: [] }));
+    FROM products p
+    WHERE p.id IN (${ids.map(() => '?').join(', ')})
+  `).bind(...ids).all();
+  const productMap = new Map<string, any>((products || []).map((p: any) => [p.id, p]));
+  const lines = orderLines.map((l) => ({ ...productMap.get(l.product_id), quantity: l.quantity, product_id: l.product_id }));
 
   let totalCogs = 0;
-  for (const line of (lines || []) as any[]) {
+  for (const line of lines as any[]) {
     const qty = Number(line.quantity || 0);
     if (line.product_type === 'GROUPED') {
       const { results: components } = await db.prepare(`
@@ -185,7 +196,7 @@ export async function calculateOrderCogs(db: any, orderId: string): Promise<numb
         FROM product_group_items pgi
         JOIN products cp ON cp.id = pgi.component_product_id
         WHERE pgi.parent_product_id = ?
-      `).bind(line.product_id).all().catch(() => ({ results: [] }));
+      `).bind(line.product_id).all();
 
       let groupUnitCost = 0;
       for (const comp of (components || []) as any[]) {
@@ -211,7 +222,7 @@ export async function prepareJournalEntryPosting(
   const db = c.env.DB;
 
   // ── Idempotency Check: Prevent duplicate postings ─────────────────────────
-  if (params.referenceType && params.referenceId && params.referenceType !== 'MANUAL') {
+  if (params.referenceType && params.referenceId && params.referenceType !== 'MANUAL' && !params.skipIdempotency) {
     const existing = await db.prepare(
       "SELECT id FROM journal_entries WHERE reference_type = ? AND reference_id = ? AND status = 'POSTED' LIMIT 1"
     ).bind(params.referenceType, params.referenceId).first().catch(() => null);
@@ -425,70 +436,30 @@ export async function createAndPostJournalEntry(
 
 
 /**
- * Journal Entry for Purchase Order Approval / Receipt
- * DR: Inventory Asset (1030)
- * CR: Accounts Payable (2010)
- */
-export async function postPurchaseApprovalJournalEntry(
-  c: any,
-  po: { id: string; po_number: string; branch_id?: string },
-  totalAmount: number,
-  userId?: string
-) {
-  return createAndPostJournalEntry(c, {
-    description: `Purchase Goods Received #${po.po_number}`,
-    referenceType: 'PURCHASE',
-    referenceId: po.id,
-    branchId: po.branch_id || null,
-    userId,
-    lines: [
-      { accountCode: '1030', debitAmount: totalAmount, creditAmount: 0 },
-      { accountCode: '2010', debitAmount: 0, creditAmount: totalAmount },
-    ],
-  });
-}
-
-/**
- * Journal Entry for Purchase Invoice Payment
- * DR: Accounts Payable (2010)
- * CR: Cash & Cash Equivalents (1010)
- */
-export async function postPurchasePaymentJournalEntry(
-  c: any,
-  payment: { id: string; amount: number; paymentDate?: string },
-  invoice: { id: string; invoice_number: string; branch_id?: string },
-  userId?: string
-) {
-  return createAndPostJournalEntry(c, {
-    description: `Payment to Supplier for Invoice #${invoice.invoice_number}`,
-    referenceType: 'PURCHASE',
-    referenceId: invoice.id,
-    entryDate: payment.paymentDate,
-    branchId: invoice.branch_id || null,
-    userId,
-    lines: [
-      { accountCode: '2010', debitAmount: payment.amount, creditAmount: 0 },
-      { accountCode: '1010', debitAmount: 0, creditAmount: payment.amount },
-    ],
-  });
-}
-
-/**
  * Journal Entry for Sale Order Completion / Invoice
  * DR: Accounts Receivable (1020)
  * CR: Sales Revenue (4010)
  * Optional COGS: DR COGS (5010), CR Inventory Asset (1030)
  */
-export async function postSaleJournalEntry(
+export async function postSaleJournalEntry(...args: Parameters<typeof saleJournalParams>) {
+  return createAndPostJournalEntry(args[0], saleJournalParams(...args));
+}
+
+/** Same as postSaleJournalEntry, but returns statements for the caller's batch. */
+export async function prepareSaleJournalEntry(...args: Parameters<typeof saleJournalParams>) {
+  return prepareJournalEntryPosting(args[0], saleJournalParams(...args));
+}
+
+function saleJournalParams(
   c: any,
-  order: { id: string; order_number: string; branch_id?: string },
+  order: { id: string; order_number: string; branch_id?: string | null },
   totalAmount: number,
   cogsAmount: number = 0,
-  userId?: string,
+  userId?: string | null,
   prefetchedFiscalPeriodId?: string | null,
   prefetchedCoaMap?: Map<string, { id: string; normal_balance: string }>,
   installationFee: number = 0
-) {
+): PostJournalParams {
   const installFee = Number(installationFee || 0);
   const totalReceivable = totalAmount + installFee;
 
@@ -507,7 +478,7 @@ export async function postSaleJournalEntry(
     lines.push({ accountCode: '1030', debitAmount: 0, creditAmount: cogsAmount });
   }
 
-  return createAndPostJournalEntry(c, {
+  return {
     description: `Sales Order Completed & Invoiced #${order.order_number}`,
     referenceType: 'SALE',
     referenceId: order.id,
@@ -516,57 +487,7 @@ export async function postSaleJournalEntry(
     prefetchedFiscalPeriodId,
     prefetchedCoaMap,
     lines,
-  });
-}
-
-/**
- * Journal Entry for Manufacturing Material Consumption
- * DR: Work in Progress (1070)
- * CR: Raw Materials Inventory Asset (1030)
- */
-export async function postManufacturingConsumptionJournalEntry(
-  c: any,
-  workOrder: { id: string; wo_number: string; warehouse_id?: string },
-  materialCost: number,
-  userId?: string
-) {
-  if (materialCost <= 0) return null;
-  return createAndPostJournalEntry(c, {
-    description: `Manufacturing Material Consumption for WO #${workOrder.wo_number}`,
-    referenceType: 'MANUFACTURING',
-    referenceId: workOrder.id,
-    branchId: null,
-    userId,
-    lines: [
-      { accountCode: '1070', debitAmount: materialCost, creditAmount: 0 },
-      { accountCode: '1030', debitAmount: 0, creditAmount: materialCost },
-    ],
-  });
-}
-
-/**
- * Journal Entry for Manufacturing Completion
- * DR: Finished Goods Inventory Asset (1030)
- * CR: Work in Progress (1070)
- */
-export async function postManufacturingCompletionJournalEntry(
-  c: any,
-  workOrder: { id: string; wo_number: string; warehouse_id?: string },
-  totalCost: number,
-  userId?: string
-) {
-  if (totalCost <= 0) return null;
-  return createAndPostJournalEntry(c, {
-    description: `Finished Goods Produced for WO #${workOrder.wo_number}`,
-    referenceType: 'MANUFACTURING',
-    referenceId: workOrder.id,
-    branchId: null,
-    userId,
-    lines: [
-      { accountCode: '1030', debitAmount: totalCost, creditAmount: 0 },
-      { accountCode: '1070', debitAmount: 0, creditAmount: totalCost },
-    ],
-  });
+  };
 }
 
 /**
@@ -600,16 +521,25 @@ export async function postInstallationPayoutJournalEntry(
  * DR: Cash & Cash Equivalents (1010)
  * CR: Accounts Receivable (1020)
  */
-export async function postCustomerPaymentJournalEntry(
+export async function postCustomerPaymentJournalEntry(...args: Parameters<typeof customerPaymentJournalParams>) {
+  return createAndPostJournalEntry(args[0], customerPaymentJournalParams(...args));
+}
+
+/** Same as postCustomerPaymentJournalEntry, but returns statements for the caller's batch. */
+export async function prepareCustomerPaymentJournalEntry(...args: Parameters<typeof customerPaymentJournalParams>) {
+  return prepareJournalEntryPosting(args[0], customerPaymentJournalParams(...args));
+}
+
+function customerPaymentJournalParams(
   c: any,
   payment: { id: string; amount: number; paymentDate?: string },
-  order: { id: string; order_number: string; branch_id?: string },
-  userId?: string,
+  order: { id: string; order_number: string; branch_id?: string | null },
+  userId?: string | null,
   prefetchedFiscalPeriodId?: string | null,
   prefetchedCoaMap?: Map<string, { id: string; normal_balance: string }>
-) {
+): PostJournalParams {
   const refId = (payment.id && payment.id !== order.id) ? payment.id : `${order.id}-pay`;
-  return createAndPostJournalEntry(c, {
+  return {
     description: `Customer Payment Received for Order #${order.order_number}`,
     referenceType: 'SALE',
     referenceId: refId,
@@ -622,7 +552,7 @@ export async function postCustomerPaymentJournalEntry(
       { accountCode: '1010', debitAmount: payment.amount, creditAmount: 0 },
       { accountCode: '1020', debitAmount: 0, creditAmount: payment.amount },
     ],
-  });
+  };
 }
 
 /**
@@ -630,16 +560,18 @@ export async function postCustomerPaymentJournalEntry(
  * DR: Expense Account (6010 / 6050)
  * CR: Cash & Cash Equivalents (1010)
  */
-export async function postExpenseJournalEntry(
+export async function prepareExpenseJournal(
   c: any,
-  expense: { id: string; title: string; amount: number; category: string; expense_date: string; branch_id?: string; payment_method?: string },
-  userId?: string
+  expense: { id: string; title: string; amount: number; category: string; expense_date: string; branch_id?: string | null; payment_method?: string | null },
+  userId?: string | null,
+  skipIdempotency = false
 ) {
-  const expenseCode = ['Rent', 'Salaries', 'Utilities', 'Maintenance'].includes(expense.category) ? '6010' : '6050';
+  const expenseCode = ['Rent', 'Salaries', 'Utilities', 'Maintenance'].includes(String(expense.category).trim()) ? '6010' : '6050';
   const method = String(expense.payment_method || 'CASH').toUpperCase();
   const payable = ['CREDIT', 'ON_ACCOUNT', 'UNPAID', 'PAYABLE'].includes(method);
 
-  return createAndPostJournalEntry(c, {
+  return prepareJournalEntryPosting(c, {
+    skipIdempotency,
     description: `Expense Paid: ${expense.title} (${expense.category})`,
     referenceType: 'EXPENSE',
     referenceId: expense.id,
@@ -658,7 +590,7 @@ export async function postExpenseJournalEntry(
  * Positive adjustment (stock increase): DR Inventory (1030), CR Inventory Gain (5030)
  * Negative adjustment (stock decrease): DR Inventory Loss (5020), CR Inventory (1030)
  */
-export async function postInventoryAdjustmentJournalEntry(
+export async function prepareInventoryAdjustmentJournalEntry(
   c: any,
   adjustment: {
     id: string;
@@ -670,10 +602,10 @@ export async function postInventoryAdjustmentJournalEntry(
   },
   userId?: string
 ) {
-  const estimatedCost = Number(adjustment.unitCost || 10) * adjustment.quantity;
+  const estimatedCost = Number(adjustment.unitCost || 0) * adjustment.quantity;
   const isIncrease = adjustment.direction === 'INCREASE';
 
-  return createAndPostJournalEntry(c, {
+  return prepareJournalEntryPosting(c, {
     description: `Inventory Adjustment (${adjustment.direction}) - Product #${adjustment.productId}`,
     referenceType: 'INVENTORY_ADJUSTMENT',
     referenceId: adjustment.id,
@@ -692,40 +624,48 @@ export async function postInventoryAdjustmentJournalEntry(
 }
 
 /**
- * Reverse a Journal Entry by ID (Non-destructive cancellation)
+ * Prepare the statements that reverse a posted journal entry (non-destructive):
+ * flag the original REVERSED (guarded, so a second reversal conflicts) and post
+ * a mirror entry with its own GL rows. Reports count both, which nets to zero.
+ * Run the result inside the same batch as the business change it belongs to.
  */
-export async function reverseJournalEntry(
+export async function prepareJournalReversal(
   c: any,
   journalEntryId: string,
   reason: string,
-  userId?: string
-) {
+  userId?: string | null
+): Promise<any[]> {
   const db = c.env.DB;
   const original = await db.prepare('SELECT * FROM journal_entries WHERE id = ?').bind(journalEntryId).first();
-  if (!original) return null;
+  if (!original) return [];
 
   const { results: lines } = await db.prepare(
-    'SELECT jel.*, coa.code as account_code FROM journal_entry_lines jel JOIN chart_of_accounts coa ON coa.id = jel.account_id WHERE jel.journal_entry_id = ?'
+    'SELECT jel.*, coa.code as account_code FROM journal_entry_lines jel JOIN chart_of_accounts coa ON coa.id = jel.account_id WHERE jel.journal_entry_id = ? ORDER BY jel.line_order'
   ).bind(journalEntryId).all();
 
-  if (!lines || !lines.length) return null;
+  if (!lines || !lines.length) return [];
 
-  const reverseLines: JournalLineInput[] = lines.map((l: any) => ({
-    accountCode: l.account_code,
-    debitAmount: l.credit_amount,
-    creditAmount: l.debit_amount,
-    description: `Reversal: ${l.description || original.description}`,
-    branchId: l.branch_id,
-  }));
-
-  return createAndPostJournalEntry(c, {
+  const reversal = await prepareJournalEntryPosting(c, {
     description: `REVERSAL of JE #${original.entry_number}: ${reason}`,
     referenceType: 'MANUAL',
-    referenceId: original.reference_id || original.id,
+    referenceId: original.id,
     branchId: original.branch_id,
     userId,
-    lines: reverseLines,
+    lines: lines.map((l: any) => ({
+      accountCode: l.account_code,
+      debitAmount: Number(l.credit_amount || 0),
+      creditAmount: Number(l.debit_amount || 0),
+      description: `Reversal: ${l.description || original.description}`,
+      branchId: l.branch_id,
+    })),
   });
+
+  return [
+    db.prepare("UPDATE journal_entries SET status = 'REVERSED', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'POSTED'")
+      .bind(journalEntryId)
+      .mustAffect(`Journal entry ${original.entry_number} has already been reversed.`),
+    ...reversal.statements,
+  ];
 }
 
 /**
@@ -777,10 +717,20 @@ export async function reconcileMissingSalesJournalEntries(c: any): Promise<numbe
 
       // 2. Customer Payment Journal Entry (for PAID status)
       if (order.status === 'PAID') {
+        // Payments are journaled under the payment id (invoice_payments /
+        // customer_payments), the invoice id (checkout) or `${order}-pay`
+        // (legacy). Any of them means the payment is already in the ledger.
         const payRefId = `${order.id}-pay`;
-        const existingPayJe = await db.prepare(
-          "SELECT id FROM journal_entries WHERE reference_type = 'SALE' AND reference_id = ? AND status = 'POSTED' LIMIT 1"
-        ).bind(payRefId).first().catch(() => null);
+        const existingPayJe = await db.prepare(`
+          SELECT je.id FROM journal_entries je
+          WHERE je.reference_type = 'SALE' AND je.status = 'POSTED' AND (
+            je.reference_id = ?
+            OR je.reference_id IN (SELECT i.id FROM invoices i WHERE i.sales_order_id = ?)
+            OR je.reference_id IN (SELECT ip.id FROM invoice_payments ip JOIN invoices i ON i.id = ip.invoice_id WHERE i.sales_order_id = ?)
+            OR je.reference_id IN (SELECT cp.id FROM customer_payments cp JOIN invoices i ON i.id = cp.invoice_id WHERE i.sales_order_id = ?)
+          )
+          LIMIT 1
+        `).bind(payRefId, order.id, order.id, order.id).first();
 
         if (!existingPayJe) {
           const invoice = await db.prepare(

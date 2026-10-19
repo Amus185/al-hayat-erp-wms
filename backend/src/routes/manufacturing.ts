@@ -2,10 +2,7 @@ import { Hono } from 'hono';
 import { Env, uuidv4 } from '../db';
 import { authMiddleware, requirePermissions } from '../middleware/auth';
 import { logAudit, createAuditLogStmt } from '../services/audit';
-import {
-  postManufacturingConsumptionJournalEntry,
-  postManufacturingCompletionJournalEntry,
-} from '../services/accounting-service';
+import { prepareJournalEntryPosting } from '../services/accounting-service';
 
 const manufacturing = new Hono<{ Bindings: Env; Variables: { jwtPayload: any } }>();
 
@@ -377,22 +374,43 @@ manufacturing.post('/work-orders/:id/start', requirePermissions(['manage_invento
     WHERE wom.work_order_id = ?
   `).bind(id).all();
 
-  const stmts: any[] = [];
+  // Claim the work order (a double-click start must not consume twice).
+  const stmts: any[] = [
+    c.env.DB.prepare("UPDATE work_orders SET status = 'IN_PROGRESS' WHERE id = ? AND status = ?")
+      .bind(id, wo.status).mustAffect('This work order was just started or changed. Please refresh.'),
+  ];
   let totalMaterialCost = 0;
 
-  // Validate stock and deduct
+  // Refuse to start without the raw materials: consuming stock that is not
+  // there would post material cost for goods that were never used.
+  const shortages: string[] = [];
+  for (const m of (materials || []) as any[]) {
+    const stock = await c.env.DB.prepare(`
+      SELECT COALESCE(SUM(quantity_on_hand), 0) AS qty FROM inventory_stock
+      WHERE product_id = ? AND warehouse_id = ? AND owner_type = 'WAREHOUSE'
+    `).bind(m.material_product_id, wo.warehouse_id).first() as any;
+    if (Number(stock?.qty || 0) < Number(m.planned_quantity)) {
+      shortages.push(`${m.material_product_id}: need ${m.planned_quantity}, available ${Number(stock?.qty || 0)}`);
+    }
+  }
+  if (shortages.length) {
+    return c.json({ message: 'Insufficient raw materials in the production warehouse.', details: shortages }, 400);
+  }
+
+  // Deduct
   for (const m of (materials || []) as any[]) {
     const qty = Number(m.planned_quantity);
     const unitCost = Number(m.unit_cost || m.cost_price || 0);
     totalMaterialCost += (qty * unitCost);
 
-    // Deduct raw materials from inventory stock in this warehouse
+    // Deduct raw materials from inventory stock in this warehouse (never below zero)
     stmts.push(c.env.DB.prepare(`
       UPDATE inventory_stock
-      SET quantity_on_hand = GREATEST(0, quantity_on_hand - ?),
+      SET quantity_on_hand = quantity_on_hand - ?,
           updated_at = CURRENT_TIMESTAMP
-      WHERE product_id = ? AND warehouse_id = ? AND owner_type = 'WAREHOUSE'
-    `).bind(qty, m.material_product_id, wo.warehouse_id));
+      WHERE product_id = ? AND warehouse_id = ? AND owner_type = 'WAREHOUSE' AND quantity_on_hand >= ?
+    `).bind(qty, m.material_product_id, wo.warehouse_id, qty)
+      .mustAffect('Raw material stock changed while starting the work order. Please refresh.'));
 
     // Record inventory transaction
     stmts.push(c.env.DB.prepare(`
@@ -422,10 +440,21 @@ manufacturing.post('/work-orders/:id/start', requirePermissions(['manage_invento
     WHERE work_order_id = ? AND sequence_order = 1
   `).bind(id));
 
-  await c.env.DB.batch(stmts);
+  // GL (DR 1070 WIP, CR 1030 Raw Materials) commits with the stock movement.
+  if (totalMaterialCost > 0) {
+    stmts.push(...(await prepareJournalEntryPosting(c, {
+      description: `Manufacturing Material Consumption for WO #${wo.wo_number}`,
+      referenceType: 'MANUFACTURING',
+      referenceId: wo.id,
+      userId,
+      lines: [
+        { accountCode: '1070', debitAmount: totalMaterialCost, creditAmount: 0 },
+        { accountCode: '1030', debitAmount: 0, creditAmount: totalMaterialCost },
+      ],
+    })).statements);
+  }
 
-  // Post Double-Entry GL Journal Entry (DR 1070 WIP, CR 1030 Raw Materials)
-  await postManufacturingConsumptionJournalEntry(c, { id: wo.id, wo_number: wo.wo_number, warehouse_id: wo.warehouse_id }, totalMaterialCost, userId).catch(() => {});
+  await c.env.DB.batch(stmts);
   await logAudit(c, 'WORK_ORDER_START', 'work_orders', id, { status: wo.status }, { status: 'IN_PROGRESS', totalMaterialCost });
 
   const updated = await c.env.DB.prepare('SELECT * FROM work_orders WHERE id = ?').bind(id).first();
@@ -491,15 +520,23 @@ manufacturing.post('/work-orders/:id/complete', requirePermissions(['manage_inve
   const wo = await c.env.DB.prepare('SELECT * FROM work_orders WHERE id = ?').bind(id).first() as any;
   if (!wo) return c.json({ message: 'Work order not found' }, 404);
   if (wo.status === 'COMPLETED') return c.json({ message: 'Work order is already completed' }, 400);
+  if (wo.status !== 'IN_PROGRESS') return c.json({ message: 'Start the work order (consume materials) before completing it.' }, 400);
 
   const completedQty = Number(body.completedQuantity || wo.target_quantity);
   const rejectedQty = Number(body.rejectedQuantity || 0);
+  if (!Number.isInteger(completedQty) || completedQty < 0 || !Number.isInteger(rejectedQty) || rejectedQty < 0) {
+    return c.json({ message: 'Completed and rejected quantities must be whole numbers of zero or more.' }, 400);
+  }
   const materialCost = Number(wo.material_cost || 0);
   const laborCost = Number(body.laborCost || wo.labor_cost || 0);
   const totalProductionCost = materialCost + laborCost;
   const unitProductionCost = completedQty > 0 ? (totalProductionCost / completedQty) : 0;
 
-  const stmts: any[] = [];
+  // Claim: a double-click complete must not add finished goods twice.
+  const stmts: any[] = [
+    c.env.DB.prepare("UPDATE work_orders SET status = 'COMPLETED' WHERE id = ? AND status = 'IN_PROGRESS'")
+      .bind(id).mustAffect('This work order was just completed or changed. Please refresh.'),
+  ];
 
   // Check if finished good exists in warehouse stock
   const existingStock = await c.env.DB.prepare(`
@@ -554,10 +591,24 @@ manufacturing.post('/work-orders/:id/complete', requirePermissions(['manage_inve
     WHERE id = ?
   `).bind(completedQty, rejectedQty, laborCost, totalProductionCost, id));
 
-  await c.env.DB.batch(stmts);
+  // GL (DR 1030 Finished Goods, CR 1070 WIP) for the material cost that start
+  // moved into WIP. Own reference key: sharing the consumption entry's key made
+  // the idempotency guard silently skip this posting. Labor is not yet
+  // journaled anywhere (no labor/payroll account) — see AUDIT_REPORT.
+  if (materialCost > 0) {
+    stmts.push(...(await prepareJournalEntryPosting(c, {
+      description: `Finished Goods Produced for WO #${wo.wo_number}`,
+      referenceType: 'MANUFACTURING',
+      referenceId: `${wo.id}:complete`,
+      userId,
+      lines: [
+        { accountCode: '1030', debitAmount: materialCost, creditAmount: 0 },
+        { accountCode: '1070', debitAmount: 0, creditAmount: materialCost },
+      ],
+    })).statements);
+  }
 
-  // Post Double-Entry GL Journal Entry (DR 1030 Finished Goods, CR 1070 WIP)
-  await postManufacturingCompletionJournalEntry(c, { id: wo.id, wo_number: wo.wo_number, warehouse_id: wo.warehouse_id }, totalProductionCost, userId).catch(() => {});
+  await c.env.DB.batch(stmts);
   await logAudit(c, 'WORK_ORDER_COMPLETE', 'work_orders', id, { status: wo.status }, { status: 'COMPLETED', completedQty, totalProductionCost });
 
   const updated = await c.env.DB.prepare('SELECT * FROM work_orders WHERE id = ?').bind(id).first();

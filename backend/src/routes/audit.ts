@@ -13,7 +13,7 @@ audit.use('/*', authMiddleware, async (c, next) => {
                     payload.permissions.includes('manage_inventory') ||
                     payload.permissions.includes('manage_sales') ||
                     payload.permissions.includes('manage_purchasing');
-  if (!hasAccess && payload.permissions.length > 0) {
+  if (!hasAccess) {
     return c.json({ message: 'Forbidden' }, 403);
   }
   await next();

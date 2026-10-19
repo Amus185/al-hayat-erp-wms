@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { Env, uuidv4 } from '../db';
 import { authMiddleware, requirePermissions, isAdminUser } from '../middleware/auth';
 import { createAuditLogStmt } from '../services/audit';
-import { postInventoryAdjustmentJournalEntry } from '../services/accounting-service';
+import { prepareInventoryAdjustmentJournalEntry } from '../services/accounting-service';
 
 const inventory = new Hono<{ Bindings: Env; Variables: { jwtPayload: any } }>();
 
@@ -163,22 +163,20 @@ inventory.post('/adjust', requirePermissions(['manage_inventory']), async (c) =>
   `).bind(txId, body.productId, transactionType, delta, ownerType, body.warehouseId || null, body.branchId || null, body.warehouseLocationId || null, body.notes || null, userId));
 
   stmts.push(createAuditLogStmt(c, 'INVENTORY_ADJUST', 'inventory_stock', txId, null, { productId: body.productId, quantity: body.quantity, direction: body.direction, ownerType, warehouseId: body.warehouseId, branchId: body.branchId, notes: body.notes }));
-  await c.env.DB.batch(stmts);
 
-  // Automatically post double-entry GL journal entry for Inventory Adjustment (Must succeed)
+  // GL entry commits with the stock change, valued at the product's actual cost
+  // (no invented fallback cost; a zero-cost product moves stock only).
   const prodInfo = await c.env.DB.prepare('SELECT cost_price FROM products WHERE id = ?').bind(body.productId).first();
-  await postInventoryAdjustmentJournalEntry(
-    c,
-    {
-      id: txId,
-      productId: body.productId,
-      quantity: body.quantity,
-      direction: body.direction,
-      unitCost: Number(prodInfo?.cost_price || 10),
-      branchId: body.branchId,
-    },
-    userId
-  );
+  const unitCost = Number(prodInfo?.cost_price || 0);
+  if (unitCost > 0) {
+    stmts.push(...(await prepareInventoryAdjustmentJournalEntry(
+      c,
+      { id: txId, productId: body.productId, quantity: body.quantity, direction: body.direction, unitCost, branchId: body.branchId },
+      userId
+    )).statements);
+  }
+
+  await c.env.DB.batch(stmts);
 
   const { results } = await c.env.DB.prepare('SELECT * FROM inventory_transactions WHERE id = ?').bind(txId).all();
   return c.json(results[0], 201);

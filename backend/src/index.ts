@@ -106,6 +106,9 @@ app.route('/api/v1/manufacturing', manufacturing);
 
 // Global Error Handler - Structured JSON Logging for Cloudflare Workers Observability
 app.onError((err, c) => {
+  if (err.name === 'ConflictError') {
+    return c.json({ message: err.message, status: 409 }, 409);
+  }
   const errorPayload = {
     level: 'error',
     timestamp: new Date().toISOString(),

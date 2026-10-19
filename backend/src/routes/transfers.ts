@@ -280,9 +280,13 @@ transfers.post('/:id/dispatch', requirePermissions(['manage_transfers']), async 
     return c.json({ message: 'Insufficient stock to dispatch transfer.', details: insufficientLines }, 400);
   }
 
-  const stmts: any[] = [];
+  // Claim the transfer first: a double-submitted dispatch rolls back (409).
+  const stmts: any[] = [
+    c.env.DB.prepare("UPDATE transfers SET status = 'DISPATCHED' WHERE id = ? AND status = ?")
+      .bind(id, transfer.status).mustAffect('This transfer was just dispatched or changed. Please refresh.'),
+  ];
 
-  // Deduct from source & record TRANSFER_OUT
+  // Deduct from source & record TRANSFER_OUT (never below zero)
   for (const line of lines as any[]) {
     const qty = Number(line.quantity_requested ?? line.quantity ?? 0);
 
@@ -292,12 +296,14 @@ transfers.post('/:id/dispatch', requirePermissions(['manage_transfers']), async 
       WHERE product_id = ? AND owner_type = ?
         AND warehouse_id IS NOT DISTINCT FROM ?
         AND branch_id IS NOT DISTINCT FROM ?
+        AND quantity_on_hand >= ?
     `).bind(
       qty, line.product_id,
       transfer.source_owner_type,
       transfer.source_warehouse_id || null,
-      transfer.source_branch_id || null
-    ));
+      transfer.source_branch_id || null,
+      qty
+    ).mustAffect('Insufficient stock at the source: it changed while dispatching. Please refresh.'));
 
     stmts.push(c.env.DB.prepare(`
       INSERT INTO inventory_transactions
@@ -360,7 +366,11 @@ transfers.post('/:id/receive', requirePermissions(['manage_transfers']), async (
     return c.json({ message: 'Transfer has no line items.' }, 400);
   }
 
-  const stmts: any[] = [];
+  // Claim the transfer first: a double-submitted receipt rolls back (409).
+  const stmts: any[] = [
+    c.env.DB.prepare("UPDATE transfers SET status = 'COMPLETED' WHERE id = ? AND status = 'DISPATCHED'")
+      .bind(id).mustAffect('This transfer was just received or changed. Please refresh.'),
+  ];
 
   for (const line of lines as any[]) {
     const qty = Number(line.quantity_dispatched ?? line.quantity_requested ?? line.quantity ?? 0);

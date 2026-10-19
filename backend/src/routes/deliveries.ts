@@ -269,6 +269,18 @@ deliveries.patch('/:id', requirePermissions(['manage_sales']), async (c) => {
   return c.json(updated);
 });
 
+// A delivery whose order was cancelled, or that is already cancelled or
+// delivered, must not move (completing it used to mark a cancelled order DELIVERED).
+async function deliveryBlockReason(db: any, delivery: any): Promise<string | null> {
+  if (delivery.status === 'CANCELLED') return 'This delivery is cancelled.';
+  if (delivery.status === 'DELIVERED') return 'This delivery is already completed.';
+  if (delivery.sales_order_id) {
+    const so = await db.prepare('SELECT status FROM sales_orders WHERE id = ?').bind(delivery.sales_order_id).first();
+    if (so?.status === 'CANCELLED') return 'The sales order for this delivery was cancelled.';
+  }
+  return null;
+}
+
 // ──────────────────────────────────────────────────────────────────────
 // DISPATCH DELIVERY
 // ──────────────────────────────────────────────────────────────────────
@@ -278,6 +290,8 @@ deliveries.post('/:id/dispatch', requirePermissions(['manage_sales']), async (c)
 
   const existing = await c.env.DB.prepare('SELECT * FROM deliveries WHERE id = ?').bind(id).first() as any;
   if (!existing) return c.json({ message: 'Delivery not found' }, 404);
+  const blocked = await deliveryBlockReason(c.env.DB, existing);
+  if (blocked) return c.json({ message: blocked }, 400);
 
   const driverName = body.driverName?.trim() || existing.driver_name;
   const vehiclePlate = body.vehiclePlate?.trim() || existing.vehicle_plate;
@@ -306,6 +320,8 @@ deliveries.post('/:id/complete', requirePermissions(['manage_sales']), async (c)
 
   const existing = await c.env.DB.prepare('SELECT * FROM deliveries WHERE id = ?').bind(id).first() as any;
   if (!existing) return c.json({ message: 'Delivery not found' }, 404);
+  const blocked = await deliveryBlockReason(c.env.DB, existing);
+  if (blocked) return c.json({ message: blocked }, 400);
 
   const recipientName = body.recipientSignatureName?.trim() || existing.customer_name;
   const deliveryNotes = body.notes?.trim() || existing.notes;
@@ -325,7 +341,7 @@ deliveries.post('/:id/complete', requirePermissions(['manage_sales']), async (c)
 
   if (existing.sales_order_id) {
     await c.env.DB.prepare(
-      "UPDATE sales_orders SET status = 'DELIVERED', updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+      "UPDATE sales_orders SET status = 'DELIVERED', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status != 'CANCELLED'"
     ).bind(existing.sales_order_id).run();
   }
 
@@ -356,6 +372,8 @@ deliveries.post('/:id/runs', requirePermissions(['manage_sales']), async (c) => 
 
   const existing = await c.env.DB.prepare('SELECT * FROM deliveries WHERE id = ?').bind(id).first() as any;
   if (!existing) return c.json({ message: 'Delivery not found' }, 404);
+  const blocked = await deliveryBlockReason(c.env.DB, existing);
+  if (blocked) return c.json({ message: blocked }, 400);
 
   const boxesDelivered = Math.max(1, Number(body.boxesDelivered || 1));
   const currentTotal = Math.max(1, Number(existing.total_boxes || 1));
@@ -403,7 +421,7 @@ deliveries.post('/:id/runs', requirePermissions(['manage_sales']), async (c) => 
 
   if (newStatus === 'DELIVERED' && existing.sales_order_id) {
     stmts.push(c.env.DB.prepare(
-      "UPDATE sales_orders SET status = 'DELIVERED', updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+      "UPDATE sales_orders SET status = 'DELIVERED', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status != 'CANCELLED'"
     ).bind(existing.sales_order_id));
   }
 

@@ -4,15 +4,15 @@ import { PgAdapter } from '../pg-client';
 import { authMiddleware, requirePermissions, isAdminUser } from '../middleware/auth';
 import { logAudit, createAuditLogStmt } from '../services/audit';
 import {
-  postSaleJournalEntry,
-  postCustomerPaymentJournalEntry,
+  prepareSaleJournalEntry,
+  prepareCustomerPaymentJournalEntry,
   fetchOpenFiscalPeriodId,
   fetchCoaMapForCodes,
   calculateOrderCogs,
+  calculateLinesCogs,
   postInstallationPayoutJournalEntry,
-  createAndPostJournalEntry,
   prepareJournalEntryPosting,
-  reverseJournalEntry,
+  prepareJournalReversal,
 } from '../services/accounting-service';
 
 const sales = new Hono<{ Bindings: Env; Variables: { jwtPayload: any } }>();
@@ -171,7 +171,20 @@ sales.delete('/customers/:id', requirePermissions(['manage_sales']), async (c) =
   const { id } = c.req.param();
   const existing = await c.env.DB.prepare('SELECT * FROM customers WHERE id = ?').bind(id).first();
   if (!existing) return c.json({ message: 'Customer not found.' }, 404);
-  await c.env.DB.prepare('DELETE FROM customers WHERE id = ?').bind(id).run();
+  // Debts and payments cascade-delete with the customer while their journal
+  // entries remain, so any financial history blocks deletion.
+  const history = await c.env.DB.prepare(`
+    SELECT EXISTS (SELECT 1 FROM sales_orders WHERE customer_id = ?)
+        OR EXISTS (SELECT 1 FROM customer_debts WHERE customer_id = ?)
+        OR EXISTS (SELECT 1 FROM customer_payments WHERE customer_id = ?) AS has_history
+  `).bind(id, id, id).first() as any;
+  if (history?.has_history) {
+    return c.json({ message: 'Cannot delete a customer with orders, charges or payments; their financial history must be kept.' }, 400);
+  }
+  await c.env.DB.batch([
+    c.env.DB.prepare('DELETE FROM customers WHERE id = ?').bind(id),
+    createAuditLogStmt(c, 'CUSTOMER_DELETE', 'customers', id, existing, null),
+  ]);
   return c.json({ success: true });
 });
 
@@ -392,33 +405,22 @@ sales.post('/customers/:id/debts', requirePermissions(['manage_sales']), async (
     category,
   }));
 
+  // GL: DR Accounts Receivable (1020), CR Sales/Service Revenue (4010) — same transaction as the debt.
+  const debtJournal = await prepareJournalEntryPosting(c, {
+    description: `Manual Charge #${debtNumber}: ${body.description.trim()}`,
+    referenceType: 'SALE',
+    referenceId: id,
+    entryDate: String(debtDate).split('T')[0],
+    branchId: body.branchId || null,
+    userId,
+    lines: [
+      { accountCode: '1020', debitAmount: amount, creditAmount: 0 },
+      { accountCode: '4010', debitAmount: 0, creditAmount: amount },
+    ],
+  });
+  stmts.push(...debtJournal.statements);
+
   await c.env.DB.batch(stmts);
-
-  // Post GL Journal Entry: DR Accounts Receivable (1020), CR Sales/Service Revenue (4010)
-  try {
-    const entryDate = debtDate.split('T')[0];
-    const [fpId, coaMap] = await Promise.all([
-      fetchOpenFiscalPeriodId(c.env.DB, entryDate),
-      fetchCoaMapForCodes(c.env.DB, ['1020', '4010']),
-    ]);
-
-    await createAndPostJournalEntry(c, {
-      description: `Manual Charge #${debtNumber}: ${body.description.trim()}`,
-      referenceType: 'SALE',
-      referenceId: id,
-      entryDate,
-      branchId: body.branchId || null,
-      userId,
-      prefetchedFiscalPeriodId: fpId,
-      prefetchedCoaMap: coaMap,
-      lines: [
-        { accountCode: '1020', debitAmount: amount, creditAmount: 0 },
-        { accountCode: '4010', debitAmount: 0, creditAmount: amount },
-      ],
-    });
-  } catch (glErr) {
-    console.warn('Non-fatal GL posting error on manual debt create:', glErr);
-  }
 
   const created = await c.env.DB.prepare('SELECT * FROM customer_debts WHERE id = ?').bind(id).first();
   return c.json(created, 201);
@@ -643,8 +645,23 @@ sales.post('/payments', requirePermissions(['manage_sales']), async (c) => {
     const curPaid = Number(paidRes?.paid || 0);
     const curBalance = Math.max(0, grossTotal - curPaid);
 
+    if (invoice.status === 'CANCELLED') return c.json({ message: 'Cannot record a payment against a cancelled invoice.' }, 400);
+    if (payAmount > curBalance + 0.001) {
+      return c.json({ message: `Payment of ${payAmount.toFixed(2)} exceeds the invoice balance of ${curBalance.toFixed(2)}.`, balance: curBalance }, 400);
+    }
+
     const newPaid = curPaid + payAmount;
     remainingItemBalance = Math.max(0, grossTotal - newPaid);
+
+    // Serialize concurrent payments on this invoice, then re-check the balance
+    // after the lock so a double-submit cannot overpay.
+    stmts.push(c.env.DB.prepare('SELECT id FROM invoices WHERE id = ? FOR UPDATE').bind(invoiceId));
+    stmts.push(c.env.DB.prepare(`
+      SELECT 1 FROM invoices i JOIN sales_orders so ON so.id = i.sales_order_id
+      WHERE i.id = ? AND i.status != 'CANCELLED'
+        AND (i.total_amount - COALESCE(i.discount_amount, 0) + COALESCE(so.installation_fee, 0))
+            - (SELECT COALESCE(SUM(amount), 0) FROM invoice_payments WHERE invoice_id = i.id) >= ? - 0.001
+    `).bind(invoiceId, payAmount).mustAffect('Payment exceeds the invoice balance (another payment was just recorded). Please refresh.'));
 
     const ipId = uuidv4();
     stmts.push(c.env.DB.prepare(`
@@ -677,12 +694,20 @@ sales.post('/payments', requirePermissions(['manage_sales']), async (c) => {
     billNumber = debt.debt_number;
 
     const curDebtBal = Number(debt.remaining_balance || 0);
+    if (debt.status === 'CANCELLED') return c.json({ message: 'Cannot pay a cancelled charge.' }, 400);
+    if (payAmount > curDebtBal + 0.001) {
+      return c.json({ message: `Payment of ${payAmount.toFixed(2)} exceeds the remaining charge of ${curDebtBal.toFixed(2)}.`, balance: curDebtBal }, 400);
+    }
     remainingItemBalance = Math.max(0, curDebtBal - payAmount);
-    const newStatus = remainingItemBalance <= 0 ? 'PAID' : 'PARTIALLY_PAID';
 
+    // Relative, guarded decrement: concurrent payments cannot overdraw the charge.
     stmts.push(c.env.DB.prepare(`
-      UPDATE customer_debts SET remaining_balance = ?, status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
-    `).bind(remainingItemBalance, newStatus, manualDebtId));
+      UPDATE customer_debts
+      SET remaining_balance = GREATEST(0, remaining_balance - ?),
+          status = CASE WHEN remaining_balance - ? <= 0.001 THEN 'PAID' ELSE 'PARTIALLY_PAID' END,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = ? AND status != 'CANCELLED' AND remaining_balance >= ? - 0.001
+    `).bind(payAmount, payAmount, manualDebtId, payAmount).mustAffect('Payment exceeds the remaining charge (another payment was just recorded). Please refresh.'));
 
     stmts.push(c.env.DB.prepare(`
       INSERT INTO customer_payments (id, receipt_number, customer_id, allocation_type, manual_debt_id, amount, payment_method, payment_date, previous_balance, remaining_balance, notes, recorded_by)
@@ -705,27 +730,16 @@ sales.post('/payments', requirePermissions(['manage_sales']), async (c) => {
     paymentMethod,
   }));
 
+  // GL: DR Cash, CR Accounts Receivable — committed with the payment itself.
+  const paymentJournal = await prepareCustomerPaymentJournalEntry(
+    c,
+    { id: paymentId, amount: payAmount, paymentDate: new Date().toISOString().split('T')[0] },
+    { id: customerId, order_number: billNumber || `CUST-${customerId.slice(0, 6)}` },
+    userId
+  );
+  stmts.push(...paymentJournal.statements);
+
   await c.env.DB.batch(stmts);
-
-  // Post GL Journal Entry for customer payment
-  try {
-    const entryDate = new Date().toISOString().split('T')[0];
-    const [fpId, coaMap] = await Promise.all([
-      fetchOpenFiscalPeriodId(c.env.DB, entryDate),
-      fetchCoaMapForCodes(c.env.DB, ['1010', '1020']),
-    ]);
-
-    await postCustomerPaymentJournalEntry(
-      c,
-      { id: paymentId, amount: payAmount, paymentDate: entryDate },
-      { id: customerId, order_number: billNumber || `CUST-${customerId.slice(0, 6)}` },
-      userId,
-      fpId,
-      coaMap
-    );
-  } catch (glErr) {
-    console.warn('Non-fatal GL posting error on customer payment:', glErr);
-  }
 
   const newRemainingBalance = Math.max(0, previousBalance - payAmount);
 
@@ -966,6 +980,52 @@ sales.get('/orders/:id', async (c) => {
   });
 });
 
+// Settle the remaining balance of an order's invoice (installation fee
+// included): payment row + its ledger entry + PAID statuses, in one batch.
+// The order status change is guarded on `fromStatus`, so a double-submit
+// rolls back instead of paying twice.
+async function prepareInvoiceSettlement(c: any, orderId: string, fromStatus: string, userId: string, note: string) {
+  const invoice = await c.env.DB.prepare(`
+    SELECT i.id, i.total_amount, i.discount_amount, so.order_number, so.branch_id, COALESCE(so.installation_fee, 0) AS installation_fee,
+           (SELECT COALESCE(SUM(amount), 0) FROM invoice_payments WHERE invoice_id = i.id) AS paid
+    FROM invoices i JOIN sales_orders so ON so.id = i.sales_order_id
+    WHERE i.sales_order_id = ? AND i.status != 'CANCELLED'
+  `).bind(orderId).first() as any;
+  if (!invoice) return null;
+
+  const due = Number(invoice.total_amount) - Number(invoice.discount_amount || 0) + Number(invoice.installation_fee || 0);
+  const remaining = Math.max(0, Math.round((due - Number(invoice.paid || 0)) * 100) / 100);
+  const statements: any[] = [
+    c.env.DB.prepare("UPDATE sales_orders SET status = 'PAID' WHERE id = ? AND status = ?").bind(orderId, fromStatus)
+      .mustAffect('This order is already being paid or was changed. Please refresh.'),
+    c.env.DB.prepare("UPDATE invoices SET status = 'PAID', paid_at = CURRENT_TIMESTAMP WHERE id = ?").bind(invoice.id),
+    createAuditLogStmt(c, 'SALES_ORDER_PAY', 'sales_orders', orderId, { status: fromStatus }, { status: 'PAID', invoiceId: invoice.id, amount: remaining }),
+  ];
+  if (remaining > 0) {
+    const paymentId = uuidv4();
+    statements.push(c.env.DB.prepare(`
+      INSERT INTO invoice_payments (id, invoice_id, amount, payment_method, payment_date, notes, recorded_by)
+      VALUES (?, ?, ?, 'CASH', CURRENT_TIMESTAMP, ?, ?)
+    `).bind(paymentId, invoice.id, remaining, note, userId));
+    const journal = await prepareCustomerPaymentJournalEntry(
+      c, { id: paymentId, amount: remaining },
+      { id: orderId, order_number: String(invoice.order_number || orderId), branch_id: invoice.branch_id }, userId,
+    );
+    statements.push(...journal.statements);
+  }
+  return { invoiceId: invoice.id as string, statements };
+}
+
+// Branch stock issue that cannot go negative: under concurrent sales of the
+// last units the second transaction matches no row and rolls back (409).
+function branchStockIssue(db: PgAdapter, productId: string, qty: number, branchId: string) {
+  return db.prepare(`
+    UPDATE inventory_stock SET quantity_on_hand = quantity_on_hand - ?, updated_at = CURRENT_TIMESTAMP
+    WHERE product_id = ? AND owner_type = 'BRANCH' AND branch_id = ? AND quantity_on_hand >= ?
+  `).bind(qty, productId, branchId, qty)
+    .mustAffect('Insufficient stock: these units were just sold or moved. Please refresh and try again.');
+}
+
 // ──────────────────────────────────────────────────────────────────────
 // Helper: Resolve sales lines to inventory requirements (standard vs grouped)
 // ──────────────────────────────────────────────────────────────────────
@@ -1176,10 +1236,7 @@ sales.post('/orders', requirePermissions(['manage_sales']), async (c) => {
   if (isCreditSale) {
     // 1. Deduct inventory immediately from physical stock (resolving components for grouped items)
     for (const req of invReqs) {
-      stmts.push(c.env.DB.prepare(`
-        UPDATE inventory_stock SET quantity_on_hand = quantity_on_hand - ?, updated_at = CURRENT_TIMESTAMP
-        WHERE product_id = ? AND owner_type = 'BRANCH' AND branch_id = ?
-      `).bind(req.quantity, req.productId, body.branchId));
+      stmts.push(branchStockIssue(c.env.DB, req.productId, req.quantity, body.branchId));
 
       stmts.push(c.env.DB.prepare(`
         INSERT INTO inventory_transactions (id, product_id, transaction_type, quantity, source_owner_type, source_branch_id, reference_type, reference_id, created_by)
@@ -1203,7 +1260,8 @@ sales.post('/orders', requirePermissions(['manage_sales']), async (c) => {
     `).bind(invoiceId, id));
 
     // 3. If upfront deposit made at checkout, record payment & unique receipt
-    if (deposit > 0 && body.customerId) {
+    //    (also for walk-in customers: the invoice status above already counts it)
+    if (deposit > 0) {
       receiptNumber = `RCP-${Date.now().toString().slice(-6)}-${Math.floor(100 + Math.random() * 900)}`;
       const paymentId = uuidv4();
 
@@ -1212,10 +1270,20 @@ sales.post('/orders', requirePermissions(['manage_sales']), async (c) => {
         VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, 'Upfront Deposit at Checkout', ?, ?, ?, ?)
       `).bind(uuidv4(), invoiceId, deposit, depositMethod, userId, receiptNumber, grandTotal, remaining));
 
-      stmts.push(c.env.DB.prepare(`
-        INSERT INTO customer_payments (id, receipt_number, customer_id, allocation_type, invoice_id, amount, payment_method, payment_date, previous_balance, remaining_balance, notes, recorded_by)
-        VALUES (?, ?, ?, 'INVOICE', ?, ?, ?, CURRENT_TIMESTAMP, ?, ?, 'Upfront Deposit at Checkout', ?)
-      `).bind(paymentId, receiptNumber, body.customerId, invoiceId, deposit, depositMethod, grandTotal, remaining, userId));
+      if (body.customerId) {
+        stmts.push(c.env.DB.prepare(`
+          INSERT INTO customer_payments (id, receipt_number, customer_id, allocation_type, invoice_id, amount, payment_method, payment_date, previous_balance, remaining_balance, notes, recorded_by)
+          VALUES (?, ?, ?, 'INVOICE', ?, ?, ?, CURRENT_TIMESTAMP, ?, ?, 'Upfront Deposit at Checkout', ?)
+        `).bind(paymentId, receiptNumber, body.customerId, invoiceId, deposit, depositMethod, grandTotal, remaining, userId));
+      }
+    }
+
+    // 4. Revenue/receivable/COGS and the deposit commit with the sale.
+    const orderRef = { id, order_number: orderNumber, branch_id: body.branchId };
+    const cogsAmount = await calculateLinesCogs(c.env.DB, body.lines.map((l: any) => ({ product_id: l.productId, quantity: l.quantity })));
+    stmts.push(...(await prepareSaleJournalEntry(c, orderRef, netTotal, cogsAmount, userId, undefined, undefined, installFee)).statements);
+    if (deposit > 0) {
+      stmts.push(...(await prepareCustomerPaymentJournalEntry(c, { id: invoiceId, amount: deposit }, orderRef, userId)).statements);
     }
   }
 
@@ -1230,42 +1298,6 @@ sales.post('/orders', requirePermissions(['manage_sales']), async (c) => {
   }));
 
   await c.env.DB.batch(stmts);
-
-  // Post double-entry GL journal entries for credit sale
-  if (isCreditSale) {
-    try {
-      const entryDate = new Date().toISOString().split('T')[0];
-      const [sharedFiscalPeriodId, sharedCoaMap] = await Promise.all([
-        fetchOpenFiscalPeriodId(c.env.DB, entryDate),
-        fetchCoaMapForCodes(c.env.DB, ['1010', '1020', '1030', '2050', '4010', '5010']),
-      ]);
-
-      const cogsAmount = await calculateOrderCogs(c.env.DB, id);
-      await postSaleJournalEntry(
-        c,
-        { id, order_number: orderNumber, branch_id: body.branchId },
-        netTotal,
-        cogsAmount,
-        userId,
-        sharedFiscalPeriodId || undefined,
-        sharedCoaMap,
-        installFee
-      );
-
-      if (deposit > 0) {
-        await postCustomerPaymentJournalEntry(
-          c,
-          { id: invoiceId, amount: deposit },
-          { id, order_number: orderNumber, branch_id: body.branchId },
-          userId,
-          sharedFiscalPeriodId,
-          sharedCoaMap
-        );
-      }
-    } catch (glErr) {
-      console.warn('Non-fatal GL posting error on credit sale order create:', glErr);
-    }
-  }
 
   const { results } = await c.env.DB.prepare('SELECT * FROM sales_orders WHERE id = ?').bind(id).all();
   return c.json({
@@ -1446,10 +1478,7 @@ sales.post('/orders/:id/invoice', requirePermissions(['manage_sales']), async (c
     for (const req of invReqs) {
       const qty = req.quantity;
 
-      stmts.push(c.env.DB.prepare(`
-        UPDATE inventory_stock SET quantity_on_hand = quantity_on_hand - ?, updated_at = CURRENT_TIMESTAMP
-        WHERE product_id = ? AND owner_type = 'BRANCH' AND branch_id = ?
-      `).bind(qty, req.productId, branchId));
+      stmts.push(branchStockIssue(c.env.DB, req.productId, qty, String(branchId)));
 
       stmts.push(c.env.DB.prepare(`
         INSERT INTO inventory_transactions (id, product_id, transaction_type, quantity, source_owner_type, source_branch_id, reference_type, reference_id, created_by)
@@ -1461,11 +1490,12 @@ sales.post('/orders/:id/invoice', requirePermissions(['manage_sales']), async (c
     stmts.push(c.env.DB.prepare("UPDATE sales_orders SET status = 'INVOICED' WHERE id = ?").bind(orderId));
     stmts.push(createAuditLogStmt(c, 'SALES_ORDER_INVOICE', 'sales_orders', orderId, { status: 'CONFIRMED' }, { status: 'INVOICED', invoiceId, total }));
 
-    await c.env.DB.batch(stmts);
-
-    // Auto-post double-entry journal to Accounting (Must succeed or entire order invoicing fails)
+    // Revenue, receivable (incl. installation fee) and COGS commit with the invoice.
     const cogsAmount = await calculateOrderCogs(c.env.DB, orderId as string);
-    await postSaleJournalEntry(c, { id: orderId, order_number: String((order as any)?.order_number || orderId), branch_id: branchId ? String(branchId) : undefined } as any, total, cogsAmount, userId);
+    const orderRef = { id: orderId as string, order_number: String((order as any)?.order_number || orderId), branch_id: branchId ? String(branchId) : null };
+    stmts.push(...(await prepareSaleJournalEntry(c, orderRef, total, cogsAmount, userId, undefined, undefined, installFee)).statements);
+
+    await c.env.DB.batch(stmts);
 
     const { results } = await c.env.DB.prepare('SELECT * FROM invoices WHERE id = ?').bind(invoiceId).all();
     return c.json(results[0], 201);
@@ -1476,6 +1506,7 @@ sales.post('/orders/:id/invoice', requirePermissions(['manage_sales']), async (c
       await c.env.DB.prepare("UPDATE sales_orders SET status = 'CONFIRMED' WHERE id = ?").bind(orderId).run();
     } catch (_) {}
     console.error('Invoice creation failed:', err);
+    if (err?.name === 'ConflictError') return c.json({ message: err.message }, 409);
     return c.json({ message: 'Invoice creation failed. Order rolled back to CONFIRMED.', error: err?.message }, 500);
   }
 });
@@ -1502,57 +1533,18 @@ sales.post('/orders/:id/pay', requirePermissions(['manage_sales']), async (c) =>
   }
 
   try {
-    // Check invoice exists and is unpaid
-    const invoice = await c.env.DB.prepare(
-      'SELECT id, status, total_amount, discount_amount FROM invoices WHERE sales_order_id = ?'
-    ).bind(orderId).first();
-    if (!invoice) {
+    const settle = await prepareInvoiceSettlement(c, orderId as string, 'PAYING', userId, 'Full payment via Mark as Paid');
+    if (!settle) {
       await c.env.DB.prepare("UPDATE sales_orders SET status = 'INVOICED' WHERE id = ?").bind(orderId).run();
       return c.json({ message: 'No invoice found for this order.' }, 400);
     }
-    if (invoice.status === 'PAID') {
-      await c.env.DB.prepare("UPDATE sales_orders SET status = 'PAID' WHERE id = ?").bind(orderId).run();
-      return c.json({ message: 'Invoice is already paid.' }, 409);
-    }
-
-    // Check if there's already a payment covering the full amount
-    const existingPaid = await c.env.DB.prepare(
-      'SELECT COALESCE(SUM(amount), 0) AS paid FROM invoice_payments WHERE invoice_id = ?'
-    ).bind(invoice.id).first();
-    const alreadyPaid = Number(existingPaid?.paid || 0);
-    const netTotal = Math.max(0, Number(invoice.total_amount) - Number(invoice.discount_amount || 0));
-    const remaining = Math.max(0, netTotal - alreadyPaid);
-
-    const stmts: any[] = [];
-
-    // Insert a payment record for the remaining balance if any
-    if (remaining > 0) {
-      stmts.push(c.env.DB.prepare(`
-        INSERT INTO invoice_payments (id, invoice_id, amount, payment_method, payment_date, notes, recorded_by)
-        VALUES (?, ?, ?, 'CASH', CURRENT_TIMESTAMP, 'Full payment via Mark as Paid', ?)
-      `).bind(uuidv4(), invoice.id, remaining, userId));
-    }
-
-    // Atomic payment
-    stmts.push(c.env.DB.prepare("UPDATE invoices SET status = 'PAID', paid_at = CURRENT_TIMESTAMP WHERE id = ?").bind(invoice.id));
-    stmts.push(c.env.DB.prepare("UPDATE sales_orders SET status = 'PAID' WHERE id = ?").bind(orderId));
-    stmts.push(createAuditLogStmt(c, 'SALES_ORDER_PAY', 'sales_orders', orderId, { status: 'INVOICED' }, { status: 'PAID', invoiceId: invoice.id }));
-    await c.env.DB.batch(stmts);
-
-    // Auto-post double-entry journal to Accounting (Must succeed or entire payment fails)
-    const orderRow = await c.env.DB.prepare('SELECT order_number, branch_id FROM sales_orders WHERE id = ?').bind(orderId).first() as any;
-    await postCustomerPaymentJournalEntry(
-      c,
-      { id: String((invoice as any).id || orderId), amount: remaining > 0 ? remaining : netTotal },
-      { id: orderId, order_number: String(orderRow?.order_number || orderId), branch_id: orderRow?.branch_id ? String(orderRow.branch_id) : undefined } as any,
-      userId
-    );
-
+    await c.env.DB.batch(settle.statements);
     return c.json({ success: true });
   } catch (err: any) {
     try {
       await c.env.DB.prepare("UPDATE sales_orders SET status = 'INVOICED' WHERE id = ?").bind(orderId).run();
     } catch (_) {}
+    if (err?.name === 'ConflictError') return c.json({ message: err.message }, 409);
     return c.json({ message: 'Payment processing failed. Order rolled back to INVOICED.', error: err?.message }, 500);
   }
 });
@@ -1580,24 +1572,10 @@ sales.post('/orders/:id/complete', requirePermissions(['manage_sales']), async (
       await c.env.DB.prepare("UPDATE sales_orders SET status = 'PAID' WHERE id = ?").bind(orderId).run();
       return c.json({ success: true, message: 'Payment recorded.' });
     }
-    const existingPaid = await c.env.DB.prepare(
-      'SELECT COALESCE(SUM(amount), 0) AS paid FROM invoice_payments WHERE invoice_id = ?'
-    ).bind(invoice.id).first();
-    const alreadyPaid = Number(existingPaid?.paid || 0);
-    const netTotal = Math.max(0, Number(invoice.total_amount) - Number(invoice.discount_amount || 0));
-    const remaining = Math.max(0, netTotal - alreadyPaid);
-    const stmts: any[] = [];
-    if (remaining > 0) {
-      stmts.push(c.env.DB.prepare(`
-        INSERT INTO invoice_payments (id, invoice_id, amount, payment_method, payment_date, notes, recorded_by)
-        VALUES (?, ?, ?, 'CASH', CURRENT_TIMESTAMP, 'Full payment via Complete Sale', ?)
-      `).bind(uuidv4(), invoice.id, remaining, userId));
-    }
-    stmts.push(c.env.DB.prepare("UPDATE invoices SET status = 'PAID', paid_at = CURRENT_TIMESTAMP WHERE id = ?").bind(invoice.id));
-    stmts.push(c.env.DB.prepare("UPDATE sales_orders SET status = 'PAID' WHERE id = ?").bind(orderId));
-    stmts.push(createAuditLogStmt(c, 'SALES_ORDER_COMPLETE', 'sales_orders', orderId, { status: 'INVOICED' }, { status: 'PAID', invoiceId: invoice.id }));
-    await c.env.DB.batch(stmts);
-    return c.json({ success: true, invoiceId: invoice.id });
+    const settle = await prepareInvoiceSettlement(c, orderId as string, 'INVOICED', userId, 'Full payment via Complete Sale');
+    if (!settle) return c.json({ message: 'Order is INVOICED but no invoice found.' }, 500);
+    await c.env.DB.batch(settle.statements);
+    return c.json({ success: true, invoiceId: settle.invoiceId });
   }
 
   // Order is DRAFT or CONFIRMED — need to invoice + pay
@@ -1753,10 +1731,7 @@ sales.post('/orders/:id/complete', requirePermissions(['manage_sales']), async (
     // Deduct inventory
     for (const req of invReqs) {
       const qty = req.quantity;
-      stmts.push(c.env.DB.prepare(`
-        UPDATE inventory_stock SET quantity_on_hand = quantity_on_hand - ?, updated_at = CURRENT_TIMESTAMP
-        WHERE product_id = ? AND owner_type = 'BRANCH' AND branch_id = ?
-      `).bind(qty, req.productId, branchId));
+      stmts.push(branchStockIssue(c.env.DB, req.productId, qty, String(branchId)));
 
       stmts.push(c.env.DB.prepare(`
         INSERT INTO inventory_transactions (id, product_id, transaction_type, quantity, source_owner_type, source_branch_id, reference_type, reference_id, created_by)
@@ -1825,6 +1800,7 @@ sales.post('/orders/:id/complete', requirePermissions(['manage_sales']), async (
       await c.env.DB.prepare("UPDATE sales_orders SET status = ? WHERE id = ?").bind(validSource, orderId).run();
     } catch (_) {}
     console.error('Order completion failed:', err);
+    if (err?.name === 'ConflictError') return c.json({ message: err.message }, 409);
     return c.json({ message: 'Order completion failed. Rolled back.', error: err?.message }, 500);
   }
 });
@@ -2157,33 +2133,42 @@ sales.post('/orders/:id/cancel', requirePermissions(['manage_sales']), async (c)
 
   const prevStatus = order.status;
   const branchId = order.branch_id;
-  const stmts: any[] = [];
+
+  // Claim the order first: a concurrent or repeated cancel matches no row and
+  // rolls back, so stock is never restored twice.
+  const stmts: any[] = [
+    c.env.DB.prepare(`
+      UPDATE sales_orders
+      SET status = 'CANCELLED', cancelled_by = ?, cancelled_at = CURRENT_TIMESTAMP, cancellation_reason = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ? AND status = ?
+    `).bind(userId, reason, orderId, prevStatus).mustAffect('This order was just changed or cancelled. Please refresh.'),
+  ];
 
   // Check if invoice exists
   const invoice = await c.env.DB.prepare('SELECT * FROM invoices WHERE sales_order_id = ?').bind(orderId).first() as any;
 
-  // If order was CONFIRMED, INVOICED, or has invoice (meaning inventory was deducted):
-  // We must restore warehouse/branch inventory!
-  if (prevStatus === 'CONFIRMED' || prevStatus === 'INVOICED' || prevStatus === 'PAID' || invoice) {
-    const { results: lines } = await c.env.DB.prepare(
-      'SELECT product_id, quantity FROM sales_order_lines WHERE sales_order_id = ?'
-    ).bind(orderId).all();
+  // Restore exactly what the sale issued, per the inventory ledger (this covers
+  // grouped-product components, and orders that never deducted stock restore nothing).
+  if (invoice) {
+    const { results: issued } = await c.env.DB.prepare(`
+      SELECT product_id, -SUM(quantity) AS qty FROM inventory_transactions
+      WHERE transaction_type = 'SALE_ISSUE' AND reference_id = ?
+      GROUP BY product_id
+    `).bind(invoice.id).all();
 
-    for (const line of (lines || []) as any[]) {
-      const qty = Number(line.quantity || 0);
+    for (const line of (issued || []) as any[]) {
+      const qty = Number(line.qty || 0);
       if (qty > 0) {
-        // Restore physical stock to warehouse/branch inventory
         stmts.push(c.env.DB.prepare(`
           UPDATE inventory_stock
           SET quantity_on_hand = quantity_on_hand + ?, updated_at = CURRENT_TIMESTAMP
           WHERE product_id = ? AND owner_type = 'BRANCH' AND branch_id = ?
-        `).bind(qty, line.product_id, branchId));
+        `).bind(qty, line.product_id, branchId).mustAffect('The branch stock record for a sold product no longer exists; cannot restore stock.'));
 
-        // Record restore inventory transaction
         stmts.push(c.env.DB.prepare(`
-          INSERT INTO inventory_transactions (id, product_id, transaction_type, quantity, dest_owner_type, dest_branch_id, reference_type, reference_id, notes, created_by)
-          VALUES (?, ?, 'SALE_CANCEL_RESTORE', ?, 'BRANCH', ?, 'ORDER_CANCEL', ?, ?, ?)
-        `).bind(uuidv4(), line.product_id, qty, branchId, orderId, `Restored from cancelled order #${order.order_number}`, userId));
+          INSERT INTO inventory_transactions (id, product_id, transaction_type, quantity, destination_owner_type, destination_branch_id, dest_owner_type, dest_branch_id, reference_type, reference_id, notes, created_by)
+          VALUES (?, ?, 'SALE_CANCEL_RESTORE', ?, 'BRANCH', ?, 'BRANCH', ?, 'ORDER_CANCEL', ?, ?, ?)
+        `).bind(uuidv4(), line.product_id, qty, branchId, branchId, orderId, `Restored from cancelled order #${order.order_number}`, userId));
       }
     }
   }
@@ -2197,34 +2182,25 @@ sales.post('/orders/:id/cancel', requirePermissions(['manage_sales']), async (c)
     `).bind(userId, invoice.id));
   }
 
-  // Update sales order status and audit fields
-  stmts.push(c.env.DB.prepare(`
-    UPDATE sales_orders
-    SET status = 'CANCELLED', cancelled_by = ?, cancelled_at = CURRENT_TIMESTAMP, cancellation_reason = ?, updated_at = CURRENT_TIMESTAMP
-    WHERE id = ?
-  `).bind(userId, reason, orderId));
-
   stmts.push(createAuditLogStmt(c, 'SALES_ORDER_CANCEL', 'sales_orders', orderId, { status: prevStatus }, {
     status: 'CANCELLED',
     reason,
     cancelledBy: userId,
   }));
 
-  await c.env.DB.batch(stmts);
-
-  // Reverse double-entry GL journal entries if any were posted
-  try {
-    const { results: jes } = await c.env.DB.prepare(`
-      SELECT id FROM journal_entries
-      WHERE reference_id = ? OR reference_id = ? OR reference_id LIKE ?
-    `).bind(orderId, invoice?.id || orderId, `${orderId}%`).all();
-
-    for (const je of (jes || []) as any[]) {
-      await reverseJournalEntry(c, je.id, `Reversal due to cancelled order #${order.order_number}: ${reason}`, userId);
-    }
-  } catch (revErr) {
-    console.warn('Non-fatal GL reversal error on order cancellation:', revErr);
+  // Reverse the order's posted journal entries in the same transaction.
+  // (Same selection as before; payments recorded later under their own
+  // payment ids are not reversed — see AUDIT_REPORT: refund policy.)
+  const { results: jes } = await c.env.DB.prepare(`
+    SELECT id FROM journal_entries
+    WHERE status = 'POSTED' AND reference_type != 'MANUAL'
+      AND (reference_id = ? OR reference_id = ? OR reference_id LIKE ?)
+  `).bind(orderId, invoice?.id || orderId, `${orderId}%`).all();
+  for (const je of (jes || []) as any[]) {
+    stmts.push(...await prepareJournalReversal(c, je.id, `Reversal due to cancelled order #${order.order_number}: ${reason}`, userId));
   }
+
+  await c.env.DB.batch(stmts);
 
   return c.json({
     success: true,
@@ -2249,16 +2225,14 @@ sales.delete('/orders/:id', requirePermissions(['manage_sales']), async (c) => {
     return c.json({ message: 'Access denied: order belongs to another branch.' }, 403);
   }
 
-  // Find invoice if any
+  // Invoiced orders carry posted revenue, stock issues and payments: deleting
+  // them would silently erase financial history. They must be cancelled.
   const invoice = await c.env.DB.prepare('SELECT id FROM invoices WHERE sales_order_id = ?').bind(id).first();
-  const invoiceId = invoice ? (invoice as any).id : null;
+  if (invoice) {
+    return c.json({ message: 'This order has an invoice and cannot be deleted. Cancel the order instead to reverse stock and accounting.' }, 400);
+  }
 
   const stmts = [];
-  if (invoiceId) {
-    stmts.push(c.env.DB.prepare('DELETE FROM invoice_payments WHERE invoice_id = ?').bind(invoiceId));
-    stmts.push(c.env.DB.prepare('DELETE FROM invoice_lines WHERE invoice_id = ?').bind(invoiceId));
-    stmts.push(c.env.DB.prepare('DELETE FROM invoices WHERE id = ?').bind(invoiceId));
-  }
   stmts.push(c.env.DB.prepare('DELETE FROM sales_order_lines WHERE sales_order_id = ?').bind(id));
   stmts.push(c.env.DB.prepare('DELETE FROM sales_orders WHERE id = ?').bind(id));
   stmts.push(createAuditLogStmt(c, 'SALES_ORDER_DELETE', 'sales_orders', id, order, null));

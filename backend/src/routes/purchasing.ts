@@ -560,11 +560,13 @@ purchasing.post('/receipts', requirePermissions(['manage_purchasing']), async (c
       `).bind(uuidv4(), line.productId, warehouseId, qty));
     }
 
+    // Guarded: a double-submitted receipt cannot push received past ordered.
     stmts.push(c.env.DB.prepare(`
       UPDATE purchase_order_lines
       SET quantity_received = COALESCE(quantity_received, 0) + ?
-      WHERE purchase_order_id = ? AND product_id = ?
-    `).bind(qty, body.purchaseOrderId, line.productId));
+      WHERE purchase_order_id = ? AND product_id = ? AND COALESCE(quantity_received, 0) + ? <= quantity
+    `).bind(qty, body.purchaseOrderId, line.productId, qty)
+      .mustAffect('These goods were just received by another request. Please refresh the purchase order.'));
   }
 
   // 3. Determine if all items across entire PO are fully received
@@ -686,6 +688,14 @@ purchasing.post('/invoices/:id/payments', requirePermissions(['manage_purchasing
   const isFullyPaid = Math.abs(amount - summary.balance) < 0.01;
 
   const stmts: any[] = [
+    // Serialize payments on this invoice, then re-check the balance after the
+    // lock so a double-submit cannot overpay the supplier.
+    c.env.DB.prepare('SELECT id FROM purchase_invoices WHERE id = ? FOR UPDATE').bind(realInvoiceId),
+    c.env.DB.prepare(`
+      SELECT 1 FROM purchase_invoices pi
+      WHERE pi.id = ? AND (pi.total_amount - COALESCE(pi.discount_amount, 0))
+        - (SELECT COALESCE(SUM(amount), 0) FROM purchase_invoice_payments WHERE purchase_invoice_id = pi.id) >= ? - 0.001
+    `).bind(realInvoiceId, amount).mustAffect('Payment exceeds the remaining balance (another payment was just recorded). Please refresh.'),
     c.env.DB.prepare(`
       INSERT INTO purchase_invoice_payments (id, purchase_invoice_id, amount, payment_method, payment_date, notes, recorded_by)
       VALUES (?, ?, ?, ?, ?, ?, ?)

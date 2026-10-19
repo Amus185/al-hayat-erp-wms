@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { Env } from '../db';
 import { authMiddleware, requirePermissions } from '../middleware/auth';
-import { reconcileMissingReceiptJournalEntries, reconcileMissingSalesJournalEntries } from '../services/accounting-service';
+import { prepareJournalReversal, reconcileMissingReceiptJournalEntries, reconcileMissingSalesJournalEntries } from '../services/accounting-service';
 
 const accounting = new Hono<{ Bindings: Env }>();
 
@@ -45,7 +45,7 @@ accounting.post('/fiscal-periods', requirePermissions(['manage_purchasing']), as
   }
 
   const id = generateId();
-  const userId = (c as any).get('userId') || null;
+  const userId = (c as any).get('jwtPayload')?.sub || null;
 
   // Write BOTH name and period_name — schema has period_name NOT NULL
   // and a separate nullable 'name' column was added via migration.
@@ -235,7 +235,7 @@ accounting.post('/journal-entries', requirePermissions(['manage_purchasing']), a
   const seq = (Number(countRes?.cnt || 0)) + 1;
   const entryNumber = generateEntryNumber(seq);
   const entryId = generateId();
-  const userId = (c as any).get('userId') || null;
+  const userId = (c as any).get('jwtPayload')?.sub || null;
 
   try {
     await c.env.DB.prepare(`
@@ -282,7 +282,7 @@ accounting.post('/journal-entries/:id/post', requirePermissions(['manage_purchas
   if (entry.status === 'POSTED') return c.json({ error: 'Entry is already posted' }, 409);
   if (entry.status === 'REVERSED') return c.json({ error: 'Reversed entries cannot be re-posted' }, 409);
 
-  const userId = (c as any).get('userId') || null;
+  const userId = (c as any).get('jwtPayload')?.sub || null;
   const now = new Date().toISOString();
 
   // Fetch lines to build general ledger
@@ -340,44 +340,13 @@ accounting.post('/journal-entries/:id/reverse', requirePermissions(['manage_purc
   if (entry.status === 'REVERSED') return c.json({ error: 'This entry has already been reversed. A reversal entry was created when it was first reversed.' }, 409);
   if (entry.status !== 'POSTED') return c.json({ error: `Cannot reverse an entry with status "${entry.status}". Only POSTED entries can be reversed.` }, 409);
 
-  const { results: lines } = await c.env.DB.prepare(
-    'SELECT * FROM journal_entry_lines WHERE journal_entry_id = ? ORDER BY line_order ASC'
-  ).bind(id).all() as { results: any[] };
+  const stmts = await prepareJournalReversal(c, id, entry.description, (c as any).get('jwtPayload')?.sub || null);
+  if (!stmts.length) return c.json({ error: 'Entry has no lines to reverse' }, 409);
+  await c.env.DB.batch(stmts);
 
-  const userId = (c as any).get('userId') || null;
-  const countRes = await c.env.DB.prepare('SELECT COUNT(*) AS cnt FROM journal_entries').first() as any;
-  const seq = (Number(countRes?.cnt || 0)) + 1;
-  const revEntryNumber = generateEntryNumber(seq);
-  const revId = generateId();
-  const today = new Date().toISOString().split('T')[0];
-
-  // Insert the reversal journal entry header (no 'notes' column — not in schema)
-  await c.env.DB.prepare(`
-    INSERT INTO journal_entries
-      (id, entry_number, fiscal_period_id, entry_date, description, reference_type, reference_id,
-       branch_id, status, total_debit, total_credit, created_by)
-    VALUES (?, ?, ?, ?, ?, 'MANUAL', ?, ?, 'POSTED', ?, ?, ?)
-  `).bind(revId, revEntryNumber, entry.fiscal_period_id || null, today,
-    `REVERSAL of ${entry.entry_number}: ${entry.description}`,
-    id, entry.branch_id || null, entry.total_credit, entry.total_debit, userId).run();
-
-  const lineStmts = (lines || []).map((line: any, idx: number) => {
-    const lineId = generateId();
-    return c.env.DB.prepare(`
-      INSERT INTO journal_entry_lines
-        (id, journal_entry_id, account_id, description, debit_amount, credit_amount, branch_id, line_order)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).bind(lineId, revId, line.account_id, `Reversal: ${line.description || ''}`,
-      line.credit_amount, line.debit_amount, line.branch_id || null, idx);
-  });
-
-  await c.env.DB.batch([
-    ...lineStmts,
-    c.env.DB.prepare("UPDATE journal_entries SET status = 'REVERSED', updated_at = ? WHERE id = ?")
-      .bind(new Date().toISOString(), id)
-  ]);
-
-  const rev = await c.env.DB.prepare('SELECT * FROM journal_entries WHERE id = ?').bind(revId).first();
+  const rev = await c.env.DB.prepare(
+    "SELECT * FROM journal_entries WHERE reference_type = 'MANUAL' AND reference_id = ? ORDER BY created_at DESC LIMIT 1"
+  ).bind(id).first();
   return c.json(rev, 201);
 });
 
@@ -422,7 +391,7 @@ accounting.get('/trial-balance', requirePermissions(['view_reports']), async (c)
   // For UNADJUSTED: exclude CLOSING entries
   // For ADJUSTED: include DEPRECIATION + ADJUSTING
   // For POST_CLOSING: only permanent accounts remain (assets, liabilities, equity)
-  let statusFilter = "je.status = 'POSTED'";
+  let statusFilter = "je.status IN ('POSTED', 'REVERSED')";
   let typeFilter = '';
 
   if (type === 'UNADJUSTED') {
@@ -506,7 +475,7 @@ accounting.get('/income-statement', requirePermissions(['view_reports']), async 
            COALESCE(SUM(CASE WHEN je.id IS NOT NULL THEN (jel.credit_amount - jel.debit_amount) ELSE 0 END), 0) AS amount
     FROM chart_of_accounts coa
     LEFT JOIN journal_entry_lines jel ON jel.account_id = coa.id
-    LEFT JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status = 'POSTED' ${periodFilter}
+    LEFT JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status IN ('POSTED', 'REVERSED') ${periodFilter}
     LEFT JOIN branches b ON b.id = jel.branch_id
     WHERE coa.account_type = 'REVENUE'
     GROUP BY coa.id, coa.name, coa.code, b.id, b.name
@@ -519,9 +488,9 @@ accounting.get('/income-statement', requirePermissions(['view_reports']), async 
            COALESCE(SUM(CASE WHEN je.id IS NOT NULL THEN (jel.debit_amount - jel.credit_amount) ELSE 0 END), 0) AS amount
     FROM chart_of_accounts coa
     LEFT JOIN journal_entry_lines jel ON jel.account_id = coa.id
-    LEFT JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status = 'POSTED' ${periodFilter}
+    LEFT JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status IN ('POSTED', 'REVERSED') ${periodFilter}
     LEFT JOIN branches b ON b.id = jel.branch_id
-    WHERE coa.account_type = 'COGS'
+    WHERE coa.account_type = 'COGS' OR (coa.account_type = 'EXPENSE' AND coa.code LIKE '5%')
     GROUP BY coa.id, coa.name, coa.code, b.id, b.name
     ORDER BY coa.code ASC
   `).bind(...params).all();
@@ -532,9 +501,9 @@ accounting.get('/income-statement', requirePermissions(['view_reports']), async 
            COALESCE(SUM(CASE WHEN je.id IS NOT NULL THEN (jel.debit_amount - jel.credit_amount) ELSE 0 END), 0) AS amount
     FROM chart_of_accounts coa
     LEFT JOIN journal_entry_lines jel ON jel.account_id = coa.id
-    LEFT JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status = 'POSTED' ${periodFilter}
+    LEFT JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status IN ('POSTED', 'REVERSED') ${periodFilter}
     LEFT JOIN branches b ON b.id = jel.branch_id
-    WHERE coa.account_type = 'EXPENSE'
+    WHERE coa.account_type = 'EXPENSE' AND coa.code NOT LIKE '5%'
     GROUP BY coa.id, coa.name, coa.code, b.id, b.name
     ORDER BY coa.code ASC
   `).bind(...params).all();
@@ -607,7 +576,7 @@ accounting.get('/balance-sheet', requirePermissions(['view_reports']), async (c)
            END AS balance
     FROM chart_of_accounts coa
     LEFT JOIN journal_entry_lines jel ON jel.account_id = coa.id
-    LEFT JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status = 'POSTED' ${asOfFilter}
+    LEFT JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status IN ('POSTED', 'REVERSED') ${asOfFilter}
     LEFT JOIN branches b ON b.id = jel.branch_id
     WHERE coa.account_type IN ('ASSET', 'LIABILITY', 'EQUITY') AND coa.is_active = 1
     GROUP BY coa.id, coa.code, coa.name, coa.account_type, coa.normal_balance, b.id, b.name
@@ -632,7 +601,7 @@ accounting.get('/balance-sheet', requirePermissions(['view_reports']), async (c)
         COALESCE(SUM(CASE WHEN coa.account_type IN ('COGS', 'EXPENSE') THEN (jel.debit_amount - jel.credit_amount) ELSE 0 END), 0) AS net_income
       FROM chart_of_accounts coa
       JOIN journal_entry_lines jel ON jel.account_id = coa.id
-      JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status = 'POSTED'
+      JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status IN ('POSTED', 'REVERSED')
         AND (je.fiscal_period_id = ? OR (je.entry_date >= ? AND je.entry_date <= ?))
       WHERE coa.account_type IN ('REVENUE', 'COGS', 'EXPENSE')
     `).bind(selectedPeriod.id, selectedPeriod.start_date, selectedPeriod.end_date).first() as any;
@@ -644,7 +613,7 @@ accounting.get('/balance-sheet', requirePermissions(['view_reports']), async (c)
         COALESCE(SUM(CASE WHEN coa.account_type IN ('COGS', 'EXPENSE') THEN (jel.debit_amount - jel.credit_amount) ELSE 0 END), 0) AS prior_net_income
       FROM chart_of_accounts coa
       JOIN journal_entry_lines jel ON jel.account_id = coa.id
-      JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status = 'POSTED'
+      JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status IN ('POSTED', 'REVERSED')
         AND je.entry_date < ?
         AND (je.fiscal_period_id IS NULL OR je.fiscal_period_id != ?)
       WHERE coa.account_type IN ('REVENUE', 'COGS', 'EXPENSE')
@@ -657,7 +626,7 @@ accounting.get('/balance-sheet', requirePermissions(['view_reports']), async (c)
         COALESCE(SUM(CASE WHEN coa.account_type IN ('COGS', 'EXPENSE') THEN (jel.debit_amount - jel.credit_amount) ELSE 0 END), 0) AS net_income
       FROM chart_of_accounts coa
       JOIN journal_entry_lines jel ON jel.account_id = coa.id
-      JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status = 'POSTED' AND je.fiscal_period_id = ?
+      JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status IN ('POSTED', 'REVERSED') AND je.fiscal_period_id = ?
       WHERE coa.account_type IN ('REVENUE', 'COGS', 'EXPENSE')
     `).bind(periodId).first() as any;
     currentPeriodNetIncome = Number(netIncomeRes?.net_income || 0);
@@ -668,7 +637,7 @@ accounting.get('/balance-sheet', requirePermissions(['view_reports']), async (c)
         COALESCE(SUM(CASE WHEN coa.account_type IN ('COGS', 'EXPENSE') THEN (jel.debit_amount - jel.credit_amount) ELSE 0 END), 0) AS net_income
       FROM chart_of_accounts coa
       JOIN journal_entry_lines jel ON jel.account_id = coa.id
-      JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status = 'POSTED'
+      JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status IN ('POSTED', 'REVERSED')
       WHERE coa.account_type IN ('REVENUE', 'COGS', 'EXPENSE')
     `).first() as any;
     currentPeriodNetIncome = Number(netIncomeRes?.net_income || 0);
@@ -755,7 +724,7 @@ accounting.get('/cash-flow', requirePermissions(['view_reports']), async (c) => 
       COALESCE(SUM(jel.debit_amount), 0) AS cash_in,
       COALESCE(SUM(jel.credit_amount), 0) AS cash_out
     FROM journal_entry_lines jel
-    JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status = 'POSTED' ${periodFilter}
+    JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status IN ('POSTED', 'REVERSED') ${periodFilter}
     WHERE jel.account_id = ?
     GROUP BY je.reference_type
   `).bind(...params, cashAcctId).all();
@@ -816,7 +785,7 @@ accounting.get('/owners-equity', requirePermissions(['view_reports']), async (c)
            END AS balance
     FROM chart_of_accounts coa
     LEFT JOIN journal_entry_lines jel ON jel.account_id = coa.id
-    LEFT JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status = 'POSTED' ${asOfFilter}
+    LEFT JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status IN ('POSTED', 'REVERSED') ${asOfFilter}
     WHERE coa.account_type IN ('EQUITY') AND coa.is_active = 1
     GROUP BY coa.id, coa.code, coa.name, coa.account_type, coa.normal_balance
     ORDER BY coa.code ASC
@@ -843,7 +812,7 @@ accounting.get('/owners-equity', requirePermissions(['view_reports']), async (c)
       COALESCE(SUM(CASE WHEN coa.account_type IN ('COGS', 'EXPENSE') THEN (jel.debit_amount - jel.credit_amount) ELSE 0 END), 0) AS net_income
     FROM chart_of_accounts coa
     JOIN journal_entry_lines jel ON jel.account_id = coa.id
-    JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status = 'POSTED' ${periodFilter}
+    JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status IN ('POSTED', 'REVERSED') ${periodFilter}
     WHERE coa.account_type IN ('REVENUE', 'COGS', 'EXPENSE')
   `).bind(...pParams).all();
 
@@ -904,7 +873,7 @@ accounting.post('/inventory-counts', requirePermissions(['manage_purchasing']), 
   }
 
   const id = generateId();
-  const userId = (c as any).get('userId') || null;
+  const userId = (c as any).get('jwtPayload')?.sub || null;
 
   await c.env.DB.prepare(`
     INSERT INTO inventory_period_counts
@@ -919,7 +888,7 @@ accounting.post('/inventory-counts', requirePermissions(['manage_purchasing']), 
 
 accounting.patch('/inventory-counts/:id/approve', requirePermissions(['manage_purchasing']), async (c) => {
   const { id } = c.req.param();
-  const userId = (c as any).get('userId') || null;
+  const userId = (c as any).get('jwtPayload')?.sub || null;
   await c.env.DB.prepare(`
     UPDATE inventory_period_counts SET status = 'APPROVED', approved_by = ? WHERE id = ?
   `).bind(userId, id).run();
@@ -967,7 +936,7 @@ accounting.post('/depreciation', requirePermissions(['manage_purchasing']), asyn
   }
 
   const id = generateId();
-  const userId = (c as any).get('userId') || null;
+  const userId = (c as any).get('jwtPayload')?.sub || null;
 
   await c.env.DB.prepare(`
     INSERT INTO depreciation_schedules
@@ -1024,7 +993,7 @@ accounting.post('/closing-entries', requirePermissions(['manage_purchasing']), a
   const period = await c.env.DB.prepare('SELECT * FROM fiscal_periods WHERE id = ?').bind(fiscal_period_id).first() as any;
   if (!period) return c.json({ error: 'Fiscal period not found' }, 404);
 
-  const userId = (c as any).get('userId') || null;
+  const userId = (c as any).get('jwtPayload')?.sub || null;
 
   // Pre-flight: verify required closing accounts exist in chart_of_accounts
   const [incomeSummaryAcc, retainedEarningsAcc] = await Promise.all([
@@ -1049,7 +1018,7 @@ accounting.post('/closing-entries', requirePermissions(['manage_purchasing']), a
     FROM chart_of_accounts coa
     JOIN journal_entry_lines jel ON jel.account_id = coa.id
     JOIN journal_entries je ON je.id = jel.journal_entry_id
-      AND je.status = 'POSTED' AND je.fiscal_period_id = ?
+      AND je.status IN ('POSTED', 'REVERSED') AND je.fiscal_period_id = ?
     WHERE coa.account_type = 'REVENUE' AND coa.is_active = 1
     GROUP BY coa.id, coa.code, coa.name
     HAVING COALESCE(SUM(jel.credit_amount - jel.debit_amount), 0) > 0
@@ -1061,7 +1030,7 @@ accounting.post('/closing-entries', requirePermissions(['manage_purchasing']), a
     FROM chart_of_accounts coa
     JOIN journal_entry_lines jel ON jel.account_id = coa.id
     JOIN journal_entries je ON je.id = jel.journal_entry_id
-      AND je.status = 'POSTED' AND je.fiscal_period_id = ?
+      AND je.status IN ('POSTED', 'REVERSED') AND je.fiscal_period_id = ?
     WHERE coa.account_type IN ('EXPENSE', 'COGS') AND coa.is_active = 1
     GROUP BY coa.id, coa.code, coa.name
     HAVING COALESCE(SUM(jel.debit_amount - jel.credit_amount), 0) > 0
@@ -1179,7 +1148,7 @@ accounting.get('/audit/transaction-flow', requirePermissions(['view_reports']), 
         FROM journal_entries je
         JOIN journal_entry_lines jel ON jel.journal_entry_id = je.id
         JOIN chart_of_accounts coa ON coa.id = jel.account_id
-        WHERE je.status = 'POSTED'
+        WHERE je.status IN ('POSTED', 'REVERSED')
           AND (coa.code IN ('1010', '1020', '1030', '4010', '5010') OR coa.account_type = 'EXPENSE')
       )
       SELECT je.id AS journal_entry_id, je.entry_number, je.entry_date, je.description,
@@ -1202,7 +1171,7 @@ accounting.get('/audit/transaction-flow', requirePermissions(['view_reports']), 
              END AS balance
       FROM chart_of_accounts coa
       LEFT JOIN journal_entry_lines jel ON jel.account_id = coa.id
-      LEFT JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status = 'POSTED'
+      LEFT JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status IN ('POSTED', 'REVERSED')
       WHERE coa.code IN ('1010', '1020', '1030', '4010', '5010') OR coa.account_type = 'EXPENSE'
       GROUP BY coa.id, coa.code, coa.name, coa.normal_balance
       ORDER BY coa.code
@@ -1268,9 +1237,7 @@ accounting.post('/reconcile-inventory-accounting', requirePermissions(['manage_p
 });
 
 accounting.get('/dashboard', requirePermissions(['view_reports']), async (c) => {
-  // Auto-reconcile any sales that completed before GL entries were created
-  await reconcileMissingSalesJournalEntries(c).catch(() => 0);
-
+  // Read-only: backfilling missing journals is an explicit action (POST /reconcile-journals).
   const rawPeriodId = c.req.query('period_id');
   const periodId = (rawPeriodId && rawPeriodId !== 'ALL' && rawPeriodId !== 'undefined') ? rawPeriodId : null;
   const params: any[] = [];
@@ -1282,12 +1249,12 @@ accounting.get('/dashboard', requirePermissions(['view_reports']), async (c) => 
 
   const [jeCount, postedCount, revenueRes, expenseRes, periods, accounts, opExpRes] = await Promise.all([
     c.env.DB.prepare(`SELECT COUNT(*) AS cnt FROM journal_entries WHERE 1=1 ${periodId ? 'AND (fiscal_period_id = ? OR fiscal_period_id IS NULL)' : ''}`).bind(...(periodId ? [periodId] : [])).first(),
-    c.env.DB.prepare(`SELECT COUNT(*) AS cnt FROM journal_entries WHERE status = 'POSTED' ${periodId ? 'AND (fiscal_period_id = ? OR fiscal_period_id IS NULL)' : ''}`).bind(...(periodId ? [periodId] : [])).first(),
+    c.env.DB.prepare(`SELECT COUNT(*) AS cnt FROM journal_entries WHERE status IN ('POSTED', 'REVERSED') ${periodId ? 'AND (fiscal_period_id = ? OR fiscal_period_id IS NULL)' : ''}`).bind(...(periodId ? [periodId] : [])).first(),
     c.env.DB.prepare(`
       SELECT COALESCE(SUM(jel.credit_amount - jel.debit_amount), 0) AS total
       FROM chart_of_accounts coa
       JOIN journal_entry_lines jel ON jel.account_id = coa.id
-      JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status = 'POSTED' ${pf}
+      JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status IN ('POSTED', 'REVERSED') ${pf}
       WHERE coa.account_type = 'REVENUE'
     `).bind(...params).first(),
     // COGS (account code 5xxx) — product cost from sales
@@ -1295,7 +1262,7 @@ accounting.get('/dashboard', requirePermissions(['view_reports']), async (c) => 
       SELECT COALESCE(SUM(jel.debit_amount - jel.credit_amount), 0) AS total
       FROM chart_of_accounts coa
       JOIN journal_entry_lines jel ON jel.account_id = coa.id
-      JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status = 'POSTED' ${pf}
+      JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status IN ('POSTED', 'REVERSED') ${pf}
       WHERE coa.account_type IN ('EXPENSE', 'COGS') AND (coa.code LIKE '5%')
     `).bind(...params).first(),
     c.env.DB.prepare('SELECT COUNT(*) AS cnt FROM fiscal_periods').first(),
@@ -1305,7 +1272,7 @@ accounting.get('/dashboard', requirePermissions(['view_reports']), async (c) => 
       SELECT COALESCE(SUM(jel.debit_amount - jel.credit_amount), 0) AS total
       FROM chart_of_accounts coa
       JOIN journal_entry_lines jel ON jel.account_id = coa.id
-      JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status = 'POSTED' ${pf}
+      JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status IN ('POSTED', 'REVERSED') ${pf}
       WHERE coa.account_type IN ('EXPENSE', 'COGS') AND (coa.code LIKE '6%')
     `).bind(...params).first(),
   ]);

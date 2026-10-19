@@ -285,15 +285,35 @@ products.post('/bulk', requirePermissions(['manage_inventory']), async (c) => {
     }
   }
 
+  // Existing SKUs: skip and report (previously counted as created, and with
+  // initial stock the stock insert hit a missing product and failed the import).
+  const batchSkus = items.map((i) => (i?.sku ? String(i.sku).trim() : '')).filter(Boolean);
+  const existingSkus = new Set<string>();
+  if (batchSkus.length > 0) {
+    const { results: skuRows } = await c.env.DB.prepare(
+      `SELECT sku FROM products WHERE sku IN (${batchSkus.map(() => '?').join(',')})`
+    ).bind(...batchSkus).all() as { results: any[] };
+    for (const row of skuRows || []) existingSkus.add(String(row.sku));
+  }
+
   const stmts: any[] = [];
   let createdCount = 0;
   const skipped: Array<{ sku: string; barcode: string | null; reason: string }> = [];
 
   for (const item of items) {
-    if (!item.sku || !item.name) continue;
+    if (!item?.sku || !item?.name) {
+      skipped.push({ sku: item?.sku ? String(item.sku) : '', barcode: item?.barcode ? String(item.barcode) : null, reason: 'SKU and name are required' });
+      continue;
+    }
     const sku = String(item.sku).trim();
     const name = String(item.name).trim();
     const barcode = item.barcode ? String(item.barcode).trim() : null;
+
+    if (existingSkus.has(sku)) {
+      skipped.push({ sku, barcode, reason: `SKU "${sku}" already exists (or appears more than once in this import)` });
+      continue;
+    }
+    existingSkus.add(sku);
 
     // Skip rows with duplicate barcodes
     if (barcode) {
@@ -345,7 +365,6 @@ products.post('/bulk', requirePermissions(['manage_inventory']), async (c) => {
     stmts.push(c.env.DB.prepare(`
       INSERT INTO products (id, sku, barcode, name, description, category_id, brand_id, cost_price, selling_price, reorder_level)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT (sku) DO NOTHING
     `).bind(
       productId, sku, barcode, name, item.description || null,
       categoryId, brandId, cost, sell, Number(item.reorderLevel || 5)
@@ -643,11 +662,21 @@ products.delete('/:id', requirePermissions(['manage_inventory']), async (c) => {
   const prod = await c.env.DB.prepare('SELECT * FROM products WHERE id = ?').bind(id).first();
   if (!prod) return c.json({ message: 'Product not found' }, 404);
 
-  // Atomically clean up draft/cancelled order lines, inventory transactions, and inventory_stock before deleting product
+  // Any stock or history (orders of any status, invoices, receipts, movements)
+  // must survive: deleting it would rewrite past invoices and stock ledgers.
+  const history = await c.env.DB.prepare(`
+    SELECT
+      (SELECT COALESCE(SUM(quantity_on_hand), 0) FROM inventory_stock WHERE product_id = ?) AS on_hand,
+      EXISTS (SELECT 1 FROM inventory_transactions WHERE product_id = ?)
+        OR EXISTS (SELECT 1 FROM sales_order_lines WHERE product_id = ?)
+        OR EXISTS (SELECT 1 FROM purchase_order_lines WHERE product_id = ?)
+        OR EXISTS (SELECT 1 FROM product_group_items WHERE component_product_id = ?) AS referenced
+  `).bind(id, id, id, id, id).first() as any;
+  if (Number(history?.on_hand || 0) !== 0 || history?.referenced) {
+    return c.json({ message: 'Cannot delete: this product has stock or transaction history. Deactivate it instead to keep past records intact.' }, 400);
+  }
+
   const batchStmts = [
-    c.env.DB.prepare('DELETE FROM sales_order_lines WHERE product_id = ?').bind(id),
-    c.env.DB.prepare('DELETE FROM purchase_order_lines WHERE product_id = ?').bind(id),
-    c.env.DB.prepare('DELETE FROM inventory_transactions WHERE product_id = ?').bind(id),
     c.env.DB.prepare('DELETE FROM inventory_stock WHERE product_id = ?').bind(id),
     c.env.DB.prepare('DELETE FROM products WHERE id = ?').bind(id),
     createAuditLogStmt(c, 'PRODUCT_DELETE', 'products', id, prod, null)
