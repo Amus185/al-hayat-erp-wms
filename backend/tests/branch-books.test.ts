@@ -43,6 +43,27 @@ test('stock entered with a new product is valued in the books, so selling it kee
   assert.deepEqual(moves.map((m: any) => m.transaction_type), ['OPENING_STOCK', 'SALE_ISSUE']);
 });
 
+test('opening stock split across locations (the product form) is capital, not an inventory gain', async () => {
+  const gain0 = await balance('5030'), capA0 = await balance('3010', A), capB0 = await balance('3010', B);
+  const res = await t.api('POST', '/products', {
+    sku: `FORM-${randomUUID().slice(0, 8)}`, name: 'Table', costPrice: 40, sellingPrice: 100,
+    initialStock: [{ ownerType: 'BRANCH', branchId: A, quantity: 10 }, { ownerType: 'BRANCH', branchId: B, quantity: 2 }],
+  });
+  assert.equal(res.status, 201, JSON.stringify(res.body));
+  assert.equal(await balance('5030'), gain0, 'opening stock was booked as an inventory gain (income)');
+  assert.equal(await balance('3010', A) - capA0, 400);
+  assert.equal(await balance('3010', B) - capB0, 80);
+  const stock = await t.q('SELECT branch_id, quantity_on_hand FROM inventory_stock WHERE product_id = $1 ORDER BY branch_id', [res.body.id]);
+  assert.deepEqual(stock.map((s: any) => [s.branch_id, Number(s.quantity_on_hand)]).sort(), [[A, 10], [B, 2]].sort());
+
+  const user = await t.createUser({ branchId: A, roleId: 'role-branch-user', role: 'branch_user' });
+  const other = await t.api('POST', '/products', {
+    sku: `FORM-${randomUUID().slice(0, 8)}`, name: 'Chair', costPrice: 5, sellingPrice: 9,
+    initialStock: [{ ownerType: 'BRANCH', branchId: B, quantity: 1 }],
+  }, user.token);
+  assert.notEqual(other.status, 201, 'a branch user added opening stock to another branch');
+});
+
 test('bulk-imported stock is valued per branch too', async () => {
   const before = await balance('1030', B);
   const res = await t.api('POST', '/products/bulk', [{ sku: `BULK-${randomUUID().slice(0, 6)}`, name: 'Chair', costPrice: 10, sellingPrice: 30, initialStock: 4, locationName: 'Al Hayat CL Branch' }]);

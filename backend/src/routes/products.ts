@@ -156,6 +156,33 @@ products.post('/', requirePermissions(['manage_inventory']), async (c) => {
   const productId = uuidv4();
   const stockId = uuidv4();
 
+  // Opening stock split across locations (the product form). Each line is
+  // opening stock in its own location — not a stock-count gain — so it is
+  // posted Dr Inventory / Cr Owner's Capital in the same transaction.
+  const openingLines: Array<{ ownerType: 'BRANCH' | 'WAREHOUSE'; warehouseId: string | null; branchId: string | null; quantity: number }> = [];
+  if (Array.isArray(body.initialStock) && body.initialStock.length > 0) {
+    if (productType !== 'STANDARD') return c.json({ message: 'Only standard products hold their own stock.' }, 400);
+    const pinnedBranch = payload && !isAdminUser(payload) && payload.branch_id ? payload.branch_id as string : null;
+    const merged = new Map<string, (typeof openingLines)[number]>();
+    for (const line of body.initialStock) {
+      const qty = Number(line?.quantity);
+      if (!Number.isFinite(qty) || qty <= 0) continue;
+      const lineType = line.ownerType === 'WAREHOUSE' ? 'WAREHOUSE' : 'BRANCH';
+      const locId = String((lineType === 'WAREHOUSE' ? line.warehouseId : line.branchId) || '');
+      if (!locId) return c.json({ message: 'Every opening stock line needs a location.' }, 400);
+      if (pinnedBranch && (lineType !== 'BRANCH' || locId !== pinnedBranch)) {
+        return c.json({ message: 'You can only add opening stock to your own branch.' }, 403);
+      }
+      const exists = await c.env.DB.prepare(`SELECT id FROM ${lineType === 'WAREHOUSE' ? 'warehouses' : 'branches'} WHERE id = ?`).bind(locId).first();
+      if (!exists) return c.json({ message: `Stock location ${locId} does not exist.` }, 400);
+      const key = `${lineType}:${locId}`;
+      const prev = merged.get(key);
+      if (prev) prev.quantity += qty;
+      else merged.set(key, { ownerType: lineType, warehouseId: lineType === 'WAREHOUSE' ? locId : null, branchId: lineType === 'BRANCH' ? locId : null, quantity: qty });
+    }
+    openingLines.push(...merged.values());
+  }
+
   const stmts = [];
 
   // 1. Insert product catalog entry
@@ -168,7 +195,15 @@ products.post('/', requirePermissions(['manage_inventory']), async (c) => {
   ));
 
   // 2. Insert initial inventory_stock entry (only for STANDARD products; grouped products draw stock from components)
-  if (productType === 'STANDARD') {
+  if (productType === 'STANDARD' && openingLines.length > 0) {
+    for (const line of openingLines) {
+      stmts.push(c.env.DB.prepare(`
+        INSERT INTO inventory_stock (id, product_id, owner_type, warehouse_id, branch_id, quantity_on_hand, quantity_reserved)
+        VALUES (?, ?, ?, ?, ?, ?, 0)
+      `).bind(uuidv4(), productId, line.ownerType, line.warehouseId, line.branchId, line.quantity));
+    }
+    stmts.push(...await prepareOpeningStock(c, openingLines.map((l) => ({ productId, unitCost: cost, ...l })), c.get('jwtPayload')?.sub || null));
+  } else if (productType === 'STANDARD') {
     stmts.push(c.env.DB.prepare(`
       INSERT INTO inventory_stock (id, product_id, owner_type, warehouse_id, branch_id, quantity_on_hand, quantity_reserved)
       VALUES (?, ?, ?, ?, ?, ?, 0)

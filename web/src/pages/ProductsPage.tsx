@@ -468,35 +468,21 @@ export function ProductsPage() {
     };
     if (newProduct.categoryId) payload.categoryId = newProduct.categoryId;
     if (newProduct.brandId) payload.brandId = newProduct.brandId;
+    // Opening stock per location is saved with the product, in one transaction,
+    // and valued in the books as opening stock (not as a stock-count gain).
+    if (newProduct.productType === 'STANDARD') {
+      payload.initialStock = initialStockLines
+        .filter(l => l.locationId && l.quantity > 0)
+        .map(l => ({
+          ownerType: l.ownerType,
+          quantity: l.quantity,
+          ...(l.ownerType === 'WAREHOUSE' ? { warehouseId: l.locationId } : { branchId: l.locationId }),
+        }));
+    }
 
     try {
       setSubmitting(true);
-      const created: any = await apiPost('/products', payload);
-
-      // Distribute initial stock across multiple locations (standard products only)
-      if (newProduct.productType === 'STANDARD') {
-        const validLines = initialStockLines.filter(l => l.locationId && l.quantity > 0);
-        if (validLines.length > 0) {
-          const stockResults = await Promise.allSettled(
-            validLines.map(line =>
-              apiPost('/inventory/adjust', {
-                productId: created.id,
-                direction: 'INCREASE',
-                quantity: line.quantity,
-                ownerType: line.ownerType,
-                ...(line.ownerType === 'WAREHOUSE'
-                  ? { warehouseId: line.locationId }
-                  : { branchId: line.locationId }),
-                notes: 'Initial stock on product creation',
-              })
-            )
-          );
-          const failed = stockResults.filter(r => r.status === 'rejected').length;
-          if (failed > 0) {
-            addToast('error', `Product created, but ${failed} stock location(s) failed — check Inventory manually.`);
-          }
-        }
-      }
+      await apiPost('/products', payload);
 
       addToast('success', 'Product created successfully');
       setIsCreateOpen(false);

@@ -318,7 +318,7 @@ export function ExpensesPage() {
                 <div>
                   <label style={{ display: 'block', fontSize: '13px', fontWeight: 500, color: '#374151', marginBottom: '4px' }}>Branch</label>
                   <select value={form.branch_id} onChange={e => setForm(p => ({ ...p, branch_id: e.target.value }))} style={{ width: '100%', padding: '10px 12px', border: '1px solid #e5e7eb', borderRadius: '8px', fontSize: '14px', background: '#fff', boxSizing: 'border-box' }}>
-                    <option value="">HQ / No Branch</option>
+                    <option value="">No branch (company-level)</option>
                     {branches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
                   </select>
                 </div>
