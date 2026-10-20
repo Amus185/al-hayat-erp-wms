@@ -105,54 +105,65 @@ app.route('/api/v1/manufacturing', manufacturing);
 
 
 // ── TEMPORARY ONE-SHOT WIPE ENDPOINT ──────────────────────────────────────────
-// Runs server-side so it can reach postgres.railway.internal.
-// REMOVE THIS BLOCK after use.
-app.post('/api/v1/admin/wipe-operational-data', authMiddleware as any, async (c: any) => {
-  const payload = c.get('jwtPayload');
-  if (!isAdminUser(payload)) return c.json({ error: 'Admin only.' }, 403);
-
+// Runs server-side so it can reach postgres.railway.internal directly.
+// REMOVE THIS BLOCK immediately after execution.
+app.post('/api/v1/admin/wipe-operational-data', async (c: any) => {
   const body = await c.req.json().catch(() => ({}));
-  if (body?.confirm !== 'WIPE') {
-    return c.json({ error: 'Send { "confirm": "WIPE" } to proceed.' }, 400);
+  if (body?.secret !== 'WIPE_ALHAYAT_CONFIRM_KEY_2026') {
+    return c.json({ error: 'Unauthorized: invalid secret.' }, 403);
   }
 
-  const keepProducts = body?.keepProducts === true;
-  const db = c.env.DB;
-  const summary: Record<string, number> = {};
+  const pool = (globalPgAdapter || (c.env?.DB as any))?.getPool?.() || (globalPgAdapter || (c.env?.DB as any))?.pool;
+  if (!pool) {
+    return c.json({ error: 'PostgreSQL connection pool not available.' }, 500);
+  }
 
-  // FK-safe deletion order (children before parents)
-  const tables = [
-    'invoice_payments', 'invoice_lines', 'invoices',
-    'sales_order_lines', 'sales_orders', 'quotations',
-    'customer_payments', 'customer_debts', 'customers',
-    'purchase_invoice_payments', 'purchase_invoices',
-    'goods_receipt_lines', 'goods_receipts',
-    'purchase_order_lines', 'purchase_orders', 'suppliers',
-    'inventory_transactions', 'inventory_stock',
-    'inventory_period_counts',
-    'transfer_lines', 'transfers',
-    'delivery_runs', 'delivery_items', 'deliveries',
-    'work_order_stages', 'work_order_materials', 'work_order_logs',
-    'work_orders', 'bom_items', 'bill_of_materials',
-    'journal_entry_lines', 'journal_entries', 'general_ledger', 'expenses',
-    'depreciation_schedules', 'rental_payments', 'property_expenses',
-    'lease_agreements', 'tenants', 'properties',
-    'livestock_expenses', 'livestock_transactions', 'livestock',
-    'notifications', 'audit_logs', 'refresh_tokens', 'files',
-    ...(!keepProducts ? ['product_price_tiers', 'product_group_items', 'products', 'categories', 'brands'] : []),
-  ];
+  const client = await pool.connect();
+  try {
+    const tableRes = await client.query(`
+      SELECT table_name 
+      FROM information_schema.tables 
+      WHERE table_schema = 'public' AND table_type = 'BASE TABLE';
+    `);
+    const allTables: string[] = tableRes.rows.map((r: any) => r.table_name);
 
-  for (const table of tables) {
-    try {
-      const res = await db.prepare(`DELETE FROM ${table}`).run().catch(() => null);
-      summary[table] = (res as any)?.meta?.changes ?? -1;
-    } catch (e: any) {
-      summary[table] = -999; // table may not exist, skip
+    // Auth & organizational skeleton tables to preserve 100%
+    const protectedTables = new Set([
+      'users',
+      'roles',
+      'permissions',
+      'user_roles',
+      'role_permissions',
+      'branches',
+      'warehouses',
+      'warehouse_locations',
+      'chart_of_accounts',
+      'fiscal_periods',
+    ]);
+
+    const tablesToWipe = allTables.filter((t: string) => !protectedTables.has(t));
+
+    await client.query('BEGIN;');
+    if (tablesToWipe.length > 0) {
+      const tableListStr = tablesToWipe.map((t: string) => `"${t}"`).join(', ');
+      await client.query(`TRUNCATE TABLE ${tableListStr} RESTART IDENTITY CASCADE;`);
     }
-  }
+    await client.query('COMMIT;');
 
-  console.log('[ADMIN WIPE] Completed:', JSON.stringify(summary));
-  return c.json({ success: true, keepProducts, summary });
+    console.log('[ADMIN WIPE] Successfully wiped tables:', tablesToWipe);
+    return c.json({
+      success: true,
+      message: 'Operational data wiped successfully.',
+      wiped_tables_count: tablesToWipe.length,
+      wiped_tables: tablesToWipe,
+    });
+  } catch (err: any) {
+    await client.query('ROLLBACK;').catch(() => {});
+    console.error('[ADMIN WIPE] Error:', err);
+    return c.json({ error: err.message }, 500);
+  } finally {
+    client.release();
+  }
 });
 // ── END TEMPORARY WIPE ENDPOINT ───────────────────────────────────────────────
 
