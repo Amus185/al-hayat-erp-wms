@@ -44,7 +44,7 @@ for (const p of envPaths) {
 }
 
 const { Client } = pg;
-const DATABASE_URL = process.env.DATABASE_URL || process.env.POSTGRES_URL || process.env.PG_URL;
+const DATABASE_URL = process.env.DATABASE_PUBLIC_URL || process.env.DATABASE_URL || process.env.POSTGRES_URL || process.env.PG_URL;
 
 const args = process.argv.slice(2);
 const IS_DRY_RUN = args.includes('--dry-run');

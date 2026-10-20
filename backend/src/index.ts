@@ -24,6 +24,7 @@ import manufacturing from './routes/manufacturing';
 
 import { PgAdapter } from './pg-client';
 import { ensurePostgresInit } from './init-postgres';
+import { authMiddleware, isAdminUser } from './middleware/auth';
 
 const app = new Hono();
 
@@ -103,6 +104,57 @@ app.route('/api/v1/deliveries', deliveries);
 app.route('/api/v1/manufacturing', manufacturing);
 
 
+// ── TEMPORARY ONE-SHOT WIPE ENDPOINT ──────────────────────────────────────────
+// Runs server-side so it can reach postgres.railway.internal.
+// REMOVE THIS BLOCK after use.
+app.post('/api/v1/admin/wipe-operational-data', authMiddleware as any, async (c: any) => {
+  const payload = c.get('jwtPayload');
+  if (!isAdminUser(payload)) return c.json({ error: 'Admin only.' }, 403);
+
+  const body = await c.req.json().catch(() => ({}));
+  if (body?.confirm !== 'WIPE') {
+    return c.json({ error: 'Send { "confirm": "WIPE" } to proceed.' }, 400);
+  }
+
+  const keepProducts = body?.keepProducts === true;
+  const db = c.env.DB;
+  const summary: Record<string, number> = {};
+
+  // FK-safe deletion order (children before parents)
+  const tables = [
+    'invoice_payments', 'invoice_lines', 'invoices',
+    'sales_order_lines', 'sales_orders', 'quotations',
+    'customer_payments', 'customer_debts', 'customers',
+    'purchase_invoice_payments', 'purchase_invoices',
+    'goods_receipt_lines', 'goods_receipts',
+    'purchase_order_lines', 'purchase_orders', 'suppliers',
+    'inventory_transactions', 'inventory_stock',
+    'inventory_period_counts',
+    'transfer_lines', 'transfers',
+    'delivery_runs', 'delivery_items', 'deliveries',
+    'work_order_stages', 'work_order_materials', 'work_order_logs',
+    'work_orders', 'bom_items', 'bill_of_materials',
+    'journal_entry_lines', 'journal_entries', 'general_ledger', 'expenses',
+    'depreciation_schedules', 'rental_payments', 'property_expenses',
+    'lease_agreements', 'tenants', 'properties',
+    'livestock_expenses', 'livestock_transactions', 'livestock',
+    'notifications', 'audit_logs', 'refresh_tokens', 'files',
+    ...(!keepProducts ? ['product_price_tiers', 'product_group_items', 'products', 'categories', 'brands'] : []),
+  ];
+
+  for (const table of tables) {
+    try {
+      const res = await db.prepare(`DELETE FROM ${table}`).run().catch(() => null);
+      summary[table] = (res as any)?.meta?.changes ?? -1;
+    } catch (e: any) {
+      summary[table] = -999; // table may not exist, skip
+    }
+  }
+
+  console.log('[ADMIN WIPE] Completed:', JSON.stringify(summary));
+  return c.json({ success: true, keepProducts, summary });
+});
+// ── END TEMPORARY WIPE ENDPOINT ───────────────────────────────────────────────
 
 // Global Error Handler - Structured JSON Logging for Cloudflare Workers Observability
 app.onError((err, c) => {
