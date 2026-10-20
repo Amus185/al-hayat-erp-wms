@@ -458,7 +458,7 @@ accounting.get('/trial-balance', requirePermissions(['view_reports']), async (c)
     JOIN journal_entry_lines jel ON jel.journal_entry_id = je.id
     JOIN chart_of_accounts coa ON coa.id = jel.account_id
     WHERE ${statusFilter} ${typeFilter} ${periodFilter} ${branchSql(scope, 'jel.branch_id')}
-      AND coa.is_active = 1
+      
     GROUP BY coa.id, coa.code, coa.name, coa.account_type, coa.normal_balance
     HAVING SUM(jel.debit_amount) > 0 OR SUM(jel.credit_amount) > 0
     ORDER BY coa.code ASC
@@ -610,7 +610,7 @@ accounting.get('/balance-sheet', requirePermissions(['view_reports']), async (c)
     FROM chart_of_accounts coa
     LEFT JOIN journal_entry_lines jel ON jel.account_id = coa.id ${bf}
     LEFT JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status IN ('POSTED', 'REVERSED') ${asOfFilter}
-    WHERE coa.account_type IN ('ASSET', 'LIABILITY', 'EQUITY') AND coa.is_active = 1
+    WHERE coa.account_type IN ('ASSET', 'LIABILITY', 'EQUITY') AND (coa.is_active = 1 OR EXISTS (SELECT 1 FROM journal_entry_lines x WHERE x.account_id = coa.id))
     GROUP BY coa.id, coa.code, coa.name, coa.account_type, coa.normal_balance
     ORDER BY coa.code ASC
   `).bind(...asOfParams).all();
@@ -720,6 +720,23 @@ accounting.get('/balance-sheet', requirePermissions(['view_reports']), async (c)
     });
   }
 
+  // Negative cash is not an asset: present it as an overdraft liability
+  // (totals still balance) and flag it, instead of showing negative assets.
+  const warnings: string[] = [];
+  const cashRow: any = assets.find((a: any) => a.code === '1010');
+  if (cashRow && Number(cashRow.balance) < -0.005) {
+    const overdraft = -Number(cashRow.balance);
+    cashRow.balance = 0;
+    liabilities.push({ id: 'cash-overdraft', code: 'OVERDRAFT', account_name: 'Cash overdraft (payments exceed recorded cash)', account_type: 'LIABILITY', normal_balance: 'CREDIT', total_debit: 0, total_credit: overdraft, balance: overdraft } as any);
+    warnings.push(`Cash is negative by ${overdraft.toFixed(2)}: more cash was paid out than was recorded coming in. Record opening cash / owner funding (Accounting → Opening Balances) or enter the missing receipts.`);
+  }
+  const tbCheck = await c.env.DB.prepare(`
+    SELECT COALESCE(SUM(jel.debit_amount), 0) AS d, COALESCE(SUM(jel.credit_amount), 0) AS cr
+    FROM journal_entry_lines jel
+    JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status IN ('POSTED', 'REVERSED') ${asOfFilter}
+    WHERE 1=1 ${bf}
+  `).bind(...asOfParams).first() as any;
+
   const totalAssets = assets.reduce((s: number, r: any) => s + Number(r.balance), 0);
   const totalLiabilities = liabilities.reduce((s: number, r: any) => s + Number(r.balance), 0);
   const totalEquity = equityList.reduce((s: number, r: any) => s + Number(r.balance), 0);
@@ -734,8 +751,16 @@ accounting.get('/balance-sheet', requirePermissions(['view_reports']), async (c)
       total_liabilities: totalLiabilities,
       total_equity: totalEquity,
       total_liabilities_and_equity: totalLiabilities + totalEquity,
-      is_balanced: Math.abs(totalAssets - (totalLiabilities + totalEquity)) < 0.01
-    }
+      is_balanced: Math.abs(totalAssets - (totalLiabilities + totalEquity)) < 0.01,
+    },
+    // Independent check: the ledger in this scope and as-of date balances
+    // (debits = credits). The balance sheet is only trustworthy when it does.
+    verification: {
+      ledger_debits: Number(tbCheck?.d || 0),
+      ledger_credits: Number(tbCheck?.cr || 0),
+      trial_balance_balanced: Math.abs(Number(tbCheck?.d || 0) - Number(tbCheck?.cr || 0)) < 0.01,
+    },
+    warnings,
   });
 });
 
@@ -746,45 +771,90 @@ accounting.get('/cash-flow', requirePermissions(['view_reports']), async (c) => 
   const scope = await resolveBranchScope(c);
   const bf = branchSql(scope, 'jel.branch_id');
   const periodId = c.req.query('period_id') || null;
-  const params: any[] = [];
-  let periodFilter = '';
-  if (periodId) { periodFilter = 'AND je.fiscal_period_id = ?'; params.push(periodId); }
+  const period = periodId ? await c.env.DB.prepare('SELECT * FROM fiscal_periods WHERE id = ?').bind(periodId).first() as any : null;
+  if (periodId && !period) return c.json({ error: 'Fiscal period not found' }, 404);
+  const day = (d: any) => String(d instanceof Date ? d.toISOString() : d).slice(0, 10);
+  const start = period ? day(period.start_date) : null;
+  const end = period ? day(period.end_date) : null;
 
-  // Cash collected (revenue collections via cash account debits)
-  const cashAcctId = 'coa-1010';
-  const { results: cashRows } = await c.env.DB.prepare(`
+  // Direct method from the cash account (1010). Each cash line is classified by
+  // the other side of its journal entry: equity (owner capital, drawings,
+  // opening balances) = financing; property, livestock and fixed assets =
+  // investing; everything else (customers, suppliers, expenses) = operating.
+  // The window is by entry date, so beginning cash (everything dated before
+  // the period) + the period's net change = ending cash, which is also the
+  // ledger balance at period end.
+  const contra = (codes: string) => `EXISTS (SELECT 1 FROM journal_entry_lines o JOIN chart_of_accounts oc ON oc.id = o.account_id
+      WHERE o.journal_entry_id = je.id AND o.id <> jel.id AND ${codes})`;
+  const window = period ? 'AND je.entry_date >= ? AND je.entry_date <= ?' : '';
+  const { results: rows } = await c.env.DB.prepare(`
     SELECT
-      je.reference_type,
+      CASE WHEN ${contra("oc.account_type = 'EQUITY'")} THEN 'FINANCING'
+           WHEN ${contra("oc.code IN ('1040', '1050', '1500', '1501')")} THEN 'INVESTING'
+           ELSE 'OPERATING' END AS activity,
+      COALESCE(je.reference_type, 'MANUAL') AS reference_type,
       COALESCE(SUM(jel.debit_amount), 0) AS cash_in,
       COALESCE(SUM(jel.credit_amount), 0) AS cash_out
     FROM journal_entry_lines jel
-    JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status IN ('POSTED', 'REVERSED') ${periodFilter}
-    WHERE jel.account_id = ? ${bf}
-    GROUP BY je.reference_type
-  `).bind(...params, cashAcctId).all();
+    JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status IN ('POSTED', 'REVERSED') ${window}
+    JOIN chart_of_accounts coa ON coa.id = jel.account_id AND coa.code = '1010'
+    WHERE 1=1 ${bf}
+    GROUP BY 1, 2
+    ORDER BY 1, 2
+  `).bind(...(period ? [start, end] : [])).all() as { results: any[] };
 
-  const cashIn = (cashRows || []).reduce((s: number, r: any) => s + Number(r.cash_in), 0);
-  const cashOut = (cashRows || []).reduce((s: number, r: any) => s + Number(r.cash_out), 0);
-  const netCash = cashIn - cashOut;
-
-  // Ending cash = all posted cash lines in scope (not the stored running
-  // balance, which is company-wide and not concurrency-safe)
-  const balRes = await c.env.DB.prepare(`
-    SELECT COALESCE(SUM(jel.debit_amount - jel.credit_amount), 0) AS running_balance
+  const beginRes = period ? await c.env.DB.prepare(`
+    SELECT COALESCE(SUM(jel.debit_amount - jel.credit_amount), 0) AS bal
     FROM journal_entry_lines jel
-    JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status IN ('POSTED', 'REVERSED')
-    WHERE jel.account_id = ? ${bf}
-  `).bind(cashAcctId).first() as any;
+    JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status IN ('POSTED', 'REVERSED') AND je.entry_date < ?
+    JOIN chart_of_accounts coa ON coa.id = jel.account_id AND coa.code = '1010'
+    WHERE 1=1 ${bf}
+  `).bind(start).first() as any : null;
+  const endRes = await c.env.DB.prepare(`
+    SELECT COALESCE(SUM(jel.debit_amount - jel.credit_amount), 0) AS bal
+    FROM journal_entry_lines jel
+    JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status IN ('POSTED', 'REVERSED') ${period ? 'AND je.entry_date <= ?' : ''}
+    JOIN chart_of_accounts coa ON coa.id = jel.account_id AND coa.code = '1010'
+    WHERE 1=1 ${bf}
+  `).bind(...(period ? [end] : [])).first() as any;
+
+  const lines = rows.map((r) => ({
+    activity: r.activity, reference_type: r.reference_type,
+    cash_in: Number(r.cash_in), cash_out: Number(r.cash_out), net: Number(r.cash_in) - Number(r.cash_out),
+  }));
+  const net = (activity: string) => lines.filter((l) => l.activity === activity).reduce((s, l) => s + l.net, 0);
+  const round = (n: number) => Math.round(n * 100) / 100;
+  const beginning = Number(beginRes?.bal || 0);
+  const operating = net('OPERATING'), investing = net('INVESTING'), financing = net('FINANCING');
+  const change = operating + investing + financing;
+  const ledgerEnding = Number(endRes?.bal || 0);
+  const ending = beginning + change;
+  const warnings: string[] = [];
+  if (Math.abs(ending - ledgerEnding) > 0.01) {
+    warnings.push(`Cash flow does not reconcile to the cash ledger (${round(ending)} vs ${round(ledgerEnding)}).`);
+  }
+  if (ledgerEnding < -0.005) {
+    warnings.push('Cash is negative: more cash payments are recorded than cash received. Record opening cash / owner funding (Accounting → Opening Balances) or check for receipts that were not entered.');
+  }
 
   return c.json({
     period_id: periodId,
-    operating_activities: cashRows || [],
+    period: period ? { start_date: start, end_date: end } : null,
+    operating_activities: lines.filter((l) => l.activity === 'OPERATING'),
+    investing_activities: lines.filter((l) => l.activity === 'INVESTING'),
+    financing_activities: lines.filter((l) => l.activity === 'FINANCING'),
     summary: {
-      total_cash_in: cashIn,
-      total_cash_out: cashOut,
-      net_cash_from_operations: netCash,
-      ending_cash_balance: Number(balRes?.running_balance || 0)
-    }
+      beginning_cash_balance: round(beginning),
+      net_cash_from_operations: round(operating),
+      net_cash_from_investing: round(investing),
+      net_cash_from_financing: round(financing),
+      net_change_in_cash: round(change),
+      ending_cash_balance: round(ledgerEnding),
+      total_cash_in: round(lines.reduce((s, l) => s + l.cash_in, 0)),
+      total_cash_out: round(lines.reduce((s, l) => s + l.cash_out, 0)),
+      reconciles: Math.abs(ending - ledgerEnding) <= 0.01,
+    },
+    warnings,
   });
 });
 
@@ -824,7 +894,7 @@ accounting.get('/owners-equity', requirePermissions(['view_reports']), async (c)
     FROM chart_of_accounts coa
     LEFT JOIN journal_entry_lines jel ON jel.account_id = coa.id ${bf}
     LEFT JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status IN ('POSTED', 'REVERSED') ${asOfFilter}
-    WHERE coa.account_type IN ('EQUITY') AND coa.is_active = 1
+    WHERE coa.account_type IN ('EQUITY') AND (coa.is_active = 1 OR EXISTS (SELECT 1 FROM journal_entry_lines x WHERE x.account_id = coa.id))
     GROUP BY coa.id, coa.code, coa.name, coa.account_type, coa.normal_balance
     ORDER BY coa.code ASC
   `).bind(...asOfParams).all();

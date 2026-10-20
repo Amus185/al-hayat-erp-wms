@@ -29,6 +29,11 @@ const PIE_COLORS = [G, G2, AMBER, BLUE, TEAL, RED, '#7c3aed', '#db2777'];
 // ─── Helpers ────────────────────────────────────────────────────────
 const fmt = (v: number) =>
   new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(v);
+const CASH_LABELS: Record<string, string> = {
+  SALE: 'Customers (sales & receipts)', PURCHASE: 'Suppliers', EXPENSE: 'Operating expenses',
+  OPENING: 'Owner funding / opening cash', MANUAL: 'Manual journals & reversals', TRANSFER: 'Inter-branch transfers',
+  INVENTORY_ADJUSTMENT: 'Stock adjustments', MANUFACTURING: 'Manufacturing', DEPRECIATION: 'Depreciation', CLOSING: 'Closing entries',
+};
 const fmtN = (v: number) =>
   new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(v);
 
@@ -1156,6 +1161,11 @@ export function AccountingPage() {
               <SectionHeader icon={Building2} title='Balance Sheet' sub={`Assets = Liabilities + Owner's Equity · ${scopeLabel}`} />
 
               <PeriodBar />
+              {(balanceSheet?.warnings || []).map((w: string, i: number) => (
+                <div key={i} role='alert' style={{ background: AMBER + '14', border: `1px solid ${AMBER}55`, color: '#7c4a03', borderRadius: '10px', padding: '10px 14px', marginBottom: '12px', fontSize: '13px', fontWeight: 600 }}>
+                  {w}
+                </div>
+              ))}
               {balanceSheet ? (
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
                   <StmtCard title='ASSETS'>
@@ -1192,7 +1202,7 @@ export function AccountingPage() {
                     </StmtCard>
                     <div style={{ background: (balanceSheet.totals?.is_balanced ? G : RED) + '12', borderRadius: '10px', padding: '14px 20px', border: `1px solid ${(balanceSheet.totals?.is_balanced ? G : RED)}44`, textAlign: 'center' }}>
                       <p style={{ margin: 0, fontWeight: 800, color: balanceSheet.totals?.is_balanced ? G : RED, fontSize: '15px' }}>
-                        {balanceSheet.totals?.is_balanced ? 'Balance Sheet Balanced' : 'Unbalanced'}
+                        {balanceSheet.totals?.is_balanced && balanceSheet.verification?.trial_balance_balanced !== false ? 'Balance Sheet Balanced · ledger debits = credits' : 'Unbalanced — check the trial balance'}
                       </p>
                       <p style={{ margin: '4px 0 0', fontSize: '13px', color: '#6b7280' }}>
                         Total Assets: {fmt(balanceSheet.totals?.total_assets || 0)} | Liabilities + Equity: {fmt(balanceSheet.totals?.total_liabilities_and_equity || 0)}
@@ -1209,16 +1219,36 @@ export function AccountingPage() {
             <div>
               <SectionHeader icon={Wallet} title='Cash Flow Statement' sub='Direct method — from Cash & Bank account movements' />
               <PeriodBar />
+              {(cashFlow?.warnings || []).map((w: string, i: number) => (
+                <div key={i} role='alert' style={{ background: AMBER + '14', border: `1px solid ${AMBER}55`, color: '#7c4a03', borderRadius: '10px', padding: '10px 14px', marginBottom: '12px', fontSize: '13px', fontWeight: 600 }}>
+                  {w}
+                </div>
+              ))}
               {cashFlow ? (
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
                   <StmtCard title={`Statement of Cash Flows (Direct Method) — ${scopeLabel}`}>
+
                     <StmtRow label='OPERATING ACTIVITIES' value='' bold />
                     {(cashFlow.operating_activities || []).map((a: any, i: number) => (
-                      <StmtRow key={i} label={`Cash ${a.reference_type || 'Transaction'}`} value={fmt(a.cash_in - a.cash_out)} indent={1} color={(a.cash_in - a.cash_out) >= 0 ? G : RED} />
+                      <StmtRow key={i} label={CASH_LABELS[a.reference_type] || a.reference_type} value={fmt(a.net)} indent={1} color={a.net >= 0 ? G : RED} />
                     ))}
-                    <StmtRow label='Net Cash from Operations' value={fmt(cashFlow.summary?.net_cash_from_operations || 0)} bold color={G} separator />
-                    <StmtRow label='Beginning Cash Balance' value={fmt(0)} indent={1} />
-                    <StmtRow label='ENDING CASH BALANCE' value={fmt(cashFlow.summary?.ending_cash_balance || 0)} bold color={G} separator />
+                    {(cashFlow.operating_activities || []).length === 0 && <StmtRow label='None' value={fmt(0)} indent={1} />}
+                    <StmtRow label='Net cash from operating activities' value={fmt(cashFlow.summary?.net_cash_from_operations || 0)} bold color={(cashFlow.summary?.net_cash_from_operations || 0) >= 0 ? G : RED} separator />
+                    <StmtRow label='INVESTING ACTIVITIES' value='' bold />
+                    {(cashFlow.investing_activities || []).map((a: any, i: number) => (
+                      <StmtRow key={i} label={CASH_LABELS[a.reference_type] || a.reference_type} value={fmt(a.net)} indent={1} color={a.net >= 0 ? G : RED} />
+                    ))}
+                    {(cashFlow.investing_activities || []).length === 0 && <StmtRow label='None' value={fmt(0)} indent={1} />}
+                    <StmtRow label='Net cash from investing activities' value={fmt(cashFlow.summary?.net_cash_from_investing || 0)} bold color={(cashFlow.summary?.net_cash_from_investing || 0) >= 0 ? G : RED} separator />
+                    <StmtRow label='FINANCING ACTIVITIES' value='' bold />
+                    {(cashFlow.financing_activities || []).map((a: any, i: number) => (
+                      <StmtRow key={i} label={CASH_LABELS[a.reference_type] || a.reference_type} value={fmt(a.net)} indent={1} color={a.net >= 0 ? G : RED} />
+                    ))}
+                    {(cashFlow.financing_activities || []).length === 0 && <StmtRow label='None' value={fmt(0)} indent={1} />}
+                    <StmtRow label='Net cash from financing activities' value={fmt(cashFlow.summary?.net_cash_from_financing || 0)} bold color={(cashFlow.summary?.net_cash_from_financing || 0) >= 0 ? G : RED} separator />
+                    <StmtRow label='Net change in cash' value={fmt(cashFlow.summary?.net_change_in_cash || 0)} bold />
+                    <StmtRow label='Beginning cash balance' value={fmt(cashFlow.summary?.beginning_cash_balance || 0)} indent={1} />
+                    <StmtRow label='ENDING CASH BALANCE' value={fmt(cashFlow.summary?.ending_cash_balance || 0)} bold color={(cashFlow.summary?.ending_cash_balance || 0) >= 0 ? G : RED} separator />
                   </StmtCard>
                   <div>
                     <div style={{ background: '#fff', borderRadius: '14px', border: '1px solid #e5ede5', padding: '20px', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>

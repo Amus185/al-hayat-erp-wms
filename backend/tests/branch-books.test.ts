@@ -61,9 +61,11 @@ test('consolidated statements show each account once, and the branch views add u
     const codes = bs.body[section].map((a: any) => a.code);
     assert.equal(new Set(codes).size, codes.length, `${section} lists an account more than once: ${codes}`);
   }
-  const cashAll = bs.body.assets.find((a: any) => a.code === '1010').balance;
+  // Net cash = cash asset − overdraft (negative cash is presented as a liability)
+  const netCash = (body: any) => body.assets.find((a: any) => a.code === '1010').balance
+    - (body.liabilities.find((l: any) => l.code === 'OVERDRAFT')?.balance ?? 0);
   const parts = await Promise.all([A, B, 'UNASSIGNED'].map((b) => t.api('GET', `/accounting/balance-sheet?branch_id=${b}`)));
-  assert.equal(cashAll, parts.reduce((s, r) => s + r.body.assets.find((a: any) => a.code === '1010').balance, 0));
+  assert.equal(netCash(bs.body), parts.reduce((s, r) => s + netCash(r.body), 0));
 
   const is = await t.api('GET', '/accounting/income-statement');
   const revCodes = is.body.revenue.map((r: any) => r.code);

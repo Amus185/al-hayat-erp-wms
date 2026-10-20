@@ -124,3 +124,34 @@ Details: [BRANCH_ACCOUNTING.md](BRANCH_ACCOUNTING.md).
 | R21 per-branch debit/credit totals | CL 790 = 790 · HQ 536 = 536 · company-level 191 = 191 |
 
 **Production:** run R17–R23 after deploying. The startup backfill attributes only provable history. R18 and R20 list what needs a human decision; R22 lists transfers made before clearing journals existed.
+
+## 8. Negative cash, negative inventory and the statements (investigation 2026-10-20)
+
+Reported consolidated figures: cash −$49,514, inventory −$960, total assets −$50,254, net income −$50,254, "Balanced". All of them were **reproduced exactly** on a local database built to match the production records (4 HQ sales $2,372 with $220 unpaid; rent $7,000 at HQ; salaries $44,444 and maintenance $222 with no branch; products whose stock was entered at creation).
+
+**Findings:**
+
+| # | Figure | Root cause | Status |
+|---|---|---|---|
+| CF-1 | Beginning cash $0 | The UI **hardcoded** beginning cash to `$0`; the API never calculated it | FIXED: beginning = cash lines dated before the period; ending = the cash ledger at period end; the statement checks beginning + net change = ending and warns if not |
+| CF-2 | Ending cash with a period selected | Ending used the all-time ledger while "net cash" used the period, so the statement could not reconcile | FIXED: same date window for both |
+| CF-3 | Everything "operating" | Lines were grouped by document type only | FIXED: classified by the other side of each cash entry. Equity (owner capital, opening cash) = **financing**; property, livestock and fixed assets = **investing**; customers, suppliers and expenses = **operating** |
+| BS-1 | Cash shown as a negative asset | Presentation | FIXED: negative cash is presented as a **Cash overdraft** liability with a warning (totals unchanged) |
+| BS-2 | "Balanced" | Not a plug. Net income is computed from revenue/expense lines and equals the income statement in every scope (test). The balance sheet now also returns an **independent** ledger check (debits = credits for the same scope and date) | Verified |
+| BS-3 | Deactivated accounts with balances | The trial balance, balance sheet and owners'-equity statement dropped them, which could make a balanced ledger look unbalanced | FIXED |
+| NC-1 | Cash −$49,514 | **Not a calculation error.** Recorded cash: in $2,152 (customer receipts), out $51,666 (expenses), and no opening cash or owner funding was ever recorded. By branch: HQ −$4,848 (2,152 − 7,000); company-level −$44,666 (salaries and maintenance saved without a branch). | Explained. Fix the data: record opening cash / owner funding (Accounting → Opening Balances) and, if they belong to a branch, set the branch on the two expenses. Nothing was fabricated |
+| NI-1 | Inventory −$960 | Stock entered with new products was never valued in the books, so the $960 cost of goods sold came out of an empty account | Root cause fixed earlier (`a6d7bda`): new products and imports post opening stock. Existing stock: Accounting → Opening Balances posts it per branch, once, valued at cost |
+
+**Regression tests:** `tests/statements-reconciliation.test.ts` covers realistic activity in two branches and at company level (opening cash, prior-year expense, cash and credit sales, partial payment, a cancelled paid sale, stock adjustment, purchase receipt plus supplier payment, warehouse → branch transfer, property purchase).
+
+| Test | Before | After |
+|---|---|---|
+| Every entry and every scope's trial balance balance | pass | pass |
+| Cash flow: beginning + net = ending = cash ledger, for A, B, company-level and consolidated, all-time and current period | FAIL | pass |
+| Cash flow: owner funding = financing (+500), property = investing (−300), the rest operating | FAIL | pass |
+| Branch cash flows add up to consolidated (beginning, each activity, ending) | (hollow pass: fields missing) | pass |
+| Balance sheet net income = income statement net income; negative cash = overdraft; independent ledger check | FAIL | pass |
+| Inventory ledger = stock on hand × cost per branch and consolidated; no negative stock | pass | pass |
+| Branch cash ledger = operational receipts − payments | pass | pass |
+
+Full suite: **67/67**.
