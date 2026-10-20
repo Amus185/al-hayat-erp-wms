@@ -24,7 +24,6 @@ import manufacturing from './routes/manufacturing';
 
 import { PgAdapter } from './pg-client';
 import { ensurePostgresInit } from './init-postgres';
-import { authMiddleware, isAdminUser } from './middleware/auth';
 
 const app = new Hono();
 
@@ -103,69 +102,6 @@ app.route('/api/v1/assets', assets);
 app.route('/api/v1/deliveries', deliveries);
 app.route('/api/v1/manufacturing', manufacturing);
 
-
-// ── TEMPORARY ONE-SHOT WIPE ENDPOINT ──────────────────────────────────────────
-// Runs server-side so it can reach postgres.railway.internal directly.
-// REMOVE THIS BLOCK immediately after execution.
-app.post('/api/v1/admin/wipe-operational-data', async (c: any) => {
-  const body = await c.req.json().catch(() => ({}));
-  if (body?.secret !== 'WIPE_ALHAYAT_CONFIRM_KEY_2026') {
-    return c.json({ error: 'Unauthorized: invalid secret.' }, 403);
-  }
-
-  const pool = (globalPgAdapter || (c.env?.DB as any))?.getPool?.() || (globalPgAdapter || (c.env?.DB as any))?.pool;
-  if (!pool) {
-    return c.json({ error: 'PostgreSQL connection pool not available.' }, 500);
-  }
-
-  const client = await pool.connect();
-  try {
-    const tableRes = await client.query(`
-      SELECT table_name 
-      FROM information_schema.tables 
-      WHERE table_schema = 'public' AND table_type = 'BASE TABLE';
-    `);
-    const allTables: string[] = tableRes.rows.map((r: any) => r.table_name);
-
-    // Auth & organizational skeleton tables to preserve 100%
-    const protectedTables = new Set([
-      'users',
-      'roles',
-      'permissions',
-      'user_roles',
-      'role_permissions',
-      'branches',
-      'warehouses',
-      'warehouse_locations',
-      'chart_of_accounts',
-      'fiscal_periods',
-    ]);
-
-    const tablesToWipe = allTables.filter((t: string) => !protectedTables.has(t));
-
-    await client.query('BEGIN;');
-    if (tablesToWipe.length > 0) {
-      const tableListStr = tablesToWipe.map((t: string) => `"${t}"`).join(', ');
-      await client.query(`TRUNCATE TABLE ${tableListStr} RESTART IDENTITY CASCADE;`);
-    }
-    await client.query('COMMIT;');
-
-    console.log('[ADMIN WIPE] Successfully wiped tables:', tablesToWipe);
-    return c.json({
-      success: true,
-      message: 'Operational data wiped successfully.',
-      wiped_tables_count: tablesToWipe.length,
-      wiped_tables: tablesToWipe,
-    });
-  } catch (err: any) {
-    await client.query('ROLLBACK;').catch(() => {});
-    console.error('[ADMIN WIPE] Error:', err);
-    return c.json({ error: err.message }, 500);
-  } finally {
-    client.release();
-  }
-});
-// ── END TEMPORARY WIPE ENDPOINT ───────────────────────────────────────────────
 
 // Global Error Handler - Structured JSON Logging for Cloudflare Workers Observability
 app.onError((err, c) => {
