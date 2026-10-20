@@ -61,8 +61,6 @@ const PROTECTED_TABLES = new Set([
   'branches',
   'warehouses',
   'warehouse_locations',
-  'chart_of_accounts',
-  'fiscal_periods',
 ]);
 
 // Product Catalog Tables (Preserved only if --keep-products is passed)
@@ -117,6 +115,8 @@ const TARGET_OPERATIONAL_TABLES = [
   'journal_entries',
   'general_ledger',
   'expenses',
+  'chart_of_accounts',
+  'fiscal_periods',
 
   // Assets, Leases & Specialized Modules
   'depreciation_schedules',
