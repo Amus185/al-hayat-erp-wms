@@ -195,9 +195,6 @@ export async function ensurePostgresInit(pool: Pool) {
       CREATE TABLE IF NOT EXISTS journal_entry_lines (
         id TEXT PRIMARY KEY, journal_entry_id TEXT NOT NULL REFERENCES journal_entries(id) ON DELETE CASCADE, account_id TEXT NOT NULL REFERENCES chart_of_accounts(id), description TEXT, debit_amount DOUBLE PRECISION NOT NULL DEFAULT 0, credit_amount DOUBLE PRECISION NOT NULL DEFAULT 0, branch_id TEXT REFERENCES branches(id), line_order INTEGER NOT NULL DEFAULT 1
       );
-      CREATE TABLE IF NOT EXISTS general_ledger (
-        id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES chart_of_accounts(id), journal_entry_id TEXT NOT NULL REFERENCES journal_entries(id), line_id TEXT REFERENCES journal_entry_lines(id), entry_date DATE NOT NULL, description TEXT, debit_amount DOUBLE PRECISION NOT NULL DEFAULT 0, credit_amount DOUBLE PRECISION NOT NULL DEFAULT 0, running_balance DOUBLE PRECISION NOT NULL DEFAULT 0, branch_id TEXT REFERENCES branches(id), created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
-      );
       CREATE TABLE IF NOT EXISTS notifications (
         id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, title TEXT NOT NULL, message TEXT NOT NULL, type TEXT NOT NULL DEFAULT 'INFO', read_at TIMESTAMP WITH TIME ZONE, created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
       );
@@ -719,6 +716,49 @@ export async function ensurePostgresInit(pool: Pool) {
   }
 
   await ensureBranchAttribution(pool);
+  await ensureLedgerView(pool);
+}
+
+/**
+ * The general ledger is a VIEW over posted journal lines, not a second copy of
+ * them. The old physical table duplicated every line plus a stored running
+ * balance that drifted (company-wide in branch views, read-then-write races,
+ * hand-written depreciation rows). On first boot after this change the old
+ * table is renamed to general_ledger_legacy — kept, never dropped, for audit
+ * comparison — and the view takes its name. Idempotent; own transaction.
+ */
+export async function ensureLedgerView(pool: Pool) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(`
+      DO $$ BEGIN
+        IF EXISTS (SELECT 1 FROM information_schema.tables
+                   WHERE table_schema = current_schema() AND table_name = 'general_ledger' AND table_type = 'BASE TABLE') THEN
+          IF EXISTS (SELECT 1 FROM information_schema.tables
+                     WHERE table_schema = current_schema() AND table_name = 'general_ledger_legacy') THEN
+            RAISE EXCEPTION 'general_ledger and general_ledger_legacy both exist as tables; resolve manually';
+          END IF;
+          ALTER TABLE general_ledger RENAME TO general_ledger_legacy;
+        END IF;
+      END $$;
+    `);
+    await client.query(`
+      CREATE OR REPLACE VIEW general_ledger AS
+      SELECT jel.id, jel.account_id, jel.journal_entry_id, jel.id AS line_id, je.entry_date,
+             COALESCE(jel.description, je.description) AS description,
+             jel.debit_amount, jel.credit_amount, jel.branch_id, je.created_at, jel.line_order, je.status
+      FROM journal_entry_lines jel
+      JOIN journal_entries je ON je.id = jel.journal_entry_id
+      WHERE je.status IN ('POSTED', 'REVERSED')
+    `);
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('❌ General ledger view migration failed (no data changed):', err);
+  } finally {
+    client.release();
+  }
 }
 
 /**
@@ -800,16 +840,11 @@ export async function ensureBranchAttribution(pool: Pool) {
         AND r.branch_id IS NULL AND o.branch_id IS NOT NULL
         AND NOT EXISTS (SELECT 1 FROM journal_entry_lines l WHERE l.journal_entry_id = r.id AND l.branch_id IS NOT NULL)
     `);
-    // Unbranched lines take their entry's branch; GL rows follow their line
+    // Unbranched lines take their entry's branch
     await client.query(`
       UPDATE journal_entry_lines l SET branch_id = je.branch_id
       FROM journal_entries je
       WHERE l.journal_entry_id = je.id AND l.branch_id IS NULL AND je.branch_id IS NOT NULL
-    `);
-    await client.query(`
-      UPDATE general_ledger gl SET branch_id = l.branch_id
-      FROM journal_entry_lines l
-      WHERE gl.line_id = l.id AND gl.branch_id IS DISTINCT FROM l.branch_id
     `);
     await client.query('COMMIT');
     if (backfilled.rowCount) console.log(`✅ Branch attribution backfilled for ${backfilled.rowCount} journal entries`);

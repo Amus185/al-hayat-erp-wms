@@ -316,48 +316,14 @@ accounting.post('/journal-entries/:id/post', requirePermissions(['manage_purchas
   const userId = (c as any).get('jwtPayload')?.sub || null;
   const now = new Date().toISOString();
 
-  // Fetch lines to build general ledger
-  const { results: lines } = await c.env.DB.prepare(`
-    SELECT jel.*, coa.normal_balance
-    FROM journal_entry_lines jel
-    JOIN chart_of_accounts coa ON coa.id = jel.account_id
-    WHERE jel.journal_entry_id = ?
-    ORDER BY jel.line_order ASC
-  `).bind(id).all() as { results: any[] };
-
-  // For each line, compute running balance and insert into general_ledger
-  const glStmts = (lines || []).map(async (line: any) => {
-    // Get current running balance for this account
-    const lastBalance = await c.env.DB.prepare(`
-      SELECT running_balance FROM general_ledger
-      WHERE account_id = ?
-      ORDER BY created_at DESC
-      LIMIT 1
-    `).bind(line.account_id).first() as any;
-
-    let runningBalance = Number(lastBalance?.running_balance || 0);
-    if (line.normal_balance === 'DEBIT') {
-      runningBalance += (line.debit_amount - line.credit_amount);
-    } else {
-      runningBalance += (line.credit_amount - line.debit_amount);
-    }
-
-    const glId = generateId();
-    return c.env.DB.prepare(`
-      INSERT INTO general_ledger
-        (id, account_id, journal_entry_id, line_id, entry_date, description,
-         debit_amount, credit_amount, running_balance, branch_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).bind(glId, line.account_id, id, line.id, entry.entry_date,
-      entry.description, line.debit_amount, line.credit_amount, runningBalance, line.branch_id || null);
-  });
-
-  const resolvedGlStmts = await Promise.all(glStmts);
+  // Posting only changes the entry's status: its lines enter the general
+  // ledger (a view over POSTED/REVERSED lines) at that moment. The status
+  // guard makes a concurrent double-post a 409 instead of a second posting.
   await c.env.DB.batch([
-    ...resolvedGlStmts,
     c.env.DB.prepare(`
-      UPDATE journal_entries SET status = 'POSTED', fiscal_period_id = COALESCE(fiscal_period_id, ?), posted_by = ?, posted_at = ?, updated_at = ? WHERE id = ?
-    `).bind(postingPeriodId, userId, now, now, id)
+      UPDATE journal_entries SET status = 'POSTED', fiscal_period_id = COALESCE(fiscal_period_id, ?), posted_by = ?, posted_at = ?, updated_at = ?
+      WHERE id = ? AND status NOT IN ('POSTED', 'REVERSED')
+    `).bind(postingPeriodId, userId, now, now, id).mustAffect('Entry is already posted'),
   ]);
 
   const updated = await c.env.DB.prepare('SELECT * FROM journal_entries WHERE id = ?').bind(id).first();
@@ -390,21 +356,29 @@ accounting.get('/general-ledger', requirePermissions(['view_reports']), async (c
   const fromDate = c.req.query('from_date') || null;
   const toDate = c.req.query('to_date') || null;
 
-  let query = `
+  // Running balance is computed here, over the lines in the caller's branch
+  // scope and in the account's normal-balance direction, across all dates —
+  // so a date window still starts from the true balance brought forward.
+  const params: any[] = [];
+  let inner = `
     SELECT gl.*, coa.code AS account_code, coa.name AS account_name, coa.account_type,
-           je.entry_number, b.name AS branch_name
+           je.entry_number, b.name AS branch_name,
+           SUM(CASE WHEN coa.normal_balance = 'CREDIT' THEN gl.credit_amount - gl.debit_amount
+                    ELSE gl.debit_amount - gl.credit_amount END)
+             OVER (PARTITION BY gl.account_id ORDER BY gl.entry_date, gl.created_at, gl.journal_entry_id, gl.line_order
+                   ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running_balance
     FROM general_ledger gl
     JOIN chart_of_accounts coa ON coa.id = gl.account_id
     JOIN journal_entries je ON je.id = gl.journal_entry_id
     LEFT JOIN branches b ON b.id = gl.branch_id
     WHERE 1=1
   `;
-  const params: any[] = [];
-  if (accountId) { query += ' AND gl.account_id = ?'; params.push(accountId); }
-  query += branchSql(scope, 'gl.branch_id');
-  if (fromDate) { query += ' AND gl.entry_date >= ?'; params.push(fromDate); }
-  if (toDate) { query += ' AND gl.entry_date <= ?'; params.push(toDate); }
-  query += ' ORDER BY gl.account_id ASC, gl.entry_date ASC, gl.created_at ASC';
+  if (accountId) { inner += ' AND gl.account_id = ?'; params.push(accountId); }
+  inner += branchSql(scope, 'gl.branch_id');
+  let query = `SELECT * FROM (${inner}) l WHERE 1=1`;
+  if (fromDate) { query += ' AND l.entry_date >= ?'; params.push(fromDate); }
+  if (toDate) { query += ' AND l.entry_date <= ?'; params.push(toDate); }
+  query += ' ORDER BY l.account_id ASC, l.entry_date ASC, l.created_at ASC, l.journal_entry_id ASC, l.line_order ASC';
   query += ' LIMIT 500';
 
   const stmt = c.env.DB.prepare(query);
@@ -1055,46 +1029,42 @@ accounting.post('/depreciation', requirePermissions(['manage_purchasing']), asyn
   const id = generateId();
   const userId = (c as any).get('jwtPayload')?.sub || null;
 
-  await c.env.DB.prepare(`
+  const amount = Number(body.period_depreciation);
+  if (!Number.isFinite(amount) || amount < 0) return c.json({ error: 'period_depreciation must be zero or more' }, 400);
+  const accumDepAcc = body.accum_dep_account_id || 'coa-1501';
+  const expAcc = body.dep_expense_account_id || 'coa-6060';
+
+  // The schedule and its journal entry (Dr expense / Cr accumulated
+  // depreciation, company-level) are saved together or not at all.
+  const stmts: any[] = [c.env.DB.prepare(`
     INSERT INTO depreciation_schedules
       (id, asset_name, asset_account_id, accum_dep_account_id, dep_expense_account_id,
        acquisition_date, cost, salvage_value, useful_life_years, method,
        fiscal_period_id, period_depreciation, notes, created_by)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).bind(id, body.asset_name,
-    body.asset_account_id || 'coa-1500', body.accum_dep_account_id || 'coa-1501',
-    body.dep_expense_account_id || 'coa-6060',
+    body.asset_account_id || 'coa-1500', accumDepAcc, expAcc,
     body.acquisition_date, body.cost, body.salvage_value || 0,
     body.useful_life_years, body.method || 'STRAIGHT_LINE',
-    body.fiscal_period_id || null, body.period_depreciation,
-    body.notes || null, userId).run();
-
-  // Create posted journal entry and general ledger entries for depreciation
-  if (body.period_depreciation > 0) {
-    try {
-      const jeId = generateId();
-      const jeNum = `JE-DEP-${Date.now()}`;
-      const accumDepAcc = body.accum_dep_account_id || 'coa-1501';
-      const expAcc = body.dep_expense_account_id || 'coa-6060';
-
-      await c.env.DB.prepare(`
-        INSERT INTO journal_entries
-          (id, entry_number, fiscal_period_id, entry_date, description, reference_type, reference_id, status, total_debit, total_credit, created_by)
-        VALUES (?, ?, ?, ?, ?, 'DEPRECIATION', ?, 'POSTED', ?, ?, ?)
-      `).bind(jeId, jeNum, body.fiscal_period_id || null, body.acquisition_date, `Depreciation: ${body.asset_name}`, id, body.period_depreciation, body.period_depreciation, userId).run();
-
-      const line1Id = generateId();
-      const line2Id = generateId();
-      await c.env.DB.batch([
-        c.env.DB.prepare(`INSERT INTO journal_entry_lines (id, journal_entry_id, account_id, description, debit_amount, credit_amount, line_order) VALUES (?, ?, ?, ?, ?, 0, 1)`).bind(line1Id, jeId, expAcc, `Depreciation Expense: ${body.asset_name}`, body.period_depreciation),
-        c.env.DB.prepare(`INSERT INTO journal_entry_lines (id, journal_entry_id, account_id, description, debit_amount, credit_amount, line_order) VALUES (?, ?, ?, ?, 0, ?, 2)`).bind(line2Id, jeId, accumDepAcc, `Accumulated Depreciation: ${body.asset_name}`, body.period_depreciation),
-        c.env.DB.prepare(`INSERT INTO general_ledger (id, account_id, journal_entry_id, line_id, entry_date, description, debit_amount, credit_amount, running_balance) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)`).bind(generateId(), expAcc, jeId, line1Id, body.acquisition_date, `Depreciation Expense: ${body.asset_name}`, body.period_depreciation, body.period_depreciation),
-        c.env.DB.prepare(`INSERT INTO general_ledger (id, account_id, journal_entry_id, line_id, entry_date, description, debit_amount, credit_amount, running_balance) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)`).bind(generateId(), accumDepAcc, jeId, line2Id, body.acquisition_date, `Accumulated Depreciation: ${body.asset_name}`, body.period_depreciation, body.period_depreciation),
-      ]);
-    } catch (depErr) {
-      console.error('Failed to post depreciation GL entry:', depErr);
-    }
+    body.fiscal_period_id || null, amount,
+    body.notes || null, userId)];
+  if (amount > 0) {
+    const prepared = await prepareJournalEntryPosting(c, {
+      description: `Depreciation: ${body.asset_name}`,
+      referenceType: 'DEPRECIATION',
+      referenceId: id,
+      branchId: null,
+      entryDate: body.acquisition_date,
+      userId,
+      lines: [
+        { accountCode: expAcc, description: `Depreciation Expense: ${body.asset_name}`, debitAmount: amount, creditAmount: 0 },
+        { accountCode: accumDepAcc, description: `Accumulated Depreciation: ${body.asset_name}`, debitAmount: 0, creditAmount: amount },
+      ],
+    });
+    if (!prepared.statements.length) return c.json({ error: 'Depreciation accounts were not found in the chart of accounts' }, 422);
+    stmts.push(...prepared.statements);
   }
+  await c.env.DB.batch(stmts);
 
   const row = await c.env.DB.prepare('SELECT * FROM depreciation_schedules WHERE id = ?').bind(id).first();
   return c.json(row, 201);

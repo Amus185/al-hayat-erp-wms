@@ -304,41 +304,6 @@ export async function prepareJournalEntryPosting(
     throw new Error(`Journal entry is not balanced or has no valid lines: ${params.description}`);
   }
 
-  // ── Running balance pre-fetch ─────────────────────────────────────────────
-  // Fetch the latest running_balance for each account in this entry.
-  // Uses DISTINCT ON (PostgreSQL) to safely get one row per account.
-  // Falls back to 0 if no prior GL entry exists for an account (i.e., first posting).
-  const accountIds = resolvedLines.map((l) => l.accountId);
-  const glBalanceMap = new Map<string, number>();
-
-  try {
-    const glPlaceholders = accountIds.map((_, i) => `$${i + 1}`).join(', ');
-    const rawDb = (db as any).pool ?? null;
-    if (rawDb) {
-      // Direct PostgreSQL query for DISTINCT ON support
-      const res = await rawDb.query(
-        `SELECT DISTINCT ON (account_id) account_id, running_balance
-         FROM general_ledger
-         WHERE account_id IN (${glPlaceholders})
-         ORDER BY account_id, created_at DESC`,
-        accountIds
-      );
-      for (const row of (res.rows || []) as any[]) {
-        glBalanceMap.set(row.account_id as string, Number(row.running_balance || 0));
-      }
-    } else {
-      // Fallback — per-account query
-      for (const accountId of accountIds) {
-        const row = await db.prepare(
-          `SELECT running_balance FROM general_ledger WHERE account_id = ? ORDER BY created_at DESC LIMIT 1`
-        ).bind(accountId).first().catch(() => null);
-        if (row) glBalanceMap.set(accountId, Number((row as any).running_balance || 0));
-      }
-    }
-  } catch (_) {
-    // Non-fatal: running_balance defaults to 0 for first-time entries
-  }
-
   const stmts: any[] = [];
 
   // 1. Insert Journal Entry (status = 'POSTED')
@@ -370,7 +335,9 @@ export async function prepareJournalEntryPosting(
       )
   );
 
-  // 2. Insert Journal Entry Lines & General Ledger entries
+  // 2. Insert Journal Entry Lines. They are the single source of truth: the
+  // general ledger is a view over them, and running balances are computed
+  // when the ledger is read (within the requested branch scope).
   for (const line of resolvedLines) {
     stmts.push(
       db
@@ -388,37 +355,6 @@ export async function prepareJournalEntryPosting(
           line.creditAmount,
           line.branchId,
           line.lineOrder
-        )
-    );
-
-    // Running balance computed from the pre-fetched map (no extra round-trip)
-    let runningBalance = glBalanceMap.get(line.accountId) ?? 0;
-    if (line.normalBalance === 'DEBIT') {
-      runningBalance += line.debitAmount - line.creditAmount;
-    } else {
-      runningBalance += line.creditAmount - line.debitAmount;
-    }
-
-    const glId = uuidv4();
-    stmts.push(
-      db
-        .prepare(
-          `INSERT INTO general_ledger (
-          id, account_id, journal_entry_id, line_id, entry_date, description,
-          debit_amount, credit_amount, running_balance, branch_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-        )
-        .bind(
-          glId,
-          line.accountId,
-          entryId,
-          line.lineId,
-          entryDate,
-          line.description,
-          line.debitAmount,
-          line.creditAmount,
-          runningBalance,
-          line.branchId
         )
     );
   }

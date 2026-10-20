@@ -113,7 +113,8 @@ const TARGET_OPERATIONAL_TABLES = [
   // General Ledger & Accounting
   'journal_entry_lines',
   'journal_entries',
-  'general_ledger',
+  'general_ledger',         // pre-view databases only; now a view (skipped)
+  'general_ledger_legacy',  // the old copy kept after the switch to a view
   'expenses',
   'chart_of_accounts',
   'fiscal_periods',

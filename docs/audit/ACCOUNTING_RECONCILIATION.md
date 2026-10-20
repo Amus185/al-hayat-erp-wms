@@ -94,7 +94,7 @@ Nothing was changed in any database. Recommended sequence after deploying the fi
 
 All money columns are `DOUBLE PRECISION`. Plan:
 1. Add a versioned migration (introduce a migration tool first; see the SECURITY doc).
-2. In a maintenance window, `ALTER COLUMN … TYPE NUMERIC(14,2) USING ROUND(col::numeric, 2)` table by table, starting with `journal_entry_lines`, `general_ledger`, `invoice_payments`, `purchase_invoice_payments`, `customer_payments`, `customer_debts`.
+2. In a maintenance window, `ALTER COLUMN … TYPE NUMERIC(14,2) USING ROUND(col::numeric, 2)` table by table, starting with `journal_entry_lines` (the general ledger is a view over it), `invoice_payments`, `purchase_invoice_payments`, `customer_payments`, `customer_debts`.
 3. The `pg` driver returns NUMERIC as strings: audit every `Number(...)` use. Most code already wraps values in `Number()`; arithmetic in SQL stays exact.
 4. Re-run the test suite and R1–R16 before and after.
 
