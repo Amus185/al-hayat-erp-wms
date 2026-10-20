@@ -102,40 +102,6 @@ app.route('/api/v1/assets', assets);
 app.route('/api/v1/deliveries', deliveries);
 app.route('/api/v1/manufacturing', manufacturing);
 
-// ── TEMPORARY WIPE ROUTE FOR CHART OF ACCOUNTS & FISCAL PERIODS ───────────────
-app.post('/api/v1/admin/wipe-accounts-and-periods', async (c: any) => {
-  const body = await c.req.json().catch(() => ({}));
-  if (body?.secret !== 'WIPE_ACCOUNTS_PERIODS_CONFIRM_2026') {
-    return c.json({ error: 'Unauthorized: invalid secret.' }, 403);
-  }
-
-  const pool = (globalPgAdapter || (c.env?.DB as any))?.getPool?.() || (globalPgAdapter || (c.env?.DB as any))?.pool;
-  if (!pool) {
-    return c.json({ error: 'PostgreSQL pool not available.' }, 500);
-  }
-
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN;');
-    await client.query('TRUNCATE TABLE chart_of_accounts, fiscal_periods RESTART IDENTITY CASCADE;');
-    await client.query('COMMIT;');
-
-    console.log('[ADMIN WIPE] chart_of_accounts and fiscal_periods wiped successfully.');
-    return c.json({
-      success: true,
-      message: 'chart_of_accounts and fiscal_periods wiped successfully.',
-      wiped: ['chart_of_accounts', 'fiscal_periods']
-    });
-  } catch (err: any) {
-    await client.query('ROLLBACK;').catch(() => {});
-    console.error('[ADMIN WIPE] Error:', err);
-    return c.json({ error: err.message }, 500);
-  } finally {
-    client.release();
-  }
-});
-// ── END TEMPORARY WIPE ROUTE ──────────────────────────────────────────────────
-
 // Global Error Handler - Structured JSON Logging for Cloudflare Workers Observability
 app.onError((err, c) => {
   if (err.name === 'ConflictError') {
