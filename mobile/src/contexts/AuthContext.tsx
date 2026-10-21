@@ -100,7 +100,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const refreshUser = async () => {
     try {
       // In a real app we might call GET /auth/me
-      const me = await client.api.get<AuthUser>('/auth/me');
+      const me = (await client.api.get<{ user: AuthUser }>('/auth/me'))?.user;
       if (me) {
         setUser(me);
         await AsyncStorage.setItem(USER_DATA_KEY, JSON.stringify(me));

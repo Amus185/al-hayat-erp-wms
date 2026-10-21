@@ -3,6 +3,20 @@ import { Env, uuidv4 } from '../db';
 import * as bcrypt from 'bcryptjs';
 import { authMiddleware, requirePermissions, invalidateUserCache } from '../middleware/auth';
 import { logAudit, createAuditLogStmt } from '../services/audit';
+import { prepareRevokeAllSessions } from '../services/auth-sessions';
+
+const ADMIN_ROLE_ID = '77777777-7777-7777-7777-777777777777';
+
+/** Only an administrator may grant the admin role or manage an admin account. */
+async function adminGuard(c: any, targetUserId: string | null, roleIds?: string[]): Promise<string | null> {
+  if (c.get('jwtPayload')?.role === 'admin') return null;
+  if (roleIds?.includes(ADMIN_ROLE_ID)) return 'Only an administrator can grant the administrator role.';
+  if (targetUserId) {
+    const isAdmin = await c.env.DB.prepare('SELECT 1 AS x FROM user_roles WHERE user_id = ? AND role_id = ?').bind(targetUserId, ADMIN_ROLE_ID).first();
+    if (isAdmin) return 'Only an administrator can change an administrator account.';
+  }
+  return null;
+}
 
 const users = new Hono<{ Bindings: Env }>();
 
@@ -36,6 +50,11 @@ users.get('/:id/roles', async (c) => {
 
 // CREATE user
 users.post('/', async (c) => {
+  {
+    const peek = await c.req.json().catch(() => ({}));
+    const denied = await adminGuard(c, null, Array.isArray(peek?.roleIds) ? peek.roleIds : undefined);
+    if (denied) return c.json({ message: denied }, 403);
+  }
   const body = await c.req.json();
 
   // Input validation
@@ -71,6 +90,8 @@ users.post('/', async (c) => {
 users.patch('/:id', async (c) => {
   const id = c.req.param('id');
   const body = await c.req.json();
+  const denied = await adminGuard(c, id, Array.isArray(body.roleIds) ? body.roleIds : undefined);
+  if (denied) return c.json({ message: denied }, 403);
 
   // Check email uniqueness if changing email
   if (body.email) {
@@ -112,6 +133,11 @@ users.patch('/:id', async (c) => {
     }
   }
 
+  // A deactivated user's sessions end now (and stay ended if reactivated)
+  if (body.isActive === false) {
+    await c.env.DB.batch([prepareRevokeAllSessions(c.env.DB, id, 'user_deactivated')]);
+  }
+
   const user = await c.env.DB.prepare(
     'SELECT id, email, full_name, phone, branch_id, warehouse_id, is_active FROM users WHERE id = ?'
   ).bind(id).first();
@@ -127,14 +153,17 @@ users.post('/:id/change-password', async (c) => {
   if (!newPassword || newPassword.length < 6) {
     return c.json({ message: 'Password must be at least 6 characters' }, 400);
   }
+  const denied = await adminGuard(c, id);
+  if (denied) return c.json({ message: denied }, 403);
   const passwordHash = bcrypt.hashSync(newPassword, 12);
-  try {
-    await c.env.DB.prepare(
+  // New password version + every session ended, in one transaction: all
+  // access tokens stop working on the next request, on every instance.
+  await c.env.DB.batch([
+    c.env.DB.prepare(
       'UPDATE users SET password_hash = ?, password_version = COALESCE(password_version, 1) + 1 WHERE id = ?'
-    ).bind(passwordHash, id).run();
-  } catch (_) {
-    await c.env.DB.prepare('UPDATE users SET password_hash = ? WHERE id = ?').bind(passwordHash, id).run();
-  }
+    ).bind(passwordHash, id),
+    prepareRevokeAllSessions(c.env.DB, id, 'password_changed'),
+  ]);
   invalidateUserCache(id); // Clear cache so next request validates against DB
   await logAudit(c, 'USER_CHANGE_PASSWORD', 'users', id, null, { changed: true });
   return c.json({ success: true });
@@ -144,6 +173,8 @@ users.post('/:id/change-password', async (c) => {
 // DELETE user (safe — checks for active references)
 users.delete('/:id', async (c) => {
   const id = c.req.param('id');
+  const denied = await adminGuard(c, id);
+  if (denied) return c.json({ message: denied }, 403);
   const user = await c.env.DB.prepare('SELECT id FROM users WHERE id = ?').bind(id).first();
   if (!user) return c.json({ message: 'User not found.' }, 404);
 

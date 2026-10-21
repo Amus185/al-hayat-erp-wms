@@ -17,6 +17,7 @@ import { LoadingSpinner } from '../components/LoadingSpinner';
 import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
 import type { PaymentMethod, PurchaseInvoicePayment, PaymentSummary } from '../types';
+import { html, writePrintDocument } from '../utils/html';
 
 // ── Local types ────────────────────────────────────────────────────
 interface Supplier {
@@ -364,7 +365,7 @@ export function PurchasingPage() {
       const amountPaid = Number(inv.amount_paid ?? 0);
       const balance = Number(inv.balance ?? 0);
 
-      w.document.write(`<!DOCTYPE html>
+      writePrintDocument(w, html`<!DOCTYPE html>
 <html>
 <head>
   <title>Purchase Invoice ${inv.invoice_number}</title>
@@ -401,7 +402,7 @@ export function PurchasingPage() {
   </style>
 </head>
 <body>
-  <button class="btn-print no-print" onclick="window.print()">Print / Save as PDF</button>
+  <button class="btn-print no-print" data-action="print">Print / Save as PDF</button>
   <div class="header">
     <div>
       <div class="company-title">AL-HAYAT ERP</div>
@@ -417,15 +418,15 @@ export function PurchasingPage() {
     <div class="card">
       <div class="card-title">Vendor / Supplier</div>
       <p class="bold">${data.supplier.name}</p>
-      ${data.supplier.contactName ? `<p>Contact: ${data.supplier.contactName}</p>` : ''}
-      ${data.supplier.phone ? `<p>Tel: ${data.supplier.phone}</p>` : ''}
-      ${data.supplier.email ? `<p>Email: ${data.supplier.email}</p>` : ''}
-      ${data.supplier.address ? `<p>${data.supplier.address}</p>` : ''}
+      ${data.supplier.contactName ? html`<p>Contact: ${data.supplier.contactName}</p>` : ''}
+      ${data.supplier.phone ? html`<p>Tel: ${data.supplier.phone}</p>` : ''}
+      ${data.supplier.email ? html`<p>Email: ${data.supplier.email}</p>` : ''}
+      ${data.supplier.address ? html`<p>${data.supplier.address}</p>` : ''}
     </div>
     <div class="card">
       <div class="card-title">Receiving Location &amp; Status</div>
       <p class="bold">Destination: ${data.warehouse.name}</p>
-      ${data.warehouse.address ? `<p>${data.warehouse.address}</p>` : ''}
+      ${data.warehouse.address ? html`<p>${data.warehouse.address}</p>` : ''}
       <p style="margin-top: 8px;">Status: <span class="badge ${inv.payment_status === 'PAID' ? 'paid' : inv.payment_status === 'PARTIALLY_PAID' ? 'partial' : 'unpaid'}">${(inv.payment_status || inv.status || 'UNPAID').replace('_', ' ')}</span></p>
     </div>
   </div>
@@ -441,7 +442,7 @@ export function PurchasingPage() {
       </tr>
     </thead>
     <tbody>
-      ${data.lines.map((l: any) => `
+      ${data.lines.map((l: any) => html`
         <tr>
           <td><strong>${l.product_name}</strong></td>
           <td style="color: #64748b; font-family: monospace;">${l.variant_sku}</td>
@@ -450,16 +451,16 @@ export function PurchasingPage() {
           <td class="text-right" style="color: #b45309;">-${Number(l.discount_amount || 0).toFixed(2)}</td>
           <td class="text-right" style="font-weight: 700;">$${Number(l.line_total || ((l.quantity_ordered * l.unit_cost) - Number(l.discount_amount || 0))).toFixed(2)}</td>
         </tr>
-      `).join('')}
+      `)}
     </tbody>
   </table>
   <div class="summary-box">
     <div class="summary-table">
       <div class="summary-row"><span>Subtotal:</span><span>$${subtotal.toFixed(2)}</span></div>
-      ${totalDiscount > 0 ? `<div class="summary-row" style="color:#b45309"><span>Total Discount:</span><span>-$${totalDiscount.toFixed(2)}</span></div>` : ''}
+      ${totalDiscount > 0 ? html`<div class="summary-row" style="color:#b45309"><span>Total Discount:</span><span>-$${totalDiscount.toFixed(2)}</span></div>` : ''}
       <div class="summary-row grand-total"><span>Grand Total:</span><span>$${grandTotal.toFixed(2)}</span></div>
       <div class="summary-row paid-row"><span>Paid to Supplier:</span><span>$${amountPaid.toFixed(2)}</span></div>
-      ${balance > 0 ? `<div class="summary-row balance-row"><span>Remaining Payable:</span><span>$${balance.toFixed(2)}</span></div>` : ''}
+      ${balance > 0 ? html`<div class="summary-row balance-row"><span>Remaining Payable:</span><span>$${balance.toFixed(2)}</span></div>` : ''}
     </div>
   </div>
   <div class="footer">
@@ -468,7 +469,6 @@ export function PurchasingPage() {
   </div>
 </body>
 </html>`);
-      w.document.close();
     } catch (err: any) {
       addToast('error', err?.message || 'Failed to generate printable purchase invoice.');
     }

@@ -17,6 +17,7 @@ import { MetricCard } from '../components/MetricCard';
 import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
 import { confirmAction } from '../utils/swal';
+import { html, writePrintDocument } from '../utils/html';
 
 interface DeliveryItem {
   id: string;
@@ -696,7 +697,7 @@ export function DeliveriesPage() {
   const handlePrintSlip = (d: Delivery) => {
     const w = window.open('', '_blank', 'width=800,height=900');
     if (!w) return;
-    w.document.write(`
+    writePrintDocument(w, html`
       <html>
       <head>
         <title>Delivery Consignment Note - ${d.delivery_number}</title>
@@ -743,7 +744,7 @@ export function DeliveriesPage() {
           </div>
         </div>
 
-        ${d.installation_required ? `
+        ${d.installation_required ? html`
           <div style="background: #fefce8; border: 1px solid #fde047; border-radius: 8px; padding: 12px; margin-bottom: 20px;">
             <strong style="color: #854d0e;">Installation Service</strong>
             <div style="font-size: 12px; color: #713f12; margin-top: 4px;">
@@ -763,15 +764,15 @@ export function DeliveriesPage() {
             </tr>
           </thead>
           <tbody>
-            ${(d.items || []).map((i) => `
+            ${(d.items || []).map((i) => html`
               <tr>
                 <td><strong>${i.product_name || '—'}</strong></td>
                 <td>${i.product_sku || '—'}</td>
                 <td><strong>${i.quantity}</strong></td>
                 <td>${i.notes || '—'}</td>
               </tr>
-            `).join('')}
-            ${(!d.items || d.items.length === 0) ? `
+            `)}
+            ${(!d.items || d.items.length === 0) ? html`
               <tr>
                 <td colspan="4" style="text-align: center; color: #64748b;">Associated with Sales Order #${d.order_number || d.sales_order_id}</td>
               </tr>
@@ -779,7 +780,7 @@ export function DeliveriesPage() {
           </tbody>
         </table>
 
-        ${d.notes ? `<div style="margin-top: 14px; font-size: 13px; color: #475569;"><strong>Notes / Delivery Instructions:</strong> ${d.notes}</div>` : ''}
+        ${d.notes ? html`<div style="margin-top: 14px; font-size: 13px; color: #475569;"><strong>Notes / Delivery Instructions:</strong> ${d.notes}</div>` : ''}
 
         <div class="sig-row">
           <div class="sig-box">
@@ -794,7 +795,6 @@ export function DeliveriesPage() {
       </body>
       </html>
     `);
-    w.document.close();
   };
 
   // Filtered deliveries

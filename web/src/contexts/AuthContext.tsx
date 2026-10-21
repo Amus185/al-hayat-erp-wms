@@ -1,6 +1,6 @@
 import { createContext, useContext, useCallback, useEffect, useState, type ReactNode } from 'react';
-import type { AuthUser, LoginRequest, LoginResponse } from '../types';
-import { apiPublicPost } from '../api/client';
+import type { AuthUser, LoginRequest } from '../types';
+import { loginRequest, logoutRequest, refreshSession, onSessionExpired, setAccessToken } from '../api/client';
 
 interface AuthContextType {
   user: AuthUser | null;
@@ -17,41 +17,43 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | null>(null);
 
+// The signed-in user is kept in memory only and always comes from the server
+// (login or refresh response). It drives what the UI shows; the server never
+// trusts it — every request is authorised from the database.
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  // Restore session on mount
+  // Restore the session on load from the HttpOnly refresh cookie
   useEffect(() => {
-    try {
-      const storedUser = localStorage.getItem('auth_user');
-      const accessToken = localStorage.getItem('access_token');
-      if (storedUser && accessToken) {
-        setUser(JSON.parse(storedUser));
-      }
-    } catch {
-      localStorage.removeItem('auth_user');
-      localStorage.removeItem('access_token');
-      localStorage.removeItem('refresh_token');
-    } finally {
-      setIsLoading(false);
-    }
+    let cancelled = false;
+    refreshSession<AuthUser>()
+      .then((session) => { if (!cancelled) setUser(session?.user ?? null); })
+      .catch(() => { if (!cancelled) setUser(null); })
+      .finally(() => { if (!cancelled) setIsLoading(false); });
+    return () => { cancelled = true; };
+  }, []);
+
+  // A session that can no longer be renewed (logged out elsewhere, password
+  // changed, revoked) returns the user to the sign-in page.
+  useEffect(() => {
+    onSessionExpired(() => {
+      setAccessToken(null);
+      setUser(null);
+      if (!window.location.pathname.includes('/login')) window.location.href = '/login';
+    });
   }, []);
 
   const login = useCallback(async (credentials: LoginRequest) => {
-    const response = await apiPublicPost<LoginResponse>('/auth/login', credentials);
-    localStorage.setItem('access_token', response.accessToken);
-    localStorage.setItem('refresh_token', response.refreshToken);
-    localStorage.setItem('auth_user', JSON.stringify(response.user));
-    setUser(response.user);
+    const session = await loginRequest<AuthUser>(credentials);
+    setUser(session.user);
   }, []);
 
   const logout = useCallback(() => {
-    localStorage.removeItem('access_token');
-    localStorage.removeItem('refresh_token');
-    localStorage.removeItem('auth_user');
-    setUser(null);
-    window.location.href = '/login';
+    logoutRequest().finally(() => {
+      setUser(null);
+      window.location.href = '/login';
+    });
   }, []);
 
   const hasPermission = useCallback(

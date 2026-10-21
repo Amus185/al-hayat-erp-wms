@@ -15,6 +15,7 @@ import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
 import { confirmAction } from '../utils/swal';
 import type { PaymentMethod } from '../types';
+import { html, writePrintDocument } from '../utils/html';
 
 // ── Interface Definitions ───────────────────────────────────────────
 interface Customer {
@@ -578,7 +579,7 @@ export function CustomersPage() {
     const currentBal = ledgerData.current_balance ?? ledgerData.customer?.current_balance ?? 0;
     const entries = ledgerData.entries || (ledgerData as any).ledger || [];
 
-    w.document.write(`
+    writePrintDocument(w, html`
       <!DOCTYPE html>
       <html>
       <head>
@@ -608,7 +609,7 @@ export function CustomersPage() {
         </style>
       </head>
       <body>
-        <button onclick="window.print()" style="position:fixed;top:20px;right:20px;padding:8px 16px;background:#066006;color:white;border:none;border-radius:6px;cursor:pointer;font-weight:600;">Print Statement</button>
+        <button data-action="print" style="position:fixed;top:20px;right:20px;padding:8px 16px;background:#066006;color:white;border:none;border-radius:6px;cursor:pointer;font-weight:600;">Print Statement</button>
         <div class="header">
           <div>
             <h1>AL-HAYAT FURNITURE STORE</h1>
@@ -623,9 +624,9 @@ export function CustomersPage() {
           <div class="card">
             <h3>Customer Profile</h3>
             <p><strong>${c.name}</strong></p>
-            ${c.phone ? `<p>Phone: ${c.phone}</p>` : ''}
-            ${c.email ? `<p>Email: ${c.email}</p>` : ''}
-            ${c.address ? `<p>Address: ${c.address}</p>` : ''}
+            ${c.phone ? html`<p>Phone: ${c.phone}</p>` : ''}
+            ${c.email ? html`<p>Email: ${c.email}</p>` : ''}
+            ${c.address ? html`<p>Address: ${c.address}</p>` : ''}
           </div>
           <div class="balance-box">
             <h3>Net Outstanding Balance</h3>
@@ -648,7 +649,7 @@ export function CustomersPage() {
             ${entries.map(e => {
               const debitVal = Number(e.debit ?? (e as any).charge ?? 0);
               const creditVal = Number(e.credit ?? (e as any).payment ?? 0);
-              return `
+              return html`
               <tr>
                 <td>${new Date(e.date).toLocaleDateString()}</td>
                 <td style="font-family: monospace; font-weight: 600;">${e.reference}</td>
@@ -658,7 +659,7 @@ export function CustomersPage() {
                 <td class="run-bal" style="color: ${e.running_balance > 0 ? '#b91c1c' : '#15803d'};">${fmt(e.running_balance)}</td>
               </tr>
             `;
-            }).join('')}
+            })}
           </tbody>
         </table>
         <div class="footer">
@@ -667,7 +668,6 @@ export function CustomersPage() {
       </body>
       </html>
     `);
-    w.document.close();
   };
 
   // Printable Receipt Trigger
@@ -676,7 +676,7 @@ export function CustomersPage() {
     const w = window.open('', '_blank');
     if (!w) { addToast('error', 'Pop-up blocked. Please allow pop-ups to print receipt.'); return; }
 
-    w.document.write(`
+    writePrintDocument(w, html`
       <!DOCTYPE html>
       <html>
       <head>
@@ -703,7 +703,7 @@ export function CustomersPage() {
         </style>
       </head>
       <body>
-        <button onclick="window.print()" style="position:fixed;top:20px;right:20px;padding:8px 16px;background:#066006;color:white;border:none;border-radius:6px;cursor:pointer;font-weight:600;">Print Receipt</button>
+        <button data-action="print" style="position:fixed;top:20px;right:20px;padding:8px 16px;background:#066006;color:white;border:none;border-radius:6px;cursor:pointer;font-weight:600;">Print Receipt</button>
         <div class="header">
           <h1>AL-HAYAT FURNITURE STORE</h1>
           <p>Official Payment Receipt</p>
@@ -745,7 +745,7 @@ export function CustomersPage() {
             <span>${fmt(currentReceipt.remaining_balance)}</span>
           </div>
         </div>
-        ${currentReceipt.notes ? `<div style="font-size: 12px; color: #475569; margin-bottom: 12px;"><strong>Notes:</strong> ${currentReceipt.notes}</div>` : ''}
+        ${currentReceipt.notes ? html`<div style="font-size: 12px; color: #475569; margin-bottom: 12px;"><strong>Notes:</strong> ${currentReceipt.notes}</div>` : ''}
         <div class="footer">
           <p>Thank you for your payment!</p>
           <p>Authorized Cashier Signature / Store Stamp</p>
@@ -753,7 +753,6 @@ export function CustomersPage() {
       </body>
       </html>
     `);
-    w.document.close();
   };
 
   return (
