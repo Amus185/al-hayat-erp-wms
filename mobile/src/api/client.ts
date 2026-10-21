@@ -16,37 +16,64 @@ import {
 
 export const API_BASE_URL = 'http://localhost:3000/api/v1'; // On Android emulator, use http://10.0.2.2:3000/api/v1
 
-const TOKEN_KEY = 'al_hayat_wms_token';
+// Legacy builds persisted the access token in AsyncStorage (unencrypted).
+const LEGACY_TOKEN_KEY = 'al_hayat_wms_token';
 
+// Tokens are kept in memory only. Persisting the refresh token requires the
+// platform keystore (expo-secure-store / Keychain / Android Keystore); until
+// that dependency is added (see docs/audit/AUTHENTICATION.md), the user signs
+// in again after the app is closed. AsyncStorage is never used for tokens.
 let authToken: string | null = null;
+let refreshToken: string | null = null;
 
-// Initialize token from storage
+// Native clients identify themselves so the server returns the refresh token
+// in the body (no cookie) and accepts it back in the body.
+const NATIVE_HEADERS = { 'X-Client-Type': 'native' };
+
 export async function initializeClient(): Promise<string | null> {
   try {
-    const token = await AsyncStorage.getItem(TOKEN_KEY);
-    authToken = token;
-    return token;
-  } catch (error) {
-    console.error('Failed to load auth token from storage', error);
-    return null;
+    await AsyncStorage.removeItem(LEGACY_TOKEN_KEY);
+  } catch {
+    // ignore
   }
+  return authToken;
 }
 
 export async function setAuthToken(token: string | null) {
-  try {
-    authToken = token;
-    if (token) {
-      await AsyncStorage.setItem(TOKEN_KEY, token);
-    } else {
-      await AsyncStorage.removeItem(TOKEN_KEY);
-    }
-  } catch (error) {
-    console.error('Failed to save auth token to storage', error);
-  }
+  authToken = token;
+  if (!token) refreshToken = null;
 }
 
 export function getAuthToken() {
   return authToken;
+}
+
+let refreshing: Promise<boolean> | null = null;
+
+/** Exchange the refresh token for a new pair (single-flight). */
+async function refreshTokens(): Promise<boolean> {
+  if (!refreshToken) return false;
+  if (!refreshing) {
+    refreshing = (async () => {
+      try {
+        const res = await fetch(`${API_BASE_URL}/auth/refresh`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...NATIVE_HEADERS },
+          body: JSON.stringify({ refreshToken }),
+        });
+        if (!res.ok) { authToken = null; refreshToken = null; return false; }
+        const data = await res.json();
+        authToken = data.accessToken;
+        refreshToken = data.refreshToken;
+        return true;
+      } catch {
+        return false;
+      } finally {
+        refreshing = null;
+      }
+    })();
+  }
+  return refreshing;
 }
 
 // HTTP Helpers
@@ -70,7 +97,11 @@ async function request<T>(
     headers,
   };
 
-  const response = await fetch(url, config);
+  let response = await fetch(url, config);
+  if (response.status === 401 && !path.startsWith('/auth/') && await refreshTokens()) {
+    headers.set('Authorization', `Bearer ${authToken}`);
+    response = await fetch(url, { ...config, headers });
+  }
 
   if (!response.ok) {
     let errorMessage = `HTTP Request failed with status ${response.status}`;
@@ -117,15 +148,28 @@ export const api = {
 // ── Specific Endpoints ─────────────────────────────────
 
 export async function login(data: LoginRequest): Promise<LoginResponse> {
-  const res = await api.post<LoginResponse>('/auth/login', data);
-  if (res && res.accessToken) {
-    await setAuthToken(res.accessToken);
-  }
+  const res = await api.post<LoginResponse>('/auth/login', data, { headers: NATIVE_HEADERS });
+  authToken = res?.accessToken ?? null;
+  refreshToken = res?.refreshToken ?? null;
   return res;
 }
 
+/** Ends the session on the server, then forgets the tokens. */
 export async function logout(): Promise<void> {
-  await setAuthToken(null);
+  const token = refreshToken;
+  authToken = null;
+  refreshToken = null;
+  if (token) {
+    try {
+      await fetch(`${API_BASE_URL}/auth/logout`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...NATIVE_HEADERS },
+        body: JSON.stringify({ refreshToken: token }),
+      });
+    } catch {
+      // offline: the session still expires server-side
+    }
+  }
 }
 
 export async function barcodeLookup(barcode: string): Promise<any> {

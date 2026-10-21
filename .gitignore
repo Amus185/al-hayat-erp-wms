@@ -42,3 +42,6 @@ mobile/ios/
 
 # TypeScript
 *.tsbuildinfo
+
+# Cloudflare wrangler local dev state
+.wrangler/

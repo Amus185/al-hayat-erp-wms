@@ -1,114 +1,86 @@
 import { Context, Next } from 'hono';
 import { verify } from 'hono/jwt';
 import { Env } from '../db';
+import { getAccessSecret } from '../security-config';
 
 export type JwtPayload = {
   sub: string;
+  sid: string;            // server-side session (auth_sessions.id)
   email: string;
   name: string;
-  // The fields below are re-derived from the database on every request
-  // (see authMiddleware); the copies inside the token are never trusted.
+  // The fields below are loaded from the database on every request (see
+  // authMiddleware); nothing the client sends is trusted for authorization.
   permissions: string[];
   branch_id: string | null;
   role: string;           // 'admin' when the user holds the admin role, else their first role
   roles?: string[];
-  pwd_ver: number;        // password_version — invalidated on credential regen
+  pwd_ver: number;        // password_version — a password change ends every session
 };
 
-// ── In-memory user cache (5-minute TTL) ──────────────────────────────────────
-// Holds the user's live authorization scope so a changed branch, role or
-// permission applies on the next request instead of when the token expires.
-// Invalidated immediately on user updates (single Railway replica).
-interface CachedUser {
-  pwdVer: number;
-  isActive: boolean;
-  branchId: string | null;
-  roles: string[];
-  permissions: string[];
-  expiresAt: number;
-}
+/**
+ * Kept for callers that used to clear the per-process user cache. There is no
+ * cache any more: every request reads the user and session from the database,
+ * so a password change, deactivation, role change or logout applies on the
+ * next request on every backend instance.
+ */
+export function invalidateUserCache(_userId: string) {}
 
-const userCache = new Map<string, CachedUser>();
-const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
-
-function getCachedUser(userId: string): CachedUser | null {
-  const entry = userCache.get(userId);
-  if (!entry) return null;
-  if (Date.now() > entry.expiresAt) {
-    userCache.delete(userId);
-    return null;
-  }
-  return entry;
-}
-
-export function invalidateUserCache(userId: string) {
-  userCache.delete(userId);
-}
-
-async function loadUser(db: any, userId: string): Promise<CachedUser | null> {
-  const user = await db.prepare(`
-    SELECT u.password_version, u.is_active, u.branch_id,
+async function loadAuthState(db: any, userId: string, sessionId: string) {
+  return db.prepare(`
+    SELECT u.email, u.full_name, COALESCE(u.password_version, 1) AS password_version, u.is_active, u.branch_id,
            (SELECT STRING_AGG(DISTINCT r.code, ',') FROM user_roles ur JOIN roles r ON r.id = ur.role_id WHERE ur.user_id = u.id) AS roles,
            (SELECT STRING_AGG(DISTINCT p.code, ',') FROM user_roles ur
               JOIN role_permissions rp ON rp.role_id = ur.role_id
               JOIN permissions p ON p.id = rp.permission_id
-            WHERE ur.user_id = u.id) AS permissions
-    FROM users u WHERE u.id = ?
-  `).bind(userId).first();
-  if (!user) return null;
-  const entry: CachedUser = {
-    pwdVer: (user.password_version as number) ?? 1,
-    isActive: Boolean(user.is_active),
-    branchId: (user.branch_id as string | null) ?? null,
-    roles: user.roles ? String(user.roles).split(',') : [],
-    permissions: user.permissions ? String(user.permissions).split(',') : [],
-    expiresAt: Date.now() + CACHE_TTL_MS,
-  };
-  userCache.set(userId, entry);
-  return entry;
+            WHERE ur.user_id = u.id) AS permissions,
+           s.id IS NOT NULL AND s.revoked_at IS NULL AND s.expires_at > CURRENT_TIMESTAMP AS session_live
+    FROM users u
+    LEFT JOIN auth_sessions s ON s.id = ? AND s.user_id = u.id
+    WHERE u.id = ?
+  `).bind(sessionId, userId).first();
 }
 
 export const authMiddleware = async (c: Context<{ Bindings: Env }>, next: Next) => {
-  const reqStart = Date.now();
-  (c as any).reqStartTime = reqStart;
-  console.log(`[WATERFALL] +0ms | Request received: ${c.req.method} ${c.req.url}`);
-
   const authHeader = c.req.header('Authorization');
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return c.json({ message: 'Unauthorized' }, 401);
   }
 
-  const token = authHeader.replace('Bearer ', '');
+  let payload: JwtPayload & { typ?: string };
   try {
-    const t0 = Date.now();
-    const payload = await verify(token, c.env.JWT_ACCESS_SECRET, 'HS256') as JwtPayload;
-    console.log(`[WATERFALL] +${Date.now() - reqStart}ms | authMiddleware JWT verified (${Date.now() - t0}ms)`);
-
-    // Live scope: cache hit (<1ms) or one DB read per user per 5 minutes
-    const cached = getCachedUser(payload.sub) ?? await loadUser(c.env.DB, payload.sub);
-    if (!cached) {
-      return c.json({ message: 'User not found or deactivated' }, 401);
-    }
-
-    if (!cached.isActive) {
-      return c.json({ message: 'User deactivated' }, 401);
-    }
-
-    if (payload.pwd_ver !== undefined && cached.pwdVer !== payload.pwd_ver) {
-      return c.json({ message: 'Credentials have been regenerated. Please log in again.' }, 401);
-    }
-
-    // Authorization comes from the database, never from token claims.
-    payload.branch_id = cached.branchId;
-    payload.permissions = cached.permissions;
-    payload.roles = cached.roles;
-    payload.role = cached.roles.includes('admin') ? 'admin' : (cached.roles[0] || 'branch_user');
-
-    c.set('jwtPayload', payload);
-    await next();
-  } catch (error) {
+    payload = await verify(authHeader.slice(7), getAccessSecret(), 'HS256') as any;
+  } catch (error: any) {
+    if (error?.name === 'ConfigError') throw error;
     return c.json({ message: 'Invalid or expired token' }, 401);
   }
+  // Only session-bound access tokens are accepted (tokens issued before
+  // server-side sessions existed carry no sid and are refused).
+  if (payload.typ !== 'access' || !payload.sid || !payload.sub) {
+    return c.json({ message: 'Invalid or expired token' }, 401);
+  }
+
+  const user = await loadAuthState(c.env.DB, payload.sub, payload.sid);
+  if (!user || Number(user.is_active) !== 1) {
+    return c.json({ message: 'User not found or deactivated' }, 401);
+  }
+  if (Number(user.password_version) !== Number(payload.pwd_ver)) {
+    return c.json({ message: 'Your password was changed. Please sign in again.' }, 401);
+  }
+  if (!user.session_live) {
+    return c.json({ message: 'Session ended. Please sign in again.' }, 401);
+  }
+
+  // Authorization comes from the database, never from token claims.
+  const roles = user.roles ? String(user.roles).split(',') : [];
+  payload.email = user.email;
+  payload.name = user.full_name;
+  payload.branch_id = (user.branch_id as string | null) ?? null;
+  payload.permissions = user.permissions ? String(user.permissions).split(',') : [];
+  payload.roles = roles;
+  payload.role = roles.includes('admin') ? 'admin' : (roles[0] || 'branch_user');
+
+  c.set('jwtPayload', payload);
+  await next();
 };
 
 
@@ -117,8 +89,6 @@ export const authMiddleware = async (c: Context<{ Bindings: Env }>, next: Next) 
  */
 export const requirePermissions = (requiredPermissions: string[]) => {
   return async (c: Context<{ Bindings: Env; Variables: { jwtPayload: JwtPayload } }>, next: Next) => {
-    const reqStart = (c as any).reqStartTime || Date.now();
-    console.log(`[WATERFALL] +${Date.now() - reqStart}ms | requirePermissions check started`);
     const payload = c.get('jwtPayload');
     if (!payload) {
       return c.json({ message: 'Unauthorized' }, 401);
@@ -133,7 +103,6 @@ export const requirePermissions = (requiredPermissions: string[]) => {
       return c.json({ message: 'Forbidden' }, 403);
     }
 
-    console.log(`[WATERFALL] +${Date.now() - reqStart}ms | requirePermissions check passed`);
     await next();
   };
 };

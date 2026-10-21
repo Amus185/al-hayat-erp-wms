@@ -9,7 +9,9 @@ export interface LoginRequest {
 
 export interface LoginResponse {
   accessToken: string;
-  refreshToken: string;
+  expiresIn: number;
+  /** Native clients only; browsers receive the refresh token as an HttpOnly cookie. */
+  refreshToken?: string;
   user: AuthUser;
 }
 
@@ -20,10 +22,6 @@ export interface AuthUser {
   permissions: string[];
   branchId: string | null;
   role: string; // 'admin' | 'branch_user' | 'manager' | etc.
-}
-
-export interface RefreshRequest {
-  refreshToken: string;
 }
 
 // ── Users ───────────────────────────────────────────

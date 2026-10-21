@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { Env, uuidv4 } from '../db';
 import * as bcrypt from 'bcryptjs';
 import { authMiddleware, requirePermissions, requireAdmin, isAdminUser, invalidateUserCache } from '../middleware/auth';
+import { prepareRevokeAllSessions } from '../services/auth-sessions';
 import { logAudit } from '../services/audit';
 
 const branches = new Hono<{ Bindings: Env; Variables: { jwtPayload: any } }>();
@@ -234,6 +235,7 @@ branches.post('/:id/regenerate-credentials', requireAdmin, async (c) => {
     c.env.DB.prepare(
       'DELETE FROM refresh_tokens WHERE user_id = ?'
     ).bind(branchUser.id),
+    prepareRevokeAllSessions(c.env.DB, branchUser.id as string, 'credentials_regenerated'),
   ]);
 
   invalidateUserCache(branchUser.id as string);

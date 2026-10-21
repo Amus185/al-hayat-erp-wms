@@ -23,6 +23,7 @@ import manufacturing from './routes/manufacturing';
 // Global router instances...
 
 import { PgAdapter } from './pg-client';
+import { getAccessSecret, isAllowedOrigin, isProductionRuntime } from './security-config';
 import { ensurePostgresInit } from './init-postgres';
 
 const app = new Hono();
@@ -44,25 +45,38 @@ app.get('/api/v1/health', (c) => c.json({
   timestamp: new Date().toISOString()
 }));
 
+// CORS: only listed origins (CORS_ORIGINS). In production the browser calls
+// the API same-origin through the Pages proxy, so CORS applies only to direct
+// cross-origin calls (local development, or an old cached bundle).
 app.use('*', cors({
-  origin: '*',
+  origin: (origin) => (isAllowedOrigin(origin) ? origin : null),
   allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowHeaders: ['Content-Type', 'Authorization'],
+  allowHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Protection', 'X-Client-Type'],
   exposeHeaders: ['Content-Length'],
-  maxAge: 86400,
+  maxAge: 600,
   credentials: true,
 }));
+
+app.use('*', async (c, next) => {
+  await next();
+  c.header('X-Content-Type-Options', 'nosniff');
+  c.header('Referrer-Policy', 'no-referrer');
+  c.header('X-Frame-Options', 'DENY');
+});
 
 // Environment & Database Binding Middleware for Railway / Node.js
 app.use('*', async (c, next) => {
   const envObj = (c.env || {}) as Record<string, any>;
   (c as any).env = envObj;
 
-  // Populate secrets from process.env if available (Railway / Node.js)
-  envObj.JWT_ACCESS_SECRET = envObj.JWT_ACCESS_SECRET || (typeof process !== 'undefined' ? process.env.JWT_ACCESS_SECRET : undefined) || 'dev-access-secret-1234567890123456';
-  envObj.JWT_REFRESH_SECRET = envObj.JWT_REFRESH_SECRET || (typeof process !== 'undefined' ? process.env.JWT_REFRESH_SECRET : undefined) || 'dev-refresh-secret-1234567890123456';
-  envObj.JWT_ACCESS_EXPIRY = envObj.JWT_ACCESS_EXPIRY || (typeof process !== 'undefined' ? process.env.JWT_ACCESS_EXPIRY : undefined) || '15m';
-  envObj.JWT_REFRESH_EXPIRY = envObj.JWT_REFRESH_EXPIRY || (typeof process !== 'undefined' ? process.env.JWT_REFRESH_EXPIRY : undefined) || '7d';
+  // Fail closed: without a strong signing secret in production, no API
+  // request is served (anyone could otherwise forge a token).
+  try {
+    getAccessSecret();
+  } catch (err: any) {
+    console.error(JSON.stringify({ level: 'error', service: 'al-hayat-api', event: 'CONFIG_ERROR', error: err.message }));
+    return c.json({ message: 'Service misconfigured. Contact the administrator.' }, 503);
+  }
 
   const pgConnStr = typeof process !== 'undefined' ? (process.env.DATABASE_URL || process.env.POSTGRES_URL || process.env.PG_URL) : undefined;
 
@@ -130,7 +144,8 @@ app.onError((err, c) => {
 
   return c.json(
     {
-      error: err.message || 'Internal Server Error',
+      // Internal details (SQL, stack) stay in the server log, not the response
+      error: isProductionRuntime() ? 'Internal Server Error' : (err.message || 'Internal Server Error'),
       status: 500,
     },
     500

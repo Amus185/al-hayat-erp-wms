@@ -21,6 +21,7 @@ import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
 import type { PaymentMethod, InvoicePayment, PaymentSummary } from '../types';
 import { confirmAction } from '../utils/swal';
+import { html, writePrintDocument } from '../utils/html';
 
 // ── Local interface shapes matching API responses ───────────────────
 interface Customer {
@@ -415,12 +416,12 @@ export function SalesPage() {
       if (!w) { addToast('error', 'Pop-up blocked. Please allow pop-ups.'); return; }
       const inv = data.invoice;
       const paidBadge = inv.payment_status === 'PAID'
-        ? '<span class="status paid">PAID</span>'
+        ? html`<span class="status paid">PAID</span>`
         : inv.payment_status === 'PARTIALLY_PAID'
-          ? '<span class="status partial">PARTIALLY PAID</span>'
-          : '<span class="status unpaid">UNPAID</span>';
+          ? html`<span class="status partial">PARTIALLY PAID</span>`
+          : html`<span class="status unpaid">UNPAID</span>`;
 
-      w.document.write(`<!DOCTYPE html><html><head><title>Invoice ${inv.invoice_number}</title>
+      writePrintDocument(w, html`<!DOCTYPE html><html><head><title>Invoice ${inv.invoice_number}</title>
         <style>
           * { margin: 0; padding: 0; box-sizing: border-box; }
           body { font-family: 'Segoe UI', sans-serif; padding: 40px; color: #1a1a1a; max-width: 800px; margin: 0 auto; }
@@ -447,27 +448,26 @@ export function SalesPage() {
           .status.unpaid { background: #f8d7da; color: #721c24; }
           @media print { body { padding: 20px; } button { display: none !important; } }
         </style></head><body>
-        <button onclick="window.print()" style="position:fixed;top:20px;right:20px;padding:10px 20px;background:#066006;color:white;border:none;border-radius:6px;cursor:pointer;font-weight:600;">Print</button>
+        <button data-action="print" style="position:fixed;top:20px;right:20px;padding:10px 20px;background:#066006;color:white;border:none;border-radius:6px;cursor:pointer;font-weight:600;">Print</button>
         <div class="header">
           <div><h1>INVOICE</h1><p style="font-size:14px;color:#555">${inv.invoice_number}</p></div>
-          <div style="text-align:right"><p style="font-weight:700">${data.branch.name}</p><p style="font-size:13px;color:#555">${data.branch.city || ''}${data.branch.address ? ', ' + data.branch.address : ''}</p>${data.branch.phone ? '<p style="font-size:12px;color:#555">Tel: ' + data.branch.phone + '</p>' : ''}</div>
+          <div style="text-align:right"><p style="font-weight:700">${data.branch.name}</p><p style="font-size:13px;color:#555">${data.branch.city || ''}${data.branch.address ? ', ' + data.branch.address : ''}</p>${data.branch.phone ? html`<p style="font-size:12px;color:#555">Tel: ${data.branch.phone}</p>` : ''}</div>
         </div>
         <div class="meta">
-          <div class="meta-box"><h3>Bill To</h3><p style="font-weight:700">${data.customer.name}</p>${data.customer.phone ? '<p>' + data.customer.phone + '</p>' : ''}${data.customer.email ? '<p>' + data.customer.email + '</p>' : ''}${data.customer.address ? '<p>' + data.customer.address + '</p>' : ''}</div>
-          <div class="meta-box"><h3>Invoice Details</h3><p><strong>Order:</strong> ${inv.order_number}</p><p><strong>Issued:</strong> ${inv.issued_at ? new Date(inv.issued_at).toLocaleDateString() : 'N/A'}</p><p><strong>Status:</strong> ${paidBadge}</p>${inv.paid_at ? '<p><strong>Paid:</strong> ' + new Date(inv.paid_at).toLocaleDateString() + '</p>' : ''}</div>
+          <div class="meta-box"><h3>Bill To</h3><p style="font-weight:700">${data.customer.name}</p>${data.customer.phone ? html`<p>${data.customer.phone}</p>` : ''}${data.customer.email ? html`<p>${data.customer.email}</p>` : ''}${data.customer.address ? html`<p>${data.customer.address}</p>` : ''}</div>
+          <div class="meta-box"><h3>Invoice Details</h3><p><strong>Order:</strong> ${inv.order_number}</p><p><strong>Issued:</strong> ${inv.issued_at ? new Date(inv.issued_at).toLocaleDateString() : 'N/A'}</p><p><strong>Status:</strong> ${paidBadge}</p>${inv.paid_at ? html`<p><strong>Paid:</strong> ${new Date(inv.paid_at).toLocaleDateString()}</p>` : ''}</div>
         </div>
         <table><thead><tr><th>Product</th><th>SKU</th><th>Qty</th><th>Unit Price</th><th style="text-align:right">Subtotal</th></tr></thead>
-        <tbody>${data.lines.map((l: any) => '<tr><td>' + l.product_name + '</td><td>' + l.product_sku + '</td><td>' + l.quantity + '</td><td>$' + Number(l.unit_price).toFixed(2) + '</td><td style="text-align:right;font-weight:600">$' + Number(l.subtotal).toFixed(2) + '</td></tr>').join('')}</tbody></table>
+        <tbody>${data.lines.map((l: any) => html`<tr><td>${l.product_name}</td><td>${l.product_sku}</td><td>${l.quantity}</td><td>$${Number(l.unit_price).toFixed(2)}</td><td style="text-align:right;font-weight:600">$${Number(l.subtotal).toFixed(2)}</td></tr>`)}</tbody></table>
         <div class="summary"><div class="summary-inner">
           <div class="summary-row"><span>Subtotal</span><span>$${Number(inv.total_amount ?? (inv.net_total + inv.discount_amount)).toFixed(2)}</span></div>
-          ${Number(inv.discount_amount) > 0 ? '<div class="summary-row" style="color:#b45309"><span>Discount</span><span>-$' + Number(inv.discount_amount).toFixed(2) + '</span></div>' : ''}
+          ${Number(inv.discount_amount) > 0 ? html`<div class="summary-row" style="color:#b45309"><span>Discount</span><span>-$${Number(inv.discount_amount).toFixed(2)}</span></div>` : ''}
           <div class="summary-row total"><span>Net Total</span><span style="color:#066006">$${Number(inv.net_total ?? (inv.total_amount - inv.discount_amount)).toFixed(2)}</span></div>
           <div class="summary-row paid-row"><span>Amount Paid</span><span>$${Number(inv.amount_paid ?? 0).toFixed(2)}</span></div>
-          ${Number(inv.balance) > 0 ? '<div class="summary-row balance"><span>Remaining Balance</span><span>$' + Number(inv.balance).toFixed(2) + '</span></div>' : ''}
+          ${Number(inv.balance) > 0 ? html`<div class="summary-row balance"><span>Remaining Balance</span><span>$${Number(inv.balance).toFixed(2)}</span></div>` : ''}
         </div></div>
         <div class="footer"><p>Thank you for your business!</p><p>Generated on ${new Date().toLocaleString()}</p></div>
       </body></html>`);
-      w.document.close();
     } catch (err: any) {
       addToast('error', err?.message || 'Failed to load invoice for printing');
     }

@@ -38,17 +38,27 @@ export async function setupTestApp() {
   await ensurePostgresInit(pool);
   const { default: app } = await import('../src/index');
 
-  const tokenFor = (claims: { sub: string; permissions?: string[]; branch_id?: string | null; role?: string }) =>
-    sign({
+  // A real server-side session plus a session-bound access token. Role,
+  // branch and permission claims are deliberately ignored by the server (it
+  // reads them from the database); they are kept here only to prove that.
+  const tokenFor = async (claims: { sub: string; permissions?: string[]; branch_id?: string | null; role?: string }) => {
+    const sid = randomUUID();
+    await pool.query(
+      `INSERT INTO auth_sessions (id, user_id, client_type, expires_at) VALUES ($1, $2, 'browser', CURRENT_TIMESTAMP + INTERVAL '1 day')`,
+      [sid, claims.sub],
+    );
+    const pv = (await pool.query('SELECT COALESCE(password_version, 1) AS v FROM users WHERE id = $1', [claims.sub])).rows[0]?.v ?? 1;
+    return sign({
       sub: claims.sub,
-      email: `${claims.sub}@test.local`,
-      name: 'Test User',
+      sid,
+      typ: 'access',
       permissions: claims.permissions ?? ALL_PERMISSIONS,
       branch_id: claims.branch_id ?? null,
       role: claims.role ?? 'admin',
-      pwd_ver: 1,
+      pwd_ver: Number(pv),
       exp: Math.floor(Date.now() / 1000) + 3600,
     }, 'test-access-secret', 'HS256');
+  };
 
   const adminToken = await tokenFor({ sub: ADMIN_ID });
 

@@ -717,6 +717,56 @@ export async function ensurePostgresInit(pool: Pool) {
 
   await ensureBranchAttribution(pool);
   await ensureLedgerView(pool);
+  await ensureAuthSchema(pool);
+}
+
+/**
+ * Server-side sessions for authentication (idempotent, runs on boot).
+ * - auth_sessions: one row per login (browser tab family or device). Every
+ *   access token carries its session id, and every request checks the session
+ *   is still live, so logout / password change / reuse detection take effect
+ *   immediately on every backend instance.
+ * - refresh_tokens: one row per issued refresh token (opaque, stored as a
+ *   SHA-256 hash). A token is single-use: rotation marks it used and issues a
+ *   successor in the same session. Pre-existing rows (no session) are inert.
+ * - auth_login_failures: failed sign-ins, for throttling across instances.
+ */
+export async function ensureAuthSchema(pool: Pool) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS auth_sessions (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        client_type TEXT NOT NULL DEFAULT 'browser',
+        user_agent TEXT,
+        ip TEXT,
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        last_used_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+        revoked_at TIMESTAMP WITH TIME ZONE,
+        revoked_reason TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_auth_sessions_user ON auth_sessions(user_id);
+      ALTER TABLE refresh_tokens ADD COLUMN IF NOT EXISTS session_id TEXT REFERENCES auth_sessions(id) ON DELETE CASCADE;
+      ALTER TABLE refresh_tokens ADD COLUMN IF NOT EXISTS used_at TIMESTAMP WITH TIME ZONE;
+      CREATE INDEX IF NOT EXISTS idx_refresh_tokens_hash ON refresh_tokens(token_hash);
+      CREATE TABLE IF NOT EXISTS auth_login_failures (
+        id TEXT PRIMARY KEY,
+        email TEXT NOT NULL,
+        ip TEXT,
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS idx_auth_login_failures_email ON auth_login_failures(email, created_at);
+    `);
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('❌ Auth schema migration failed (no data changed):', err);
+  } finally {
+    client.release();
+  }
 }
 
 /**
