@@ -1,5 +1,6 @@
 "use client";
 
+import { CartIcon } from "../icons";
 import { useCart } from "./cart-context";
 
 export function CartButton() {
@@ -9,13 +10,12 @@ export function CartButton() {
       type="button"
       onClick={open}
       aria-label={count ? `Open cart, ${count} item${count === 1 ? "" : "s"}` : "Open cart"}
-      className="relative flex h-11 w-11 items-center justify-center rounded-md border border-neutral-200 bg-white text-black transition-colors hover:border-brand"
+      className="relative flex h-11 items-center gap-2 rounded-md px-2.5 text-white hover:bg-white/10"
     >
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="h-5 w-5" aria-hidden="true">
-        <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 3h1.386a.75.75 0 0 1 .726.564L4.9 6m0 0 1.5 6.75a.75.75 0 0 0 .73.585h9.87a.75.75 0 0 0 .73-.57l1.4-5.6A.75.75 0 0 0 18.4 6.2L4.9 6Zm2.6 12.75a1.125 1.125 0 1 0 0 2.25 1.125 1.125 0 0 0 0-2.25Zm9 0a1.125 1.125 0 1 0 0 2.25 1.125 1.125 0 0 0 0-2.25Z" />
-      </svg>
+      <CartIcon className="h-6 w-6" />
+      <span className="hidden text-sm font-medium lg:inline">Cart</span>
       {count > 0 && (
-        <span className="absolute -right-2 -top-2 flex h-4 min-w-4 items-center justify-center rounded bg-brand px-1 text-[11px] font-medium text-white">{count}</span>
+        <span className="absolute left-6 top-0.5 flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-gold px-1 text-[11px] font-bold text-ink">{count}</span>
       )}
     </button>
   );

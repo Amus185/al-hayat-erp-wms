@@ -1,14 +1,24 @@
 import Image from "next/image";
 import Link from "next/link";
 import { CategoryCards } from "@/components/category-cards";
-import { PriceTag } from "@/components/product-card";
-import { ProductImage } from "@/components/product-image";
+import { FeaturesRow } from "@/components/features-row";
+import { PhoneIcon } from "@/components/icons";
+import { toCardItem } from "@/components/product-card";
 import { ProductTabs, type ProductTab } from "@/components/product-tabs";
 import { listCategories, listProducts } from "@/lib/erp";
+import { PHOTOS, roomPhotoFor } from "@/lib/photos";
+import { CONTACT_PHONE, PHONE_HREF, SITE_NAME } from "@/lib/site";
 import type { Category, Product } from "@/lib/types";
 
 // Rendered on request: the page must not depend on the ERP being reachable at build time.
 export const dynamic = "force-dynamic";
+
+const STEPS = [
+  { title: "Choose your pieces", text: "Browse the collection and add what you like to your cart." },
+  { title: "Send a request", text: "Leave your name and phone number. No payment, no account." },
+  { title: "We call you", text: "We confirm stock, the final price and a delivery date." },
+  { title: "Pay and receive", text: "Pay once everything is agreed, then we deliver." },
+];
 
 export default async function HomePage() {
   let newest: Product[] = [];
@@ -28,91 +38,126 @@ export default async function HomePage() {
     unavailable = true;
   }
 
-  const hero = featured[0] ?? newest[0];
-  const topCategories = categories.filter((c) => !c.parentId).sort((a, b) => b.productCount - a.productCount).slice(0, 6);
+  const topCategories = categories.filter((c) => !c.parentId && c.productCount > 0).sort((a, b) => b.productCount - a.productCount).slice(0, 8);
   const tabs: ProductTab[] = [
-    { key: "new", label: "New arrivals", products: newest, href: "/search?sort=new" },
-    { key: "sale", label: "On sale", products: onSale, href: "/search?sale=1" },
-    { key: "featured", label: "Featured", products: featured, href: "/search?featured=1" },
-  ].filter((t) => t.products.length > 0);
+    { key: "featured", label: "Featured", items: featured.map(toCardItem), href: "/search?featured=1" },
+    { key: "new", label: "New arrivals", items: newest.map(toCardItem), href: "/search?sort=new" },
+    { key: "sale", label: "On sale", items: onSale.map(toCardItem), href: "/search?sale=1" },
+  ].filter((t) => t.items.length > 0);
+  const banners = topCategories.slice(0, 2);
 
   return (
-    <div className="mx-auto max-w-7xl px-4">
+    <>
       {/* Hero */}
-      <section className="mt-6 grid overflow-hidden rounded-2xl bg-brand-lighter md:grid-cols-2">
-        <div className="flex flex-col justify-center gap-5 p-8 md:p-14">
-          <p className="text-xs font-bold uppercase tracking-[0.2em] text-brand">Al Hayat Furniture Group</p>
-          <h1 className="text-4xl font-extrabold uppercase leading-[1.05] tracking-tight md:text-5xl lg:text-6xl">
-            Furniture that <span className="text-brand">feels like</span> home
+      <section className="relative isolate overflow-hidden bg-brand-deep">
+        <Image src={PHOTOS.hero.src} alt="" fill preload sizes="100vw" className="-z-10 object-cover" />
+        <div className="absolute inset-0 -z-10 bg-gradient-to-t from-brand-deep/95 via-brand-deep/70 to-brand-deep/25 md:bg-gradient-to-r md:from-brand-deep/95 md:via-brand-deep/75 md:to-brand-deep/10" aria-hidden="true" />
+        <div className="mx-auto flex min-h-[460px] max-w-7xl flex-col justify-center px-4 py-16 md:min-h-[560px]">
+          <p className="text-xs font-semibold uppercase tracking-[0.3em] text-gold">{SITE_NAME}</p>
+          <h1 className="mt-4 max-w-2xl text-4xl font-semibold leading-[1.08] tracking-tight text-white sm:text-5xl lg:text-6xl">
+            Furniture made for the way you live
           </h1>
-          <p className="max-w-md text-muted">
-            Sofas, beds, dining and more from our showroom. Pick what you love, send a request, and we call you to confirm. No payment online.
+          <p className="mt-5 max-w-lg text-base leading-relaxed text-white/80 md:text-lg">
+            Sofas, beds, dining and more from our showroom. Choose what you love, send a request, and we call you to confirm. No payment online.
           </p>
-          <div className="flex flex-wrap gap-3">
-            <Link href="/search" className="inline-flex items-center gap-2 rounded-md bg-brand px-6 py-3 text-sm font-bold uppercase tracking-wide text-white hover:bg-brand-dark">
-              Shop now <span aria-hidden="true">→</span>
+          <div className="mt-8 flex flex-wrap gap-3">
+            <Link href="/search" className="btn btn-gold px-7 py-3.5 text-[15px]">Shop the collection</Link>
+            <Link href="/how-to-order" className="btn border-[1.5px] border-white/70 px-7 py-3.5 text-[15px] text-white hover:bg-white hover:text-brand-darker">
+              How ordering works
             </Link>
-            {onSale.length > 0 && (
-              <Link href="/search?sale=1" className="inline-flex items-center rounded-md border-2 border-brand px-6 py-3 text-sm font-bold uppercase tracking-wide text-brand hover:bg-brand hover:text-white">
-                See the sale
-              </Link>
-            )}
           </div>
         </div>
-        <div className="relative min-h-[300px] md:min-h-[480px]">
-          {hero?.images[0] ? (
-            <Link href={`/product/${hero.slug}`} className="group absolute inset-0 block" aria-label={hero.name}>
-              <ProductImage image={hero.images[0]} name={hero.name} sizes="(min-width: 768px) 50vw, 100vw" preload className="transition duration-700 group-hover:scale-105" />
-              <span className="absolute bottom-5 left-5 rounded-xl bg-white/90 px-4 py-3 shadow-lg backdrop-blur">
-                <span className="block text-sm font-semibold">{hero.name}</span>
-                <PriceTag product={hero} />
-              </span>
-            </Link>
-          ) : (
-            <div className="flex h-full items-center justify-center p-10">
-              <Image src="/logo.png" alt="Al Hayat Furniture Group" width={260} height={260} className="h-56 w-56 opacity-90" />
+      </section>
+
+      <FeaturesRow tone="cream" />
+
+      <div className="mx-auto max-w-7xl px-4">
+        {unavailable && (
+          <p role="status" className="mt-10 rounded-lg border border-line bg-canvas p-6 text-muted">
+            Our catalog is temporarily unavailable. Please try again in a moment{PHONE_HREF ? `, or call us on ${CONTACT_PHONE}` : ""}.
+          </p>
+        )}
+
+        {topCategories.length > 0 && (
+          <section className="mt-16" aria-labelledby="rooms-heading">
+            <div className="mb-6 flex items-end justify-between gap-4">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.25em] text-gold-dark">Collections</p>
+                <h2 id="rooms-heading" className="mt-1 text-2xl font-semibold tracking-tight text-brand-darker md:text-3xl">Shop by room</h2>
+              </div>
+              <Link href="/search" className="hidden text-sm font-medium text-brand-dark hover:underline sm:block">All furniture →</Link>
             </div>
+            <CategoryCards categories={topCategories} />
+          </section>
+        )}
+
+        <section className="mt-16" aria-labelledby="collection-heading">
+          {tabs.length > 0 ? (
+            <ProductTabs title="Our collection" tabs={tabs} />
+          ) : (
+            !unavailable && (
+              <div className="rounded-lg border border-line bg-canvas p-10 text-center">
+                <h2 id="collection-heading" className="text-xl font-semibold">New pieces are on their way</h2>
+                <p className="mt-2 text-muted">Please check back soon{PHONE_HREF ? `, or call us on ${CONTACT_PHONE}` : ""}.</p>
+              </div>
+            )
+          )}
+        </section>
+
+        {banners.length > 0 && (
+          <section className={`mt-16 grid gap-5 ${banners.length > 1 ? "md:grid-cols-2" : ""}`} aria-label="Featured collections">
+            {banners.map((c) => {
+              const photo = roomPhotoFor(c.name);
+              return (
+                <Link key={c.id} href={`/search?category=${encodeURIComponent(c.id)}`} className="group relative isolate block min-h-[260px] overflow-hidden rounded-lg md:min-h-[320px]">
+                  <Image src={photo.src} alt={photo.alt} fill sizes="(min-width: 768px) 50vw, 100vw" className="-z-10 object-cover transition duration-700 group-hover:scale-105" />
+                  <span className="absolute inset-0 -z-10 bg-gradient-to-r from-brand-deep/85 to-brand-deep/20" aria-hidden="true" />
+                  <span className="flex h-full min-h-[inherit] flex-col justify-end p-6 text-white md:p-8">
+                    <span className="text-xs font-semibold uppercase tracking-[0.25em] text-gold">The collection</span>
+                    <span className="mt-2 font-display text-2xl font-semibold md:text-3xl">{c.name}</span>
+                    <span className="mt-4 inline-flex w-fit items-center gap-2 rounded-md bg-gold px-5 py-2.5 text-sm font-semibold text-ink transition group-hover:bg-gold-dark">
+                      Explore {c.productCount} piece{c.productCount === 1 ? "" : "s"} <span aria-hidden="true">→</span>
+                    </span>
+                  </span>
+                </Link>
+              );
+            })}
+          </section>
+        )}
+
+        {/* How ordering works */}
+        <section className="mt-16" aria-labelledby="steps-heading">
+          <div className="text-center">
+            <p className="text-xs font-semibold uppercase tracking-[0.25em] text-gold-dark">Simple and safe</p>
+            <h2 id="steps-heading" className="mt-1 text-2xl font-semibold tracking-tight text-brand-darker md:text-3xl">How ordering works</h2>
+          </div>
+          <ol className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            {STEPS.map((s, i) => (
+              <li key={s.title} className="rounded-lg border border-line bg-white p-6">
+                <span className="flex h-10 w-10 items-center justify-center rounded-full bg-gold-light font-display text-lg font-semibold text-gold-dark">{i + 1}</span>
+                <h3 className="mt-4 font-sans text-base font-semibold">{s.title}</h3>
+                <p className="mt-1 text-sm text-muted">{s.text}</p>
+              </li>
+            ))}
+          </ol>
+        </section>
+      </div>
+
+      {/* Promo */}
+      <section data-flush-footer className="relative isolate mt-16 overflow-hidden bg-brand-darker">
+        <Image src={PHOTOS.promo.src} alt="" fill sizes="100vw" className="-z-10 object-cover opacity-40" />
+        <div className="mx-auto flex max-w-7xl flex-col items-start gap-5 px-4 py-14 md:flex-row md:items-center md:justify-between md:py-20">
+          <div className="max-w-xl text-white">
+            <h2 className="text-3xl font-semibold tracking-tight md:text-4xl">Not sure what fits your space?</h2>
+            <p className="mt-3 text-white/80">Tell us about your room. We will help you choose sizes, colours and pieces that work together.</p>
+          </div>
+          {PHONE_HREF ? (
+            <a href={PHONE_HREF} className="btn btn-gold px-7 py-3.5 text-[15px]"><PhoneIcon /> Call {CONTACT_PHONE}</a>
+          ) : (
+            <Link href="/contact" className="btn btn-gold px-7 py-3.5 text-[15px]">Contact us</Link>
           )}
         </div>
       </section>
-
-      {unavailable && (
-        <p className="mt-8 rounded-xl border border-line bg-canvas p-6 text-muted">Our catalog is temporarily unavailable. Please try again in a moment.</p>
-      )}
-
-      {topCategories.length > 0 && (
-        <section className="mt-14 scroll-mt-32" aria-labelledby="rooms-heading">
-          <h2 id="rooms-heading" className="mb-6 text-center text-2xl font-extrabold uppercase tracking-tight">Shop by room</h2>
-          <CategoryCards categories={topCategories} />
-        </section>
-      )}
-
-      <section className="mt-14 scroll-mt-32" aria-labelledby="collection-heading">
-        <h2 id="collection-heading" className="mb-2 text-center text-2xl font-extrabold uppercase tracking-tight">Our collection</h2>
-        {tabs.length > 0 ? (
-          <div className="mt-4"><ProductTabs tabs={tabs} /></div>
-        ) : (
-          !unavailable && <p className="mt-4 text-center text-muted">New pieces are on their way. Please check back soon.</p>
-        )}
-      </section>
-
-      <section className="mt-16 grid gap-4 rounded-2xl bg-canvas p-6 sm:grid-cols-3 md:p-8" aria-label="How ordering works">
-        {[
-          { title: "Live showroom stock", text: "What you see is what we have, updated every minute.", icon: "M3 7.5 12 3l9 4.5v9L12 21l-9-4.5v-9Zm9 4.5 9-4.5M12 12 3 7.5M12 12v9" },
-          { title: "Send a request", text: "No payment online. Add to cart and send us your details.", icon: "M4 6h16v12H4zM4 7l8 6 8-6" },
-          { title: "We call to confirm", text: "We confirm stock, delivery and payment with you by phone.", icon: "M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2" },
-        ].map((f) => (
-          <div key={f.title} className="flex gap-4">
-            <span className="flex h-12 w-12 flex-none items-center justify-center rounded-full bg-brand-light text-brand-dark">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" className="h-6 w-6" aria-hidden="true"><path d={f.icon} /></svg>
-            </span>
-            <div>
-              <h3 className="font-bold">{f.title}</h3>
-              <p className="text-sm text-muted">{f.text}</p>
-            </div>
-          </div>
-        ))}
-      </section>
-    </div>
+    </>
   );
 }

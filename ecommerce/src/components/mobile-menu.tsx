@@ -1,55 +1,94 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { CloseIcon, MenuIcon } from "./icons";
+import { useIsCurrent } from "./nav-links";
+import { CONTACT_PHONE, PHONE_HREF } from "@/lib/site";
 
-// Category menu for small screens: a button that opens a panel with the
-// same links as the desktop menu, plus search.
-export function MobileMenu({ links, sale }: { links: { href: string; label: string }[]; sale: boolean }) {
+export interface MenuLink {
+  href: string;
+  label: string;
+  tone?: "sale";
+}
+
+// Menu for small screens: a button that opens a side panel with the shop and
+// help links. Escape or the backdrop closes it; focus returns to the button.
+export function MobileMenu({ shop, help }: { shop: MenuLink[]; help: MenuLink[] }) {
   const [open, setOpen] = useState(false);
-  const pathname = usePathname();
+  const button = useRef<HTMLButtonElement>(null);
+  const panel = useRef<HTMLDivElement>(null);
+  const isCurrent = useIsCurrent();
 
-  // Close after navigating.
   useEffect(() => {
     if (!open) return;
+    const trigger = button.current;
+    panel.current?.focus();
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
     document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.body.style.overflow = "";
+      trigger?.focus();
+    };
   }, [open]);
+
+  const close = () => setOpen(false);
+  const item = (l: MenuLink) => (
+    <li key={l.href}>
+      <Link
+        href={l.href}
+        onClick={close}
+        aria-current={isCurrent(l.href) ? "page" : undefined}
+        className={`block rounded-md px-3 py-3 ${l.tone === "sale" ? "text-sale" : ""} ${isCurrent(l.href) ? "bg-brand-light font-semibold text-brand-darker" : "hover:bg-canvas"}`}
+      >
+        {l.label}
+      </Link>
+    </li>
+  );
 
   return (
     <div className="lg:hidden">
       <button
+        ref={button}
         type="button"
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => setOpen(true)}
         aria-expanded={open}
         aria-controls="mobile-menu"
-        aria-label={open ? "Close menu" : "Open menu"}
-        className="flex h-10 w-10 items-center justify-center rounded-md border border-line text-ink"
+        aria-label="Open menu"
+        className="flex h-11 w-11 items-center justify-center rounded-md text-white hover:bg-white/10"
       >
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-5 w-5" aria-hidden="true">
-          {open ? <path strokeLinecap="round" d="M6 18 18 6M6 6l12 12" /> : <path strokeLinecap="round" d="M4 7h16M4 12h16M4 17h16" />}
-        </svg>
+        <MenuIcon className="h-6 w-6" />
       </button>
       {open && (
-        <div id="mobile-menu" key={pathname} className="absolute inset-x-0 top-full z-50 border-b border-line bg-white px-4 pb-6 pt-3 shadow-lg">
-          <form action="/search" role="search" className="mb-4" onSubmit={() => setOpen(false)}>
-            <label htmlFor="mobile-search" className="sr-only">Search furniture</label>
-            <input id="mobile-search" name="q" type="search" placeholder="Search furniture…" className="w-full rounded-full border border-line bg-canvas px-4 py-2.5 text-sm" />
-          </form>
-          <ul className="divide-y divide-line text-sm font-semibold uppercase tracking-wide">
-            {links.map((l) => (
-              <li key={l.href}>
-                <Link href={l.href} onClick={() => setOpen(false)} className="block py-3 hover:text-brand">{l.label}</Link>
-              </li>
-            ))}
-            {sale && (
-              <li>
-                <Link href="/search?sale=1" onClick={() => setOpen(false)} className="block py-3 text-brand">Sale</Link>
-              </li>
+        <div className="fixed inset-0 z-50" role="dialog" aria-modal="true" aria-label="Menu">
+          <div className="absolute inset-0 bg-black/40" onClick={close} aria-hidden="true" />
+          <div
+            id="mobile-menu"
+            ref={panel}
+            tabIndex={-1}
+            className="absolute inset-y-0 left-0 flex w-[85%] max-w-sm flex-col overflow-y-auto bg-white shadow-xl outline-none"
+          >
+            <div className="flex items-center justify-between bg-brand-darker px-4 py-3 text-white">
+              <span className="font-display text-lg font-semibold">Menu</span>
+              <button type="button" onClick={close} aria-label="Close menu" className="flex h-11 w-11 items-center justify-center rounded-md hover:bg-white/10">
+                <CloseIcon className="h-6 w-6" />
+              </button>
+            </div>
+            <nav aria-label="Shop" className="px-3 py-4">
+              <p className="px-3 pb-2 text-xs font-semibold uppercase tracking-widest text-muted">Shop</p>
+              <ul className="text-[15px]">{shop.map(item)}</ul>
+              <p className="mt-4 border-t border-line px-3 pb-2 pt-5 text-xs font-semibold uppercase tracking-widest text-muted">Help</p>
+              <ul className="text-[15px]">
+                {item({ href: "/saved", label: "Saved items" })}
+                {help.map(item)}
+              </ul>
+            </nav>
+            {PHONE_HREF && (
+              <a href={PHONE_HREF} className="btn btn-gold mx-6 mb-6 mt-auto">Call {CONTACT_PHONE}</a>
             )}
-          </ul>
+          </div>
         </div>
       )}
     </div>

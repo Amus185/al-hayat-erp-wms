@@ -1,10 +1,17 @@
 // Shop identity and display settings, all overridable from the environment.
 // NEXT_PUBLIC_* values are visible in the browser by design (they are not secrets).
+// Contact details are only shown when they are set: the site never invents them.
 
 export const SITE_NAME = process.env.NEXT_PUBLIC_SITE_NAME || "Al Hayat Furniture";
 export const CURRENCY = process.env.NEXT_PUBLIC_CURRENCY || "USD";
 export const CONTACT_PHONE = process.env.NEXT_PUBLIC_CONTACT_PHONE || "";
+export const CONTACT_EMAIL = process.env.NEXT_PUBLIC_CONTACT_EMAIL || "";
+export const SHOWROOM_ADDRESS = process.env.NEXT_PUBLIC_SHOWROOM_ADDRESS || "";
+export const OPENING_HOURS = process.env.NEXT_PUBLIC_OPENING_HOURS || "";
 export const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3001").replace(/\/$/, "");
+
+/** tel: link for the shop phone, or null when no phone is configured. */
+export const PHONE_HREF = CONTACT_PHONE ? `tel:${CONTACT_PHONE.replace(/[^\d+]/g, "")}` : null;
 
 export function formatPrice(amount: number): string {
   try {

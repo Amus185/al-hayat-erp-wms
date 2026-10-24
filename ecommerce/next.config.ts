@@ -19,6 +19,8 @@ const nextConfig: NextConfig = {
             { protocol: "https" as const, hostname: imageHost, pathname: "/categories/**" },
           ]
         : []),
+      // Marketing photos only (src/lib/photos.ts). Product photos always come from the photo bucket above.
+      { protocol: "https" as const, hostname: "images.unsplash.com", pathname: "/photo-**" },
       ...(allowLocalImages ? [{ protocol: "http" as const, hostname: "127.0.0.1", port: "9100", pathname: "/**" }] : []),
     ],
     dangerouslyAllowLocalIP: allowLocalImages,

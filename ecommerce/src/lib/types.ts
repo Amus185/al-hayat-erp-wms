@@ -44,13 +44,18 @@ export interface CartItem {
   quantity: number;
 }
 
-/** A cart line shown to the customer, always built from fresh ERP data. */
-export interface CartLine {
+/** Fresh card data for a product the browser only knows by slug (cart, saved items, recently viewed). */
+export interface ProductSummary {
   slug: string;
   name: string;
   price: number;
+  compareAtPrice: number | null;
   image: ProductImage | null;
   availability: Availability;
+}
+
+/** A cart line shown to the customer, always built from fresh ERP data. */
+export interface CartLine extends ProductSummary {
   quantity: number;
 }
 

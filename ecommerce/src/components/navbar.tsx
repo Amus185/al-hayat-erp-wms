@@ -1,16 +1,19 @@
 import Link from "next/link";
 import { CartButton } from "./cart/cart-button";
+import { SearchIcon } from "./icons";
 import { Logo } from "./logo";
-import { MobileMenu } from "./mobile-menu";
+import { MobileMenu, type MenuLink } from "./mobile-menu";
+import { NavLinks } from "./nav-links";
+import { SavedLink } from "./saved/saved-link";
 import { listCategories, listProducts } from "@/lib/erp";
-import { CONTACT_PHONE } from "@/lib/site";
+import { CONTACT_PHONE, PHONE_HREF } from "@/lib/site";
 import type { Category } from "@/lib/types";
 
 /** Top-level categories for the menu, most stocked first (at most six). */
 export async function menuCategories(): Promise<Category[]> {
   try {
     const all = await listCategories();
-    return all.filter((c) => !c.parentId).sort((a, b) => b.productCount - a.productCount).slice(0, 6);
+    return all.filter((c) => !c.parentId && c.productCount > 0).sort((a, b) => b.productCount - a.productCount).slice(0, 6);
   } catch {
     return [];
   }
@@ -24,62 +27,76 @@ async function hasSale(): Promise<boolean> {
   }
 }
 
+function SearchForm({ id, className = "" }: { id: string; className?: string }) {
+  return (
+    <form action="/search" role="search" className={`flex w-full ${className}`}>
+      <label htmlFor={id} className="sr-only">Search furniture</label>
+      <input
+        id={id}
+        name="q"
+        type="search"
+        maxLength={80}
+        placeholder="Search sofas, beds, tables…"
+        autoComplete="off"
+        className="h-11 min-w-0 flex-1 rounded-l-md border-0 bg-white px-4 text-sm text-ink placeholder:text-muted"
+      />
+      <button type="submit" aria-label="Search" className="flex h-11 w-12 flex-none items-center justify-center rounded-r-md bg-gold text-ink hover:bg-gold-dark">
+        <SearchIcon />
+      </button>
+    </form>
+  );
+}
+
 export async function Navbar() {
   const [categories, sale] = await Promise.all([menuCategories(), hasSale()]);
-  const links = [
+  const shop: MenuLink[] = [
     ...categories.map((c) => ({ href: `/search?category=${encodeURIComponent(c.id)}`, label: c.name })),
     { href: "/search", label: "All furniture" },
+    ...(sale ? [{ href: "/search?sale=1", label: "Sale", tone: "sale" as const }] : []),
+  ];
+  const help: MenuLink[] = [
+    { href: "/how-to-order", label: "How to order" },
+    { href: "/contact", label: "Contact" },
   ];
 
   return (
-    <header className="sticky top-0 z-40 border-b border-line bg-white/95 backdrop-blur">
-      <div className="bg-brand-darker text-xs text-white">
+    <>
+      <div className="bg-brand-deep text-xs text-white/85">
         <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-2">
-          <p>Order online, pay on confirmation. <span className="hidden sm:inline">We call you to confirm stock and delivery.</span></p>
-          {CONTACT_PHONE && (
-            <a href={`tel:${CONTACT_PHONE.replace(/[^\d+]/g, "")}`} className="font-semibold text-accent hover:underline">{CONTACT_PHONE}</a>
+          <p>No payment online. <span className="hidden sm:inline">Send a request and we call you to confirm stock and delivery.</span></p>
+          {PHONE_HREF && (
+            <a href={PHONE_HREF} className="whitespace-nowrap font-semibold text-gold hover:underline">Call {CONTACT_PHONE}</a>
           )}
         </div>
       </div>
 
-      <div className="mx-auto flex max-w-7xl items-center gap-4 px-4 py-3">
-        <MobileMenu links={links} sale={sale} />
-        <Logo />
-
-        <nav aria-label="Categories" className="hidden flex-1 justify-center lg:flex">
-          <ul className="flex items-center gap-5 whitespace-nowrap text-[13px] font-semibold uppercase tracking-wide text-ink xl:gap-7">
-            {links.map((l) => (
-              <li key={l.href}>
-                <Link href={l.href} className="py-2 hover:text-brand">{l.label}</Link>
-              </li>
-            ))}
-            {sale && (
-              <li>
-                <Link href="/search?sale=1" className="rounded bg-brand px-2.5 py-1 text-white hover:bg-brand-dark">Sale</Link>
-              </li>
-            )}
-          </ul>
-        </nav>
-
-        <div className="ml-auto flex items-center gap-3 lg:ml-0">
-          {/* Full search box on wide screens; on medium screens a search icon (the search page has its own box). */}
-          <form action="/search" role="search" className="hidden xl:block">
-            <label htmlFor="site-search" className="sr-only">Search furniture</label>
-            <input
-              id="site-search"
-              name="q"
-              type="search"
-              placeholder="Search furniture…"
-              autoComplete="off"
-              className="w-52 rounded-full border border-line bg-canvas px-4 py-2 text-sm placeholder:text-muted focus:bg-white"
-            />
-          </form>
-          <Link href="/search" aria-label="Search furniture" className="hidden h-11 w-11 items-center justify-center rounded-md border border-line hover:border-brand md:flex xl:hidden">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-5 w-5" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path strokeLinecap="round" d="m20 20-3.5-3.5" /></svg>
-          </Link>
-          <CartButton />
+      <header className="sticky top-0 z-40 shadow-sm">
+        <div className="bg-brand-darker">
+          <div className="mx-auto flex max-w-7xl items-center gap-3 px-4 py-3 md:gap-6">
+            <MobileMenu shop={shop} help={help} />
+            <Logo inverted />
+            <SearchForm id="site-search" className="mx-auto hidden max-w-xl md:flex" />
+            <div className="ml-auto flex items-center gap-1 md:ml-0">
+              <SavedLink />
+              <CartButton />
+            </div>
+          </div>
+          <div className="px-4 pb-3 md:hidden">
+            <SearchForm id="mobile-search" />
+          </div>
         </div>
-      </div>
-    </header>
+
+        <nav aria-label="Main" className="hidden border-b border-line bg-white lg:block">
+          <div className="mx-auto flex max-w-7xl items-center justify-between px-4">
+            <NavLinks links={shop} />
+            <ul className="flex items-center gap-6 text-sm text-muted">
+              {help.map((l) => (
+                <li key={l.href}><Link href={l.href} className="py-3 hover:text-brand-darker">{l.label}</Link></li>
+              ))}
+            </ul>
+          </div>
+        </nav>
+      </header>
+    </>
   );
 }

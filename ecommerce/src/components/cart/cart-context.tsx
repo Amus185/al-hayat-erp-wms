@@ -3,13 +3,13 @@
 // The cart lives in the browser and holds only product slugs and quantities.
 // Names, prices, photos and availability are always loaded fresh from the shop
 // (through /api/cart), so a stale cart can never show or promise an old price.
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
+import { formatPrice } from "@/lib/site";
+import { useProductSummaries } from "@/lib/use-product-summaries";
 import { MAX_CART_LINES, MAX_QUANTITY_PER_ITEM, type CartItem, type CartLine } from "@/lib/types";
 
 const STORAGE_KEY = "ah_cart_v1";
 const CHANGE_EVENT = "ah-cart-change";
-
-type Fresh = Omit<CartLine, "quantity">;
 
 interface CartContextValue {
   items: CartItem[];
@@ -17,10 +17,15 @@ interface CartContextValue {
   lines: CartLine[];
   missing: string[]; // slugs no longer sold
   loading: boolean;
+  failed: boolean; // the shop could not be reached for fresh prices
+  subtotal: number;
+  /** The subtotal ready to show: a placeholder until fresh prices have loaded. */
+  subtotalText: string;
   isOpen: boolean;
   open: () => void;
   close: () => void;
-  add: (slug: string, quantity?: number) => void;
+  /** Adds to the cart; opens the cart drawer unless `quiet`. Returns false when the cart is full. */
+  add: (slug: string, quantity?: number, opts?: { quiet?: boolean }) => boolean;
   setQuantity: (slug: string, quantity: number) => void;
   remove: (slug: string) => void;
   clear: () => void;
@@ -73,50 +78,32 @@ export function CartProvider({ children }: { children: ReactNode }) {
   // "[]" on the server and during hydration, the real cart right after.
   const raw = useSyncExternalStore(subscribe, readRaw, () => "[]");
   const items = useMemo(() => parseItems(raw), [raw]);
-
+  const slugs = useMemo(() => items.map((i) => i.slug), [items]);
+  const fresh = useProductSummaries(slugs);
   const [isOpen, setIsOpen] = useState(false);
-  const [fresh, setFresh] = useState<Record<string, Fresh>>({});
-  const [gone, setGone] = useState<string[]>([]);
-  const [failed, setFailed] = useState(false);
-
-  // Fetch current product data whenever the set of products changes (not quantities).
-  const slugsKey = items.map((i) => i.slug).join(",");
-  useEffect(() => {
-    if (!slugsKey) return;
-    let cancelled = false;
-    fetch("/api/cart", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ slugs: slugsKey.split(",") }),
-    })
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error("cart"))))
-      .then((data: { products: Fresh[]; missing: string[] }) => {
-        if (cancelled) return;
-        setFresh(Object.fromEntries(data.products.map((p) => [p.slug, p])));
-        setGone(data.missing);
-        setFailed(false);
-      })
-      .catch(() => { if (!cancelled) setFailed(true); });
-    return () => { cancelled = true; };
-  }, [slugsKey]);
 
   // Everything shown is derived: no copies of cart data in state.
-  const lines = useMemo<CartLine[]>(
-    () => items.flatMap((i) => (fresh[i.slug] ? [{ ...fresh[i.slug], quantity: i.quantity }] : [])),
-    [items, fresh],
-  );
-  const missing = useMemo(() => items.filter((i) => gone.includes(i.slug)).map((i) => i.slug), [items, gone]);
-  const loading = !failed && items.some((i) => !fresh[i.slug] && !gone.includes(i.slug));
+  const lines = useMemo<CartLine[]>(() => {
+    const bySlug = new Map(fresh.products.map((p) => [p.slug, p]));
+    return items.flatMap((i) => {
+      const p = bySlug.get(i.slug);
+      return p ? [{ ...p, quantity: i.quantity }] : [];
+    });
+  }, [items, fresh.products]);
+  const subtotal = lines.reduce((sum, l) => sum + l.price * l.quantity, 0);
 
-  const add = useCallback((slug: string, quantity = 1) => {
+  const add = useCallback((slug: string, quantity = 1, opts: { quiet?: boolean } = {}) => {
     const current = parseItems(readRaw());
     const existing = current.find((i) => i.slug === slug);
     if (existing) {
       writeItems(current.map((i) => (i.slug === slug ? { ...i, quantity: Math.min(MAX_QUANTITY_PER_ITEM, i.quantity + quantity) } : i)));
     } else if (current.length < MAX_CART_LINES) {
-      writeItems([...current, { slug, quantity: Math.min(MAX_QUANTITY_PER_ITEM, quantity) }]);
+      writeItems([...current, { slug, quantity: Math.min(MAX_QUANTITY_PER_ITEM, Math.max(1, quantity)) }]);
+    } else {
+      return false;
     }
-    setIsOpen(true);
+    if (!opts.quiet) setIsOpen(true);
+    return true;
   }, []);
 
   const setQuantity = useCallback((slug: string, quantity: number) => {
@@ -130,13 +117,23 @@ export function CartProvider({ children }: { children: ReactNode }) {
 
   const remove = useCallback((slug: string) => writeItems(parseItems(readRaw()).filter((i) => i.slug !== slug)), []);
   const clear = useCallback(() => writeItems([]), []);
+  const open = useCallback(() => setIsOpen(true), []);
+  const close = useCallback(() => setIsOpen(false), []);
 
   const value = useMemo<CartContextValue>(
     () => ({
-      items, count: items.reduce((n, i) => n + i.quantity, 0), lines, missing, loading, isOpen,
-      open: () => setIsOpen(true), close: () => setIsOpen(false), add, setQuantity, remove, clear,
+      items,
+      count: items.reduce((n, i) => n + i.quantity, 0),
+      lines,
+      missing: fresh.missing,
+      loading: fresh.loading,
+      failed: fresh.failed,
+      subtotal,
+      subtotalText: fresh.loading && lines.length < items.length ? "…" : formatPrice(subtotal),
+      isOpen,
+      open, close, add, setQuantity, remove, clear,
     }),
-    [items, lines, missing, loading, isOpen, add, setQuantity, remove, clear],
+    [items, lines, fresh.missing, fresh.loading, fresh.failed, subtotal, isOpen, open, close, add, setQuantity, remove, clear],
   );
 
   return <CartContext.Provider value={value}>{children}</CartContext.Provider>;

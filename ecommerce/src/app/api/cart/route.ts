@@ -1,8 +1,9 @@
 import { getProduct } from "@/lib/erp";
 import { isJson, isSameSiteRequest } from "@/lib/request-guard";
-import { MAX_CART_LINES, type CartLine } from "@/lib/types";
+import { MAX_CART_LINES, type ProductSummary } from "@/lib/types";
 
-// Fresh name, price, photo and availability for the products in a cart.
+// Fresh name, price, photo and availability for products the browser keeps by
+// slug only: the cart, saved items and recently viewed.
 export async function POST(request: Request) {
   if (!isSameSiteRequest(request) || !isJson(request)) {
     return Response.json({ message: "Not allowed" }, { status: 403 });
@@ -18,12 +19,19 @@ export async function POST(request: Request) {
     return Response.json({ message: "The shop is temporarily unavailable." }, { status: 503 });
   }
 
-  const products: Omit<CartLine, "quantity">[] = [];
+  const products: ProductSummary[] = [];
   const missing: string[] = [];
   settled.forEach((r, i) => {
     const p = r.status === "fulfilled" ? r.value : null;
     if (!p) { missing.push(slugs[i]); return; }
-    products.push({ slug: p.slug, name: p.name, price: p.price, image: p.images[0] ?? null, availability: p.availability });
+    products.push({
+      slug: p.slug,
+      name: p.name,
+      price: p.price,
+      compareAtPrice: p.compareAtPrice,
+      image: p.images[0] ?? null,
+      availability: p.availability,
+    });
   });
   return Response.json({ products, missing }, { headers: { "Cache-Control": "no-store" } });
 }

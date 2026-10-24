@@ -1,21 +1,32 @@
 @import "tailwindcss";
 
 /* Layout ideas adapted from Next.js Commerce (MIT, Copyright (c) 2025 Vercel, Inc.).
-   See THIRD_PARTY_NOTICES.md. Colours are Al Hayat's own (same as the staff app). */
+   See THIRD_PARTY_NOTICES.md. Colours are Al Hayat's own: the palm-logo greens
+   (same as the staff app) with a warm gold for calls to action. */
 
 @theme {
   --color-brand: #0b8f08;
   --color-brand-dark: #066006;
   --color-brand-darker: #054405;
+  --color-brand-deep: #032e03;
   --color-brand-light: #e9f6e8;
   --color-brand-lighter: #f4fbf4;
+  /* Gold buttons always carry dark text (white on gold fails contrast). */
+  --color-gold: #d4ac2b;
+  --color-gold-dark: #b8921a;
+  --color-gold-light: #f8efd4;
   --color-accent: #f3d400;
-  --color-accent-dark: #c5ab00;
-  --color-ink: #1a1a1a;
-  --color-muted: #667066;
-  --color-line: #e1e8e1;
-  --color-canvas: #f7f9f7;
+  --color-ink: #1a1f1a;
+  --color-muted: #5f6a5f;
+  --color-line: #e3e7e1;
+  --color-canvas: #f6f7f4;
+  --color-cream: #fbf8f1;
   --color-sale: #c62828;
+}
+
+@theme inline {
+  --font-sans: var(--font-body), ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+  --font-display: var(--font-heading), var(--font-body), ui-sans-serif, system-ui, sans-serif;
 }
 
 @layer base {
@@ -28,11 +39,17 @@
   }
   html {
     color-scheme: light;
+    -webkit-text-size-adjust: 100%;
   }
   body {
-    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
     color: var(--color-ink);
     background: #fff;
+    -webkit-font-smoothing: antialiased;
+  }
+  h1,
+  h2,
+  h3 {
+    font-family: var(--font-display);
   }
 }
 
@@ -40,8 +57,53 @@ a,
 input,
 button,
 textarea,
-select {
-  @apply focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-white;
+select,
+summary {
+  @apply focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-gold focus-visible:ring-offset-2 focus-visible:ring-offset-white;
+}
+
+@utility btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  border-radius: 0.375rem;
+  padding: 0.75rem 1.5rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  transition: background-color 150ms, color 150ms, border-color 150ms;
+  &:disabled,
+  &[aria-disabled="true"] {
+    cursor: not-allowed;
+    opacity: 0.5;
+  }
+}
+
+@utility btn-gold {
+  background: var(--color-gold);
+  color: var(--color-ink);
+  &:hover:not(:disabled) {
+    background: var(--color-gold-dark);
+  }
+}
+
+@utility btn-green {
+  background: var(--color-brand-darker);
+  color: #fff;
+  &:hover:not(:disabled) {
+    background: var(--color-brand-dark);
+  }
+}
+
+@utility btn-outline {
+  border: 1.5px solid var(--color-brand-darker);
+  color: var(--color-brand-darker);
+  background: #fff;
+  &:hover:not(:disabled) {
+    background: var(--color-brand-darker);
+    color: #fff;
+  }
 }
 
 @keyframes fadeIn {
@@ -49,10 +111,33 @@ select {
   to { opacity: 1; transform: none; }
 }
 
+@keyframes slideIn {
+  from { transform: translateX(100%); }
+  to { transform: none; }
+}
+
+@keyframes shimmer {
+  to { background-position: -200% 0; }
+}
+
 .animate-fade-in {
   animation: fadeIn 0.35s ease-out both;
 }
 
+.animate-slide-in {
+  animation: slideIn 0.25s ease-out both;
+}
+
+.skeleton {
+  background: linear-gradient(90deg, #eef0ec 25%, #f6f7f4 50%, #eef0ec 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s linear infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .animate-fade-in { animation: none; }
+  .animate-fade-in,
+  .animate-slide-in,
+  .skeleton {
+    animation: none;
+  }
 }

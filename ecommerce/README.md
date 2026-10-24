@@ -30,7 +30,12 @@ Browser ──► this site (Next.js)  ──server-to-server──►  ERP back
 | `NEXT_PUBLIC_SITE_NAME` | public | Shop name |
 | `NEXT_PUBLIC_SITE_URL` | public | The site's own public URL (links, robots) |
 | `NEXT_PUBLIC_CURRENCY` | public | ISO code, default `USD` |
-| `NEXT_PUBLIC_CONTACT_PHONE` | public | Shown in the header, footer and thank-you page |
+| `NEXT_PUBLIC_CONTACT_PHONE` | public | Shown in the header, footer, product, contact and thank-you pages |
+| `NEXT_PUBLIC_CONTACT_EMAIL` | public, optional | Shown on the contact page and in the footer when set |
+| `NEXT_PUBLIC_SHOWROOM_ADDRESS` | public, optional | Showroom address (line breaks kept), shown when set |
+| `NEXT_PUBLIC_OPENING_HOURS` | public, optional | Opening hours (line breaks kept), shown when set |
+
+Marketing photos (home hero, room banners) come from `images.unsplash.com` under the Unsplash License; see `PHOTO_CREDITS.md`. Product pages only ever show the photos staff upload in the ERP.
 
 `NEXT_PUBLIC_*` values are compiled into the browser code at build time, so set them before building.
 

@@ -35,16 +35,23 @@ export interface ListOptions {
   category?: string;
   page?: number;
   pageSize?: number;
-  sort?: "name" | "new";
+  sort?: SortKey;
   featured?: boolean;
   sale?: boolean;
+  minPrice?: number | null;
+  maxPrice?: number | null;
 }
+
+export const SORT_KEYS = ["name", "new", "price_asc", "price_desc"] as const;
+export type SortKey = (typeof SORT_KEYS)[number];
 
 export async function listProducts(opts: ListOptions = {}): Promise<ProductPage> {
   const params = new URLSearchParams();
-  if (opts.sort === "new") params.set("sort", "new");
+  if (opts.sort && opts.sort !== "name") params.set("sort", opts.sort);
   if (opts.featured) params.set("featured", "1");
   if (opts.sale) params.set("sale", "1");
+  if (opts.minPrice != null) params.set("minPrice", String(opts.minPrice));
+  if (opts.maxPrice != null) params.set("maxPrice", String(opts.maxPrice));
   if (opts.q) params.set("q", opts.q);
   if (opts.category) params.set("category", opts.category);
   if (opts.page && opts.page > 1) params.set("page", String(opts.page));

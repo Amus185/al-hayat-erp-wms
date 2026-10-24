@@ -18,8 +18,9 @@ export function ProductImage({
 }) {
   if (!image) {
     return (
-      <div className="flex h-full w-full items-center justify-center bg-neutral-100 text-xs text-neutral-400" aria-hidden="true">
-        No photo
+      <div className="flex h-full w-full flex-col items-center justify-center gap-2 bg-canvas text-xs text-muted" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4" className="h-8 w-8 opacity-50"><rect x="3" y="5" width="18" height="14" rx="2" /><circle cx="9" cy="10" r="1.6" /><path d="m4 17 5-4.5 3.5 3 3-2.5L20 17" /></svg>
+        Photo coming soon
       </div>
     );
   }
