@@ -122,11 +122,16 @@ export async function loadImages(db: any, productIds: string[]): Promise<Map<str
 
 /** The only shape the public API ever returns for a product. */
 export function toPublicProduct(row: any, images: PublicImage[], availability: Availability) {
+  const price = Number(row.selling_price);
+  const compareAt = row.compare_at_price == null ? null : Number(row.compare_at_price);
   return {
     slug: row.slug as string,
     name: row.name as string,
-    description: (row.web_description || row.description || null) as string | null,
-    price: Number(row.selling_price),
+    // Only the text written for the website: the ERP's own description can hold internal notes.
+    description: (row.web_description || null) as string | null,
+    price,
+    // Only a real reduction is shown: a "was" price at or below today's price is ignored.
+    compareAtPrice: compareAt != null && compareAt > price ? compareAt : null,
     category: row.category_id ? { id: row.category_id as string, name: (row.category_name ?? null) as string | null } : null,
     images,
     availability,
