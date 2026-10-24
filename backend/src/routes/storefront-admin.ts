@@ -56,7 +56,7 @@ admin.patch('/settings', requireAdmin, async (c) => {
 // ── Product web fields and photos (manage_inventory) ────────────────────────
 
 async function loadProduct(c: any, id: string) {
-  return c.env.DB.prepare('SELECT id, name, selling_price, COALESCE(is_active, 1) AS is_active, is_published, slug, web_description FROM products WHERE id = ?').bind(id).first();
+  return c.env.DB.prepare('SELECT id, name, selling_price, compare_at_price, is_featured, COALESCE(is_active, 1) AS is_active, is_published, slug, web_description FROM products WHERE id = ?').bind(id).first();
 }
 
 async function imagesOf(c: any, productId: string) {
@@ -70,13 +70,49 @@ async function imagesOf(c: any, productId: string) {
   }));
 }
 
+/** Validate an upload request and return a presigned URL for a new object under `prefix`. */
+function presignUpload(c: any, prefix: string, body: any) {
+  const cfg = getR2Config();
+  if (!cfg) return c.json({ message: 'Photo storage is not configured yet.' }, 503);
+  const ext = ALLOWED_IMAGE_TYPES[String(body.contentType)];
+  const size = Number(body.size);
+  if (!ext) return c.json({ message: 'Only JPEG, PNG or WebP photos are allowed.' }, 400);
+  if (!Number.isInteger(size) || size <= 0 || size > MAX_IMAGE_BYTES) return c.json({ message: 'Photos must be 5 MB or smaller.' }, 400);
+  const key = `${prefix}${uuidv4()}.${ext}`;
+  return c.json({ key, uploadUrl: presignPut(cfg, key, String(body.contentType), size), expiresInSeconds: 300 });
+}
+
+/**
+ * Check what actually landed in storage before trusting an upload: it must
+ * exist under the expected prefix, be an accepted image type, and be within
+ * the size limit. Bad uploads are deleted. Returns an error response or null.
+ */
+async function verifyUpload(c: any, prefix: string, key: string): Promise<Response | null> {
+  const cfg = getR2Config();
+  if (!cfg) return c.json({ message: 'Photo storage is not configured yet.' }, 503);
+  if (!key.startsWith(prefix) || key.includes('..') || key.length > 200) return c.json({ message: 'Invalid photo.' }, 400);
+  const head = await headObject(cfg, key).catch(() => null);
+  if (!head) return c.json({ message: 'The photo was not uploaded.' }, 400);
+  if (head.size > MAX_IMAGE_BYTES || !ALLOWED_IMAGE_TYPES[head.contentType.split(';')[0]]) {
+    await deleteObject(cfg, key).catch(() => {});
+    return c.json({ message: 'The uploaded file is not an accepted photo.' }, 400);
+  }
+  return null;
+}
+
+const productWebView = async (c: any, p: any) => ({
+  id: p.id, name: p.name, isPublished: Number(p.is_published) === 1, slug: p.slug ?? null,
+  webDescription: p.web_description ?? null,
+  sellingPrice: Number(p.selling_price),
+  compareAtPrice: p.compare_at_price == null ? null : Number(p.compare_at_price),
+  isFeatured: Number(p.is_featured) === 1,
+  images: await imagesOf(c, p.id),
+});
+
 admin.get('/products/:id', requirePermissions(['manage_inventory']), async (c) => {
   const p = await loadProduct(c, param(c, 'id')) as any;
   if (!p) return c.json({ message: 'Product not found.' }, 404);
-  return c.json({
-    id: p.id, name: p.name, isPublished: Number(p.is_published) === 1, slug: p.slug ?? null,
-    webDescription: p.web_description ?? null, images: await imagesOf(c, p.id),
-  });
+  return c.json(await productWebView(c, p));
 });
 
 admin.patch('/products/:id', requirePermissions(['manage_inventory']), async (c) => {
@@ -103,46 +139,49 @@ admin.patch('/products/:id', requirePermissions(['manage_inventory']), async (c)
   }
   const description = body.webDescription === undefined ? p.web_description : (String(body.webDescription).trim().slice(0, 4000) || null);
 
-  await c.env.DB.prepare(
-    'UPDATE products SET is_published = ?, slug = ?, web_description = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
-  ).bind(publish ? 1 : 0, slug, description, id).run();
-  await logAudit(c, publish ? 'PRODUCT_PUBLISH' : 'PRODUCT_UNPUBLISH', 'products', id, { isPublished: Number(p.is_published) === 1 }, { isPublished: publish, slug });
-  return c.json({ id, isPublished: publish, slug, webDescription: description, images: await imagesOf(c, id) });
+  // "Was" price: display only. It must be a real reduction from today's price.
+  let compareAt: number | null = p.compare_at_price == null ? null : Number(p.compare_at_price);
+  if (body.compareAtPrice !== undefined) {
+    if (body.compareAtPrice === null || body.compareAtPrice === '') {
+      compareAt = null;
+    } else {
+      const n = Number(body.compareAtPrice);
+      if (!Number.isFinite(n) || n <= Number(p.selling_price) || n > 10_000_000) {
+        return c.json({ message: 'The "was" price must be higher than the current selling price.' }, 400);
+      }
+      compareAt = Math.round(n * 100) / 100;
+    }
+  }
+  const featured = body.isFeatured === undefined ? Number(p.is_featured) === 1 : Boolean(body.isFeatured);
+
+  await c.env.DB.prepare(`
+    UPDATE products SET is_published = ?, slug = ?, web_description = ?, compare_at_price = ?, is_featured = ?,
+           published_at = CASE WHEN ? = 1 THEN COALESCE(published_at, CURRENT_TIMESTAMP) ELSE published_at END,
+           updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).bind(publish ? 1 : 0, slug, description, compareAt, featured ? 1 : 0, publish ? 1 : 0, id).run();
+  await logAudit(c, publish ? 'PRODUCT_PUBLISH' : 'PRODUCT_UNPUBLISH', 'products', id,
+    { isPublished: Number(p.is_published) === 1, compareAtPrice: p.compare_at_price ?? null, isFeatured: Number(p.is_featured) === 1 },
+    { isPublished: publish, slug, compareAtPrice: compareAt, isFeatured: featured });
+  return c.json(await productWebView(c, await loadProduct(c, id)));
 });
 
 admin.post('/products/:id/images/presign', requirePermissions(['manage_inventory']), async (c) => {
   const id = param(c, 'id');
   if (!(await loadProduct(c, id))) return c.json({ message: 'Product not found.' }, 404);
-  const cfg = getR2Config();
-  if (!cfg) return c.json({ message: 'Photo storage is not configured yet.' }, 503);
   const body = await c.req.json().catch(() => ({}));
-  const ext = ALLOWED_IMAGE_TYPES[String(body.contentType)];
-  const size = Number(body.size);
-  if (!ext) return c.json({ message: 'Only JPEG, PNG or WebP photos are allowed.' }, 400);
-  if (!Number.isInteger(size) || size <= 0 || size > MAX_IMAGE_BYTES) return c.json({ message: 'Photos must be 5 MB or smaller.' }, 400);
   const count = Number(((await c.env.DB.prepare('SELECT COUNT(*) AS n FROM product_images WHERE product_id = ?').bind(id).first()) as any)?.n ?? 0);
   if (count >= MAX_IMAGES_PER_PRODUCT) return c.json({ message: `A product can have at most ${MAX_IMAGES_PER_PRODUCT} photos.` }, 400);
-
-  const key = `products/${id}/${uuidv4()}.${ext}`;
-  return c.json({ key, uploadUrl: presignPut(cfg, key, String(body.contentType), size), expiresInSeconds: 300 });
+  return presignUpload(c, `products/${id}/`, body);
 });
 
 admin.post('/products/:id/images', requirePermissions(['manage_inventory']), async (c) => {
   const id = param(c, 'id');
   if (!(await loadProduct(c, id))) return c.json({ message: 'Product not found.' }, 404);
-  const cfg = getR2Config();
-  if (!cfg) return c.json({ message: 'Photo storage is not configured yet.' }, 503);
   const body = await c.req.json().catch(() => ({}));
   const key = String(body.key || '');
-  if (!key.startsWith(`products/${id}/`) || key.includes('..') || key.length > 200) return c.json({ message: 'Invalid photo.' }, 400);
-
-  // Never trust the browser: check what actually landed in storage.
-  const head = await headObject(cfg, key).catch(() => null);
-  if (!head) return c.json({ message: 'The photo was not uploaded.' }, 400);
-  if (head.size > MAX_IMAGE_BYTES || !ALLOWED_IMAGE_TYPES[head.contentType.split(';')[0]]) {
-    await deleteObject(cfg, key).catch(() => {});
-    return c.json({ message: 'The uploaded file is not an accepted photo.' }, 400);
-  }
+  const rejected = await verifyUpload(c, `products/${id}/`, key);
+  if (rejected) return rejected;
   const existing = await c.env.DB.prepare('SELECT COUNT(*) AS n, COALESCE(MAX(sort_order), -1) AS max_order FROM product_images WHERE product_id = ?').bind(id).first() as any;
   const imageId = uuidv4();
   await c.env.DB.prepare(
@@ -186,6 +225,51 @@ admin.delete('/products/:id/images/:imageId', requirePermissions(['manage_invent
   const cfg = getR2Config();
   if (cfg) await deleteObject(cfg, img.object_key).catch((e) => console.error('R2 delete failed:', e?.message));
   return c.json({ images: await imagesOf(c, id) });
+});
+
+// ── Category photos for the website (manage_inventory) ─────────────────────
+
+admin.get('/categories', requirePermissions(['manage_inventory']), async (c) => {
+  const cfg = getR2Config();
+  const { results } = await c.env.DB.prepare(`
+    SELECT cat.id, cat.name, cat.image_key,
+           (SELECT COUNT(*) FROM products p WHERE p.category_id = cat.id AND p.is_published = 1 AND COALESCE(p.is_active, 1) = 1) AS published_count
+    FROM categories cat ORDER BY cat.name
+  `).all();
+  return c.json((results || []).map((r: any) => ({
+    id: r.id, name: r.name, publishedCount: Number(r.published_count),
+    imageUrl: cfg && r.image_key ? publicUrl(cfg, r.image_key) : null,
+  })));
+});
+
+admin.post('/categories/:id/image/presign', requirePermissions(['manage_inventory']), async (c) => {
+  const id = param(c, 'id');
+  const cat = await c.env.DB.prepare('SELECT id FROM categories WHERE id = ?').bind(id).first();
+  if (!cat) return c.json({ message: 'Category not found.' }, 404);
+  return presignUpload(c, `categories/${id}/`, await c.req.json().catch(() => ({})));
+});
+
+admin.post('/categories/:id/image', requirePermissions(['manage_inventory']), async (c) => {
+  const id = param(c, 'id');
+  const cat = await c.env.DB.prepare('SELECT id, image_key FROM categories WHERE id = ?').bind(id).first() as any;
+  if (!cat) return c.json({ message: 'Category not found.' }, 404);
+  const key = String((await c.req.json().catch(() => ({}))).key || '');
+  const rejected = await verifyUpload(c, `categories/${id}/`, key);
+  if (rejected) return rejected;
+  await c.env.DB.prepare('UPDATE categories SET image_key = ? WHERE id = ?').bind(key, id).run();
+  const cfg = getR2Config();
+  if (cfg && cat.image_key && cat.image_key !== key) await deleteObject(cfg, cat.image_key).catch(() => {});
+  return c.json({ id, imageUrl: cfg ? publicUrl(cfg, key) : null }, 201);
+});
+
+admin.delete('/categories/:id/image', requirePermissions(['manage_inventory']), async (c) => {
+  const id = param(c, 'id');
+  const cat = await c.env.DB.prepare('SELECT id, image_key FROM categories WHERE id = ?').bind(id).first() as any;
+  if (!cat) return c.json({ message: 'Category not found.' }, 404);
+  await c.env.DB.prepare('UPDATE categories SET image_key = NULL WHERE id = ?').bind(id).run();
+  const cfg = getR2Config();
+  if (cfg && cat.image_key) await deleteObject(cfg, cat.image_key).catch(() => {});
+  return c.json({ id, imageUrl: null });
 });
 
 // ── Website order requests (manage_sales; web branch or all-branch users) ──

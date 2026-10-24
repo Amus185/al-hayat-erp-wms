@@ -740,6 +740,14 @@ export async function ensureStorefrontSchema(pool: Pool) {
       ALTER TABLE products ADD COLUMN IF NOT EXISTS is_published INTEGER NOT NULL DEFAULT 0;
       ALTER TABLE products ADD COLUMN IF NOT EXISTS slug TEXT;
       ALTER TABLE products ADD COLUMN IF NOT EXISTS web_description TEXT;
+      -- "Was" price shown crossed out on the website. Display only: sales and
+      -- requests always use selling_price.
+      ALTER TABLE products ADD COLUMN IF NOT EXISTS compare_at_price DOUBLE PRECISION;
+      ALTER TABLE products ADD COLUMN IF NOT EXISTS is_featured INTEGER NOT NULL DEFAULT 0;
+      -- First time the product was published; drives "New arrivals".
+      ALTER TABLE products ADD COLUMN IF NOT EXISTS published_at TIMESTAMP WITH TIME ZONE;
+      -- Optional category photo for the website (R2 object key).
+      ALTER TABLE categories ADD COLUMN IF NOT EXISTS image_key TEXT;
       CREATE UNIQUE INDEX IF NOT EXISTS idx_products_slug ON products(slug) WHERE slug IS NOT NULL;
       CREATE INDEX IF NOT EXISTS idx_products_published ON products(is_published) WHERE is_published = 1;
 
