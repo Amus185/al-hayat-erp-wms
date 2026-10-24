@@ -226,7 +226,13 @@ test('a non-admin user manager cannot grant the admin role or take over an admin
 });
 
 test('every API route except sign-in and health requires a valid access token', async () => {
-  const PUBLIC = new Set(['/', '/api/v1/health', '/api/v1/auth/login', '/api/v1/auth/refresh', '/api/v1/auth/logout']);
+  // Deliberately public: health, sign-in, and the storefront's read-only catalog.
+  // POST /storefront/requests has no login but needs the server-to-server API key
+  // (covered in storefront.test.ts).
+  const PUBLIC = new Set([
+    '/', '/api/v1/health', '/api/v1/auth/login', '/api/v1/auth/refresh', '/api/v1/auth/logout',
+    '/api/v1/storefront/categories', '/api/v1/storefront/products', '/api/v1/storefront/products/:slug', '/api/v1/storefront/requests',
+  ]);
   const routes = t.app.routes.filter((r: any) => r.method !== 'ALL' && !PUBLIC.has(r.path) && r.path.startsWith('/api/v1/'));
   assert.ok(routes.length > 100, `only ${routes.length} routes found`);
   const open: string[] = [];

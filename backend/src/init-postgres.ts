@@ -718,6 +718,92 @@ export async function ensurePostgresInit(pool: Pool) {
   await ensureBranchAttribution(pool);
   await ensureLedgerView(pool);
   await ensureAuthSchema(pool);
+  await ensureStorefrontSchema(pool);
+}
+
+/**
+ * Public storefront support (idempotent, additive, runs on boot).
+ * - products.is_published / slug / web_description: what the website shows.
+ *   Products are unpublished until staff publish them.
+ * - product_images: photos in object storage (R2); only the object key is
+ *   stored, the public URL is built from R2_PUBLIC_BASE_URL.
+ * - storefront_settings: which branch the website sells from, and buffers.
+ * - storefront_requests(+_lines): order REQUESTS from the website. They are
+ *   not sales orders: nothing is deducted or posted until staff convert one.
+ * - storefront_request_log: submissions per IP/phone, for throttling.
+ */
+export async function ensureStorefrontSchema(pool: Pool) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(`
+      ALTER TABLE products ADD COLUMN IF NOT EXISTS is_published INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE products ADD COLUMN IF NOT EXISTS slug TEXT;
+      ALTER TABLE products ADD COLUMN IF NOT EXISTS web_description TEXT;
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_products_slug ON products(slug) WHERE slug IS NOT NULL;
+      CREATE INDEX IF NOT EXISTS idx_products_published ON products(is_published) WHERE is_published = 1;
+
+      CREATE TABLE IF NOT EXISTS product_images (
+        id TEXT PRIMARY KEY,
+        product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+        object_key TEXT NOT NULL UNIQUE,
+        alt TEXT,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        is_primary INTEGER NOT NULL DEFAULT 0,
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS idx_product_images_product ON product_images(product_id, sort_order);
+
+      CREATE TABLE IF NOT EXISTS storefront_settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE TABLE IF NOT EXISTS storefront_requests (
+        id TEXT PRIMARY KEY,
+        request_number TEXT UNIQUE NOT NULL,
+        customer_name TEXT NOT NULL,
+        phone TEXT NOT NULL,
+        email TEXT,
+        address TEXT,
+        city TEXT,
+        notes TEXT,
+        status TEXT NOT NULL DEFAULT 'NEW',
+        total_amount DOUBLE PRECISION NOT NULL DEFAULT 0,
+        converted_order_id TEXT REFERENCES sales_orders(id),
+        handled_by TEXT REFERENCES users(id),
+        handled_at TIMESTAMP WITH TIME ZONE,
+        ip TEXT,
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS idx_storefront_requests_status ON storefront_requests(status, created_at DESC);
+
+      CREATE TABLE IF NOT EXISTS storefront_request_lines (
+        id TEXT PRIMARY KEY,
+        request_id TEXT NOT NULL REFERENCES storefront_requests(id) ON DELETE CASCADE,
+        product_id TEXT NOT NULL REFERENCES products(id),
+        product_name TEXT NOT NULL,
+        quantity INTEGER NOT NULL,
+        unit_price DOUBLE PRECISION NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS storefront_request_log (
+        id TEXT PRIMARY KEY,
+        ip TEXT,
+        phone TEXT,
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS idx_storefront_request_log_ip ON storefront_request_log(ip, created_at);
+      CREATE INDEX IF NOT EXISTS idx_storefront_request_log_phone ON storefront_request_log(phone, created_at);
+    `);
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('❌ Storefront schema migration failed (no data changed):', err);
+  } finally {
+    client.release();
+  }
 }
 
 /**
