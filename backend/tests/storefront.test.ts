@@ -187,7 +187,7 @@ test('public catalog: only published, active products, and only whitelisted fiel
   assert.equal(list.body.items.length, list.body.total);
 
   const item = list.body.items.find((i: any) => i.slug === shown.slug);
-  assert.deepEqual(Object.keys(item).sort(), ['availability', 'category', 'compareAtPrice', 'description', 'images', 'name', 'price', 'slug']);
+  assert.deepEqual(Object.keys(item).sort(), ['availability', 'category', 'compareAtPrice', 'description', 'images', 'isNew', 'name', 'price', 'slug']);
   assert.equal(item.price, 250);
   assert.equal(item.images.length, 1);
   assert.ok(item.images[0].url.startsWith('https://img.example.com/products/'));
@@ -460,6 +460,13 @@ test('featured and new arrivals: staff flag featured; "new" follows the first pu
   await t.api('PATCH', `/storefront-admin/products/${newer.id}`, { isPublished: true });
   const again = (await t.q('SELECT published_at FROM products WHERE id = $1', [newer.id]))[0].published_at;
   assert.equal(new Date(again).getTime(), new Date(firstPublished).getTime());
+
+  // "isNew" for 30 days after the first publish; the date itself is never public
+  const shownNewer = await pub('GET', `/storefront/products/${newer.slug}`);
+  assert.equal(shownNewer.body.isNew, true);
+  assert.ok(!/published_?at/i.test(shownNewer.text), 'publish date leaked');
+  await t.q(`UPDATE products SET published_at = CURRENT_TIMESTAMP - INTERVAL '31 days' WHERE id = $1`, [older.id]);
+  assert.equal((await pub('GET', `/storefront/products/${older.slug}`)).body.isNew, false);
 
   assert.equal((await t.api('PATCH', `/storefront-admin/products/${older.id}`, { isFeatured: true })).body.isFeatured, true);
   const featured = (await pub('GET', '/storefront/products?featured=1&pageSize=60')).body.items.map((i: any) => i.slug);
