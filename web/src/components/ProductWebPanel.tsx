@@ -24,6 +24,8 @@ export function ProductWebPanel({ product, onClose, onChanged }: Props) {
   const [busy, setBusy] = useState(false);
   const [slug, setSlug] = useState('');
   const [description, setDescription] = useState('');
+  const [wasPrice, setWasPrice] = useState('');
+  const [featured, setFeatured] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -37,6 +39,8 @@ export function ProductWebPanel({ product, onClose, onChanged }: Props) {
         setWeb(w);
         setSlug(w.slug ?? '');
         setDescription(w.webDescription ?? '');
+        setWasPrice(w.compareAtPrice == null ? '' : String(w.compareAtPrice));
+        setFeatured(w.isFeatured);
       })
       .catch((err) => { if (!cancelled) addToast('error', err?.message || 'Could not load website details'); })
       .finally(() => { if (!cancelled) setLoading(false); });
@@ -90,9 +94,16 @@ export function ProductWebPanel({ product, onClose, onChanged }: Props) {
 
   const save = (publish: boolean) =>
     run(async () => {
-      const saved = await saveProductWeb(product.id, { isPublished: publish, slug: slug.trim() || undefined, webDescription: description });
+      const saved = await saveProductWeb(product.id, {
+        isPublished: publish,
+        slug: slug.trim() || undefined,
+        webDescription: description,
+        compareAtPrice: wasPrice.trim() === '' ? null : Number(wasPrice),
+        isFeatured: featured,
+      });
       setWeb(saved);
       setSlug(saved.slug ?? '');
+      setWasPrice(saved.compareAtPrice == null ? '' : String(saved.compareAtPrice));
       onChanged(product.id, saved.isPublished);
       addToast('success', publish ? (web?.isPublished ? 'Website details saved' : 'Published to the website') : 'Removed from the website');
     }, 'Could not save');
@@ -176,6 +187,28 @@ export function ProductWebPanel({ product, onClose, onChanged }: Props) {
             rows={5}
             placeholder="Materials, dimensions, colours, care instructions…"
           />
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '12px', alignItems: 'end' }}>
+            <div>
+              <InputField
+                label="“Was” price for a sale (optional)"
+                id="web-was-price"
+                type="number"
+                min={0}
+                step="0.01"
+                value={wasPrice}
+                onChange={setWasPrice}
+                placeholder="leave empty if not on sale"
+              />
+              <p style={{ margin: '4px 0 0', fontSize: '11px', color: '#64748b' }}>
+                Shown crossed out next to today’s price (${web.sellingPrice.toFixed(2)}). Must be higher. Customers are always charged today’s price.
+              </p>
+            </div>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', paddingBottom: '22px', cursor: 'pointer' }}>
+              <input type="checkbox" checked={featured} onChange={(e) => setFeatured(e.target.checked)} />
+              Feature on the website home page
+            </label>
+          </div>
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', flexWrap: 'wrap' }}>
             <button type="button" className="btn btn-secondary" onClick={onClose}>Close</button>

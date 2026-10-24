@@ -13,6 +13,7 @@ import { SearchableSelect } from '../components/SearchableSelect';
 import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
 import { ProductWebPanel } from '../components/ProductWebPanel';
+import { WebCategoriesPanel } from '../components/WebCategoriesPanel';
 
 interface Category {
   id: string;
@@ -86,6 +87,7 @@ export function ProductsPage() {
   const [newCategoryName, setNewCategoryName] = useState('');
   const [isEditOpen, setIsEditOpen] = useState(false);
   const [webProduct, setWebProduct] = useState<{ id: string; name: string } | null>(null);
+  const [isWebCategoriesOpen, setIsWebCategoriesOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
 
   // Inline Category Creation Modal
@@ -775,6 +777,11 @@ export function ProductsPage() {
             </button>
           )}
           {hasPermission('manage_inventory') && (
+            <button type="button" className="btn btn-secondary" onClick={() => setIsWebCategoriesOpen(true)}>
+              Website categories
+            </button>
+          )}
+          {hasPermission('manage_inventory') && (
             <button
               type="button"
               className="btn btn-secondary"
@@ -1327,6 +1334,8 @@ export function ProductsPage() {
       </Modal>
 
       {/* Edit Product Modal */}
+      <WebCategoriesPanel open={isWebCategoriesOpen} onClose={() => setIsWebCategoriesOpen(false)} />
+
       <ProductWebPanel
         product={webProduct}
         onClose={() => setWebProduct(null)}

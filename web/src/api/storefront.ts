@@ -20,7 +20,18 @@ export interface ProductWeb {
   isPublished: boolean;
   slug: string | null;
   webDescription: string | null;
+  sellingPrice: number;
+  /** "Was" price shown crossed out on the website; display only. */
+  compareAtPrice: number | null;
+  isFeatured: boolean;
   images: WebImage[];
+}
+
+export interface WebCategory {
+  id: string;
+  name: string;
+  publishedCount: number;
+  imageUrl: string | null;
 }
 
 export interface StorefrontSettings {
@@ -61,7 +72,10 @@ const base = '/storefront-admin';
 
 export const getProductWeb = (id: string) => apiGet<ProductWeb>(`${base}/products/${id}`);
 
-export const saveProductWeb = (id: string, body: { isPublished?: boolean; slug?: string; webDescription?: string }) =>
+export const saveProductWeb = (
+  id: string,
+  body: { isPublished?: boolean; slug?: string; webDescription?: string; compareAtPrice?: number | null; isFeatured?: boolean },
+) =>
   apiPatch<ProductWeb>(`${base}/products/${id}`, body);
 
 export const reorderImages = (id: string, imageIds: string[]) =>
@@ -77,12 +91,15 @@ export function photoProblem(file: File): string | null {
   return null;
 }
 
-/** Presign, upload straight to R2, then register the photo with the ERP. */
-export async function uploadProductPhoto(productId: string, file: File): Promise<WebImage[]> {
+/**
+ * Presign, upload straight to R2, then register the photo with the ERP.
+ * Shared by product and category photos; returns the registration response.
+ */
+async function uploadPhoto<T>(presignPath: string, registerPath: string, file: File): Promise<T> {
   const problem = photoProblem(file);
   if (problem) throw new Error(problem);
 
-  const presigned = await apiPost<{ key: string; uploadUrl: string }>(`${base}/products/${productId}/images/presign`, {
+  const presigned = await apiPost<{ key: string; uploadUrl: string }>(presignPath, {
     contentType: file.type,
     size: file.size,
   });
@@ -96,9 +113,22 @@ export async function uploadProductPhoto(productId: string, file: File): Promise
   }
   if (!put.ok) throw new Error(`Photo storage refused the upload (status ${put.status}).`);
 
-  const done = await apiPost<{ images: WebImage[] }>(`${base}/products/${productId}/images`, { key: presigned.key, alt: file.name.replace(/\.[^.]+$/, '') });
+  return apiPost<T>(registerPath, { key: presigned.key, alt: file.name.replace(/\.[^.]+$/, '') });
+}
+
+export async function uploadProductPhoto(productId: string, file: File): Promise<WebImage[]> {
+  const done = await uploadPhoto<{ images: WebImage[] }>(`${base}/products/${productId}/images/presign`, `${base}/products/${productId}/images`, file);
   return done.images;
 }
+
+export const listWebCategories = () => apiGet<WebCategory[]>(`${base}/categories`);
+
+export async function uploadCategoryPhoto(categoryId: string, file: File): Promise<string | null> {
+  const done = await uploadPhoto<{ imageUrl: string | null }>(`${base}/categories/${categoryId}/image/presign`, `${base}/categories/${categoryId}/image`, file);
+  return done.imageUrl;
+}
+
+export const removeCategoryPhoto = (categoryId: string) => apiDelete<{ imageUrl: null }>(`${base}/categories/${categoryId}/image`);
 
 export const getStorefrontSettings = () => apiGet<StorefrontSettings>(`${base}/settings`);
 
