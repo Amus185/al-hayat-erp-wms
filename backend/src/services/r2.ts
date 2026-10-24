@@ -4,6 +4,7 @@
 // browser to R2 with a short-lived presigned PUT; the backend only signs,
 // checks (HEAD) and deletes.
 import { createHash, createHmac } from 'node:crypto';
+import { isProductionRuntime } from '../security-config';
 
 export interface R2Config {
   accountId: string;
@@ -11,6 +12,8 @@ export interface R2Config {
   secretAccessKey: string;
   bucket: string;
   publicBaseUrl: string;
+  /** S3 API origin, e.g. https://<account>.r2.cloudflarestorage.com */
+  endpoint: string;
 }
 
 export const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
@@ -29,7 +32,26 @@ export function getR2Config(): R2Config | null {
     secretAccessKey: e.R2_SECRET_ACCESS_KEY,
     bucket: e.R2_BUCKET,
     publicBaseUrl: e.R2_PUBLIC_BASE_URL.replace(/\/$/, ''),
+    endpoint: r2Endpoint(e.R2_ACCOUNT_ID, e.R2_ENDPOINT),
   };
+}
+
+/**
+ * The S3 API origin. R2_ENDPOINT exists for local development against an
+ * S3-compatible stand-in (see backend/scripts/dev-photo-store.mjs). In
+ * production only an https endpoint is accepted; anything else falls back to
+ * Cloudflare R2.
+ */
+function r2Endpoint(accountId: string, override: string | undefined): string {
+  const fallback = `https://${accountId}.r2.cloudflarestorage.com`;
+  if (!override) return fallback;
+  try {
+    const u = new URL(override);
+    if (u.protocol !== 'https:' && isProductionRuntime()) return fallback;
+    return u.origin;
+  } catch {
+    return fallback;
+  }
 }
 
 export const publicUrl = (cfg: R2Config, key: string) => `${cfg.publicBaseUrl}/${key}`;
@@ -92,7 +114,7 @@ export function sigV4QueryString(i: SigV4Input): string {
   return `${canonicalQuery}&X-Amz-Signature=${signature}`;
 }
 
-const hostOf = (cfg: R2Config) => `${cfg.accountId}.r2.cloudflarestorage.com`;
+const hostOf = (cfg: R2Config) => new URL(cfg.endpoint).host;
 const pathOf = (cfg: R2Config, key: string) => `/${cfg.bucket}/${key}`;
 
 /**
@@ -107,7 +129,7 @@ export function presignPut(cfg: R2Config, key: string, contentType: string, cont
     accessKeyId: cfg.accessKeyId, secretAccessKey: cfg.secretAccessKey,
     region: 'auto', service: 's3', amzDate: amzDateOf(now), expires,
   });
-  return `https://${hostOf(cfg)}${encPath(pathOf(cfg, key))}?${qs}`;
+  return `${cfg.endpoint}${encPath(pathOf(cfg, key))}?${qs}`;
 }
 
 /** Header-authenticated request (HEAD / DELETE) with an empty body. */
@@ -125,7 +147,7 @@ function signedHeaderRequest(cfg: R2Config, method: string, key: string, now: Da
   const stringToSign = ['AWS4-HMAC-SHA256', amzDate, scope, sha256hex(canonicalRequest)].join('\n');
   const signature = createHmac('sha256', signingKey(cfg.secretAccessKey, date, 'auto', 's3')).update(stringToSign).digest('hex');
   return {
-    url: `https://${host}${encPath(pathOf(cfg, key))}`,
+    url: `${cfg.endpoint}${encPath(pathOf(cfg, key))}`,
     headers: {
       'x-amz-content-sha256': EMPTY_SHA256,
       'x-amz-date': amzDate,
