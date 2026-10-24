@@ -68,6 +68,28 @@ test('SigV4 signing matches the AWS documentation example', () => {
   assert.ok(qs.endsWith('X-Amz-Signature=aeeed9bbccd4d02ee5c0109b86d86835f995330da4c265957d157751f604d404'), qs);
 });
 
+test('R2_ENDPOINT points uploads at a local stand-in, but production only accepts https', async () => {
+  const id = await t.createProduct({ price: 50 });
+  const presignHost = async () => {
+    const r = await t.api('POST', `/storefront-admin/products/${id}/images/presign`, { contentType: 'image/png', size: 100 });
+    return new URL(r.body.uploadUrl).host;
+  };
+  const saved = { R2_ENDPOINT: process.env.R2_ENDPOINT, NODE_ENV: process.env.NODE_ENV };
+  try {
+    process.env.R2_ENDPOINT = 'http://127.0.0.1:9100';
+    assert.equal(await presignHost(), '127.0.0.1:9100');
+    // Checked on the config directly: in production mode the API itself refuses
+    // to serve with the test's short signing secret.
+    process.env.NODE_ENV = 'production';
+    const { getR2Config } = await import('../src/services/r2');
+    assert.equal(new URL(getR2Config()!.endpoint).host, 'acct123.r2.cloudflarestorage.com');
+  } finally {
+    if (saved.R2_ENDPOINT === undefined) delete process.env.R2_ENDPOINT; else process.env.R2_ENDPOINT = saved.R2_ENDPOINT;
+    if (saved.NODE_ENV === undefined) delete process.env.NODE_ENV; else process.env.NODE_ENV = saved.NODE_ENV;
+  }
+  assert.equal(await presignHost(), 'acct123.r2.cloudflarestorage.com');
+});
+
 // ── settings ────────────────────────────────────────────────────────────────
 
 test('settings: administrators only; the web location must be an existing branch; values validated', async () => {
