@@ -1,6 +1,6 @@
 // LOCAL DEVELOPMENT ONLY: fill a local database with a sample furniture
-// catalog (drawn illustrations as stand-in photos) so the website and the
-// admin panel can be tried without real data. Needs the backend to have run
+// catalog (Unsplash photos, or drawn illustrations when offline) so the website
+// and the admin panel can be tried without real data. Needs the backend to have run
 // once against the database (it creates the tables) and the local photo store
 // running (backend/scripts/dev-photo-store.mjs). Refuses non-local databases.
 //
@@ -99,9 +99,28 @@ function png(px) {
   const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(W, 0); ihdr.writeUInt32BE(H, 4); ihdr[8] = 8; ihdr[9] = 2;
   return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', ihdr), chunk('IDAT', zlib.deflateSync(Buffer.concat(rows))), chunk('IEND', Buffer.alloc(0))]);
 }
-async function store(key, px) {
-  const res = await fetch(`${PHOTO_STORE}/${BUCKET}/` + key, { method: 'PUT', headers: { 'Content-Type': 'image/png' }, body: png(px) });
+async function put(key, body, type) {
+  const res = await fetch(`${PHOTO_STORE}/${BUCKET}/` + key, { method: 'PUT', headers: { 'Content-Type': type }, body });
   if (!res.ok) throw new Error('photo store refused ' + res.status + ' (is backend/scripts/dev-photo-store.mjs running?)');
+}
+
+// Real furniture photos from Unsplash (Unsplash License: free to use, no
+// permission needed; photographers credited below). Downloaded here and
+// uploaded to the local photo store, the same way a staff upload ends up in R2.
+// Without internet the drawn illustrations are used instead.
+let online = true;
+async function photo(id) {
+  if (!online) return null;
+  try {
+    const res = await fetch(`https://images.unsplash.com/${id}?auto=format&fit=crop&w=1200&h=1200&q=80&fm=jpg`, { signal: AbortSignal.timeout(15000) });
+    const type = res.headers.get('content-type') || '';
+    if (!res.ok || !type.startsWith('image/')) throw new Error(String(res.status));
+    return { body: Buffer.from(await res.arrayBuffer()), type: type.split(';')[0] };
+  } catch (err) {
+    online = false;
+    console.warn(`Could not download photos (${err.message}); using drawn pictures instead.`);
+    return null;
+  }
 }
 
 // ── catalog ─────────────────────────────────────────────────────────────────
@@ -111,37 +130,70 @@ for (const [id, name] of cats) await db.query('INSERT INTO categories (id, code,
 await db.query(`INSERT INTO storefront_settings (key, value) VALUES ('location_id', $1), ('safety_buffer', '0'), ('low_stock_threshold', '3')
                 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, [HQ]);
 
+// photos: [Unsplash photo id, photographer]
 const items = [
-  { name: 'Oslo Corner Sofa', cat: 'cat-living', kind: 'sofa', color: '#4f7a46', price: 650, was: 799, stock: 8, featured: 1, days: 1, desc: 'Deep-seated three-seat sofa in olive linen with solid oak legs.\n280 × 95 cm · Removable, washable covers.' },
-  { name: 'Velvet Accent Armchair', cat: 'cat-living', kind: 'armchair', color: '#6d7d3a', price: 279, was: null, stock: 2, featured: 0, days: 3, desc: 'Curved velvet armchair on brass-tipped legs.' },
-  { name: 'Nordic Dining Table', cat: 'cat-dining', kind: 'table', color: '#b0814f', price: 599, was: 669, stock: 5, featured: 1, days: 6, desc: 'Solid ash table that seats six. 180 × 90 cm.' },
-  { name: 'Linen Dining Chair', cat: 'cat-dining', kind: 'chair', color: '#cdbb9a', price: 89, was: 110, stock: 24, featured: 0, days: 9, desc: 'Upholstered dining chair with walnut legs.' },
-  { name: 'Haven Storage Bed', cat: 'cat-bedroom', kind: 'bed', color: '#8a9a7b', price: 749, was: 849, stock: 4, featured: 1, days: 2, desc: 'Queen bed with lift-up storage and a padded headboard.' },
-  { name: 'Walnut Bookcase', cat: 'cat-office', kind: 'bookcase', color: '#6b4a2b', price: 229, was: null, stock: 7, featured: 0, days: 12, desc: 'Five-shelf bookcase in walnut veneer.' },
-  { name: 'Round Coffee Table', cat: 'cat-living', kind: 'coffee', color: '#a0703f', price: 199, was: null, stock: 10, featured: 0, days: 4, desc: 'Oak top on a black steel base. Ø 90 cm.' },
-  { name: 'Cloud Three-Seater', cat: 'cat-living', kind: 'sofa', color: '#9aa3a8', price: 820, was: null, stock: 0, featured: 0, days: 15, desc: 'Soft boucle sofa. Back in stock soon.' },
-  { name: 'Oak Bedside Table', cat: 'cat-bedroom', kind: 'nightstand', color: '#c49a63', price: 129, was: 149, stock: 12, featured: 0, days: 5, desc: 'Two drawers with brass handles.' },
+  { name: 'Oslo Corner Sofa', cat: 'cat-living', kind: 'sofa', color: '#4f7a46', price: 650, was: 799, stock: 8, featured: 1, days: 1,
+    desc: 'Deep-seated three-seat sofa in olive fabric with solid oak legs.\n280 × 95 cm · Removable, washable covers.',
+    photos: [['photo-1555041469-a586c61ea9bc', 'Phillip Goldsberry'], ['photo-1493663284031-b7e3aefcae8e', 'Nathan Fertig']] },
+  { name: 'Velvet Accent Armchair', cat: 'cat-living', kind: 'armchair', color: '#6d7d3a', price: 279, was: null, stock: 2, featured: 0, days: 3,
+    desc: 'Curved accent armchair with a padded seat on a solid wood frame.',
+    photos: [['photo-1586023492125-27b2c045efd7', 'Kam Idris'], ['photo-1580480055273-228ff5388ef8', 'SCOPIC LTD']] },
+  { name: 'Nordic Dining Table', cat: 'cat-dining', kind: 'table', color: '#b0814f', price: 599, was: 669, stock: 5, featured: 1, days: 6,
+    desc: 'Solid wood table that seats six. 180 × 90 cm.',
+    photos: [['photo-1505409628601-edc9af17fda6', 'yann maignan'], ['photo-1602872030490-4a484a7b3ba6', 'Jonathan Borba']] },
+  { name: 'Linen Dining Chair', cat: 'cat-dining', kind: 'chair', color: '#cdbb9a', price: 89, was: 110, stock: 24, featured: 0, days: 9,
+    desc: 'Upholstered dining chair with wooden legs.',
+    photos: [['photo-1598300042247-d088f8ab3a91', 'Sam Moghadam'], ['photo-1592078615290-033ee584e267', 'Suchit Poojari']] },
+  { name: 'Haven Storage Bed', cat: 'cat-bedroom', kind: 'bed', color: '#8a9a7b', price: 749, was: 849, stock: 4, featured: 1, days: 2,
+    desc: 'Queen bed with lift-up storage and a padded headboard.',
+    photos: [['photo-1595526114035-0d45ed16cfbf', 'Lotus Design N Print'], ['photo-1562438668-bcf0ca6578f0', '刘 强']] },
+  { name: 'Walnut Bookcase', cat: 'cat-office', kind: 'bookcase', color: '#6b4a2b', price: 229, was: null, stock: 7, featured: 0, days: 12,
+    desc: 'Five-shelf bookcase in walnut veneer.',
+    photos: [['photo-1593430980369-68efc5a5eb34', 'Pickawood'], ['photo-1603058817990-2b9a9abbce86', 'Eilis Garvey']] },
+  { name: 'Round Coffee Table', cat: 'cat-living', kind: 'coffee', color: '#a0703f', price: 199, was: null, stock: 10, featured: 0, days: 4,
+    desc: 'Oak top on a black steel base. Ø 90 cm.',
+    photos: [['photo-1581428982868-e410dd047a90', 'Lui Peng'], ['photo-1758565811033-84d1365000c6', 'Caroline Badran']] },
+  { name: 'Cloud Three-Seater', cat: 'cat-living', kind: 'sofa', color: '#9aa3a8', price: 820, was: null, stock: 0, featured: 0, days: 15,
+    desc: 'Soft three-seat sofa in grey fabric. Back in stock soon.',
+    photos: [['photo-1634497885778-152eb6fd543d', 'Hadi Yazdi Aznaveh'], ['photo-1698936061086-2bf99c7b9fc5', 'Ambo Ampeng']] },
+  { name: 'Oak Bedside Table', cat: 'cat-bedroom', kind: 'nightstand', color: '#c49a63', price: 129, was: 149, stock: 12, featured: 0, days: 5,
+    desc: 'Bedside table with drawers and brass handles.',
+    photos: [['photo-1522771739844-6a9f6d5f14af', 'Christopher Jolly'], ['photo-1771287490579-afd6e8d3c09a', 'Franco Debartolo']] },
 ];
+
+let real = 0;
 for (const it of items) {
-  const id = crypto.randomUUID();
   const slug = it.name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-  await db.query(`INSERT INTO products (id, sku, name, description, web_description, category_id, cost_price, selling_price, compare_at_price,
-                    is_published, is_featured, slug, published_at)
-                  VALUES ($1, $2, $3, 'Internal note: do not show', $4, $5, $6, $7, $8, 1, $9, $10, CURRENT_TIMESTAMP - make_interval(days => $11))`,
-    [id, 'SKU-' + id.slice(0, 6), it.name, it.desc, it.cat, Math.round(it.price * 0.5), it.price, it.was, it.featured, slug, it.days]);
-  await db.query("INSERT INTO inventory_stock (id, product_id, owner_type, branch_id, quantity_on_hand) VALUES ($1, $2, 'BRANCH', $3, $4)", [crypto.randomUUID(), id, HQ, it.stock]);
-  const key = `products/${id}/${crypto.randomUUID()}.png`;
-  await store(key, draw[it.kind](it.color));
-  await db.query('INSERT INTO product_images (id, product_id, object_key, alt, sort_order, is_primary) VALUES ($1, $2, $3, $4, 0, 1)', [crypto.randomUUID(), id, key, it.name]);
-  if (it.kind === 'sofa' && it.featured) { // a second angle
-    const k2 = `products/${id}/${crypto.randomUUID()}.png`;
-    await store(k2, draw.sofa(shade(it.color, 1.15)));
-    await db.query('INSERT INTO product_images (id, product_id, object_key, alt, sort_order, is_primary) VALUES ($1, $2, $3, $4, 1, 0)', [crypto.randomUUID(), id, k2, it.name + ', lighter shade']);
+  // Safe to run again (e.g. after restarting the photo store): products are reused by slug.
+  const existing = await db.query('SELECT id FROM products WHERE slug = $1', [slug]);
+  const id = existing.rows[0]?.id ?? crypto.randomUUID();
+  if (existing.rowCount) {
+    await db.query(`UPDATE products SET web_description = $2, category_id = $3, selling_price = $4, compare_at_price = $5, is_published = 1, is_featured = $6 WHERE id = $1`,
+      [id, it.desc, it.cat, it.price, it.was, it.featured]);
+    await db.query('DELETE FROM product_images WHERE product_id = $1', [id]);
+    await db.query("UPDATE inventory_stock SET quantity_on_hand = $2 WHERE product_id = $1 AND owner_type = 'BRANCH' AND branch_id = $3", [id, it.stock, HQ]);
+  } else {
+    await db.query(`INSERT INTO products (id, sku, name, description, web_description, category_id, cost_price, selling_price, compare_at_price,
+                      is_published, is_featured, slug, published_at)
+                    VALUES ($1, $2, $3, 'Internal note: do not show', $4, $5, $6, $7, $8, 1, $9, $10, CURRENT_TIMESTAMP - make_interval(days => $11))`,
+      [id, 'SKU-' + id.slice(0, 6), it.name, it.desc, it.cat, Math.round(it.price * 0.5), it.price, it.was, it.featured, slug, it.days]);
+    await db.query("INSERT INTO inventory_stock (id, product_id, owner_type, branch_id, quantity_on_hand) VALUES ($1, $2, 'BRANCH', $3, $4)", [crypto.randomUUID(), id, HQ, it.stock]);
+  }
+
+  for (const [n, [photoId]] of it.photos.entries()) {
+    const got = await photo(photoId);
+    if (!got && n > 0) break; // offline: one drawing is enough
+    const ext = got ? (got.type === 'image/png' ? 'png' : got.type === 'image/webp' ? 'webp' : 'jpg') : 'png';
+    const key = `products/${id}/${crypto.randomUUID()}.${ext}`;
+    if (got) { await put(key, got.body, got.type); real++; } else await put(key, png(draw[it.kind](it.color)), 'image/png');
+    await db.query('INSERT INTO product_images (id, product_id, object_key, alt, sort_order, is_primary) VALUES ($1, $2, $3, $4, $5, $6)',
+      [crypto.randomUUID(), id, key, n === 0 ? it.name : `${it.name}, another view`, n, n === 0 ? 1 : 0]);
   }
 }
 // One category with its own staff-uploaded picture (the others fall back to a product photo)
-const ck = `categories/cat-office/${crypto.randomUUID()}.png`;
-await store(ck, draw.bookcase('#3f5f48'));
+const office = await photo('photo-1606223226350-4cf4cd93a221'); // Arthur Lambillotte
+const ck = `categories/cat-office/${crypto.randomUUID()}.${office ? 'jpg' : 'png'}`;
+if (office) await put(ck, office.body, office.type); else await put(ck, png(draw.bookcase('#3f5f48')), 'image/png');
 await db.query("UPDATE categories SET image_key = $1 WHERE id = 'cat-office'", [ck]);
-console.log('seeded', items.length, 'products in', cats.length, 'categories');
+console.log(`seeded ${items.length} products in ${cats.length} categories (${real} real photos${online ? '' : ', drawings for the rest'})`);
 await db.end();

@@ -51,15 +51,31 @@ storefront.get('/categories', async (c) => {
   }));
 });
 
+// Fixed ORDER BY clauses, picked by the "sort" query value (never built from it).
+const SORTS: Record<string, string> = {
+  name: 'p.name ASC',
+  new: 'p.published_at DESC NULLS LAST, p.name ASC',
+  price_asc: 'p.selling_price ASC, p.name ASC',
+  price_desc: 'p.selling_price DESC, p.name ASC',
+};
+
 storefront.get('/products', async (c) => {
   const page = Math.max(1, Math.floor(Number(c.req.query('page'))) || 1);
   const pageSize = Math.min(60, Math.max(1, Math.floor(Number(c.req.query('pageSize'))) || 24));
   const category = (c.req.query('category') || '').slice(0, 64);
   const q = (c.req.query('q') || '').trim().slice(0, 80);
-  // sort=new: most recently published first. featured=1 / sale=1 narrow the list.
-  const sort = c.req.query('sort') === 'new' ? 'new' : 'name';
+  // sort=new: most recently published first; price_asc / price_desc by price. Anything else: by name.
+  // featured=1 / sale=1 / minPrice / maxPrice narrow the list.
+  const sortKey = c.req.query('sort') || '';
+  const orderBy = Object.hasOwn(SORTS, sortKey) ? SORTS[sortKey] : SORTS.name;
   const featured = c.req.query('featured') === '1';
   const sale = c.req.query('sale') === '1';
+  const priceBound = (v: string | undefined) => {
+    const n = Number(v);
+    return v && Number.isFinite(n) && n >= 0 ? n : null;
+  };
+  const minPrice = priceBound(c.req.query('minPrice'));
+  const maxPrice = priceBound(c.req.query('maxPrice'));
 
   let where = `WHERE ${PUBLISHED}`;
   const params: any[] = [];
@@ -69,6 +85,8 @@ storefront.get('/products', async (c) => {
   }
   if (featured) where += ' AND p.is_featured = 1';
   if (sale) where += ' AND p.compare_at_price > p.selling_price';
+  if (minPrice != null) { where += ' AND p.selling_price >= ?'; params.push(minPrice); }
+  if (maxPrice != null) { where += ' AND p.selling_price <= ?'; params.push(maxPrice); }
   if (q) {
     where += ' AND p.name ILIKE ?';
     params.push(`%${q.replace(/[\\%_]/g, (m) => '\\' + m)}%`);
@@ -77,7 +95,7 @@ storefront.get('/products', async (c) => {
   const base = `FROM products p LEFT JOIN categories c ON c.id = p.category_id ${where}`;
   const total = Number(((await c.env.DB.prepare(`SELECT COUNT(*) AS n ${base}`).bind(...params).first()) as any)?.n ?? 0);
   const { results } = await c.env.DB.prepare(
-    `SELECT ${PRODUCT_COLUMNS} ${base} ORDER BY ${sort === 'new' ? 'p.published_at DESC NULLS LAST, p.name ASC' : 'p.name ASC'} LIMIT ? OFFSET ?`,
+    `SELECT ${PRODUCT_COLUMNS} ${base} ORDER BY ${orderBy} LIMIT ? OFFSET ?`,
   ).bind(...params, pageSize, (page - 1) * pageSize).all();
 
   const rows = (results || []) as any[];

@@ -496,6 +496,32 @@ test('featured and new arrivals: staff flag featured; "new" follows the first pu
   assert.ok(!featured.includes(newer.slug));
 });
 
+test('price sort and price range; unknown sort values fall back to name order', async () => {
+  const catId = `cat-${randomUUID().slice(0, 6)}`;
+  await t.q(`INSERT INTO categories (id, code, name) VALUES ($1, $1, 'Price test')`, [catId]);
+  const made = [];
+  for (const price of [300, 100, 200]) {
+    const p = await publishedProduct({ price });
+    await t.q('UPDATE products SET category_id = $1 WHERE id = $2', [catId, p.id]);
+    made.push(p);
+  }
+  const list = async (qs: string) => {
+    const res = await pub('GET', `/storefront/products?category=${catId}&${qs}`);
+    assert.equal(res.status, 200, res.text);
+    return res.body.items.map((i: any) => i.price);
+  };
+  assert.deepEqual(await list('sort=price_asc'), [100, 200, 300]);
+  assert.deepEqual(await list('sort=price_desc'), [300, 200, 100]);
+  assert.deepEqual(await list('sort=price_asc&minPrice=150'), [200, 300]);
+  assert.deepEqual(await list('sort=price_asc&maxPrice=200'), [100, 200]);
+  assert.deepEqual(await list('sort=price_asc&minPrice=150&maxPrice=250'), [200]);
+  // bad bounds are ignored, and sort values are looked up, never placed in the SQL
+  assert.equal((await list('minPrice=abc&maxPrice=-5')).length, 3);
+  for (const sort of ['constructor', '__proto__', 'toString', 'p.cost_price', '1;DROP TABLE products']) {
+    assert.equal((await list(`sort=${encodeURIComponent(sort)}`)).length, 3, sort);
+  }
+});
+
 test('category pictures: staff photo first, otherwise a product photo; uploads are verified like product photos', async () => {
   const catId = `cat-${randomUUID().slice(0, 6)}`;
   await t.q(`INSERT INTO categories (id, code, name) VALUES ($1, $1, 'Beds')`, [catId]);
