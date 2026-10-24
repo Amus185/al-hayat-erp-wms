@@ -6,13 +6,14 @@
 import { Hono } from 'hono';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { Env, uuidv4 } from '../db';
+import { getR2Config, publicUrl } from '../services/r2';
 import {
   availabilityOf, getSettings, loadImages, sellableAfterBuffer, sellableUnits, toPublicProduct,
 } from '../services/storefront';
 
 const storefront = new Hono<{ Bindings: Env }>();
 
-const PRODUCT_COLUMNS = `p.id, p.slug, p.name, p.description, p.web_description, p.selling_price, p.category_id, c.name AS category_name`;
+const PRODUCT_COLUMNS = `p.id, p.slug, p.name, p.web_description, p.selling_price, p.compare_at_price, p.category_id, c.name AS category_name`;
 const PUBLISHED = `p.is_published = 1 AND COALESCE(p.is_active, 1) = 1 AND p.slug IS NOT NULL`;
 
 const MAX_LINES = 20;
@@ -24,18 +25,30 @@ function cacheable(c: any) {
   c.header('Cache-Control', 'public, max-age=60');
 }
 
+// Categories that have something on sale. Each gets a picture: the photo staff
+// uploaded for the category, or else the main photo of one of its products.
 storefront.get('/categories', async (c) => {
   const { results } = await c.env.DB.prepare(`
-    SELECT cat.id, cat.name, cat.parent_id, COUNT(p.id) AS product_count
+    SELECT cat.id, cat.name, cat.parent_id, cat.image_key, COUNT(p.id) AS product_count,
+           (SELECT pi.object_key FROM product_images pi
+              JOIN products p2 ON p2.id = pi.product_id
+             WHERE p2.category_id = cat.id AND p2.is_published = 1 AND COALESCE(p2.is_active, 1) = 1 AND p2.slug IS NOT NULL
+             ORDER BY p2.is_featured DESC, pi.is_primary DESC, p2.published_at DESC NULLS LAST, pi.sort_order ASC
+             LIMIT 1) AS fallback_key
     FROM categories cat
     JOIN products p ON p.category_id = cat.id AND ${PUBLISHED}
-    GROUP BY cat.id, cat.name, cat.parent_id
+    GROUP BY cat.id, cat.name, cat.parent_id, cat.image_key
     ORDER BY cat.name ASC
   `).all();
+  const cfg = getR2Config();
   cacheable(c);
-  return c.json((results || []).map((r: any) => ({
-    id: r.id, name: r.name, parentId: r.parent_id ?? null, productCount: Number(r.product_count),
-  })));
+  return c.json((results || []).map((r: any) => {
+    const key = r.image_key || r.fallback_key;
+    return {
+      id: r.id, name: r.name, parentId: r.parent_id ?? null, productCount: Number(r.product_count),
+      image: cfg && key ? { url: publicUrl(cfg, key), alt: r.name } : null,
+    };
+  }));
 });
 
 storefront.get('/products', async (c) => {
@@ -43,6 +56,10 @@ storefront.get('/products', async (c) => {
   const pageSize = Math.min(60, Math.max(1, Math.floor(Number(c.req.query('pageSize'))) || 24));
   const category = (c.req.query('category') || '').slice(0, 64);
   const q = (c.req.query('q') || '').trim().slice(0, 80);
+  // sort=new: most recently published first. featured=1 / sale=1 narrow the list.
+  const sort = c.req.query('sort') === 'new' ? 'new' : 'name';
+  const featured = c.req.query('featured') === '1';
+  const sale = c.req.query('sale') === '1';
 
   let where = `WHERE ${PUBLISHED}`;
   const params: any[] = [];
@@ -50,6 +67,8 @@ storefront.get('/products', async (c) => {
     where += ' AND (p.category_id = ? OR p.category_id IN (SELECT id FROM categories WHERE parent_id = ?))';
     params.push(category, category);
   }
+  if (featured) where += ' AND p.is_featured = 1';
+  if (sale) where += ' AND p.compare_at_price > p.selling_price';
   if (q) {
     where += ' AND p.name ILIKE ?';
     params.push(`%${q.replace(/[\\%_]/g, (m) => '\\' + m)}%`);
@@ -58,7 +77,7 @@ storefront.get('/products', async (c) => {
   const base = `FROM products p LEFT JOIN categories c ON c.id = p.category_id ${where}`;
   const total = Number(((await c.env.DB.prepare(`SELECT COUNT(*) AS n ${base}`).bind(...params).first()) as any)?.n ?? 0);
   const { results } = await c.env.DB.prepare(
-    `SELECT ${PRODUCT_COLUMNS} ${base} ORDER BY p.name ASC LIMIT ? OFFSET ?`,
+    `SELECT ${PRODUCT_COLUMNS} ${base} ORDER BY ${sort === 'new' ? 'p.published_at DESC NULLS LAST, p.name ASC' : 'p.name ASC'} LIMIT ? OFFSET ?`,
   ).bind(...params, pageSize, (page - 1) * pageSize).all();
 
   const rows = (results || []) as any[];

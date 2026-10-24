@@ -187,7 +187,7 @@ test('public catalog: only published, active products, and only whitelisted fiel
   assert.equal(list.body.items.length, list.body.total);
 
   const item = list.body.items.find((i: any) => i.slug === shown.slug);
-  assert.deepEqual(Object.keys(item).sort(), ['availability', 'category', 'description', 'images', 'name', 'price', 'slug']);
+  assert.deepEqual(Object.keys(item).sort(), ['availability', 'category', 'compareAtPrice', 'description', 'images', 'name', 'price', 'slug']);
   assert.equal(item.price, 250);
   assert.equal(item.images.length, 1);
   assert.ok(item.images[0].url.startsWith('https://img.example.com/products/'));
@@ -403,4 +403,104 @@ test('a cancelled request cannot be converted', async () => {
   const id = (await t.q('SELECT id FROM storefront_requests WHERE request_number = $1', [made.body.requestNumber]))[0].id;
   assert.equal((await t.api('POST', `/storefront-admin/requests/${id}/cancel`)).status, 200);
   assert.equal((await t.api('POST', `/storefront-admin/requests/${id}/convert`)).status, 409);
+});
+
+// ── sale prices, featured, new arrivals, categories ─────────────────────────
+
+test('the ERP\'s internal description is never public; only the website description is', async () => {
+  const p = await publishedProduct();
+  await t.q(`UPDATE products SET description = 'Internal: supplier ABC, margin 40%', web_description = NULL WHERE id = $1`, [p.id]);
+  const one = await pub('GET', `/storefront/products/${p.slug}`);
+  assert.equal(one.body.description, null);
+  assert.ok(!one.text.includes('supplier ABC'));
+  await t.api('PATCH', `/storefront-admin/products/${p.id}`, { webDescription: 'Solid oak, seats six.' });
+  assert.equal((await pub('GET', `/storefront/products/${p.slug}`)).body.description, 'Solid oak, seats six.');
+});
+
+test('sale prices: the "was" price must be a real reduction, is display-only, and never changes what is charged', async () => {
+  const p = await publishedProduct({ price: 100, qty: 9 });
+  const patch = (body: unknown) => t.api('PATCH', `/storefront-admin/products/${p.id}`, body);
+  assert.equal((await patch({ compareAtPrice: 100 })).status, 400, 'equal "was" price accepted');
+  assert.equal((await patch({ compareAtPrice: 80 })).status, 400, 'lower "was" price accepted');
+  assert.equal((await patch({ compareAtPrice: 'abc' })).status, 400);
+  const ok = await patch({ compareAtPrice: 125 });
+  assert.equal(ok.status, 200, JSON.stringify(ok.body));
+  assert.equal(ok.body.compareAtPrice, 125);
+
+  const shown = (await pub('GET', `/storefront/products/${p.slug}`)).body;
+  assert.deepEqual([shown.price, shown.compareAtPrice], [100, 125]);
+  const onSale = (await pub('GET', '/storefront/products?sale=1&pageSize=60')).body.items.map((i: any) => i.slug);
+  assert.ok(onSale.includes(p.slug));
+
+  // the customer is still charged the selling price
+  const made = await request([{ slug: p.slug, quantity: 1 }]);
+  assert.equal(Number((await t.q('SELECT total_amount FROM storefront_requests WHERE request_number = $1', [made.body.requestNumber]))[0].total_amount), 100);
+
+  // if the selling price later rises above the "was" price, the badge disappears by itself
+  await t.q('UPDATE products SET selling_price = 130 WHERE id = $1', [p.id]);
+  assert.equal((await pub('GET', `/storefront/products/${p.slug}`)).body.compareAtPrice, null);
+  assert.ok(!(await pub('GET', '/storefront/products?sale=1&pageSize=60')).body.items.some((i: any) => i.slug === p.slug));
+
+  await t.q('UPDATE products SET selling_price = 100 WHERE id = $1', [p.id]);
+  assert.equal((await patch({ compareAtPrice: null })).body.compareAtPrice, null);
+});
+
+test('featured and new arrivals: staff flag featured; "new" follows the first publish date', async () => {
+  const older = await publishedProduct();
+  await t.q(`UPDATE products SET published_at = CURRENT_TIMESTAMP - INTERVAL '10 days' WHERE id = $1`, [older.id]);
+  const newer = await publishedProduct();
+  const firstPublished = (await t.q('SELECT published_at FROM products WHERE id = $1', [newer.id]))[0].published_at;
+  assert.ok(firstPublished, 'publishing did not record a date');
+
+  const newest = (await pub('GET', '/storefront/products?sort=new&pageSize=60')).body.items.map((i: any) => i.slug);
+  assert.ok(newest.indexOf(newer.slug) < newest.indexOf(older.slug), 'newer product is not listed first');
+
+  // unpublish + republish keeps the original date (it is not "new" again)
+  await t.api('PATCH', `/storefront-admin/products/${newer.id}`, { isPublished: false });
+  await t.api('PATCH', `/storefront-admin/products/${newer.id}`, { isPublished: true });
+  const again = (await t.q('SELECT published_at FROM products WHERE id = $1', [newer.id]))[0].published_at;
+  assert.equal(new Date(again).getTime(), new Date(firstPublished).getTime());
+
+  assert.equal((await t.api('PATCH', `/storefront-admin/products/${older.id}`, { isFeatured: true })).body.isFeatured, true);
+  const featured = (await pub('GET', '/storefront/products?featured=1&pageSize=60')).body.items.map((i: any) => i.slug);
+  assert.ok(featured.includes(older.slug));
+  assert.ok(!featured.includes(newer.slug));
+});
+
+test('category pictures: staff photo first, otherwise a product photo; uploads are verified like product photos', async () => {
+  const catId = `cat-${randomUUID().slice(0, 6)}`;
+  await t.q(`INSERT INTO categories (id, code, name) VALUES ($1, $1, 'Beds')`, [catId]);
+  const p = await publishedProduct();
+  await t.q('UPDATE products SET category_id = $1 WHERE id = $2', [catId, p.id]);
+
+  const catOf = async () => (await pub('GET', '/storefront/categories')).body.find((c: any) => c.id === catId);
+  const fallback = await catOf();
+  assert.ok(fallback.image?.url.startsWith(`https://img.example.com/products/${p.id}/`), JSON.stringify(fallback));
+
+  const presign = await t.api('POST', `/storefront-admin/categories/${catId}/image/presign`, { contentType: 'image/webp', size: 2000 });
+  assert.equal(presign.status, 200, JSON.stringify(presign.body));
+  assert.ok(presign.body.key.startsWith(`categories/${catId}/`));
+  assert.equal((await t.api('POST', `/storefront-admin/categories/${catId}/image/presign`, { contentType: 'image/gif', size: 2000 })).status, 400);
+
+  const real = globalThis.fetch;
+  globalThis.fetch = (async (_u: any, init: any) => (init?.method === 'HEAD'
+    ? { ok: true, status: 200, headers: new Headers({ 'content-length': '2000', 'content-type': 'image/webp' }) }
+    : { ok: true, status: 204, headers: new Headers() })) as any;
+  try {
+    // a product photo key cannot be attached to a category
+    assert.equal((await t.api('POST', `/storefront-admin/categories/${catId}/image`, { key: `products/${p.id}/x.webp` })).status, 400);
+    const set = await t.api('POST', `/storefront-admin/categories/${catId}/image`, { key: presign.body.key });
+    assert.equal(set.status, 201, JSON.stringify(set.body));
+    assert.equal((await catOf()).image.url, `https://img.example.com/${presign.body.key}`);
+    const list = await t.api('GET', '/storefront-admin/categories');
+    assert.equal(list.body.find((c: any) => c.id === catId).imageUrl, `https://img.example.com/${presign.body.key}`);
+    assert.equal((await t.api('DELETE', `/storefront-admin/categories/${catId}/image`)).status, 200);
+    assert.ok((await catOf()).image.url.includes(`/products/${p.id}/`), 'did not fall back to a product photo');
+  } finally {
+    globalThis.fetch = real;
+  }
+
+  const noPerms = await t.tokenFor({ sub: (await t.createUser({ branchId: HQ, roleId: 'role-accountant', role: 'accountant' })).id });
+  assert.equal((await t.api('GET', '/storefront-admin/categories', undefined, noPerms)).status, 403);
+  assert.equal((await t.api('POST', `/storefront-admin/categories/${catId}/image/presign`, { contentType: 'image/png', size: 10 }, noPerms)).status, 403);
 });
