@@ -12,6 +12,7 @@ import { FormField, InputField } from '../components/FormField';
 import { SearchableSelect } from '../components/SearchableSelect';
 import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
+import { ProductWebPanel } from '../components/ProductWebPanel';
 
 interface Category {
   id: string;
@@ -52,6 +53,7 @@ export interface Product {
   price_tiers?: PriceTier[];
   group_items?: GroupItem[];
   is_active: boolean;
+  is_published?: number | boolean;
   category_name?: string;
   brand_name?: string;
 }
@@ -83,6 +85,7 @@ export function ProductsPage() {
   const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState('');
   const [isEditOpen, setIsEditOpen] = useState(false);
+  const [webProduct, setWebProduct] = useState<{ id: string; name: string } | null>(null);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
 
   // Inline Category Creation Modal
@@ -703,6 +706,20 @@ export function ProductsPage() {
               className="btn btn-secondary btn-sm"
               onClick={(e) => {
                 e.stopPropagation();
+                setWebProduct({ id: row.id, name: row.name });
+              }}
+              style={{ fontSize: '11px', padding: '3px 8px', color: Number(row.is_published) === 1 ? '#065f46' : undefined }}
+              title={Number(row.is_published) === 1 ? 'On the website. Manage photos and details' : 'Publish this product on the website'}
+            >
+              {Number(row.is_published) === 1 ? '● Website' : 'Website'}
+            </button>
+          )}
+          {hasPermission('manage_inventory') && (
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={(e) => {
+                e.stopPropagation();
                 openEditModal(row);
               }}
               style={{ fontSize: '11px', padding: '3px 8px' }}
@@ -1310,6 +1327,12 @@ export function ProductsPage() {
       </Modal>
 
       {/* Edit Product Modal */}
+      <ProductWebPanel
+        product={webProduct}
+        onClose={() => setWebProduct(null)}
+        onChanged={(id, published) => setProducts((prev) => prev.map((p) => (p.id === id ? { ...p, is_published: published ? 1 : 0 } : p)))}
+      />
+
       {isEditOpen && editingProduct && (
         <Modal isOpen={isEditOpen} title="Edit Product" onClose={() => { setIsEditOpen(false); setEditingProduct(null); }} width="lg">
           <form onSubmit={handleEditProduct}>
