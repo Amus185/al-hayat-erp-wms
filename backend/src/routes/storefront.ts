@@ -13,7 +13,7 @@ import {
 
 const storefront = new Hono<{ Bindings: Env }>();
 
-const PRODUCT_COLUMNS = `p.id, p.slug, p.name, p.web_description, p.selling_price, p.compare_at_price, p.category_id, c.name AS category_name`;
+const PRODUCT_COLUMNS = `p.id, p.slug, p.name, p.web_description, p.selling_price, p.compare_at_price, p.published_at, p.category_id, c.name AS category_name`;
 const PUBLISHED = `p.is_published = 1 AND COALESCE(p.is_active, 1) = 1 AND p.slug IS NOT NULL`;
 
 const MAX_LINES = 20;

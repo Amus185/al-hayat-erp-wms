@@ -120,6 +120,9 @@ export async function loadImages(db: any, productIds: string[]): Promise<Map<str
   return map;
 }
 
+/** How long a product counts as "new" after it is first published. */
+export const NEW_FOR_DAYS = 30;
+
 /** The only shape the public API ever returns for a product. */
 export function toPublicProduct(row: any, images: PublicImage[], availability: Availability) {
   const price = Number(row.selling_price);
@@ -132,6 +135,8 @@ export function toPublicProduct(row: any, images: PublicImage[], availability: A
     price,
     // Only a real reduction is shown: a "was" price at or below today's price is ignored.
     compareAtPrice: compareAt != null && compareAt > price ? compareAt : null,
+    // First published within the last NEW_FOR_DAYS days (the publish date itself stays private).
+    isNew: row.published_at != null && Date.now() - new Date(row.published_at).getTime() < NEW_FOR_DAYS * 86_400_000,
     category: row.category_id ? { id: row.category_id as string, name: (row.category_name ?? null) as string | null } : null,
     images,
     availability,
