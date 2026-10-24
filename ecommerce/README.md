@@ -47,10 +47,14 @@ To see photos from a local stand-in storage on `127.0.0.1:9100`, also set `ALLOW
 
 ## Deploy (second Railway service)
 
-1. Railway project → **New service** → same GitHub repo → **Settings → Root Directory: `ecommerce`**.
-2. Build command `npm ci && npm run build`, start command `npm run start` (Railway supplies `PORT`).
-3. Set the variables above. Use the same `STOREFRONT_API_KEY` as on the backend service.
-4. Add a custom domain, then set `NEXT_PUBLIC_SITE_URL` to it and redeploy.
+1. Railway project → **New → GitHub Repo** → this repo. Name the service `storefront`.
+2. **Settings → Source → Root Directory:** `/ecommerce`.
+3. **Settings → Config-as-code → Railway Config File:** `/ecommerce/railway.json`. This step matters: Railway's config file does **not** follow the Root Directory, so without it the repo-root `railway.json` (the backend's start command) would be applied to this service and it would fail to start.
+4. **Settings → Source → Watch Paths:** `/ecommerce/**`, so backend-only changes do not rebuild the site.
+5. **Variables:** the settings listed above. `STOREFRONT_API_KEY` must equal the one on the backend service. `NEXT_PUBLIC_*` and `IMAGE_HOSTNAME` are read at build time, so set them before the first deploy.
+6. **Settings → Networking → Generate Domain** (or add a custom domain), then set `NEXT_PUBLIC_SITE_URL` to that address and redeploy.
+
+Railway builds with Railpack: it runs `npm run build`, then `npm run start`, on the current Node LTS (Next 16 needs 20.9 or newer).
 
 On the backend service, the request endpoint answers 503 until `STOREFRONT_API_KEY` is set there.
 
