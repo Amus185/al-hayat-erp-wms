@@ -17,3 +17,10 @@ export function formatPrice(amount: number): string {
 export function availabilityLabel(a: "IN_STOCK" | "LOW" | "OUT"): string {
   return a === "IN_STOCK" ? "In stock" : a === "LOW" ? "Only a few left" : "Out of stock";
 }
+
+/** Whole-percent saving for a sale badge, e.g. 15 for "-15%". */
+export function discountPercent(price: number, compareAt: number | null): number | null {
+  if (compareAt == null || compareAt <= price || compareAt <= 0) return null;
+  const pct = Math.round((1 - price / compareAt) * 100);
+  return pct >= 1 ? pct : null;
+}

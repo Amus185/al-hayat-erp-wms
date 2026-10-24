@@ -14,6 +14,10 @@ export interface Product {
   name: string;
   description: string | null;
   price: number;
+  /** "Was" price for a sale; only present when it is higher than price. */
+  compareAtPrice: number | null;
+  /** Published within the last 30 days. */
+  isNew: boolean;
   category: { id: string; name: string | null } | null;
   images: ProductImage[];
   availability: Availability;
@@ -31,6 +35,7 @@ export interface Category {
   name: string;
   parentId: string | null;
   productCount: number;
+  image: ProductImage | null;
 }
 
 /** What the cart keeps in the browser: only which products and how many. */

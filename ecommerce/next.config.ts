@@ -13,7 +13,12 @@ const nextConfig: NextConfig = {
   turbopack: { root: process.cwd() },
   images: {
     remotePatterns: [
-      ...(imageHost ? [{ protocol: "https" as const, hostname: imageHost, pathname: "/products/**" }] : []),
+      ...(imageHost
+        ? [
+            { protocol: "https" as const, hostname: imageHost, pathname: "/products/**" },
+            { protocol: "https" as const, hostname: imageHost, pathname: "/categories/**" },
+          ]
+        : []),
       ...(allowLocalImages ? [{ protocol: "http" as const, hostname: "127.0.0.1", port: "9100", pathname: "/**" }] : []),
     ],
     dangerouslyAllowLocalIP: allowLocalImages,

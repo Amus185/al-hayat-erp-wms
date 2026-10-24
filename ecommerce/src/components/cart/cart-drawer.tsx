@@ -43,7 +43,7 @@ export function CartDrawer() {
       >
         <div className="flex items-center justify-between">
           <h2 id="cart-title" className="text-lg font-semibold">Your cart</h2>
-          <button type="button" onClick={close} aria-label="Close cart" className="flex h-10 w-10 items-center justify-center rounded-md border border-neutral-200 hover:border-neutral-900">
+          <button type="button" onClick={close} aria-label="Close cart" className="flex h-10 w-10 items-center justify-center rounded-md border border-neutral-200 hover:border-brand">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="h-5 w-5" aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" /></svg>
           </button>
         </div>
@@ -52,7 +52,7 @@ export function CartDrawer() {
           <div className="mt-20 flex flex-col items-center text-center text-neutral-500">
             <p className="text-lg font-semibold text-black">Your cart is empty</p>
             <p className="mt-2 text-sm">Add a piece you like and send us a request. We will call to confirm.</p>
-            <Link href="/search" onClick={close} className="mt-6 rounded-full bg-neutral-900 px-5 py-2.5 text-sm font-medium text-white">Browse furniture</Link>
+            <Link href="/search" onClick={close} className="mt-6 rounded-md bg-brand px-5 py-2.5 text-sm font-bold uppercase text-white hover:bg-brand-dark">Browse furniture</Link>
           </div>
         ) : (
           <div className="flex min-h-0 flex-1 flex-col justify-between">
@@ -100,7 +100,7 @@ export function CartDrawer() {
                 href="/checkout"
                 onClick={close}
                 aria-disabled={anyOut || lines.length === 0}
-                className={`block w-full rounded-full bg-neutral-900 p-3 text-center text-sm font-medium text-white ${anyOut || lines.length === 0 ? "pointer-events-none opacity-50" : "hover:opacity-90"}`}
+                className={`block w-full rounded-full bg-brand p-3 text-center text-sm font-bold uppercase tracking-wide text-white ${anyOut || lines.length === 0 ? "pointer-events-none opacity-50" : "hover:bg-brand-dark"}`}
               >
                 Send order request
               </Link>

@@ -19,7 +19,7 @@ export default async function ThankYouPage({ searchParams }: { searchParams: Sea
           We will call you soon to confirm availability, delivery and payment. Nothing has been charged.
         </p>
         {CONTACT_PHONE && <p className="mt-2 text-sm text-neutral-500">Need us sooner? Call {CONTACT_PHONE}.</p>}
-        <Link href="/search" className="mt-6 inline-block rounded-full bg-neutral-900 px-5 py-2.5 text-sm font-medium text-white">Keep browsing</Link>
+        <Link href="/search" className="mt-6 inline-block rounded-md bg-brand px-5 py-2.5 text-sm font-bold uppercase text-white hover:bg-brand-dark">Keep browsing</Link>
       </div>
     </div>
   );

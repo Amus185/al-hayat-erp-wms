@@ -56,7 +56,7 @@ export function CheckoutForm() {
     return (
       <div className="rounded-lg border border-neutral-200 bg-white p-8 text-center">
         <p className="text-lg font-semibold">Your cart is empty</p>
-        <Link href="/search" className="mt-4 inline-block rounded-full bg-neutral-900 px-5 py-2.5 text-sm font-medium text-white">Browse furniture</Link>
+        <Link href="/search" className="mt-4 inline-block rounded-md bg-brand px-5 py-2.5 text-sm font-bold uppercase text-white hover:bg-brand-dark">Browse furniture</Link>
       </div>
     );
   }
@@ -110,7 +110,7 @@ export function CheckoutForm() {
         <button
           type="submit"
           disabled={submitting || blocked || loading}
-          className="w-full rounded-full bg-neutral-900 p-4 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
+          className="w-full rounded-full bg-brand p-4 text-sm font-bold uppercase tracking-wide text-white hover:bg-brand-dark disabled:opacity-50"
         >
           {submitting ? "Sending…" : "Send order request"}
         </button>

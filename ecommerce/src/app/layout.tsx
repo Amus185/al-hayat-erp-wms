@@ -20,7 +20,7 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
   await connection();
   return (
     <html lang="en">
-      <body className="bg-neutral-50 text-black selection:bg-neutral-300">
+      <body className="bg-white text-ink selection:bg-brand-light">
         <CartProvider>
           <a href="#content" className="sr-only focus:not-sr-only focus:absolute focus:left-2 focus:top-2 focus:z-50 focus:rounded focus:bg-white focus:p-2">
             Skip to content

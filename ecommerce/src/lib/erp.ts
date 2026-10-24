@@ -30,8 +30,21 @@ async function get<T>(path: string): Promise<T | null> {
   return (await res.json()) as T;
 }
 
-export async function listProducts(opts: { q?: string; category?: string; page?: number; pageSize?: number } = {}): Promise<ProductPage> {
+export interface ListOptions {
+  q?: string;
+  category?: string;
+  page?: number;
+  pageSize?: number;
+  sort?: "name" | "new";
+  featured?: boolean;
+  sale?: boolean;
+}
+
+export async function listProducts(opts: ListOptions = {}): Promise<ProductPage> {
   const params = new URLSearchParams();
+  if (opts.sort === "new") params.set("sort", "new");
+  if (opts.featured) params.set("featured", "1");
+  if (opts.sale) params.set("sale", "1");
   if (opts.q) params.set("q", opts.q);
   if (opts.category) params.set("category", opts.category);
   if (opts.page && opts.page > 1) params.set("page", String(opts.page));

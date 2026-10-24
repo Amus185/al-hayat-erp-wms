@@ -37,7 +37,7 @@ export function Gallery({ images, name }: { images: ProductImage[]; name: string
                 onClick={() => setIndex(i)}
                 aria-label={`Show photo ${i + 1} of ${images.length}`}
                 aria-current={i === index}
-                className={`relative h-full w-full overflow-hidden rounded-lg border bg-white ${i === index ? "border-2 border-neutral-900" : "border-neutral-200 hover:border-neutral-900"}`}
+                className={`relative h-full w-full overflow-hidden rounded-lg border bg-white ${i === index ? "border-2 border-brand" : "border-neutral-200 hover:border-brand"}`}
               >
                 <Image src={img.url} alt="" fill sizes="80px" className="object-cover" />
               </button>

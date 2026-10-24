@@ -3,9 +3,9 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { AddToCart } from "@/components/cart/add-to-cart";
 import { Gallery } from "@/components/gallery";
-import { ProductGrid } from "@/components/product-tile";
+import { PriceTag, ProductGrid } from "@/components/product-card";
 import { getProduct, listProducts } from "@/lib/erp";
-import { availabilityLabel, CURRENCY, formatPrice, SITE_NAME } from "@/lib/site";
+import { availabilityLabel, CURRENCY, discountPercent, formatPrice, SITE_NAME } from "@/lib/site";
 import type { Product } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -34,8 +34,8 @@ export default async function ProductPage({ params }: { params: Params }) {
     return (
       <div className="mx-auto max-w-2xl px-4 py-16 text-center">
         <h1 className="text-2xl font-bold">We could not load this product</h1>
-        <p className="mt-2 text-neutral-600">Please try again in a moment.</p>
-        <Link href="/search" className="mt-6 inline-block rounded-full bg-neutral-900 px-5 py-2.5 text-sm font-medium text-white">Browse furniture</Link>
+        <p className="mt-2 text-muted">Please try again in a moment.</p>
+        <Link href="/search" className="mt-6 inline-block rounded-md bg-brand px-5 py-2.5 text-sm font-bold uppercase text-white hover:bg-brand-dark">Browse furniture</Link>
       </div>
     );
   }
@@ -47,6 +47,8 @@ export default async function ProductPage({ params }: { params: Params }) {
     related = page.items.filter((p) => p.slug !== product.slug).slice(0, 4);
   } catch { /* related items are optional */ }
 
+  const pct = discountPercent(product.price, product.compareAtPrice);
+  const stockTone = product.availability === "OUT" ? "bg-sale" : product.availability === "LOW" ? "bg-amber-500" : "bg-brand";
   const jsonLd = {
     "@context": "https://schema.org",
     "@type": "Product",
@@ -62,38 +64,56 @@ export default async function ProductPage({ params }: { params: Params }) {
   };
 
   return (
-    <div className="mx-auto max-w-(--breakpoint-2xl) px-4">
+    <div className="mx-auto max-w-7xl px-4">
       {/* "<" is escaped so product text can never close the script tag. */}
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd).replace(/</g, "\\u003c") }} />
 
-      <nav aria-label="Breadcrumb" className="mb-4 text-sm text-neutral-500">
-        <Link href="/search" className="hover:text-black hover:underline">All furniture</Link>
+      <nav aria-label="Breadcrumb" className="my-5 text-sm text-muted">
+        <Link href="/" className="hover:text-brand">Home</Link>
+        <span aria-hidden="true"> / </span>
+        <Link href="/search" className="hover:text-brand">All furniture</Link>
         {product.category && (
-          <> / <Link href={`/search?category=${encodeURIComponent(product.category.id)}`} className="hover:text-black hover:underline">{product.category.name}</Link></>
+          <>
+            <span aria-hidden="true"> / </span>
+            <Link href={`/search?category=${encodeURIComponent(product.category.id)}`} className="hover:text-brand">{product.category.name}</Link>
+          </>
         )}
       </nav>
 
-      <div className="flex flex-col rounded-lg border border-neutral-200 bg-white p-6 md:p-10 lg:flex-row lg:gap-10">
-        <div className="w-full basis-full lg:basis-4/6">
+      <div className="grid gap-8 lg:grid-cols-5 lg:gap-12">
+        <div className="lg:col-span-3">
           <Gallery images={product.images} name={product.name} />
         </div>
-        <div className="mt-8 basis-full lg:mt-0 lg:basis-2/6">
-          <h1 className="text-3xl font-medium md:text-4xl">{product.name}</h1>
-          <p className="mt-4 inline-block rounded-full bg-neutral-900 px-4 py-2 text-sm font-semibold text-white">{formatPrice(product.price)}</p>
-          <p className={`mt-4 text-sm font-medium ${product.availability === "OUT" ? "text-red-700" : product.availability === "LOW" ? "text-amber-700" : "text-green-700"}`}>
+        <div className="lg:col-span-2">
+          {product.category?.name && <p className="text-xs font-bold uppercase tracking-[0.2em] text-brand">{product.category.name}</p>}
+          <h1 className="mt-2 text-3xl font-extrabold tracking-tight md:text-4xl">{product.name}</h1>
+          <div className="mt-4 flex flex-wrap items-center gap-3">
+            <PriceTag product={product} large />
+            {pct && <span className="rounded bg-sale px-2 py-1 text-xs font-bold text-white">Save {pct}%</span>}
+          </div>
+          {pct && product.compareAtPrice != null && (
+            <p className="mt-1 text-sm text-sale">You save {formatPrice(product.compareAtPrice - product.price)}</p>
+          )}
+          <p className="mt-4 flex items-center gap-2 text-sm font-semibold">
+            <span className={`h-2.5 w-2.5 rounded-full ${stockTone}`} aria-hidden="true" />
             {availabilityLabel(product.availability)}
           </p>
-          {product.description && <p className="mt-6 whitespace-pre-line text-sm leading-6 text-neutral-700">{product.description}</p>}
-          <div className="mt-8">
-            <AddToCart slug={product.slug} availability={product.availability} />
-          </div>
-          <p className="mt-4 text-xs text-neutral-500">No payment online. Send a request and we will call you to confirm.</p>
+
+          {product.description && <p className="mt-6 whitespace-pre-line text-sm leading-7 text-ink/80">{product.description}</p>}
+
+          <div className="mt-8"><AddToCart slug={product.slug} availability={product.availability} /></div>
+
+          <ul className="mt-8 space-y-3 rounded-xl bg-brand-lighter p-5 text-sm">
+            <li className="flex gap-3"><span className="font-bold text-brand" aria-hidden="true">✓</span> No payment online: send a request first.</li>
+            <li className="flex gap-3"><span className="font-bold text-brand" aria-hidden="true">✓</span> We call you to confirm stock, delivery and payment.</li>
+            <li className="flex gap-3"><span className="font-bold text-brand" aria-hidden="true">✓</span> Stock shown live from our showroom.</li>
+          </ul>
         </div>
       </div>
 
       {related.length > 0 && (
-        <section className="py-8" aria-labelledby="related-heading">
-          <h2 id="related-heading" className="mb-4 text-2xl font-bold">You may also like</h2>
+        <section className="mt-16" aria-labelledby="related-heading">
+          <h2 id="related-heading" className="mb-6 text-2xl font-extrabold uppercase tracking-tight">You may also like</h2>
           <ProductGrid products={related} />
         </section>
       )}

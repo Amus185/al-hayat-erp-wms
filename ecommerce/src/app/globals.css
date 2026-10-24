@@ -1,7 +1,22 @@
 @import "tailwindcss";
 
-/* Design adapted from Next.js Commerce (MIT, Copyright (c) 2025 Vercel, Inc.).
-   See THIRD_PARTY_NOTICES.md. */
+/* Layout ideas adapted from Next.js Commerce (MIT, Copyright (c) 2025 Vercel, Inc.).
+   See THIRD_PARTY_NOTICES.md. Colours are Al Hayat's own (same as the staff app). */
+
+@theme {
+  --color-brand: #0b8f08;
+  --color-brand-dark: #066006;
+  --color-brand-darker: #054405;
+  --color-brand-light: #e9f6e8;
+  --color-brand-lighter: #f4fbf4;
+  --color-accent: #f3d400;
+  --color-accent-dark: #c5ab00;
+  --color-ink: #1a1a1a;
+  --color-muted: #667066;
+  --color-line: #e1e8e1;
+  --color-canvas: #f7f9f7;
+  --color-sale: #c62828;
+}
 
 @layer base {
   *,
@@ -9,13 +24,15 @@
   ::before,
   ::backdrop,
   ::file-selector-button {
-    border-color: var(--color-neutral-200, currentColor);
+    border-color: var(--color-line, currentColor);
   }
   html {
     color-scheme: light;
   }
   body {
     font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    color: var(--color-ink);
+    background: #fff;
   }
 }
 
@@ -24,16 +41,16 @@ input,
 button,
 textarea,
 select {
-  @apply focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-neutral-500 focus-visible:ring-offset-2 focus-visible:ring-offset-neutral-50;
+  @apply focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-white;
 }
 
 @keyframes fadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
 }
 
 .animate-fade-in {
-  animation: fadeIn 0.3s ease-out both;
+  animation: fadeIn 0.35s ease-out both;
 }
 
 @media (prefers-reduced-motion: reduce) {
