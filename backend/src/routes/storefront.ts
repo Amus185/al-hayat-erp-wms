@@ -8,7 +8,7 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { Env, uuidv4 } from '../db';
 import { getR2Config, publicUrl } from '../services/r2';
 import {
-  availabilityOf, getSettings, loadImages, sellableAfterBuffer, sellableUnits, toPublicProduct,
+  availabilityOf, getSettings, loadImages, reserveStockStmt, sellableAfterBuffer, sellableUnits, stockRequirements, toPublicProduct,
 } from '../services/storefront';
 
 const storefront = new Hono<{ Bindings: Env }>();
@@ -211,6 +211,14 @@ storefront.post('/requests', async (c) => {
       'INSERT INTO storefront_request_lines (id, request_id, product_id, product_name, quantity, unit_price) VALUES (?, ?, ?, ?, ?, ?)',
     ).bind(uuidv4(), requestId, p.id, p.name, qty, Number(p.selling_price)));
   }
+  // Hold the stock in the same transaction: if another request took the last
+  // units a moment ago, a reservation affects no row and nothing is saved.
+  const needs = await stockRequirements(db, Array.from(wanted, ([slug, quantity]) => ({ productId: products.get(slug).id, quantity })));
+  const names = new Map<string, string>(Array.from(products.values()).map((p) => [p.id, p.name]));
+  const reserveStmts = needs.map((n) => reserveStockStmt(db, {
+    requestId, productId: n.productId, quantity: n.quantity, branchId: settings.locationId as string,
+    buffer: settings.safetyBuffer, productName: names.get(n.productId) ?? null, // a bundle's component has no name of its own here
+  }));
   await db.batch([
     db.prepare(`
       INSERT INTO storefront_requests (id, request_number, customer_name, phone, email, address, city, notes, total_amount, ip)
@@ -218,6 +226,7 @@ storefront.post('/requests', async (c) => {
     `).bind(requestId, requestNumber, name, phone, email || null, clean(body.address, 300) || null, clean(body.city, 100) || null,
       clean(body.notes, 500) || null, Math.round(total * 100) / 100, ip),
     ...lineStmts,
+    ...reserveStmts,
   ]);
   return c.json({ requestNumber, message: 'Request received. We will contact you shortly to confirm.' }, 201);
 });

@@ -731,6 +731,7 @@ export async function ensurePostgresInit(pool: Pool) {
  * - storefront_requests(+_lines): order REQUESTS from the website. They are
  *   not sales orders: nothing is deducted or posted until staff convert one.
  * - storefront_request_log: submissions per IP/phone, for throttling.
+ * - storefront_reservations: stock held for open web requests.
  */
 export async function ensureStorefrontSchema(pool: Pool) {
   const client = await pool.connect();
@@ -803,6 +804,20 @@ export async function ensureStorefrontSchema(pool: Pool) {
         created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
       );
       CREATE INDEX IF NOT EXISTS idx_storefront_request_log_ip ON storefront_request_log(ip, created_at);
+      -- Units held for a web request (inventory_stock.quantity_reserved), so two
+      -- requests cannot promise the same last pieces. Released when the request
+      -- is cancelled, or when its sales order issues the stock or is cancelled.
+      CREATE TABLE IF NOT EXISTS storefront_reservations (
+        id TEXT PRIMARY KEY,
+        request_id TEXT NOT NULL REFERENCES storefront_requests(id) ON DELETE CASCADE,
+        stock_id TEXT NOT NULL REFERENCES inventory_stock(id) ON DELETE CASCADE,
+        product_id TEXT NOT NULL REFERENCES products(id),
+        quantity INTEGER NOT NULL CHECK (quantity > 0),
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        released_at TIMESTAMP WITH TIME ZONE,
+        release_reason TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_storefront_reservations_open ON storefront_reservations(request_id) WHERE released_at IS NULL;
       CREATE INDEX IF NOT EXISTS idx_storefront_request_log_phone ON storefront_request_log(phone, created_at);
     `);
     await client.query('COMMIT');

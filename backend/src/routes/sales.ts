@@ -4,6 +4,7 @@ import { PgAdapter } from '../pg-client';
 import { authMiddleware, requirePermissions, isAdminUser } from '../middleware/auth';
 import { resolveBranchScope, resolveWriteBranch, branchSql, inScope, ScopeError, type BranchScope } from '../services/branch-scope';
 import { logAudit, createAuditLogStmt } from '../services/audit';
+import { releaseReservationsStmt } from '../services/storefront';
 import {
   prepareSaleJournalEntry,
   prepareCustomerPaymentJournalEntry,
@@ -1516,6 +1517,9 @@ sales.post('/orders/:id/invoice', requirePermissions(['manage_sales']), async (c
       SELECT lower(hex(randomblob(16))), ?, product_id, quantity, unit_price FROM sales_order_lines WHERE sales_order_id = ?
     `).bind(invoiceId, orderId));
 
+    // Stock now leaves the branch: free what a website request held for this order.
+    stmts.push(releaseReservationsStmt(c.env.DB, { orderId: String(orderId) }, 'Sales order invoiced'));
+
     // Deduct inventory from branch
     for (const req of invReqs) {
       const qty = req.quantity;
@@ -1771,6 +1775,9 @@ sales.post('/orders/:id/complete', requirePermissions(['manage_sales']), async (
       INSERT INTO invoice_lines (id, invoice_id, product_id, quantity, unit_price)
       SELECT lower(hex(randomblob(16))), ?, product_id, quantity, unit_price FROM sales_order_lines WHERE sales_order_id = ?
     `).bind(invoiceId, orderId));
+
+    // Stock now leaves the branch: free what a website request held for this order.
+    stmts.push(releaseReservationsStmt(c.env.DB, { orderId: String(orderId) }, 'Sales order completed'));
 
     // Deduct inventory
     for (const req of invReqs) {
@@ -2192,6 +2199,9 @@ sales.post('/orders/:id/cancel', requirePermissions(['manage_sales']), async (c)
       WHERE id = ? AND status = ?
     `).bind(userId, reason, orderId, prevStatus).mustAffect('This order was just changed or cancelled. Please refresh.'),
   ];
+
+  // Free any stock a website request still holds for this order.
+  stmts.push(releaseReservationsStmt(c.env.DB, { orderId: String(orderId) }, 'Sales order cancelled'));
 
   // Check if invoice exists
   const invoice = await c.env.DB.prepare('SELECT * FROM invoices WHERE sales_order_id = ?').bind(orderId).first() as any;
