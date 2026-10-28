@@ -4,13 +4,14 @@ import { notFound } from "next/navigation";
 import { AddToCart } from "@/components/cart/add-to-cart";
 import { FeaturesRow } from "@/components/features-row";
 import { Gallery } from "@/components/gallery";
+import { CatalogUnavailable } from "@/components/catalog-unavailable";
 import { CheckIcon, PhoneIcon } from "@/components/icons";
 import { InfoTabs } from "@/components/info-tabs";
 import { Breadcrumbs } from "@/components/page-header";
 import { PriceTag, ProductGrid, toCardItem } from "@/components/product-card";
 import { RecentlyViewed } from "@/components/recently-viewed";
 import { SaveButton } from "@/components/saved/save-button";
-import { getProduct, listProducts } from "@/lib/erp";
+import { devErrorDetail, getProduct, listProducts } from "@/lib/erp";
 import { availabilityLabel, CONTACT_PHONE, CURRENCY, discountPercent, formatPrice, PHONE_HREF, SITE_NAME } from "@/lib/site";
 import type { Product } from "@/lib/types";
 
@@ -43,15 +44,11 @@ export default async function ProductPage({ params }: { params: Params }) {
   let product: Product | null;
   try {
     product = await getProduct(slug);
-  } catch {
+  } catch (err) {
     return (
-      <div className="mx-auto max-w-xl px-4 py-20 text-center">
-        <h1 className="text-2xl font-semibold">We could not load this product</h1>
-        <p className="mt-2 text-muted">Please try again in a moment.</p>
-        <div className="mt-6 flex justify-center gap-3">
-          <Link href={`/product/${slug}`} className="btn btn-green">Try again</Link>
-          <Link href="/search" className="btn btn-outline">Browse furniture</Link>
-        </div>
+      <div className="mx-auto max-w-2xl px-4 py-16">
+        <h1 className="sr-only">We could not load this product</h1>
+        <CatalogUnavailable detail={devErrorDetail(err)} />
       </div>
     );
   }

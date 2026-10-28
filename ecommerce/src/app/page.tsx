@@ -1,11 +1,12 @@
 import Image from "next/image";
 import Link from "next/link";
+import { CatalogUnavailable } from "@/components/catalog-unavailable";
 import { CategoryCards } from "@/components/category-cards";
 import { FeaturesRow } from "@/components/features-row";
 import { PhoneIcon } from "@/components/icons";
 import { toCardItem } from "@/components/product-card";
 import { ProductTabs, type ProductTab } from "@/components/product-tabs";
-import { listCategories, listProducts } from "@/lib/erp";
+import { devErrorDetail, listCategories, listProducts } from "@/lib/erp";
 import { PHOTOS, roomPhotoFor } from "@/lib/photos";
 import { CONTACT_PHONE, PHONE_HREF, SITE_NAME } from "@/lib/site";
 import type { Category, Product } from "@/lib/types";
@@ -25,7 +26,7 @@ export default async function HomePage() {
   let onSale: Product[] = [];
   let featured: Product[] = [];
   let categories: Category[] = [];
-  let unavailable = false;
+  let failure: unknown = null;
   try {
     const [n, s, f, c] = await Promise.all([
       listProducts({ sort: "new", pageSize: 8 }),
@@ -34,10 +35,11 @@ export default async function HomePage() {
       listCategories(),
     ]);
     [newest, onSale, featured, categories] = [n.items, s.items, f.items, c];
-  } catch {
-    unavailable = true;
+  } catch (err) {
+    failure = err;
   }
 
+  const unavailable = failure !== null;
   const topCategories = categories.filter((c) => !c.parentId && c.productCount > 0).sort((a, b) => b.productCount - a.productCount).slice(0, 8);
   const tabs: ProductTab[] = [
     { key: "featured", label: "Featured", items: featured.map(toCardItem), href: "/search?featured=1" },
@@ -73,9 +75,7 @@ export default async function HomePage() {
 
       <div className="mx-auto max-w-7xl px-4">
         {unavailable && (
-          <p role="status" className="mt-10 rounded-lg border border-line bg-canvas p-6 text-muted">
-            Our catalog is temporarily unavailable. Please try again in a moment{PHONE_HREF ? `, or call us on ${CONTACT_PHONE}` : ""}.
-          </p>
+          <div className="mt-10"><CatalogUnavailable detail={devErrorDetail(failure)} /></div>
         )}
 
         {topCategories.length > 0 && (

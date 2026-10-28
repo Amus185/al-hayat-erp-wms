@@ -1,33 +1,95 @@
 // Server-side client for the ERP's public storefront API.
 // Only import this from server components and route handlers: it reads
 // STOREFRONT_API_KEY, which must never reach the browser.
-import type { Category, Product, ProductPage } from "./types";
+import { isAllowedImageUrl } from "./image-hosts";
+import type { Category, Product, ProductImage, ProductPage } from "./types";
 
-const API = (process.env.ERP_API_URL || "http://localhost:3000/api/v1").replace(/\/$/, "");
+const isDev = process.env.NODE_ENV === "development";
+// In development the backend runs on port 3100 (docs/LOCAL_TESTING.md). In
+// production ERP_API_URL must be set; a missing value is reported, not guessed.
+const API = (process.env.ERP_API_URL || (isDev ? "http://localhost:3100/api/v1" : "")).replace(/\/$/, "");
 const REVALIDATE_SECONDS = 60;
 
-class ErpError extends Error {
-  constructor(public status: number, message: string) {
+export class ErpError extends Error {
+  constructor(
+    public status: number,
+    message: string,
+    /** What actually went wrong, for logs and the development-only hint. Never shown to customers in production. */
+    public detail: string,
+  ) {
     super(message);
     this.name = "ErpError";
   }
 }
 
+const UNAVAILABLE = "The shop is temporarily unavailable.";
+
+// Log each distinct failure at most once a minute so a down ERP does not flood the logs.
+const lastLogged = new Map<string, number>();
+function logFailure(detail: string) {
+  const now = Date.now();
+  if ((lastLogged.get(detail) ?? 0) > now - 60_000) return;
+  lastLogged.set(detail, now);
+  console.error(`[storefront] ERP request failed: ${detail}`);
+}
+
+function describe(err: unknown): string {
+  const e = err as { name?: string; message?: string; cause?: { code?: string; message?: string } };
+  if (e?.name === "TimeoutError") return "timed out after 8 s";
+  return e?.cause?.code || e?.cause?.message || e?.message || String(err);
+}
+
 async function get<T>(path: string): Promise<T | null> {
+  if (!API) {
+    const detail = "ERP_API_URL is not set. Set it to the ERP's /api/v1 address (see ecommerce/README.md).";
+    logFailure(detail);
+    throw new ErpError(503, UNAVAILABLE, detail);
+  }
+  const url = `${API}/storefront${path}`;
   let res: Response;
   try {
-    res = await fetch(`${API}/storefront${path}`, {
+    res = await fetch(url, {
       headers: { Accept: "application/json" },
       // Short cache: prices and availability stay fresh without hitting the ERP on every view.
       next: { revalidate: REVALIDATE_SECONDS },
       signal: AbortSignal.timeout(8000),
     });
-  } catch {
-    throw new ErpError(503, "The shop is temporarily unavailable.");
+  } catch (err) {
+    const why = describe(err);
+    const hint = why === "ECONNREFUSED" ? " Is the ERP backend running, and is ERP_API_URL right?" : "";
+    const detail = `GET ${url} failed: ${why}.${hint}`;
+    logFailure(detail);
+    throw new ErpError(503, UNAVAILABLE, detail);
   }
   if (res.status === 404) return null;
-  if (!res.ok) throw new ErpError(res.status, "The shop is temporarily unavailable.");
+  if (!res.ok) {
+    const body = (await res.text().catch(() => "")).slice(0, 200);
+    const detail = `GET ${url} returned HTTP ${res.status}${body ? `: ${body}` : ""}`;
+    logFailure(detail);
+    throw new ErpError(res.status, UNAVAILABLE, detail);
+  }
   return (await res.json()) as T;
+}
+
+// next/image throws on a photo host it is not configured for, which would fail the
+// whole page. Such photos are dropped (the page shows "photo coming soon") and logged.
+function allowedImages(images: ProductImage[]): ProductImage[] {
+  return images.filter((img) => {
+    if (isAllowedImageUrl(img.url)) return true;
+    let host = img.url;
+    try { host = new URL(img.url).host; } catch { /* keep the raw value */ }
+    logFailure(`photo host "${host}" is not allowed by the image settings; set IMAGE_HOSTNAME to the photo bucket's host (or ALLOW_LOCAL_IMAGES=1 in development) and restart.`);
+    return false;
+  });
+}
+
+function withAllowedImages(p: Product): Product {
+  return { ...p, images: allowedImages(p.images) };
+}
+
+/** The real cause of a catalog failure, but only in development (never shown to customers). */
+export function devErrorDetail(err: unknown): string | null {
+  return isDev && err instanceof ErpError ? err.detail : null;
 }
 
 export interface ListOptions {
@@ -57,16 +119,20 @@ export async function listProducts(opts: ListOptions = {}): Promise<ProductPage>
   if (opts.page && opts.page > 1) params.set("page", String(opts.page));
   if (opts.pageSize) params.set("pageSize", String(opts.pageSize));
   const qs = params.toString();
-  return (await get<ProductPage>(`/products${qs ? `?${qs}` : ""}`)) ?? { items: [], page: 1, pageSize: opts.pageSize ?? 24, total: 0 };
+  const page = await get<ProductPage>(`/products${qs ? `?${qs}` : ""}`);
+  if (!page) return { items: [], page: 1, pageSize: opts.pageSize ?? 24, total: 0 };
+  return { ...page, items: page.items.map(withAllowedImages) };
 }
 
 export async function getProduct(slug: string): Promise<Product | null> {
   if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(slug) || slug.length > 100) return null;
-  return get<Product>(`/products/${slug}`);
+  const product = await get<Product>(`/products/${slug}`);
+  return product && withAllowedImages(product);
 }
 
 export async function listCategories(): Promise<Category[]> {
-  return (await get<Category[]>("/categories")) ?? [];
+  const categories = (await get<Category[]>("/categories")) ?? [];
+  return categories.map((c) => ({ ...c, image: c.image && allowedImages([c.image])[0] ? c.image : null }));
 }
 
 export interface RequestPayload {
@@ -87,7 +153,14 @@ export type RequestResult =
 /** Send an order request to the ERP. The ERP re-checks everything and sets the prices. */
 export async function submitRequest(payload: RequestPayload, clientIp: string): Promise<RequestResult> {
   const key = process.env.STOREFRONT_API_KEY;
-  if (!key) return { ok: false, status: 503, message: "Online requests are not available yet. Please call us." };
+  if (!key) {
+    logFailure("STOREFRONT_API_KEY is not set, so order requests cannot be sent. It must equal STOREFRONT_API_KEY on the ERP.");
+    return { ok: false, status: 503, message: "Online requests are not available yet. Please call us." };
+  }
+  if (!API) {
+    logFailure("ERP_API_URL is not set, so order requests cannot be sent.");
+    return { ok: false, status: 503, message: "We could not reach the shop. Please try again in a moment." };
+  }
   let res: Response;
   try {
     res = await fetch(`${API}/storefront/requests`, {
@@ -104,6 +177,10 @@ export async function submitRequest(payload: RequestPayload, clientIp: string): 
   if (res.status === 201 && body?.requestNumber) return { ok: true, requestNumber: body.requestNumber };
   // Pass through the ERP's customer-safe messages for expected problems; hide anything else.
   const expected = [400, 409, 429, 503].includes(res.status);
+  if (!expected) {
+    const why = res.status === 401 ? " (STOREFRONT_API_KEY does not match the ERP's)" : "";
+    logFailure(`POST ${API}/storefront/requests returned HTTP ${res.status}${why}`);
+  }
   return {
     ok: false,
     status: expected ? res.status : 502,

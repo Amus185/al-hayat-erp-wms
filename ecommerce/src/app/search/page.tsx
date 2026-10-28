@@ -1,10 +1,11 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { CatalogUnavailable } from "@/components/catalog-unavailable";
 import { CloseIcon, FilterIcon } from "@/components/icons";
 import { PageHeader } from "@/components/page-header";
 import { ProductGrid, toCardItem } from "@/components/product-card";
 import { SortSelect } from "@/components/sort-select";
-import { listCategories, listProducts, SORT_KEYS, type SortKey } from "@/lib/erp";
+import { devErrorDetail, listCategories, listProducts, SORT_KEYS, type SortKey } from "@/lib/erp";
 import { CURRENCY } from "@/lib/site";
 import type { Category, ProductPage } from "@/lib/types";
 
@@ -82,15 +83,16 @@ export default async function SearchPage({ searchParams }: { searchParams: Searc
   const f = await read(searchParams);
   let result: ProductPage = { items: [], page: 1, pageSize: PAGE_SIZE, total: 0 };
   let categories: Category[] = [];
-  let unavailable = false;
+  let failure: unknown = null;
   try {
     [result, categories] = await Promise.all([
       listProducts({ q: f.q, category: f.category, page: f.page, pageSize: PAGE_SIZE, sort: f.sort, sale: f.sale, featured: f.featured, minPrice: f.min, maxPrice: f.max }),
       listCategories(),
     ]);
-  } catch {
-    unavailable = true;
+  } catch (err) {
+    failure = err;
   }
+  const unavailable = failure !== null;
   const pages = Math.max(1, Math.ceil(result.total / result.pageSize));
   const current = categories.find((c) => c.id === f.category);
   const title = f.q ? `Results for “${f.q}”` : current?.name ?? (f.sale ? "On sale" : f.featured ? "Featured" : "All furniture");
@@ -219,11 +221,7 @@ export default async function SearchPage({ searchParams }: { searchParams: Searc
           )}
 
           {unavailable ? (
-            <div role="alert" className="rounded-lg border border-line bg-canvas p-8 text-center">
-              <p className="font-semibold">Our catalog is temporarily unavailable.</p>
-              <p className="mt-1 text-sm text-muted">Please try again in a moment.</p>
-              <Link href={href(f)} className="btn btn-green mt-4">Try again</Link>
-            </div>
+            <CatalogUnavailable detail={devErrorDetail(failure)} />
           ) : result.items.length === 0 ? (
             <div className="rounded-lg border border-line bg-canvas p-10 text-center">
               <p className="text-lg font-semibold">Nothing matches your search</p>

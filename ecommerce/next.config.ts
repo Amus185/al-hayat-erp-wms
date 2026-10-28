@@ -1,9 +1,8 @@
 import type { NextConfig } from "next";
 
+import { imageRemotePatterns } from "./src/lib/image-hosts";
+
 const isProd = process.env.NODE_ENV === "production";
-// Public hostname of the photo bucket (e.g. photos.example.com). Only photos
-// from this host may be optimised and served.
-const imageHost = process.env.IMAGE_HOSTNAME;
 // Development only: a stand-in for the photo bucket on this computer.
 const allowLocalImages = !isProd && process.env.ALLOW_LOCAL_IMAGES === "1";
 
@@ -12,17 +11,8 @@ const nextConfig: NextConfig = {
   // This app has its own lockfile inside a larger repo: pin the project root so Next does not guess.
   turbopack: { root: process.cwd() },
   images: {
-    remotePatterns: [
-      ...(imageHost
-        ? [
-            { protocol: "https" as const, hostname: imageHost, pathname: "/products/**" },
-            { protocol: "https" as const, hostname: imageHost, pathname: "/categories/**" },
-          ]
-        : []),
-      // Marketing photos only (src/lib/photos.ts). Product photos always come from the photo bucket above.
-      { protocol: "https" as const, hostname: "images.unsplash.com", pathname: "/photo-**" },
-      ...(allowLocalImages ? [{ protocol: "http" as const, hostname: "127.0.0.1", port: "9100", pathname: "/**" }] : []),
-    ],
+    // Photo bucket (IMAGE_HOSTNAME), Unsplash marketing photos, and the local stand-in in development.
+    remotePatterns: imageRemotePatterns(),
     dangerouslyAllowLocalIP: allowLocalImages,
     // Photo files get a new name on every upload, so a resized copy never goes stale.
     minimumCacheTTL: 60 * 60 * 24 * 30,
