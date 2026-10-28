@@ -25,7 +25,7 @@ export type JwtPayload = {
  */
 export function invalidateUserCache(_userId: string) {}
 
-async function loadAuthState(db: any, userId: string, sessionId: string) {
+export async function loadAuthState(db: any, userId: string, sessionId: string) {
   return db.prepare(`
     SELECT u.email, u.full_name, COALESCE(u.password_version, 1) AS password_version, u.is_active, u.branch_id,
            (SELECT STRING_AGG(DISTINCT r.code, ',') FROM user_roles ur JOIN roles r ON r.id = ur.role_id WHERE ur.user_id = u.id) AS roles,
