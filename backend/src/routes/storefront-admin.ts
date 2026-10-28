@@ -8,7 +8,7 @@ import { logAudit } from '../services/audit';
 import {
   ALLOWED_IMAGE_TYPES, MAX_IMAGE_BYTES, deleteObject, getR2Config, headObject, presignPut, publicUrl,
 } from '../services/r2';
-import { SLUG_PATTERN, getSettings, uniqueSlug } from '../services/storefront';
+import { SLUG_PATTERN, getSettings, releaseReservationsStmt, uniqueSlug } from '../services/storefront';
 import sales from './sales';
 
 const admin = new Hono<{ Bindings: Env; Variables: { jwtPayload: any } }>();
@@ -288,13 +288,35 @@ admin.get('/requests', requirePermissions(['manage_sales']), async (c) => {
   const status = (c.req.query('status') || '').toUpperCase();
   const { results } = await c.env.DB.prepare(`
     SELECT r.id, r.request_number, r.customer_name, r.phone, r.status, r.total_amount, r.created_at, r.converted_order_id,
-           (SELECT COUNT(*) FROM storefront_request_lines l WHERE l.request_id = r.id) AS line_count
+           (SELECT COUNT(*) FROM storefront_request_lines l WHERE l.request_id = r.id) AS line_count,
+           so.order_number, so.status AS order_status,
+           (SELECT d.status FROM deliveries d WHERE d.sales_order_id = so.id AND d.status <> 'CANCELLED'
+             ORDER BY d.created_at DESC LIMIT 1) AS delivery_status,
+           (SELECT COALESCE(SUM(sr.quantity), 0) FROM storefront_reservations sr
+             WHERE sr.request_id = r.id AND sr.released_at IS NULL)::int AS reserved_units
     FROM storefront_requests r
+    LEFT JOIN sales_orders so ON so.id = r.converted_order_id
     WHERE (? = '' OR r.status = ?)
     ORDER BY r.created_at DESC LIMIT 200
   `).bind(status, status).all();
-  return c.json(results || []);
+  return c.json((results || []).map((r: any) => ({ ...r, stage: webOrderStage(r) })));
 });
+
+/**
+ * Where a web order is, from the request through the sales order and its
+ * delivery: NEW → ORDERED → INVOICED → PAID → DELIVERY_SCHEDULED →
+ * OUT_FOR_DELIVERY → DELIVERED, or CANCELLED at any point.
+ */
+export function webOrderStage(r: { status: string; order_status?: string | null; delivery_status?: string | null }): string {
+  if (r.status === 'CANCELLED' || r.order_status === 'CANCELLED') return 'CANCELLED';
+  if (r.status !== 'CONVERTED') return 'NEW';
+  if (r.order_status === 'DELIVERED' || r.delivery_status === 'DELIVERED') return 'DELIVERED';
+  if (r.delivery_status === 'DISPATCHED') return 'OUT_FOR_DELIVERY';
+  if (r.delivery_status === 'PENDING' || r.delivery_status === 'SCHEDULED') return 'DELIVERY_SCHEDULED';
+  if (r.order_status === 'PAID') return 'PAID';
+  if (r.order_status === 'INVOICED') return 'INVOICED';
+  return 'ORDERED';
+}
 
 admin.get('/requests/:id', requirePermissions(['manage_sales']), async (c) => {
   const denied = await assertRequestsAccess(c);
@@ -311,11 +333,15 @@ admin.post('/requests/:id/cancel', requirePermissions(['manage_sales']), async (
   const denied = await assertRequestsAccess(c);
   if (denied) return denied;
   const userId = c.get('jwtPayload').sub;
-  const done = await c.env.DB.prepare(`
-    UPDATE storefront_requests SET status = 'CANCELLED', handled_by = ?, handled_at = CURRENT_TIMESTAMP
-    WHERE id = ? AND status = 'NEW' RETURNING id
-  `).bind(userId, param(c, 'id')).all();
-  if (!done.results?.length) return c.json({ message: 'Only new requests can be cancelled.' }, 409);
+  const db = c.env.DB;
+  // Cancelling and freeing the held stock happen together, or not at all.
+  await db.batch([
+    db.prepare(`
+      UPDATE storefront_requests SET status = 'CANCELLED', handled_by = ?, handled_at = CURRENT_TIMESTAMP
+      WHERE id = ? AND status = 'NEW'
+    `).bind(userId, param(c, 'id')).mustAffect('Only new requests can be cancelled.'),
+    releaseReservationsStmt(db, { requestId: param(c, 'id') }, 'Request cancelled'),
+  ]);
   await logAudit(c, 'STOREFRONT_REQUEST_CANCEL', 'storefront_requests', param(c, 'id'));
   return c.json({ success: true });
 });

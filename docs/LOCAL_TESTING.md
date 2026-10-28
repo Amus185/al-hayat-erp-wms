@@ -91,7 +91,7 @@ Open http://localhost:3001.
    - **Publish**.
 3. **Products → Website categories:** upload a picture for a category.
 4. On the **website**, about a minute later (the site caches for 60 seconds): the hero, the sale badge, the Featured tab and the category picture.
-5. Add to cart and send a request. Then in the staff app go to **Web Requests** → **Create sales order** → **Sales** → complete it. Stock and the books move only at that point.
+5. Add to cart and send a request. The units are **held** for it at once ("Stock held" in **Web Orders**), so other customers cannot request the same last pieces. Then **Create sales order** → **Sales** → complete it. Stock and the books move only at that point, and the hold is released. Cancelling the request or its sales order also releases it.
 
 ## Limits of the local setup
 
