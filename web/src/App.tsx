@@ -26,6 +26,7 @@ import { ExpensesPage } from './pages/ExpensesPage';
 import { AssetsPage } from './pages/AssetsPage';
 import { DeliveriesPage } from './pages/DeliveriesPage';
 import { ManufacturingPage } from './pages/ManufacturingPage';
+import { WebRequestsPage } from './pages/WebRequestsPage';
 
 function ProtectedRoute({ permission }: { permission?: string }) {
   const { isAuthenticated, hasPermission, isLoading } = useAuth();
@@ -133,6 +134,11 @@ export function App() {
 
             {/* Expenses */}
             <Route path="/expenses" element={<ExpensesPage />} />
+
+            {/* Website order requests (the server also enforces permission and branch) */}
+            <Route element={<ProtectedRoute permission="manage_sales" />}>
+              <Route path="/web-requests" element={<WebRequestsPage />} />
+            </Route>
           </Route>
         </Route>
 

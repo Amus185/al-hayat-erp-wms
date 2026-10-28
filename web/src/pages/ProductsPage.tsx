@@ -12,6 +12,8 @@ import { FormField, InputField } from '../components/FormField';
 import { SearchableSelect } from '../components/SearchableSelect';
 import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
+import { ProductWebPanel } from '../components/ProductWebPanel';
+import { WebCategoriesPanel } from '../components/WebCategoriesPanel';
 
 interface Category {
   id: string;
@@ -52,6 +54,7 @@ export interface Product {
   price_tiers?: PriceTier[];
   group_items?: GroupItem[];
   is_active: boolean;
+  is_published?: number | boolean;
   category_name?: string;
   brand_name?: string;
 }
@@ -83,6 +86,8 @@ export function ProductsPage() {
   const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState('');
   const [isEditOpen, setIsEditOpen] = useState(false);
+  const [webProduct, setWebProduct] = useState<{ id: string; name: string } | null>(null);
+  const [isWebCategoriesOpen, setIsWebCategoriesOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
 
   // Inline Category Creation Modal
@@ -675,21 +680,29 @@ export function ProductsPage() {
       key: 'status',
       label: 'Status',
       render: (row) => (
-        <span
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            padding: '2px 8px',
-            borderRadius: '12px',
-            fontSize: '11px',
-            fontWeight: 700,
-            background: row.is_active ? '#ecfdf5' : '#f3f4f6',
-            color: row.is_active ? '#065f46' : '#6b7280',
-            border: `1px solid ${row.is_active ? '#a7f3d0' : '#d1d5db'}`,
-          }}
-        >
-          {row.is_active ? '● Active' : '○ Inactive'}
-        </span>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '4px' }}>
+          <span
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              padding: '2px 8px',
+              borderRadius: '12px',
+              fontSize: '11px',
+              fontWeight: 700,
+              background: row.is_active ? '#ecfdf5' : '#f3f4f6',
+              color: row.is_active ? '#065f46' : '#6b7280',
+              border: `1px solid ${row.is_active ? '#a7f3d0' : '#d1d5db'}`,
+            }}
+          >
+            {row.is_active ? '● Active' : '○ Inactive'}
+          </span>
+          {/* An inactive product is hidden from the website even when it is published. */}
+          {Number(row.is_published) === 1 && (
+            <span style={{ fontSize: '11px', fontWeight: 600, color: row.is_active ? '#1d4ed8' : '#9ca3af' }}>
+              {row.is_active ? 'On website' : 'Published, hidden while inactive'}
+            </span>
+          )}
+        </div>
       ),
     },
     {
@@ -697,6 +710,20 @@ export function ProductsPage() {
       label: 'Actions',
       render: (row) => (
         <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+          {hasPermission('manage_inventory') && (
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={(e) => {
+                e.stopPropagation();
+                setWebProduct({ id: row.id, name: row.name });
+              }}
+              style={{ fontSize: '11px', padding: '3px 8px', color: Number(row.is_published) === 1 ? '#065f46' : undefined }}
+              title={Number(row.is_published) === 1 ? 'On the website. Manage photos and details' : 'Publish this product on the website'}
+            >
+              {Number(row.is_published) === 1 ? '● Website' : 'Website'}
+            </button>
+          )}
           {hasPermission('manage_inventory') && (
             <button
               type="button"
@@ -755,6 +782,11 @@ export function ProductsPage() {
           {hasPermission('manage_inventory') && (
             <button type="button" className="btn btn-secondary" onClick={() => setIsCategoryModalOpen(true)}>
               Manage Categories
+            </button>
+          )}
+          {hasPermission('manage_inventory') && (
+            <button type="button" className="btn btn-secondary" onClick={() => setIsWebCategoriesOpen(true)}>
+              Website categories
             </button>
           )}
           {hasPermission('manage_inventory') && (
@@ -1310,6 +1342,14 @@ export function ProductsPage() {
       </Modal>
 
       {/* Edit Product Modal */}
+      <WebCategoriesPanel open={isWebCategoriesOpen} onClose={() => setIsWebCategoriesOpen(false)} />
+
+      <ProductWebPanel
+        product={webProduct}
+        onClose={() => setWebProduct(null)}
+        onChanged={(id, published) => setProducts((prev) => prev.map((p) => (p.id === id ? { ...p, is_published: published ? 1 : 0 } : p)))}
+      />
+
       {isEditOpen && editingProduct && (
         <Modal isOpen={isEditOpen} title="Edit Product" onClose={() => { setIsEditOpen(false); setEditingProduct(null); }} width="lg">
           <form onSubmit={handleEditProduct}>
