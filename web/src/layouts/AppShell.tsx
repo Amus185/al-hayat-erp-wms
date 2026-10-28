@@ -42,7 +42,7 @@ const navItems = [
   { label: 'Sales', path: '/sales', icon: ShoppingCart, permission: 'manage_sales' },
   { label: 'Deliveries', path: '/deliveries', icon: Truck, permission: 'manage_sales' },
   { label: 'Customers', path: '/customers', icon: UserCheck, permission: 'manage_sales' },
-  { label: 'Web Requests', path: '/web-requests', icon: Globe, permission: 'manage_sales' },
+  { label: 'Web Orders', path: '/web-requests', icon: Globe, permission: 'manage_sales' },
   { label: 'Expenses', path: '/expenses', icon: Receipt, permission: 'manage_purchasing' },
   { label: 'Owner\'s Assets', path: '/assets', icon: Landmark, permission: '', adminOnly: true },
   { label: 'Reports', path: '/reports', icon: BarChart3, permission: 'view_reports' },
@@ -68,7 +68,7 @@ const pageTitles: Record<string, { section: string; title: string }> = {
   '/assets':        { section: 'Owner Investments',      title: "Owner's Assets & Investments" },
   '/reports':       { section: 'Analytics',              title: 'Reports' },
   '/accounting':    { section: 'Finance',                title: 'Accounting' },
-  '/web-requests':  { section: 'Website',                title: 'Web Requests' },
+  '/web-requests':  { section: 'Website',                title: 'Web Orders' },
   '/audit':         { section: 'Compliance',             title: 'Audit Log' },
   '/users':         { section: 'Administration',         title: 'Users & Permissions' },
 };
