@@ -77,6 +77,101 @@ export async function sellableUnits(db: any, productIds: string[], locationId: s
   return out;
 }
 
+// ── Stock reservations for web requests ──────────────────────────────────────
+
+/**
+ * The stock a set of request lines needs: grouped products (bundles) are
+ * expanded into their components, and the same product from several lines is
+ * added up. Sorted by product id so concurrent requests lock rows in the same
+ * order (no deadlocks).
+ */
+export async function stockRequirements(
+  db: any,
+  lines: Array<{ productId: string; quantity: number }>,
+): Promise<Array<{ productId: string; quantity: number }>> {
+  const ids = Array.from(new Set(lines.map((l) => l.productId)));
+  if (!ids.length) return [];
+  const ph = ids.map(() => '?').join(', ');
+  const { results: prods } = await db.prepare(
+    `SELECT id, COALESCE(product_type, 'STANDARD') AS product_type FROM products WHERE id IN (${ph})`,
+  ).bind(...ids).all();
+  const grouped = new Set((prods || []).filter((p: any) => p.product_type === 'GROUPED').map((p: any) => p.id as string));
+  let components: any[] = [];
+  if (grouped.size) {
+    const gph = Array.from(grouped).map(() => '?').join(', ');
+    ({ results: components } = await db.prepare(
+      `SELECT parent_product_id, component_product_id, quantity FROM product_group_items WHERE parent_product_id IN (${gph})`,
+    ).bind(...grouped).all());
+  }
+  const need = new Map<string, number>();
+  const add = (id: string, n: number) => need.set(id, (need.get(id) ?? 0) + n);
+  for (const l of lines) {
+    if (!grouped.has(l.productId)) { add(l.productId, l.quantity); continue; }
+    for (const c of components.filter((x: any) => x.parent_product_id === l.productId)) {
+      add(c.component_product_id, l.quantity * Math.max(1, Number(c.quantity)));
+    }
+  }
+  return Array.from(need, ([productId, quantity]) => ({ productId, quantity })).sort((a, b) => a.productId.localeCompare(b.productId));
+}
+
+/**
+ * One statement that, inside the request's transaction, locks the web branch's
+ * stock row for a product, checks that enough is free (on hand - reserved -
+ * safety buffer), reserves it and records the reservation. It affects no row
+ * when the stock is not there, which rolls the whole request back (409).
+ */
+export function reserveStockStmt(
+  db: any,
+  r: { requestId: string; productId: string; quantity: number; branchId: string; buffer: number; productName: string | null },
+) {
+  return db.prepare(`
+    WITH pick AS (
+      SELECT id FROM inventory_stock
+      WHERE owner_type = 'BRANCH' AND branch_id = ? AND product_id = ?
+        AND quantity_on_hand - quantity_reserved - ? >= ?
+      ORDER BY quantity_on_hand - quantity_reserved DESC
+      LIMIT 1
+      FOR UPDATE
+    ), held AS (
+      UPDATE inventory_stock s
+      SET quantity_reserved = s.quantity_reserved + ?, updated_at = CURRENT_TIMESTAMP
+      FROM pick
+      WHERE s.id = pick.id AND s.quantity_on_hand - s.quantity_reserved - ? >= ?
+      RETURNING s.id
+    )
+    INSERT INTO storefront_reservations (id, request_id, stock_id, product_id, quantity)
+    SELECT gen_random_uuid()::text, ?, held.id, ?, ? FROM held
+  `).bind(
+    r.branchId, r.productId, r.buffer, r.quantity,
+    r.quantity, r.buffer, r.quantity,
+    r.requestId, r.productId, r.quantity,
+  ).mustAffect(r.productName
+    ? `Sorry, "${r.productName}" is not available in that quantity.`
+    : 'Sorry, one of the items is not available in that quantity.');
+}
+
+/**
+ * Releases a request's open reservations (by request, or by the sales order it
+ * became). Safe to run more than once: released rows are skipped.
+ */
+export function releaseReservationsStmt(db: any, by: { requestId: string } | { orderId: string }, reason: string) {
+  const match = 'requestId' in by
+    ? 'request_id = ?'
+    : 'request_id IN (SELECT id FROM storefront_requests WHERE converted_order_id = ?)';
+  return db.prepare(`
+    WITH released AS (
+      UPDATE storefront_reservations SET released_at = CURRENT_TIMESTAMP, release_reason = ?
+      WHERE released_at IS NULL AND ${match}
+      RETURNING stock_id, quantity
+    ), totals AS (
+      SELECT stock_id, SUM(quantity) AS qty FROM released GROUP BY stock_id
+    )
+    UPDATE inventory_stock s
+    SET quantity_reserved = GREATEST(0, s.quantity_reserved - totals.qty), updated_at = CURRENT_TIMESTAMP
+    FROM totals WHERE s.id = totals.stock_id
+  `).bind(reason, 'requestId' in by ? by.requestId : by.orderId);
+}
+
 export function availabilityOf(units: number, s: StorefrontSettings): Availability {
   const sellable = units - s.safetyBuffer;
   if (sellable <= 0) return 'OUT';

@@ -427,6 +427,111 @@ test('a cancelled request cannot be converted', async () => {
   assert.equal((await t.api('POST', `/storefront-admin/requests/${id}/convert`)).status, 409);
 });
 
+// ── stock reservations ──────────────────────────────────────────────────────
+
+const reservedAt = async (productId: string) =>
+  Number((await t.q(`SELECT COALESCE(SUM(quantity_reserved), 0) AS n FROM inventory_stock WHERE product_id = $1 AND owner_type = 'BRANCH' AND branch_id = $2`, [productId, HQ]))[0].n);
+const requestIdOf = async (requestNumber: string) =>
+  (await t.q('SELECT id FROM storefront_requests WHERE request_number = $1', [requestNumber]))[0].id as string;
+
+test('reservations: a request holds its units; the website shows them as taken; cancelling frees them', async () => {
+  const p = await publishedProduct({ qty: 3 });
+  const made = await request([{ slug: p.slug, quantity: 2 }]);
+  assert.equal(made.status, 201, JSON.stringify(made.body));
+  assert.equal(await reservedAt(p.id), 2);
+  assert.equal(await t.stockOf(p.id, { branchId: HQ }), 3, 'a request must not take stock off the shelf');
+
+  // only 1 left for the website now
+  assert.equal((await pub('GET', `/storefront/products/${p.slug}`)).body.availability, 'LOW');
+  const tooMany = await request([{ slug: p.slug, quantity: 2 }]);
+  assert.equal(tooMany.status, 409);
+  assert.equal((await request([{ slug: p.slug, quantity: 1 }])).status, 201);
+  assert.equal(await reservedAt(p.id), 3);
+  assert.equal((await pub('GET', `/storefront/products/${p.slug}`)).body.availability, 'OUT');
+
+  // cancelling frees exactly what that request held, once
+  const id = await requestIdOf(made.body.requestNumber);
+  assert.equal((await t.api('POST', `/storefront-admin/requests/${id}/cancel`)).status, 200);
+  assert.equal(await reservedAt(p.id), 1);
+  assert.equal((await t.api('POST', `/storefront-admin/requests/${id}/cancel`)).status, 409);
+  assert.equal(await reservedAt(p.id), 1, 'a second cancel released stock again');
+  const rows = await t.q('SELECT released_at, release_reason FROM storefront_reservations WHERE request_id = $1', [id]);
+  assert.ok(rows.length === 1 && rows[0].released_at && rows[0].release_reason === 'Request cancelled');
+});
+
+test('reservations: a request that cannot be fully reserved saves nothing', async () => {
+  const a = await publishedProduct({ qty: 5 });
+  const b = await publishedProduct({ qty: 1 });
+  await request([{ slug: b.slug, quantity: 1 }]); // b is now fully held
+  const before = Number((await t.q('SELECT COUNT(*) AS n FROM storefront_requests'))[0].n);
+  const res = await request([{ slug: a.slug, quantity: 2 }, { slug: b.slug, quantity: 1 }]);
+  assert.equal(res.status, 409);
+  assert.equal(Number((await t.q('SELECT COUNT(*) AS n FROM storefront_requests'))[0].n), before, 'a request row was left behind');
+  assert.equal(await reservedAt(a.id), 0, 'a partial reservation was left behind');
+});
+
+test('reservations: concurrent requests for the last units never oversell', async () => {
+  const p = await publishedProduct({ qty: 3 });
+  const results = await Promise.all(Array.from({ length: 6 }, () => request([{ slug: p.slug, quantity: 1 }])));
+  const statuses = results.map((r) => r.status).sort();
+  assert.deepEqual(statuses, [201, 201, 201, 409, 409, 409], JSON.stringify(results.map((r) => r.body)));
+  assert.equal(await reservedAt(p.id), 3);
+});
+
+test('reservations: held through the sales order, released when it completes or is cancelled', async () => {
+  const p = await publishedProduct({ qty: 4 });
+  const made = await request([{ slug: p.slug, quantity: 2 }]);
+  const id = await requestIdOf(made.body.requestNumber);
+  const conv = await t.api('POST', `/storefront-admin/requests/${id}/convert`);
+  assert.equal(conv.status, 201, JSON.stringify(conv.body));
+  assert.equal(await reservedAt(p.id), 2, 'converting must keep the units held until the sale');
+
+  // the held units do not block their own sale
+  const done = await t.api('POST', `/sales/orders/${conv.body.orderId}/complete`);
+  assert.equal(done.status, 200, JSON.stringify(done.body));
+  assert.equal(await t.stockOf(p.id, { branchId: HQ }), 2);
+  assert.equal(await reservedAt(p.id), 0);
+
+  // a converted order that is cancelled before the sale frees its units too
+  const made2 = await request([{ slug: p.slug, quantity: 1 }]);
+  const id2 = await requestIdOf(made2.body.requestNumber);
+  const conv2 = await t.api('POST', `/storefront-admin/requests/${id2}/convert`);
+  assert.equal(await reservedAt(p.id), 1);
+  const cancelled = await t.api('POST', `/sales/orders/${conv2.body.orderId}/cancel`, { reason: 'customer changed their mind' });
+  assert.equal(cancelled.status, 200, JSON.stringify(cancelled.body));
+  assert.equal(await reservedAt(p.id), 0);
+  assert.equal(await t.stockOf(p.id, { branchId: HQ }), 2);
+});
+
+test('reservations: a bundle holds its components', async () => {
+  const a = await t.createProduct(), b = await t.createProduct();
+  await setQty(a, 4); await setQty(b, 2);
+  const bundle = await t.createProduct({ type: 'GROUPED', price: 300 });
+  await t.q('INSERT INTO product_group_items (id, parent_product_id, component_product_id, quantity) VALUES ($1,$2,$3,2), ($4,$2,$5,1)',
+    [randomUUID(), bundle, a, randomUUID(), b]);
+  await addImage(bundle);
+  const slug = (await t.api('PATCH', `/storefront-admin/products/${bundle}`, { isPublished: true })).body.slug;
+  assert.equal((await request([{ slug, quantity: 2 }])).status, 201);
+  assert.deepEqual([await reservedAt(a), await reservedAt(b)], [4, 2]);
+  assert.equal((await request([{ slug, quantity: 1 }])).status, 409);
+});
+
+test('web orders list: one stage per order, from request to delivery', async () => {
+  const p = await publishedProduct({ qty: 5 });
+  const made = await request([{ slug: p.slug, quantity: 1 }]);
+  const id = await requestIdOf(made.body.requestNumber);
+  const stageOf = async () => (await t.api('GET', '/storefront-admin/requests')).body.find((r: any) => r.id === id);
+  let row = await stageOf();
+  assert.deepEqual([row.stage, row.reserved_units], ['NEW', 1]);
+  const conv = await t.api('POST', `/storefront-admin/requests/${id}/convert`);
+  row = await stageOf();
+  assert.equal(row.stage, 'ORDERED');
+  assert.ok(row.order_number);
+  await t.api('POST', `/sales/orders/${conv.body.orderId}/complete`);
+  row = await stageOf();
+  assert.deepEqual([row.stage, row.reserved_units], ['PAID', 0]);
+});
+
 // ── sale prices, featured, new arrivals, categories ─────────────────────────
 
 test('the ERP\'s internal description is never public; only the website description is', async () => {
