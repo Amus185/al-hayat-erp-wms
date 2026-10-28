@@ -55,9 +55,18 @@ export interface WebRequestRow {
   created_at: string;
   converted_order_id: string | null;
   line_count: number;
+  /** The sales order this request became, and how far it has got. */
+  order_number: string | null;
+  order_status: string | null;
+  delivery_status: string | null;
+  /** Units still held for this request (released when the sale issues stock or is cancelled). */
+  reserved_units: number;
+  stage: WebOrderStage;
 }
 
-export interface WebRequestDetail extends Omit<WebRequestRow, 'line_count'> {
+export type WebOrderStage = 'NEW' | 'ORDERED' | 'INVOICED' | 'PAID' | 'DELIVERY_SCHEDULED' | 'OUT_FOR_DELIVERY' | 'DELIVERED' | 'CANCELLED';
+
+export interface WebRequestDetail extends Omit<WebRequestRow, 'line_count' | 'order_number' | 'order_status' | 'delivery_status' | 'reserved_units' | 'stage'> {
   email: string | null;
   address: string | null;
   city: string | null;

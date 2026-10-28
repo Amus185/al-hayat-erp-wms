@@ -195,7 +195,7 @@ export function ProductWebPanel({ product, onClose, onChanged }: Props) {
                 id="web-was-price"
                 type="number"
                 min={0}
-                step="0.01"
+                step={0.01}
                 value={wasPrice}
                 onChange={setWasPrice}
                 placeholder="leave empty if not on sale"

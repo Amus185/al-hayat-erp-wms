@@ -11,13 +11,23 @@ import { useAuth } from '../contexts/AuthContext';
 import { confirmAction } from '../utils/swal';
 import {
   cancelWebRequest, convertWebRequest, getStorefrontSettings, getWebRequest, listWebRequests, saveStorefrontSettings,
-  type RequestStatus, type StorefrontSettings, type WebRequestDetail, type WebRequestRow,
+  type StorefrontSettings, type WebOrderStage, type WebRequestDetail, type WebRequestRow,
 } from '../api/storefront';
 
 const money = (n: number | string) => `$${Number(n).toFixed(2)}`;
 const when = (iso: string) => new Date(iso).toLocaleString();
-const TONE: Record<RequestStatus, 'blue' | 'yellow' | 'green' | 'red'> = { NEW: 'blue', PROCESSING: 'yellow', CONVERTED: 'green', CANCELLED: 'red' };
-const LABEL: Record<RequestStatus, string> = { NEW: 'New', PROCESSING: 'Processing', CONVERTED: 'Converted to order', CANCELLED: 'Cancelled' };
+// One stage per web order, from the request through its sales order and delivery.
+const STAGE: Record<WebOrderStage, { label: string; tone: 'blue' | 'yellow' | 'green' | 'red' | 'neutral' }> = {
+  NEW: { label: 'New request', tone: 'blue' },
+  ORDERED: { label: 'Sales order created', tone: 'yellow' },
+  INVOICED: { label: 'Invoiced', tone: 'yellow' },
+  PAID: { label: 'Paid', tone: 'green' },
+  DELIVERY_SCHEDULED: { label: 'Delivery scheduled', tone: 'yellow' },
+  OUT_FOR_DELIVERY: { label: 'Out for delivery', tone: 'yellow' },
+  DELIVERED: { label: 'Delivered', tone: 'green' },
+  CANCELLED: { label: 'Cancelled', tone: 'red' },
+};
+const stageOf = (s: WebOrderStage | undefined) => STAGE[s ?? 'NEW'] ?? { label: String(s), tone: 'neutral' as const };
 
 type Tab = 'NEW' | 'CONVERTED' | 'CANCELLED' | 'ALL';
 
@@ -31,6 +41,8 @@ export function WebRequestsPage() {
   const [loading, setLoading] = useState(true);
   const [blocked, setBlocked] = useState<string | null>(null);
   const [detail, setDetail] = useState<WebRequestDetail | null>(null);
+  const [detailRow, setDetailRow] = useState<WebRequestRow | null>(null);
+  const closeDetail = () => { setDetail(null); setDetailRow(null); };
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
@@ -52,6 +64,7 @@ export function WebRequestsPage() {
   const open = async (row: WebRequestRow) => {
     try {
       setDetail(await getWebRequest(row.id));
+      setDetailRow(row);
     } catch (err: any) {
       addToast('error', err?.message || 'Could not open the request');
     }
@@ -61,7 +74,7 @@ export function WebRequestsPage() {
     if (!detail) return;
     const ok = await confirmAction(
       'Create a sales order?',
-      `${detail.customer_name} (${detail.phone}) — ${money(detail.total_amount)}. A normal sales order is created at the quoted prices. Stock and accounts only move when you complete the sale.`,
+      `${detail.customer_name} (${detail.phone}) — ${money(detail.total_amount)}. A normal sales order is created at the quoted prices. The stock stays held for it; stock and accounts move when you complete the sale.`,
       'Create order',
       'question',
     );
@@ -70,7 +83,7 @@ export function WebRequestsPage() {
     try {
       await convertWebRequest(detail.id);
       addToast('success', 'Sales order created. Finish the sale under Sales.');
-      setDetail(null);
+      closeDetail();
       load();
     } catch (err: any) {
       addToast('error', err?.message || 'Could not create the order');
@@ -82,13 +95,13 @@ export function WebRequestsPage() {
 
   const cancel = async () => {
     if (!detail) return;
-    const ok = await confirmAction('Cancel this request?', 'The customer is not notified automatically. Call them if you already spoke.', 'Cancel request', 'warning');
+    const ok = await confirmAction('Cancel this request?', 'The held stock goes back on sale. The customer is not notified automatically: call them if you already spoke.', 'Cancel request', 'warning');
     if (!ok) return;
     setBusy(true);
     try {
       await cancelWebRequest(detail.id);
       addToast('success', 'Request cancelled');
-      setDetail(null);
+      closeDetail();
       load();
     } catch (err: any) {
       addToast('error', err?.message || 'Could not cancel the request');
@@ -102,7 +115,15 @@ export function WebRequestsPage() {
     { key: 'customer_name', label: 'Customer', render: (r) => <div><div>{r.customer_name}</div><div style={{ fontSize: '12px', color: '#64748b' }}>{r.phone}</div></div> },
     { key: 'line_count', label: 'Items', render: (r) => String(r.line_count) },
     { key: 'total_amount', label: 'Total', render: (r) => money(r.total_amount) },
-    { key: 'status', label: 'Status', render: (r) => <StatusBadge label={LABEL[r.status] ?? r.status} tone={TONE[r.status] ?? 'neutral'} /> },
+    {
+      key: 'stage', label: 'Stage', render: (r) => (
+        <div>
+          <StatusBadge label={stageOf(r.stage).label} tone={stageOf(r.stage).tone} />
+          {r.order_number && <div style={{ fontSize: '12px', color: '#64748b', marginTop: '2px', fontFamily: 'monospace' }}>{r.order_number}</div>}
+        </div>
+      ),
+    },
+    { key: 'reserved_units', label: 'Stock held', render: (r) => (r.reserved_units ? `${r.reserved_units} unit${r.reserved_units === 1 ? '' : 's'}` : '—') },
     { key: 'created_at', label: 'Received', render: (r) => when(r.created_at) },
   ];
 
@@ -112,7 +133,7 @@ export function WebRequestsPage() {
         <div className="module-header__icon"><Globe size={24} /></div>
         <div>
           <p>Website</p>
-          <h2>Order requests from the website</h2>
+          <h2>Web orders</h2>
         </div>
       </section>
 
@@ -141,10 +162,12 @@ export function WebRequestsPage() {
       )}
 
       {detail && (
-        <Modal isOpen title={`Request ${detail.request_number}`} onClose={() => setDetail(null)} width="lg">
+        <Modal isOpen title={`Request ${detail.request_number}`} onClose={closeDetail} width="lg">
           <div style={{ display: 'grid', gap: '16px' }}>
             <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
-              <StatusBadge label={LABEL[detail.status] ?? detail.status} tone={TONE[detail.status] ?? 'neutral'} />
+              <StatusBadge label={stageOf(detailRow?.stage).label} tone={stageOf(detailRow?.stage).tone} />
+              {detailRow?.order_number && <span style={{ fontSize: '12px', fontFamily: 'monospace' }}>{detailRow.order_number}</span>}
+              {!!detailRow?.reserved_units && <span style={{ fontSize: '12px', color: '#64748b' }}>{detailRow.reserved_units} unit{detailRow.reserved_units === 1 ? '' : 's'} held in stock</span>}
               <span style={{ fontSize: '12px', color: '#64748b' }}>Received {when(detail.created_at)}</span>
             </div>
 
@@ -178,7 +201,7 @@ export function WebRequestsPage() {
             <p style={{ margin: 0, fontSize: '12px', color: '#64748b' }}>Prices are the ones the customer saw when sending the request.</p>
 
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', flexWrap: 'wrap' }}>
-              <button type="button" className="btn btn-secondary" onClick={() => setDetail(null)}>Close</button>
+              <button type="button" className="btn btn-secondary" onClick={closeDetail}>Close</button>
               {detail.status === 'NEW' && (
                 <>
                   <button type="button" className="btn btn-secondary" disabled={busy} onClick={cancel} style={{ color: '#b91c1c' }}>Cancel request</button>

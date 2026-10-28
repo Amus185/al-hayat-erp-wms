@@ -680,21 +680,29 @@ export function ProductsPage() {
       key: 'status',
       label: 'Status',
       render: (row) => (
-        <span
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            padding: '2px 8px',
-            borderRadius: '12px',
-            fontSize: '11px',
-            fontWeight: 700,
-            background: row.is_active ? '#ecfdf5' : '#f3f4f6',
-            color: row.is_active ? '#065f46' : '#6b7280',
-            border: `1px solid ${row.is_active ? '#a7f3d0' : '#d1d5db'}`,
-          }}
-        >
-          {row.is_active ? '● Active' : '○ Inactive'}
-        </span>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '4px' }}>
+          <span
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              padding: '2px 8px',
+              borderRadius: '12px',
+              fontSize: '11px',
+              fontWeight: 700,
+              background: row.is_active ? '#ecfdf5' : '#f3f4f6',
+              color: row.is_active ? '#065f46' : '#6b7280',
+              border: `1px solid ${row.is_active ? '#a7f3d0' : '#d1d5db'}`,
+            }}
+          >
+            {row.is_active ? '● Active' : '○ Inactive'}
+          </span>
+          {/* An inactive product is hidden from the website even when it is published. */}
+          {Number(row.is_published) === 1 && (
+            <span style={{ fontSize: '11px', fontWeight: 600, color: row.is_active ? '#1d4ed8' : '#9ca3af' }}>
+              {row.is_active ? 'On website' : 'Published, hidden while inactive'}
+            </span>
+          )}
+        </div>
       ),
     },
     {
