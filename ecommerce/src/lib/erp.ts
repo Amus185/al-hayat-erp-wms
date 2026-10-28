@@ -23,6 +23,14 @@ export class ErpError extends Error {
 }
 
 const UNAVAILABLE = "The shop is temporarily unavailable.";
+const TIMEOUT_MS = 5000;
+
+// Circuit breaker: once the ERP cannot be reached, skip it for a short while
+// instead of making every page (header, footer, content) wait for a timeout.
+// Short in development, so "Try again" works soon after starting the backend.
+const BREAK_MS = isDev ? 2_000 : 10_000;
+let erpDownUntil = 0;
+let erpDownReason = "";
 
 // Log each distinct failure at most once a minute so a down ERP does not flood the logs.
 const lastLogged = new Map<string, number>();
@@ -35,7 +43,7 @@ function logFailure(detail: string) {
 
 function describe(err: unknown): string {
   const e = err as { name?: string; message?: string; cause?: { code?: string; message?: string } };
-  if (e?.name === "TimeoutError") return "timed out after 8 s";
+  if (e?.name === "TimeoutError") return `timed out after ${TIMEOUT_MS / 1000} s`;
   return e?.cause?.code || e?.cause?.message || e?.message || String(err);
 }
 
@@ -46,18 +54,23 @@ async function get<T>(path: string): Promise<T | null> {
     throw new ErpError(503, UNAVAILABLE, detail);
   }
   const url = `${API}/storefront${path}`;
+  if (Date.now() < erpDownUntil) {
+    throw new ErpError(503, UNAVAILABLE, `${erpDownReason} (not retried for ${BREAK_MS / 1000} s)`);
+  }
   let res: Response;
   try {
     res = await fetch(url, {
       headers: { Accept: "application/json" },
       // Short cache: prices and availability stay fresh without hitting the ERP on every view.
       next: { revalidate: REVALIDATE_SECONDS },
-      signal: AbortSignal.timeout(8000),
+      signal: AbortSignal.timeout(TIMEOUT_MS),
     });
   } catch (err) {
+    erpDownUntil = Date.now() + BREAK_MS;
     const why = describe(err);
     const hint = why === "ECONNREFUSED" ? " Is the ERP backend running, and is ERP_API_URL right?" : "";
     const detail = `GET ${url} failed: ${why}.${hint}`;
+    erpDownReason = detail;
     logFailure(detail);
     throw new ErpError(503, UNAVAILABLE, detail);
   }
