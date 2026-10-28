@@ -98,3 +98,23 @@ Open http://localhost:3001.
 - The photo store accepts any upload. Only real Cloudflare R2 checks the upload signature, so the first real upload after going live is the true test of that.
 - The local login and data exist only in `alhayat_local`. They are not your production account or data.
 - `R2_ENDPOINT` is for local testing only. In production the backend ignores it unless it is an `https` address, and production should not set it at all.
+
+## Smoke test
+
+With everything running, check the whole shop in one go:
+```powershell
+cd C:\al-hayat-erp-wms\ecommerce
+npm run smoke
+```
+It loads the catalog, sorts by price, opens a product, uses the cart API and sends a test order request. To also test the staff side (convert the request, complete the sale, check that stock goes down by one), set your **local** login first:
+```powershell
+$env:STAFF_EMAIL = "admin@alhayat.com"; $env:STAFF_PASSWORD = "the password dev-set-admin-password printed"
+npm run smoke
+```
+The staff steps refuse any ERP that is not on this computer.
+
+## If the shop says "Our catalog is temporarily unavailable"
+
+The storefront cannot reach the ERP. In development the page shows the real cause under the message, and the storefront terminal logs a line starting with `[storefront] ERP request failed`. Usually:
+- the backend (terminal 2) is not running, or
+- `ecommerce\.env.local` is missing, or `ERP_API_URL` does not end in `/api/v1`.

@@ -1,44 +1,42 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
+import { Inter, Jost } from "next/font/google";
+import { connection } from "next/server";
+import type { ReactNode } from "react";
 import "./globals.css";
-import Link from "next/link";
+import { CartProvider } from "@/components/cart/cart-context";
+import { CartDrawer } from "@/components/cart/cart-drawer";
+import { Footer } from "@/components/footer";
+import { Navbar } from "@/components/navbar";
+import { SITE_NAME, SITE_URL } from "@/lib/site";
+
+// Self-hosted by next/font at build time: the browser never contacts Google.
+const body = Inter({ subsets: ["latin"], variable: "--font-body", display: "swap" });
+const heading = Jost({ subsets: ["latin"], variable: "--font-heading", display: "swap" });
 
 export const metadata: Metadata = {
-  title: "Al Hayat Furniture Store",
-  description: "Premium Furniture Showroom",
+  metadataBase: new URL(SITE_URL),
+  title: { default: SITE_NAME, template: `%s | ${SITE_NAME}` },
+  description: `${SITE_NAME}: furniture showroom. Browse our collection and send an order request.`,
+  robots: { index: true, follow: true },
 };
 
-export default function RootLayout({
-  children,
-}: Readonly<{
-  children: React.ReactNode;
-}>) {
+export const viewport: Viewport = { themeColor: "#054405" };
+
+export default async function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
+  // Render every page per request: the Content-Security-Policy nonce (src/proxy.ts) only exists at request time.
+  await connection();
   return (
-    <html lang="en">
-      <body>
-        <header className="site-header">
-          <div className="header-container">
-            <Link href="/" className="logo">
-              <div className="logo-icon"></div>
-              <span>AL HAYAT</span>
-            </Link>
-            <nav className="main-nav">
-              <Link href="/">Showroom</Link>
-              <Link href="#">Collections</Link>
-              <Link href="#">About</Link>
-            </nav>
-            <div className="header-actions">
-              <button className="cart-btn">
-                🛒 Cart (0)
-              </button>
-            </div>
-          </div>
-        </header>
-        <main className="site-main">
-          {children}
-        </main>
-        <footer className="site-footer">
-          <p>© 2026 Al Hayat ERP. All rights reserved.</p>
-        </footer>
+    <html lang="en" className={`${body.variable} ${heading.variable}`}>
+      <body className="flex min-h-screen flex-col bg-white font-sans text-ink selection:bg-gold-light">
+        <CartProvider>
+          <a href="#content" className="sr-only focus:not-sr-only focus:absolute focus:left-2 focus:top-2 focus:z-50 focus:rounded focus:bg-white focus:p-2">
+            Skip to content
+          </a>
+          <Navbar />
+          <main id="content" className="flex-1 pb-16 has-[[data-flush-footer]]:pb-0">{children}</main>
+          <Footer />
+          <CartDrawer />
+        </CartProvider>
       </body>
     </html>
   );
