@@ -21,6 +21,7 @@ import deliveries from './routes/deliveries';
 import manufacturing from './routes/manufacturing';
 import storefront from './routes/storefront';
 import storefrontAdmin from './routes/storefront-admin';
+import agent from './routes/agent';
 
 // Global router instances...
 
@@ -120,6 +121,7 @@ app.route('/api/v1/manufacturing', manufacturing);
 // Public storefront (no login; whitelisted fields) and its staff-side management
 app.route('/api/v1/storefront', storefront);
 app.route('/api/v1/storefront-admin', storefrontAdmin);
+app.route('/api/v1/agent', agent);
 
 // Global Error Handler - Structured JSON Logging for Cloudflare Workers Observability
 app.onError((err, c) => {

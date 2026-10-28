@@ -25,10 +25,12 @@ import {
   CheckCheck,
   Clock,
   Globe,
+  Sparkles,
 } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { apiGet, apiPost } from '../api/client';
+import { AGENT_URL } from '../api/assistant';
 
 const navItems = [
   { label: 'Dashboard', path: '/', icon: Home, permission: '' },
@@ -43,6 +45,8 @@ const navItems = [
   { label: 'Deliveries', path: '/deliveries', icon: Truck, permission: 'manage_sales' },
   { label: 'Customers', path: '/customers', icon: UserCheck, permission: 'manage_sales' },
   { label: 'Web Orders', path: '/web-requests', icon: Globe, permission: 'manage_sales' },
+  // Shown once the assistant Worker is deployed (VITE_AGENT_URL); every user, the server checks permissions per question.
+  ...(AGENT_URL ? [{ label: 'Assistant', path: '/assistant', icon: Sparkles, permission: '' }] : []),
   { label: 'Expenses', path: '/expenses', icon: Receipt, permission: 'manage_purchasing' },
   { label: 'Owner\'s Assets', path: '/assets', icon: Landmark, permission: '', adminOnly: true },
   { label: 'Reports', path: '/reports', icon: BarChart3, permission: 'view_reports' },
@@ -69,6 +73,7 @@ const pageTitles: Record<string, { section: string; title: string }> = {
   '/reports':       { section: 'Analytics',              title: 'Reports' },
   '/accounting':    { section: 'Finance',                title: 'Accounting' },
   '/web-requests':  { section: 'Website',                title: 'Web Orders' },
+  '/assistant':     { section: 'Help',                   title: 'Assistant' },
   '/audit':         { section: 'Compliance',             title: 'Audit Log' },
   '/users':         { section: 'Administration',         title: 'Users & Permissions' },
 };

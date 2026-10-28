@@ -118,3 +118,7 @@ The staff steps refuse any ERP that is not on this computer.
 The storefront cannot reach the ERP. In development the page shows the real cause under the message, and the storefront terminal logs a line starting with `[storefront] ERP request failed`. Usually:
 - the backend (terminal 2) is not running, or
 - `ecommerce\.env.local` is missing, or `ERP_API_URL` does not end in `/api/v1`.
+
+## The assistant (optional)
+
+See `ai-agent/README.md` → "Try it locally". In short: set the same `AGENT_TOKEN_SECRET` (32+ random characters) on the backend and on `ai-agent/dev/local-server.ts`, then start the staff app with `VITE_AGENT_URL=http://127.0.0.1:8788`. Without Cloudflare credentials it uses a simulated model, so you can try the screens and the Confirm step offline.

@@ -1,0 +1,18 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "alhayat-ai-agent",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+  "observability": { "enabled": true },
+  "ai": { "binding": "AI" },
+  "vars": {
+    // The model, in one place. Cheapest Workers AI model with function calling
+    // that is reliable enough for tool use (see README.md for the comparison).
+    "AI_MODEL": "@cf/qwen/qwen3-30b-a3b-fp8",
+    // The Alhayat backend (Railway), ending in /api/v1.
+    "ALHAYAT_API_URL": "https://YOUR-BACKEND.up.railway.app/api/v1",
+    // The staff app's address(es), comma-separated.
+    "ALLOWED_ORIGINS": "https://YOUR-STAFF-APP.pages.dev"
+  }
+  // Secret (never in this file): npx wrangler secret put AGENT_TOKEN_SECRET
+}

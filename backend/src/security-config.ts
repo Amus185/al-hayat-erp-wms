@@ -29,6 +29,18 @@ export function getAccessSecret(): string {
 }
 
 /**
+ * Secret shared with the AI assistant Worker (ai-agent/) to sign short-lived
+ * agent tokens. It must differ from JWT_ACCESS_SECRET, so the Worker can never
+ * mint a normal login token. Null (assistant switched off) when unset or weak.
+ */
+export function getAgentSecret(): string | null {
+  const value = typeof process !== 'undefined' ? process.env.AGENT_TOKEN_SECRET : undefined;
+  if (!value || value.length < 32) return null;
+  if (value === process.env.JWT_ACCESS_SECRET) return null;
+  return value;
+}
+
+/**
  * Browser origins allowed to call the API cross-origin and to use the
  * refresh cookie. CORS_ORIGINS is a comma-separated list of exact origins.
  */

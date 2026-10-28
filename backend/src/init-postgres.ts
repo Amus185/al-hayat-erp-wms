@@ -719,6 +719,37 @@ export async function ensurePostgresInit(pool: Pool) {
   await ensureLedgerView(pool);
   await ensureAuthSchema(pool);
   await ensureStorefrontSchema(pool);
+  await ensureAgentSchema(pool);
+}
+
+/**
+ * AI assistant support (idempotent, additive, runs on boot).
+ * - agent_usage: one row per assistant message, for the per-user rate limit.
+ * - agent_actions: changes the assistant proposed. Nothing runs until the user
+ *   confirms it in the staff app; each proposal runs at most once.
+ */
+export async function ensureAgentSchema(pool: Pool) {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS agent_usage (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_usage_user ON agent_usage(user_id, created_at);
+    CREATE TABLE IF NOT EXISTS agent_actions (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      action TEXT NOT NULL,
+      args TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'RUNNING', 'DONE', 'FAILED', 'CANCELLED')),
+      result TEXT,
+      created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+      handled_at TIMESTAMP WITH TIME ZONE
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_actions_user ON agent_actions(user_id, created_at);
+  `);
 }
 
 /**

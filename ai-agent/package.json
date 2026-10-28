@@ -1,0 +1,15 @@
+{
+  "name": "alhayat-ai-agent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Cloudflare Worker: the Alhayat business assistant (Workers AI with tools).",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail",
+    "test": "cd .. && node --import tsx --test ai-agent/tests/*.test.ts",
+    "dev:local": "cd .. && node --import tsx ai-agent/dev/local-server.ts"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}
