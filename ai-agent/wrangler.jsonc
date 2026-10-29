@@ -5,14 +5,18 @@
   "compatibility_date": "2026-09-01",
   "observability": { "enabled": true },
   "ai": { "binding": "AI" },
+  // The backend Worker (backend/wrangler.jsonc). Calls go through this binding;
+  // ALHAYAT_API_URL below still supplies the /api/v1 path.
+  "services": [{ "binding": "ALHAYAT_API", "service": "al-hayat-api" }],
   "vars": {
     // The model, in one place. Cheapest Workers AI model with function calling
     // that is reliable enough for tool use (see README.md for the comparison).
     "AI_MODEL": "@cf/qwen/qwen3-30b-a3b-fp8",
-    // The Alhayat backend (Railway), ending in /api/v1.
-    "ALHAYAT_API_URL": "https://YOUR-BACKEND.up.railway.app/api/v1",
+    // Path to the backend API. The host is not used while the ALHAYAT_API
+    // binding exists; without it, use the backend's public address.
+    "ALHAYAT_API_URL": "https://al-hayat-api.internal/api/v1",
     // The staff app's address(es), comma-separated.
-    "ALLOWED_ORIGINS": "https://YOUR-STAFF-APP.pages.dev"
+    "ALLOWED_ORIGINS": "https://al-hayat-erp.pages.dev"
   }
   // Secret (never in this file): npx wrangler secret put AGENT_TOKEN_SECRET
 }

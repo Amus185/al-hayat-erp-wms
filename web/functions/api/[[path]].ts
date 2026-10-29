@@ -1,22 +1,27 @@
 // Same-origin API proxy (Cloudflare Pages Function).
 //
 // The browser calls https://<pages-host>/api/v1/... and this function forwards
-// the request to the Railway backend. Because the page and the API share one
+// the request to the backend Worker. Because the page and the API share one
 // origin, the refresh token can be a first-party, host-only,
 // SameSite=Strict, HttpOnly cookie — browsers block third-party cookies
-// between *.pages.dev and *.up.railway.app.
+// between *.pages.dev and *.workers.dev.
 //
-// API_ORIGIN (Pages environment variable) overrides the default backend.
+// The backend is reached through the API service binding (Pages project →
+// Settings → Bindings → Service binding "API" → Worker al-hayat-api) or, if
+// there is none, at API_ORIGIN (Pages environment variable).
 
-const DEFAULT_API_ORIGIN = 'https://al-hayat-erp-wms-production.up.railway.app';
+type Env = { API?: { fetch(input: Request | string, init?: RequestInit): Promise<Response> }; API_ORIGIN?: string };
 
-export async function onRequest(context: { request: Request; env: { API_ORIGIN?: string } }): Promise<Response> {
+export async function onRequest(context: { request: Request; env: Env }): Promise<Response> {
   const { request, env } = context;
   const incoming = new URL(request.url);
   if (!incoming.pathname.startsWith('/api/v1/')) {
     return new Response(JSON.stringify({ error: 'Route not found' }), { status: 404, headers: { 'Content-Type': 'application/json' } });
   }
-  const target = new URL(incoming.pathname + incoming.search, env.API_ORIGIN || DEFAULT_API_ORIGIN);
+  if (!env.API && !env.API_ORIGIN) {
+    return new Response(JSON.stringify({ message: 'Service misconfigured. Contact the administrator.' }), { status: 503, headers: { 'Content-Type': 'application/json' } });
+  }
+  const target = new URL(incoming.pathname + incoming.search, env.API_ORIGIN || 'https://al-hayat-api.internal');
 
   const headers = new Headers(request.headers);
   headers.delete('host');
@@ -30,7 +35,7 @@ export async function onRequest(context: { request: Request; env: { API_ORIGIN?:
   }
 
   const method = request.method.toUpperCase();
-  const upstream = await fetch(target.toString(), {
+  const upstream = await (env.API ? env.API.fetch.bind(env.API) : fetch)(target.toString(), {
     method,
     headers,
     body: method === 'GET' || method === 'HEAD' ? undefined : await request.arrayBuffer(),

@@ -13,6 +13,11 @@ export interface AgentEnv {
   AI_MODEL: string;
   /** The Alhayat backend, ending in /api/v1. */
   ALHAYAT_API_URL: string;
+  /**
+   * Service binding to the backend Worker. When present, backend calls go
+   * through it (Workers cannot fetch another Worker's workers.dev address).
+   */
+  ALHAYAT_API?: { fetch: typeof fetch };
 }
 
 export interface ChatMessage {
@@ -126,7 +131,7 @@ export async function runAgent(
   history: ChatMessage[],
   opts: { cache?: (key: string, load: () => Promise<string>) => Promise<string>; fetchImpl?: typeof fetch } = {},
 ): Promise<ChatResult> {
-  const doFetch = opts.fetchImpl ?? fetch;
+  const doFetch = opts.fetchImpl ?? (env.ALHAYAT_API ? env.ALHAYAT_API.fetch.bind(env.ALHAYAT_API) : fetch);
   const api = env.ALHAYAT_API_URL.replace(/\/$/, '');
   const post = async (path: string, body: unknown) => {
     const res = await doFetch(`${api}/agent${path}`, {
