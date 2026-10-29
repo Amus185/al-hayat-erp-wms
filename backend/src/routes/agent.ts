@@ -16,7 +16,7 @@
 import { Hono, type Context } from 'hono';
 import { sign, verify } from 'hono/jwt';
 import { Env, uuidv4 } from '../db';
-import { authMiddleware, loadAuthState, type JwtPayload } from '../middleware/auth';
+import { authMiddleware, loadAuthState, payloadFrom, type JwtPayload } from '../middleware/auth';
 import { hasAllBranchAccess } from '../services/branch-scope';
 import { logAudit } from '../services/audit';
 import { getAgentSecret } from '../security-config';
@@ -66,16 +66,10 @@ async function agentAuth(c: Context<{ Bindings: Env; Variables: Vars }>, next: (
   }
   if (claims?.typ !== 'agent' || !claims.sub || !claims.sid) return c.json({ message: 'Invalid or expired assistant token' }, 401);
   const user: any = await loadAuthState(c.env.DB, claims.sub, claims.sid);
-  if (!user || Number(user.is_active) !== 1 || !user.session_live || Number(user.password_version) !== Number(claims.pwd_ver)) {
+  if (!user || Number(user.is_active) !== 1 || user.banned || !user.session_live || Number(user.password_version) !== Number(claims.pwd_ver)) {
     return c.json({ message: 'Session ended. Please sign in again.' }, 401);
   }
-  const roles = user.roles ? String(user.roles).split(',') : [];
-  c.set('jwtPayload', {
-    sub: claims.sub, sid: claims.sid, email: user.email, name: user.full_name, pwd_ver: claims.pwd_ver,
-    branch_id: user.branch_id ?? null,
-    permissions: user.permissions ? String(user.permissions).split(',') : [],
-    roles, role: roles.includes('admin') ? 'admin' : (roles[0] || 'branch_user'),
-  });
+  c.set('jwtPayload', payloadFrom(user, claims.sub, claims.sid));
   await next();
 }
 

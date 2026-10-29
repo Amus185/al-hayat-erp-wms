@@ -13,15 +13,16 @@ export class ConfigError extends Error {
 }
 
 /**
- * The access-token signing secret. In production it must be set, at least 32
- * characters, and not the development default — otherwise anyone could mint
- * tokens. Outside production a development default is used when unset.
+ * Better Auth's secret (BETTER_AUTH_SECRET): signs session cookies and
+ * encrypts auth data. In production it must be set, at least 32 characters,
+ * and not the development default. Outside production a development default
+ * is used when unset.
  */
-export function getAccessSecret(): string {
-  const value = typeof process !== 'undefined' ? process.env.JWT_ACCESS_SECRET : undefined;
+export function getAuthSecret(): string {
+  const value = typeof process !== 'undefined' ? process.env.BETTER_AUTH_SECRET : undefined;
   if (isProductionRuntime()) {
     if (!value || value.length < 32 || value === DEV_ACCESS_SECRET || value.startsWith('dev-')) {
-      throw new ConfigError('JWT_ACCESS_SECRET is missing or too weak for production (set a random value of 32+ characters).');
+      throw new ConfigError('BETTER_AUTH_SECRET is missing or too weak for production (set a random value of 32+ characters, e.g. openssl rand -base64 32).');
     }
     return value;
   }
@@ -29,14 +30,23 @@ export function getAccessSecret(): string {
 }
 
 /**
+ * The address browsers use to reach /api/auth (BETTER_AUTH_URL): the staff
+ * app's origin, since the API is served same-origin through its Pages proxy.
+ */
+export function getAuthBaseURL(): string {
+  const value = typeof process !== 'undefined' ? process.env.BETTER_AUTH_URL : undefined;
+  return (value || (isProductionRuntime() ? 'https://al-hayat-erp.pages.dev' : 'http://localhost:5173')).replace(/\/$/, '');
+}
+
+/**
  * Secret shared with the AI assistant Worker (ai-agent/) to sign short-lived
- * agent tokens. It must differ from JWT_ACCESS_SECRET, so the Worker can never
- * mint a normal login token. Null (assistant switched off) when unset or weak.
+ * agent tokens. It must differ from BETTER_AUTH_SECRET, so the Worker can never
+ * sign a session cookie. Null (assistant switched off) when unset or weak.
  */
 export function getAgentSecret(): string | null {
   const value = typeof process !== 'undefined' ? process.env.AGENT_TOKEN_SECRET : undefined;
   if (!value || value.length < 32) return null;
-  if (value === process.env.JWT_ACCESS_SECRET) return null;
+  if (value === process.env.BETTER_AUTH_SECRET) return null;
   return value;
 }
 

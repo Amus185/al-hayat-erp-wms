@@ -23,10 +23,21 @@ if (!found.rowCount) {
   process.exit(1);
 }
 const password = 'Local-' + crypto.randomBytes(6).toString('hex');
+const hash = bcrypt.hashSync(password, 10);
 await db.query(
   "UPDATE users SET password_hash = $1, password_version = COALESCE(password_version, 1) + 1 WHERE email = 'admin@alhayat.com'",
-  [bcrypt.hashSync(password, 10)],
+  [hash],
 );
+// Sign-in reads Better Auth's credential account (created by db:migrate or the backend's startup).
+const updated = await db.query(
+  `UPDATE account SET password = $1, "updatedAt" = CURRENT_TIMESTAMP WHERE "userId" = $2 AND "providerId" = 'credential'`,
+  [hash, found.rows[0].id],
+).catch(() => ({ rowCount: 0 }));
+if (!updated.rowCount) {
+  console.error('No Better Auth account for the admin yet: run npm --workspace backend run db:migrate against this database first.');
+  process.exit(1);
+}
+await db.query('DELETE FROM "session" WHERE "userId" = $1', [found.rows[0].id]);
 await db.end();
 console.log('Local staff login (this database only):');
 console.log('  email:    admin@alhayat.com');

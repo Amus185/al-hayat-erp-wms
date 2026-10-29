@@ -1,4 +1,6 @@
 import { Pool } from 'pg';
+import { migrateAuthSchema } from './auth';
+import { backfillIdentities } from './services/identity';
 
 // Auth & Structural Reference Seed Data
 export const DEFAULT_AUTH_SEED = {
@@ -718,6 +720,20 @@ export async function ensurePostgresInit(pool: Pool) {
   await ensureAuthSchema(pool);
   await ensureStorefrontSchema(pool);
   await ensureAgentSchema(pool);
+  await ensureBetterAuth(pool);
+}
+
+/**
+ * Better Auth's tables (its own migration) and an identity for every ERP user
+ * that has none yet, carrying over the bcrypt password.
+ */
+export async function ensureBetterAuth(pool: Pool) {
+  try {
+    await migrateAuthSchema(pool);
+    await backfillIdentities(pool);
+  } catch (err) {
+    console.error('❌ Better Auth migration failed:', err);
+  }
 }
 
 /**

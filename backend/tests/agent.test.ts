@@ -49,8 +49,8 @@ test('tokens: switched off without a strong, separate secret', async () => {
   try {
     process.env.AGENT_TOKEN_SECRET = 'short';
     assert.equal((await t.api('POST', '/agent/session')).status, 503);
-    process.env.AGENT_TOKEN_SECRET = process.env.JWT_ACCESS_SECRET || 'dev-access-secret-1234567890123456';
-    if (process.env.JWT_ACCESS_SECRET) assert.equal((await t.api('POST', '/agent/session')).status, 503);
+    process.env.AGENT_TOKEN_SECRET = process.env.BETTER_AUTH_SECRET;
+    assert.equal((await t.api('POST', '/agent/session')).status, 503);
   } finally {
     process.env.AGENT_TOKEN_SECRET = saved;
   }
@@ -60,7 +60,7 @@ test('tokens: signing out cuts the assistant off at once', async () => {
   const user = await t.createUser({ branchId: HQ, roleId: 'role-branch-user', role: 'branch_user' });
   const token = await agentToken(user.token);
   assert.equal((await tool(token, 'search_products', { query: '' })).status, 200);
-  await t.q('UPDATE auth_sessions SET revoked_at = CURRENT_TIMESTAMP WHERE user_id = $1', [user.id]);
+  await t.q('DELETE FROM "session" WHERE "userId" = $1', [user.id]);
   assert.equal((await tool(token, 'search_products', { query: '' })).status, 401);
 });
 

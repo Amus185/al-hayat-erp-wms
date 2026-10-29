@@ -3,7 +3,7 @@ import { Env, uuidv4 } from '../db';
 import * as bcrypt from 'bcryptjs';
 import { authMiddleware, requirePermissions, invalidateUserCache } from '../middleware/auth';
 import { logAudit, createAuditLogStmt } from '../services/audit';
-import { prepareRevokeAllSessions } from '../services/auth-sessions';
+import { revokeSessionsStatement, syncIdentityStatements } from '../services/identity';
 
 const ADMIN_ROLE_ID = '77777777-7777-7777-7777-777777777777';
 
@@ -63,23 +63,23 @@ users.post('/', async (c) => {
   if (!body.fullName || !body.fullName.trim()) return c.json({ message: 'Full name is required.' }, 400);
 
   // Email uniqueness check
-  const existing = await c.env.DB.prepare('SELECT id FROM users WHERE email = ?').bind(body.email.trim()).first();
+  const existing = await c.env.DB.prepare('SELECT id FROM users WHERE LOWER(email) = LOWER(?)').bind(body.email.trim()).first();
   if (existing) return c.json({ message: 'A user with this email already exists.' }, 409);
 
   const id = uuidv4();
   const passwordHash = bcrypt.hashSync(body.password, 12);
-  
-  await c.env.DB.prepare(`
-    INSERT INTO users (id, email, password_hash, full_name, phone, branch_id, warehouse_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).bind(id, body.email.trim(), passwordHash, body.fullName.trim(), body.phone || null, body.branchId || null, body.warehouseId || null).run();
 
-  if (body.roleIds && body.roleIds.length > 0) {
-    const stmts = body.roleIds.map((rId: string) => 
+  // The ERP user, its roles and its Better Auth identity, in one transaction.
+  await c.env.DB.batch([
+    c.env.DB.prepare(`
+      INSERT INTO users (id, email, password_hash, full_name, phone, branch_id, warehouse_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).bind(id, body.email.trim(), passwordHash, body.fullName.trim(), body.phone || null, body.branchId || null, body.warehouseId || null),
+    ...(body.roleIds || []).map((rId: string) =>
       c.env.DB.prepare('INSERT INTO user_roles (user_id, role_id) VALUES (?, ?)').bind(id, rId)
-    );
-    await c.env.DB.batch(stmts);
-  }
+    ),
+    ...syncIdentityStatements(c.env.DB, id, passwordHash),
+  ]);
 
   const { results } = await c.env.DB.prepare('SELECT id, email, full_name FROM users WHERE id = ?').bind(id).all();
   await logAudit(c, 'USER_CREATE', 'users', id, null, { email: body.email.trim(), fullName: body.fullName.trim(), roleIds: body.roleIds || [] });
@@ -95,7 +95,7 @@ users.patch('/:id', async (c) => {
 
   // Check email uniqueness if changing email
   if (body.email) {
-    const existing = await c.env.DB.prepare('SELECT id FROM users WHERE email = ? AND id != ?').bind(body.email.trim(), id).first();
+    const existing = await c.env.DB.prepare('SELECT id FROM users WHERE LOWER(email) = LOWER(?) AND id != ?').bind(body.email.trim(), id).first();
     if (existing) return c.json({ message: 'A user with this email already exists.' }, 409);
   }
 
@@ -133,10 +133,12 @@ users.patch('/:id', async (c) => {
     }
   }
 
-  // A deactivated user's sessions end now (and stay ended if reactivated)
-  if (body.isActive === false) {
-    await c.env.DB.batch([prepareRevokeAllSessions(c.env.DB, id, 'user_deactivated')]);
-  }
+  // Name, email and admin flag on the Better Auth identity; a deactivated
+  // user's sessions end now (and stay ended if reactivated).
+  await c.env.DB.batch([
+    ...syncIdentityStatements(c.env.DB, id),
+    ...(body.isActive === false ? [revokeSessionsStatement(c.env.DB, id)] : []),
+  ]);
 
   const user = await c.env.DB.prepare(
     'SELECT id, email, full_name, phone, branch_id, warehouse_id, is_active FROM users WHERE id = ?'
@@ -156,13 +158,14 @@ users.post('/:id/change-password', async (c) => {
   const denied = await adminGuard(c, id);
   if (denied) return c.json({ message: denied }, 403);
   const passwordHash = bcrypt.hashSync(newPassword, 12);
-  // New password version + every session ended, in one transaction: all
-  // access tokens stop working on the next request, on every instance.
+  // New password (ERP copy and Better Auth credential) and every session
+  // ended, in one transaction: the next request of every session is refused.
   await c.env.DB.batch([
     c.env.DB.prepare(
       'UPDATE users SET password_hash = ?, password_version = COALESCE(password_version, 1) + 1 WHERE id = ?'
     ).bind(passwordHash, id),
-    prepareRevokeAllSessions(c.env.DB, id, 'password_changed'),
+    ...syncIdentityStatements(c.env.DB, id, passwordHash),
+    revokeSessionsStatement(c.env.DB, id),
   ]);
   invalidateUserCache(id); // Clear cache so next request validates against DB
   await logAudit(c, 'USER_CHANGE_PASSWORD', 'users', id, null, { changed: true });
@@ -192,6 +195,7 @@ users.delete('/:id', async (c) => {
   await c.env.DB.batch([
     c.env.DB.prepare('DELETE FROM user_roles WHERE user_id = ?').bind(id),
     c.env.DB.prepare('DELETE FROM refresh_tokens WHERE user_id = ?').bind(id),
+    c.env.DB.prepare('DELETE FROM "user" WHERE id = ?').bind(id), // its sessions and account go with it
     c.env.DB.prepare('DELETE FROM users WHERE id = ?').bind(id),
     createAuditLogStmt(c, 'USER_DELETE', 'users', id, user, null)
   ]);

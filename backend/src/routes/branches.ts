@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { Env, uuidv4 } from '../db';
 import * as bcrypt from 'bcryptjs';
 import { authMiddleware, requirePermissions, requireAdmin, isAdminUser, invalidateUserCache } from '../middleware/auth';
-import { prepareRevokeAllSessions } from '../services/auth-sessions';
+import { revokeSessionsStatement, syncIdentityStatements } from '../services/identity';
 import { logAudit } from '../services/audit';
 
 const branches = new Hono<{ Bindings: Env; Variables: { jwtPayload: any } }>();
@@ -125,6 +125,8 @@ branches.post('/', requirePermissions(['manage_users']), requireAdmin, async (c)
     c.env.DB.prepare(
       'INSERT INTO user_roles (user_id, role_id) VALUES (?, ?)'
     ).bind(userId, branchUserRole.id),
+
+    ...syncIdentityStatements(c.env.DB, userId, passwordHash),
   ]);
 
   const branch = await c.env.DB.prepare('SELECT * FROM branches WHERE id = ?').bind(branchId).first();
@@ -227,7 +229,7 @@ branches.post('/:id/regenerate-credentials', requireAdmin, async (c) => {
   const passwordHash = bcrypt.hashSync(rawPassword, 12);
   const newVersion = ((branchUser.password_version as number) || 1) + 1;
 
-  // Update password + increment version + wipe all refresh tokens (invalidates all sessions)
+  // Update password (ERP copy and Better Auth credential) + increment version + end every session
   await c.env.DB.batch([
     c.env.DB.prepare(
       'UPDATE users SET password_hash = ?, password_version = ? WHERE id = ?'
@@ -235,7 +237,8 @@ branches.post('/:id/regenerate-credentials', requireAdmin, async (c) => {
     c.env.DB.prepare(
       'DELETE FROM refresh_tokens WHERE user_id = ?'
     ).bind(branchUser.id),
-    prepareRevokeAllSessions(c.env.DB, branchUser.id as string, 'credentials_regenerated'),
+    ...syncIdentityStatements(c.env.DB, branchUser.id as string, passwordHash),
+    revokeSessionsStatement(c.env.DB, branchUser.id as string),
   ]);
 
   invalidateUserCache(branchUser.id as string);

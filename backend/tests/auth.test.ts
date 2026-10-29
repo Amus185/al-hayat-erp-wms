@@ -1,22 +1,22 @@
-// Authentication: sessions, refresh-token rotation and reuse detection,
-// logout, revocation, CSRF/CORS, and route protection.
+// Authentication with Better Auth: session cookie, sign-in throttling,
+// sign-out, revocation (password change, deactivation, ban), CSRF/CORS, the
+// mobile bearer flow, existing passwords, and route protection.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import bcrypt from 'bcryptjs';
-import { sign } from 'hono/jwt';
-import { setupTestApp, ADMIN_ID, BRANCH_HQ, type TestCtx } from './helpers';
+import { setupTestApp, ADMIN_ID, BRANCH_HQ, TEST_AUTH_SECRET, type TestCtx } from './helpers';
 
 let t: TestCtx;
 before(async () => { t = await setupTestApp(); });
 after(async () => { await t?.teardown(); });
 
 const ORIGIN = 'https://al-hayat-erp.pages.dev';
-const COOKIE = '__Host-ah_rt';
+const COOKIE = '__Secure-better-auth.session_token';
 const BROWSER = { Origin: ORIGIN, 'Sec-Fetch-Site': 'same-origin', 'X-CSRF-Protection': '1' };
 
 async function raw(method: string, path: string, opts: { headers?: Record<string, string>; body?: unknown } = {}) {
-  const res = await t.app.request(`/api/v1${path}`, {
+  const res = await t.app.request(path, {
     method,
     headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) },
     body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
@@ -27,79 +27,113 @@ async function raw(method: string, path: string, opts: { headers?: Record<string
   return { status: res.status, body, headers: res.headers };
 }
 
-const setCookieOf = (res: { headers: Headers }) => res.headers.get('set-cookie') || '';
-function refreshCookie(res: { headers: Headers }): string | null {
-  const m = setCookieOf(res).match(new RegExp(`${COOKIE}=([^;]*)`));
+const setCookieOf = (res: { headers: Headers }) => res.headers.getSetCookie().join('\n');
+function sessionCookie(res: { headers: Headers }): string | null {
+  const m = setCookieOf(res).match(new RegExp(`${COOKIE.replace('.', '\\.')}=([^;]*)`));
   return m && m[1] ? m[1] : null;
 }
 
-async function makeUser(opts: { password?: string; roleId?: string; branchId?: string | null } = {}) {
-  const id = randomUUID();
-  const email = `u-${id.slice(0, 8)}@test.local`;
+/** A staff user created through the ERP's Users API, as administrators do. */
+async function makeUser(opts: { password?: string; roleIds?: string[]; branchId?: string | null } = {}) {
+  const email = `u-${randomUUID().slice(0, 8)}@test.local`;
   const password = opts.password ?? `Pw-${randomUUID()}`;
-  await t.q('INSERT INTO users (id, email, password_hash, full_name, branch_id) VALUES ($1, $2, $3, $4, $5)',
-    [id, email, bcrypt.hashSync(password, 4), 'Auth Test', opts.branchId === undefined ? BRANCH_HQ : opts.branchId]);
-  await t.q('INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2)', [id, opts.roleId ?? 'role-branch-user']);
-  return { id, email, password };
+  const res = await t.api('POST', '/users', {
+    email, password, fullName: 'Auth Test',
+    branchId: opts.branchId === undefined ? BRANCH_HQ : opts.branchId,
+    roleIds: opts.roleIds ?? ['role-branch-user'],
+  });
+  assert.equal(res.status, 201, JSON.stringify(res.body));
+  return { id: res.body.id as string, email, password };
 }
 
-async function browserLogin(email: string, password: string) {
-  const res = await raw('POST', '/auth/login', { headers: BROWSER, body: { email, password } });
+const signIn = (email: string, password: string, headers: Record<string, string> = BROWSER) =>
+  raw('POST', '/api/auth/sign-in/email', { headers, body: { email, password } });
+
+async function browserSignIn(email: string, password: string) {
+  const res = await signIn(email, password);
   assert.equal(res.status, 200, JSON.stringify(res.body));
-  return { access: res.body.accessToken as string, cookie: refreshCookie(res)!, res };
+  const cookie = sessionCookie(res);
+  assert.ok(cookie, 'no session cookie set');
+  return { cookie: cookie!, res };
 }
 
-const refresh = (cookie: string, extra: Record<string, string> = {}) =>
-  raw('POST', '/auth/refresh', { headers: { ...BROWSER, Cookie: `${COOKIE}=${cookie}`, ...extra } });
-const me = (access: string) => raw('GET', '/auth/me', { headers: { Authorization: `Bearer ${access}` } });
+const withCookie = (cookie: string, extra: Record<string, string> = BROWSER) => ({ ...extra, Cookie: `${COOKIE}=${cookie}` });
+const me = (cookie: string, extra: Record<string, string> = BROWSER) => raw('GET', '/api/v1/auth/me', { headers: withCookie(cookie, extra) });
 
-test('browser login: refresh token only in an HttpOnly, Secure, SameSite=Strict host cookie', async () => {
+test('browser sign-in: the session lives only in an HttpOnly, Secure, SameSite=Strict cookie', async () => {
   const u = await makeUser();
-  const { access, cookie, res } = await browserLogin(u.email, u.password);
-  assert.equal(res.body.refreshToken, undefined, 'refresh token must not be readable by page script');
-  assert.ok(cookie, 'no refresh cookie set');
+  const { cookie, res } = await browserSignIn(u.email, u.password);
+  assert.equal(res.body.token, undefined, 'session token must not be readable by page script');
+  assert.equal(res.headers.get('set-auth-token'), null, 'bearer token must not reach a browser');
   const sc = setCookieOf(res);
   for (const attr of ['HttpOnly', 'Secure', 'SameSite=Strict', 'Path=/']) assert.ok(sc.includes(attr), `cookie lacks ${attr}: ${sc}`);
   assert.ok(!/Domain=/i.test(sc), 'host-only cookie must not set Domain');
-  assert.equal(res.headers.get('cache-control'), 'no-store');
-  const who = await me(access);
-  assert.equal(who.status, 200);
+  const who = await me(cookie);
+  assert.equal(who.status, 200, JSON.stringify(who.body));
   assert.equal(who.body.user.email, u.email);
+  assert.equal(who.body.user.branchId, BRANCH_HQ);
+  // get-session through Better Auth does not leak the token either
+  const session = await raw('GET', '/api/auth/get-session', { headers: withCookie(cookie) });
+  assert.equal(session.status, 200);
+  assert.equal(session.body.session.token, undefined);
 });
 
-test('login rejects bad credentials uniformly and throttles repeated failures', async () => {
+test('passwords set before Better Auth keep working (bcrypt carried over)', async () => {
+  const id = randomUUID();
+  const email = `legacy-${id.slice(0, 8)}@test.local`;
+  await t.q('INSERT INTO users (id, email, password_hash, full_name, branch_id) VALUES ($1, $2, $3, $4, $5)',
+    [id, email, bcrypt.hashSync('Legacy-pass-123', 10), 'Legacy User', BRANCH_HQ]);
+  await t.q('INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2)', [id, 'role-branch-user']);
+  const { backfillIdentities } = await import('../src/services/identity');
+  await backfillIdentities(t.pool);
+  await backfillIdentities(t.pool); // idempotent
+  assert.equal((await t.q('SELECT COUNT(*)::int AS n FROM account WHERE "userId" = $1', [id]))[0].n, 1);
+  const { cookie } = await browserSignIn(email, 'Legacy-pass-123');
+  assert.equal((await me(cookie)).status, 200);
+  // the seeded administrator got an identity too, with Better Auth's admin role
+  assert.equal((await t.q('SELECT role FROM "user" WHERE id = $1', [ADMIN_ID]))[0].role, 'admin');
+});
+
+test('sign-in rejects bad credentials uniformly and throttles repeated failures', async () => {
   const u = await makeUser();
-  const wrong = await raw('POST', '/auth/login', { headers: BROWSER, body: { email: u.email, password: 'nope' } });
-  const unknown = await raw('POST', '/auth/login', { headers: BROWSER, body: { email: 'nobody@test.local', password: 'nope' } });
+  const wrong = await signIn(u.email, 'nope-nope');
+  const unknown = await signIn('nobody@test.local', 'nope-nope');
   assert.equal(wrong.status, 401);
   assert.deepEqual(wrong.body, unknown.body, 'responses must not reveal whether the account exists');
-  for (let i = 0; i < 10; i++) await raw('POST', '/auth/login', { headers: BROWSER, body: { email: u.email, password: 'nope' } });
-  const blocked = await raw('POST', '/auth/login', { headers: BROWSER, body: { email: u.email, password: u.password } });
+  for (let i = 0; i < 10; i++) await signIn(u.email, 'nope-nope');
+  const blocked = await signIn(u.email, u.password);
   assert.equal(blocked.status, 429, 'correct password still accepted after many failures');
 });
 
-test('CSRF: cookie endpoints refuse foreign origins, cross-site requests and missing CSRF header', async () => {
+test('self sign-up is off: staff accounts are created by administrators only', async () => {
+  const res = await raw('POST', '/api/auth/sign-up/email', { headers: BROWSER, body: { email: 'new@test.local', password: 'Some-password-1', name: 'New' } });
+  assert.ok(res.status >= 400 && res.status < 500, `sign-up answered ${res.status}`);
+  assert.equal((await t.q(`SELECT COUNT(*)::int AS n FROM "user" WHERE email = 'new@test.local'`))[0].n, 0);
+});
+
+test('CSRF: cookie requests need our origin and the custom header; sign-in refuses foreign origins', async () => {
   const u = await makeUser();
-  const { cookie } = await browserLogin(u.email, u.password);
+  const { cookie } = await browserSignIn(u.email, u.password);
   const cases: Record<string, string>[] = [
     { Origin: 'https://evil.example', 'Sec-Fetch-Site': 'cross-site', 'X-CSRF-Protection': '1' },
     { 'Sec-Fetch-Site': 'cross-site', 'X-CSRF-Protection': '1' },
     { Origin: ORIGIN, 'Sec-Fetch-Site': 'same-origin' }, // no custom header (e.g. a plain form post)
   ];
   for (const headers of cases) {
-    for (const path of ['/auth/refresh', '/auth/logout', '/auth/login']) {
-      const r = await raw('POST', path, { headers: { ...headers, Cookie: `${COOKIE}=${cookie}` }, body: { email: u.email, password: u.password } });
-      assert.equal(r.status, 403, `${path} accepted ${JSON.stringify(headers)}`);
-    }
+    const r = await raw('POST', '/api/v1/sales/customers', { headers: withCookie(cookie, headers), body: { name: 'CSRF' } });
+    assert.equal(r.status, 403, `accepted ${JSON.stringify(headers)}`);
   }
+  assert.equal((await t.q(`SELECT COUNT(*)::int AS n FROM customers WHERE name = 'CSRF'`))[0].n, 0);
+  const foreign = await signIn(u.email, u.password, { Origin: 'https://evil.example' });
+  assert.equal(foreign.status, 403, JSON.stringify(foreign.body));
   // the session survived those attempts
-  assert.equal((await refresh(cookie)).status, 200);
+  assert.equal((await me(cookie)).status, 200);
 });
 
 test('CORS: only allowed origins get CORS headers; unknown origins get none', async () => {
-  const pre = (origin: string) => t.app.request('/api/v1/auth/refresh', {
+  const pre = (origin: string) => t.app.request('/api/v1/auth/me', {
     method: 'OPTIONS',
-    headers: { Origin: origin, 'Access-Control-Request-Method': 'POST', 'Access-Control-Request-Headers': 'x-csrf-protection,content-type' },
+    headers: { Origin: origin, 'Access-Control-Request-Method': 'GET', 'Access-Control-Request-Headers': 'x-csrf-protection,content-type' },
   });
   const evil = await pre('https://evil.example');
   assert.equal(evil.headers.get('access-control-allow-origin'), null);
@@ -110,127 +144,117 @@ test('CORS: only allowed origins get CORS headers; unknown origins get none', as
   assert.equal(get.headers.get('access-control-allow-origin'), null);
 });
 
-test('page reload: the cookie alone restores the session and rotates the refresh token', async () => {
+test('sign-out ends the session on the server', async () => {
   const u = await makeUser();
-  const { cookie } = await browserLogin(u.email, u.password);
-  const r1 = await refresh(cookie);
-  assert.equal(r1.status, 200, JSON.stringify(r1.body));
-  assert.equal(r1.body.user.email, u.email);
-  const next = refreshCookie(r1)!;
-  assert.ok(next && next !== cookie, 'refresh token was not rotated');
-  assert.equal((await me(r1.body.accessToken)).status, 200);
-  const r2 = await refresh(next);
-  assert.equal(r2.status, 200);
-});
-
-test('concurrent refreshes with one cookie: one wins, the other gets 409 and the session survives', async () => {
-  const u = await makeUser();
-  const { cookie } = await browserLogin(u.email, u.password);
-  const results = await Promise.all([refresh(cookie), refresh(cookie), refresh(cookie)]);
-  const statuses = results.map((r) => r.status).sort();
-  assert.deepEqual(statuses, [200, 409, 409], JSON.stringify(results.map((r) => r.body)));
-  assert.ok(results.filter((r) => r.status === 409).every((r) => r.body.code === 'REFRESH_RACE'));
-  const winner = results.find((r) => r.status === 200)!;
-  assert.equal((await refresh(refreshCookie(winner)!)).status, 200, 'session was revoked by a benign race');
-});
-
-test('refresh-token reuse after the grace window ends the whole session', async () => {
-  const u = await makeUser();
-  const { cookie } = await browserLogin(u.email, u.password);
-  const r1 = await refresh(cookie);
-  const stolenUse = refreshCookie(r1)!;
-  // the old token was rotated more than the grace window ago
-  await t.q(`UPDATE refresh_tokens SET used_at = CURRENT_TIMESTAMP - INTERVAL '5 minutes' WHERE used_at IS NOT NULL AND user_id = $1`, [u.id]);
-  const replay = await refresh(cookie);
-  assert.equal(replay.status, 401);
-  assert.equal(replay.body.code, 'REUSE_DETECTED');
-  // the legitimate holder is logged out too: both the newest refresh token and the access token die
-  assert.equal((await refresh(stolenUse)).status, 401);
-  assert.equal((await me(r1.body.accessToken)).status, 401);
-});
-
-test('logout ends the session on the server: access token and refresh cookie stop working', async () => {
-  const u = await makeUser();
-  const { access, cookie } = await browserLogin(u.email, u.password);
-  const out = await raw('POST', '/auth/logout', { headers: { ...BROWSER, Cookie: `${COOKIE}=${cookie}` } });
-  assert.equal(out.status, 204);
+  const { cookie } = await browserSignIn(u.email, u.password);
+  const out = await raw('POST', '/api/auth/sign-out', { headers: withCookie(cookie) });
+  assert.equal(out.status, 200, JSON.stringify(out.body));
   assert.ok(/Max-Age=0|Expires=Thu, 01 Jan 1970/i.test(setCookieOf(out)), 'cookie not cleared');
-  assert.equal((await me(access)).status, 401);
-  assert.equal((await refresh(cookie)).status, 401);
+  assert.equal((await me(cookie)).status, 401);
 });
 
 test('logout-all ends every session of the user', async () => {
   const u = await makeUser();
-  const a = await browserLogin(u.email, u.password);
-  const b = await browserLogin(u.email, u.password);
-  assert.equal((await raw('POST', '/auth/logout-all', { headers: { ...BROWSER, Authorization: `Bearer ${a.access}` } })).status, 204);
-  assert.equal((await me(b.access)).status, 401);
-  assert.equal((await refresh(b.cookie)).status, 401);
+  const a = await browserSignIn(u.email, u.password);
+  const b = await browserSignIn(u.email, u.password);
+  assert.equal((await raw('POST', '/api/v1/auth/logout-all', { headers: withCookie(a.cookie) })).status, 204);
+  assert.equal((await me(a.cookie)).status, 401);
+  assert.equal((await me(b.cookie)).status, 401);
 });
 
 test('a password change ends every existing session immediately', async () => {
   const u = await makeUser();
-  const s = await browserLogin(u.email, u.password);
+  const s = await browserSignIn(u.email, u.password);
   const changed = await t.api('POST', `/users/${u.id}/change-password`, { newPassword: 'A-new-password-123' });
   assert.equal(changed.status, 200, JSON.stringify(changed.body));
-  assert.equal((await me(s.access)).status, 401);
-  assert.equal((await refresh(s.cookie)).status, 401);
-  assert.equal((await raw('POST', '/auth/login', { headers: BROWSER, body: { email: u.email, password: u.password } })).status, 401);
-  await browserLogin(u.email, 'A-new-password-123');
+  assert.equal((await me(s.cookie)).status, 401);
+  assert.equal((await signIn(u.email, u.password)).status, 401);
+  await browserSignIn(u.email, 'A-new-password-123');
 });
 
-test('deactivating a user ends their sessions', async () => {
+test('deactivating a user ends their sessions and blocks sign-in', async () => {
   const u = await makeUser();
-  const s = await browserLogin(u.email, u.password);
+  const s = await browserSignIn(u.email, u.password);
   assert.equal((await t.api('PATCH', `/users/${u.id}`, { isActive: false })).status, 200);
-  assert.equal((await me(s.access)).status, 401);
-  assert.equal((await refresh(s.cookie)).status, 401);
+  assert.equal((await me(s.cookie)).status, 401);
+  const again = await signIn(u.email, u.password);
+  assert.equal(again.status, 403, JSON.stringify(again.body));
+  assert.equal(sessionCookie(again), null);
 });
 
-test('access tokens: expired, foreign-signed, pre-session and wrong-type tokens are refused', async () => {
+test('a ban (Layerbase "Disable user") cuts off live sessions and blocks sign-in', async () => {
   const u = await makeUser();
-  const { access } = await browserLogin(u.email, u.password);
-  const sid = JSON.parse(Buffer.from(access.split('.')[1], 'base64url').toString()).sid;
-  const now = Math.floor(Date.now() / 1000);
+  const s = await browserSignIn(u.email, u.password);
+  await t.q('UPDATE "user" SET banned = TRUE WHERE id = $1', [u.id]); // what the dashboard writes
+  assert.equal((await me(s.cookie)).status, 401);
+  assert.equal(sessionCookie(await signIn(u.email, u.password)), null);
+  // a ban that has expired no longer applies
+  await t.q(`UPDATE "user" SET "banExpires" = CURRENT_TIMESTAMP - INTERVAL '1 minute' WHERE id = $1`, [u.id]);
+  const back = await browserSignIn(u.email, u.password);
+  assert.equal((await me(back.cookie)).status, 200);
+});
+
+test('forged, foreign-signed and expired sessions are refused', async () => {
+  const u = await makeUser();
+  const { cookie } = await browserSignIn(u.email, u.password);
+  const [token, signature] = decodeURIComponent(cookie).split('.');
   const cases = {
-    expired: await sign({ sub: u.id, sid, typ: 'access', pwd_ver: 1, exp: now - 5 }, 'test-access-secret', 'HS256'),
-    wrongSecret: await sign({ sub: u.id, sid, typ: 'access', pwd_ver: 1, exp: now + 600 }, 'attacker-secret', 'HS256'),
-    noSession: await sign({ sub: u.id, typ: 'access', pwd_ver: 1, exp: now + 600 }, 'test-access-secret', 'HS256'),
-    otherUsersSession: await sign({ sub: ADMIN_ID, sid, typ: 'access', pwd_ver: 1, exp: now + 600 }, 'test-access-secret', 'HS256'),
-    refreshTyped: await sign({ sub: u.id, sid, typ: 'refresh', pwd_ver: 1, exp: now + 600 }, 'test-access-secret', 'HS256'),
+    unsignedCookie: token,
+    tamperedSignature: encodeURIComponent(`${token}.${signature.slice(0, -2)}AA`),
+    madeUp: encodeURIComponent(`${randomUUID()}.${signature}`),
   };
-  for (const [name, token] of Object.entries(cases)) {
-    assert.equal((await me(token)).status, 401, `${name} token was accepted`);
+  for (const [name, value] of Object.entries(cases)) {
+    assert.equal((await me(value)).status, 401, `${name} cookie was accepted`);
   }
+  assert.equal((await raw('GET', '/api/v1/auth/me', { headers: { Authorization: 'Bearer not-a-session' } })).status, 401);
+  await t.q(`UPDATE "session" SET "expiresAt" = CURRENT_TIMESTAMP - INTERVAL '1 second' WHERE "userId" = $1`, [u.id]);
+  assert.equal((await me(cookie)).status, 401, 'expired session accepted');
+  assert.notEqual(TEST_AUTH_SECRET, '');
 });
 
-test('authorization comes from the database, not from token or browser claims', async () => {
+test('authorization comes from the database, not from the client or Better Auth\'s role', async () => {
   const u = await makeUser();
-  // a branch user forging admin claims in their own (validly signed) token
+  // claims passed to tokenFor are ignored by the server
   const forged = await t.tokenFor({ sub: u.id, role: 'admin', branch_id: null, permissions: ['manage_users', 'view_reports'] });
   assert.equal((await t.api('GET', '/users', undefined, forged)).status, 403);
   assert.equal((await t.api('GET', '/accounting/opening-balances', undefined, forged)).status, 403);
+  // Better Auth's own role field grants nothing in the ERP
+  await t.q(`UPDATE "user" SET role = 'admin' WHERE id = $1`, [u.id]);
   assert.equal((await t.api('GET', '/accounting/balance-sheet?branch_id=branch-cl-show', undefined, forged)).status, 403);
+});
+
+test('Better Auth\'s admin API cannot create users, set passwords or impersonate', async () => {
+  const adminToken = t.adminToken;
+  const victim = await makeUser();
+  const call = (path: string, body: unknown) => raw('POST', `/api/auth/admin/${path}`, { headers: { Authorization: `Bearer ${adminToken}` }, body });
+  // what it may do: list users (so the 403s below are permissions, not a broken call)
+  const list = await raw('GET', '/api/auth/admin/list-users', { headers: { Authorization: `Bearer ${adminToken}` } });
+  assert.equal(list.status, 200, JSON.stringify(list.body));
+  assert.equal((await call('impersonate-user', { userId: victim.id })).status, 403);
+  assert.equal((await call('set-user-password', { userId: victim.id, newPassword: 'Taken-over-123' })).status, 403);
+  assert.equal((await call('create-user', { email: 'x@test.local', password: 'Some-pass-123', name: 'X' })).status, 403);
+  assert.equal((await signIn(victim.email, victim.password)).status, 200);
 });
 
 test('a non-admin user manager cannot grant the admin role or take over an admin account', async () => {
   const mgrRole = `role-mgr-${randomUUID().slice(0, 6)}`;
   await t.q(`INSERT INTO roles (id, code, name) VALUES ($1, $1, 'User manager')`, [mgrRole]);
   await t.q(`INSERT INTO role_permissions (role_id, permission_id) VALUES ($1, '11111111-1111-1111-1111-111111111111')`, [mgrRole]);
-  const mgr = await makeUser({ roleId: mgrRole });
+  const mgr = await makeUser({ roleIds: [mgrRole] });
   const token = await t.tokenFor({ sub: mgr.id });
   const victim = await makeUser();
   assert.equal((await t.api('PATCH', `/users/${victim.id}`, { roleIds: ['77777777-7777-7777-7777-777777777777'] }, token)).status, 403);
   assert.equal((await t.api('POST', `/users/${ADMIN_ID}/change-password`, { newPassword: 'taken-over-123' }, token)).status, 403);
   assert.equal((await t.api('PATCH', `/users/${victim.id}`, { fullName: 'Renamed' }, token)).status, 200);
+  assert.equal((await t.q('SELECT name FROM "user" WHERE id = $1', [victim.id]))[0].name, 'Renamed', 'identity not kept in step');
 });
 
-test('every API route except sign-in and health requires a valid access token', async () => {
-  // Deliberately public: health, sign-in, and the storefront's read-only catalog.
+test('every API route except health and the public catalog requires a session', async () => {
+  // Deliberately public: health and the storefront's read-only catalog.
   // POST /storefront/requests has no login but needs the server-to-server API key
-  // (covered in storefront.test.ts).
+  // (covered in storefront.test.ts). Sign-in itself is Better Auth's, under /api/auth.
   const PUBLIC = new Set([
-    '/', '/api/v1/health', '/api/v1/auth/login', '/api/v1/auth/refresh', '/api/v1/auth/logout',
+    '/', '/api/v1/health',
     '/api/v1/storefront/categories', '/api/v1/storefront/products', '/api/v1/storefront/products/:slug', '/api/v1/storefront/requests',
   ]);
   const routes = t.app.routes.filter((r: any) => r.method !== 'ALL' && !PUBLIC.has(r.path) && r.path.startsWith('/api/v1/'));
@@ -244,36 +268,38 @@ test('every API route except sign-in and health requires a valid access token', 
   assert.deepEqual(open, [], 'routes reachable without authentication');
 });
 
-test('native clients: refresh token in the body (for secure device storage), rotation and reuse detection', async () => {
+test('mobile: sign-in hands over a bearer token; a browser cannot obtain one', async () => {
   const u = await makeUser();
-  const login = await raw('POST', '/auth/login', { headers: { 'X-Client-Type': 'native' }, body: { email: u.email, password: u.password } });
-  assert.equal(login.status, 200, JSON.stringify(login.body));
-  assert.ok(login.body.refreshToken);
-  assert.equal(setCookieOf(login), '', 'native clients must not get a cookie');
-  const r1 = await raw('POST', '/auth/refresh', { headers: { 'X-Client-Type': 'native' }, body: { refreshToken: login.body.refreshToken } });
-  assert.equal(r1.status, 200);
-  assert.notEqual(r1.body.refreshToken, login.body.refreshToken);
-  await t.q(`UPDATE refresh_tokens SET used_at = CURRENT_TIMESTAMP - INTERVAL '5 minutes' WHERE used_at IS NOT NULL AND user_id = $1`, [u.id]);
-  const replay = await raw('POST', '/auth/refresh', { headers: { 'X-Client-Type': 'native' }, body: { refreshToken: login.body.refreshToken } });
-  assert.equal(replay.status, 401);
-  assert.equal((await me(r1.body.accessToken)).status, 401);
-  // a browser cannot use the native path to bypass the cookie's protections: it gets no cookie
-  const out = await raw('POST', '/auth/logout', { headers: { 'X-Client-Type': 'native' }, body: { refreshToken: r1.body.refreshToken } });
-  assert.equal(out.status, 204);
+  const native = await signIn(u.email, u.password, { 'X-Client-Type': 'native' });
+  assert.equal(native.status, 200, JSON.stringify(native.body));
+  const token = native.headers.get('set-auth-token');
+  assert.ok(token, 'no set-auth-token header for the native client');
+  const who = await raw('GET', '/api/v1/auth/me', { headers: { Authorization: `Bearer ${token}` } });
+  assert.equal(who.status, 200, JSON.stringify(who.body));
+  // a page script adding the header still sends Origin, and gets nothing
+  const spoof = await signIn(u.email, u.password, { ...BROWSER, 'X-Client-Type': 'native' });
+  assert.equal(spoof.status, 200);
+  assert.equal(spoof.headers.get('set-auth-token'), null);
+  assert.equal(spoof.body.token, undefined);
+  const out = await raw('POST', '/api/auth/sign-out', { headers: { Authorization: `Bearer ${token}`, 'X-Client-Type': 'native' } });
+  assert.equal(out.status, 200, JSON.stringify(out.body));
+  assert.equal((await raw('GET', '/api/v1/auth/me', { headers: { Authorization: `Bearer ${token}` } })).status, 401);
 });
 
-test('production refuses to run with a missing or weak signing secret', async () => {
-  const saved = { NODE_ENV: process.env.NODE_ENV, JWT_ACCESS_SECRET: process.env.JWT_ACCESS_SECRET };
+test('production refuses to run with a missing or weak auth secret', async () => {
+  const saved = { NODE_ENV: process.env.NODE_ENV, BETTER_AUTH_SECRET: process.env.BETTER_AUTH_SECRET };
   try {
     process.env.NODE_ENV = 'production';
     for (const secret of [undefined, 'short', 'dev-access-secret-1234567890123456']) {
-      if (secret === undefined) delete process.env.JWT_ACCESS_SECRET; else process.env.JWT_ACCESS_SECRET = secret;
-      const res = await t.app.request('/api/v1/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json', ...BROWSER }, body: '{}' });
+      if (secret === undefined) delete process.env.BETTER_AUTH_SECRET; else process.env.BETTER_AUTH_SECRET = secret;
+      const res = await t.app.request('/api/v1/auth/me', { headers: BROWSER });
       assert.equal(res.status, 503, `served with secret ${secret === undefined ? '(unset)' : 'weak'}`);
+      const signin = await t.app.request('/api/auth/sign-in/email', { method: 'POST', headers: { 'Content-Type': 'application/json', ...BROWSER }, body: '{}' });
+      assert.equal(signin.status, 503, `sign-in served with secret ${secret === undefined ? '(unset)' : 'weak'}`);
     }
   } finally {
     process.env.NODE_ENV = saved.NODE_ENV;
-    process.env.JWT_ACCESS_SECRET = saved.JWT_ACCESS_SECRET;
+    process.env.BETTER_AUTH_SECRET = saved.BETTER_AUTH_SECRET;
     if (saved.NODE_ENV === undefined) delete process.env.NODE_ENV;
   }
 });

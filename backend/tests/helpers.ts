@@ -2,7 +2,6 @@
 // Each test file gets its own freshly created database, bootstrapped with the
 // same startup migration production runs (ensurePostgresInit).
 import pg from 'pg';
-import { sign } from 'hono/jwt';
 import { randomUUID } from 'node:crypto';
 
 export const ADMIN_ID = '88888888-8888-8888-8888-888888888888';
@@ -10,6 +9,7 @@ export const BRANCH_HQ = 'branch-hq-main';
 export const BRANCH_CL = 'branch-cl-show';
 export const WH_MAIN = 'wh-main-01';
 export const WH_NORTH = 'wh-north-02';
+export const TEST_AUTH_SECRET = 'test-better-auth-secret-0123456789abcdef';
 const ALL_PERMISSIONS = ['manage_users', 'manage_inventory', 'manage_transfers', 'manage_purchasing', 'manage_sales', 'view_reports'];
 
 export type TestCtx = Awaited<ReturnType<typeof setupTestApp>>;
@@ -30,8 +30,8 @@ export async function setupTestApp() {
   url.pathname = `/${dbName}`;
 
   process.env.DATABASE_URL = url.toString();
-  process.env.JWT_ACCESS_SECRET = 'test-access-secret';
-  process.env.JWT_REFRESH_SECRET = 'test-refresh-secret';
+  process.env.BETTER_AUTH_SECRET = TEST_AUTH_SECRET;
+  process.env.BETTER_AUTH_URL = 'https://al-hayat-erp.pages.dev';
 
   const pool = new pg.Pool({ connectionString: url.toString() });
   const { ensurePostgresInit } = await import('../src/init-postgres');
@@ -39,26 +39,22 @@ export async function setupTestApp() {
   const { default: app } = await import('../src/index');
   const worker = process.env.TEST_TARGET === 'worker' ? await startWorker(url.toString()) : null;
 
-  // A real server-side session plus a session-bound access token. Role,
-  // branch and permission claims are deliberately ignored by the server (it
-  // reads them from the database); they are kept here only to prove that.
+  // A real Better Auth session; the token is sent as a bearer token (bearer
+  // plugin). Role, branch and permission claims are deliberately ignored by
+  // the server (it reads them from the database); they are accepted here only
+  // to prove that.
   const tokenFor = async (claims: { sub: string; permissions?: string[]; branch_id?: string | null; role?: string }) => {
-    const sid = randomUUID();
+    await pool.query(`
+      INSERT INTO "user" (id, name, email, "emailVerified", "createdAt", "updatedAt")
+      SELECT id, full_name, LOWER(email), TRUE, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP FROM users WHERE id = $1
+      ON CONFLICT DO NOTHING`, [claims.sub]);
+    const token = randomUUID().replace(/-/g, '');
     await pool.query(
-      `INSERT INTO auth_sessions (id, user_id, client_type, expires_at) VALUES ($1, $2, 'browser', CURRENT_TIMESTAMP + INTERVAL '1 day')`,
-      [sid, claims.sub],
+      `INSERT INTO "session" (id, token, "userId", "expiresAt", "createdAt", "updatedAt")
+       VALUES ($1, $2, $3, CURRENT_TIMESTAMP + INTERVAL '1 day', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+      [randomUUID(), token, claims.sub],
     );
-    const pv = (await pool.query('SELECT COALESCE(password_version, 1) AS v FROM users WHERE id = $1', [claims.sub])).rows[0]?.v ?? 1;
-    return sign({
-      sub: claims.sub,
-      sid,
-      typ: 'access',
-      permissions: claims.permissions ?? ALL_PERMISSIONS,
-      branch_id: claims.branch_id ?? null,
-      role: claims.role ?? 'admin',
-      pwd_ver: Number(pv),
-      exp: Math.floor(Date.now() / 1000) + 3600,
-    }, 'test-access-secret', 'HS256');
+    return token;
   };
 
   const adminToken = await tokenFor({ sub: ADMIN_ID });
@@ -164,8 +160,8 @@ async function startWorker(databaseUrl: string) {
     envFiles: [],
     bindings: {
       HYPERDRIVE: { type: 'hyperdrive', id: 'test', localConnectionString: databaseUrl },
-      JWT_ACCESS_SECRET: plain('test-access-secret'),
-      JWT_REFRESH_SECRET: plain('test-refresh-secret'),
+      BETTER_AUTH_SECRET: plain(TEST_AUTH_SECRET),
+      BETTER_AUTH_URL: plain('https://al-hayat-erp.pages.dev'),
       NODE_ENV: plain('test'),
     },
     dev: { server: { hostname: '127.0.0.1', port: 0 }, inspector: false, logLevel: 'error' },

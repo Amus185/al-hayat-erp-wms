@@ -4,10 +4,20 @@
 //
 //   DATABASE_URL=postgres://... npm --workspace backend run db:migrate
 //
+// or with DATABASE_URL in backend/.env. Also creates Better Auth's tables
+// (user, session, account, verification) with Better Auth's own migration and
+// gives every existing ERP user a Better Auth identity with their password.
+//
 // Safe to run repeatedly: every step is CREATE ... IF NOT EXISTS, ADD COLUMN
 // IF NOT EXISTS or ON CONFLICT DO NOTHING.
+import { existsSync } from 'node:fs';
+import { resolve } from 'node:path';
 import pg from 'pg';
 import { ensurePostgresInit } from '../src/init-postgres';
+
+// backend/.env, if present (values already in the environment win).
+const envFile = resolve(__dirname, '../.env');
+if (existsSync(envFile)) process.loadEnvFile(envFile);
 
 const url = process.env.DATABASE_URL || process.env.POSTGRES_URL || process.env.PG_URL;
 if (!url) {

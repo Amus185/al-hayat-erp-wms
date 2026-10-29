@@ -26,10 +26,46 @@ import agent from './routes/agent';
 // Global router instances...
 
 import { PgAdapter } from './pg-client';
-import { getAccessSecret, isAllowedOrigin, isProductionRuntime } from './security-config';
+import { getAuthSecret, isAllowedOrigin, isProductionRuntime } from './security-config';
+import { authFor } from './auth';
+import { poolOf } from './services/auth-sessions';
 import { ensurePostgresInit } from './init-postgres';
 
 const app = new Hono();
+
+/**
+ * Only the mobile app's sign-in may receive the session token itself (it has
+ * no cookie jar it can rely on, and stores the token for Authorization:
+ * Bearer). Browsers always send Origin on a POST, so a page script cannot
+ * pass for it, even with the X-Client-Type header.
+ */
+function isNativeSignIn(req: Request) {
+  return req.method === 'POST' && new URL(req.url).pathname === '/api/auth/sign-in/email'
+    && req.headers.get('x-client-type') === 'native' && !req.headers.get('origin');
+}
+
+/**
+ * Browsers hold the session only in the HttpOnly cookie: drop the token Better
+ * Auth also puts in JSON bodies and in the bearer plugin's set-auth-token
+ * header, so page script (or injected script) can never read it.
+ */
+async function withoutSessionToken(res: Response): Promise<Response> {
+  const headers = new Headers(res.headers);
+  headers.delete('set-auth-token');
+  headers.delete('access-control-expose-headers');
+  if (!(headers.get('content-type') || '').includes('application/json')) {
+    return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
+  }
+  const text = await res.text();
+  let body: any;
+  try { body = JSON.parse(text); } catch { return new Response(text, { status: res.status, headers }); }
+  if (body && typeof body === 'object') {
+    delete body.token;
+    if (body.session && typeof body.session === 'object') delete body.session.token;
+  }
+  headers.delete('content-length');
+  return new Response(JSON.stringify(body), { status: res.status, statusText: res.statusText, headers });
+}
 
 let globalPgAdapter: PgAdapter | null = null;
 
@@ -75,7 +111,7 @@ app.use('*', async (c, next) => {
   // Fail closed: without a strong signing secret in production, no API
   // request is served (anyone could otherwise forge a token).
   try {
-    getAccessSecret();
+    getAuthSecret();
   } catch (err: any) {
     console.error(JSON.stringify({ level: 'error', service: 'al-hayat-api', event: 'CONFIG_ERROR', error: err.message }));
     return c.json({ message: 'Service misconfigured. Contact the administrator.' }, 503);
@@ -99,6 +135,12 @@ app.use('*', async (c, next) => {
   }
 
   await next();
+});
+
+// Better Auth: sign-in, sign-out, session (src/auth.ts)
+app.on(['GET', 'POST'], '/api/auth/*', async (c) => {
+  const res = await authFor(poolOf(c)).handler(c.req.raw);
+  return isNativeSignIn(c.req.raw) ? res : withoutSessionToken(res);
 });
 
 app.route('/api/v1/auth', auth);
