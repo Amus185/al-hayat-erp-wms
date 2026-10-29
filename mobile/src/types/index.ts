@@ -8,9 +8,8 @@ export interface LoginRequest {
 }
 
 export interface LoginResponse {
-  accessToken: string;
-  refreshToken: string;
-  expiresIn: number;
+  /** Better Auth session token, sent as Authorization: Bearer. */
+  token: string;
   user: AuthUser;
 }
 
@@ -19,10 +18,6 @@ export interface AuthUser {
   email: string;
   fullName: string;
   permissions: string[];
-}
-
-export interface RefreshRequest {
-  refreshToken: string;
 }
 
 // ── Users ───────────────────────────────────────────

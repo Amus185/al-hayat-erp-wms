@@ -34,7 +34,9 @@ once first.
 1. Create the Postgres database at your provider and copy its connection string
    (with `?sslmode=require` if the provider shows it). Use the **direct**
    connection string, not a pooler: Hyperdrive does the pooling.
-2. Create the tables (safe to repeat; it never deletes data):
+2. Create the tables, ERP and Better Auth's (safe to repeat; it never deletes data).
+   With `DATABASE_URL` in `backend/.env` (copy `.env.example`), just
+   `npm --workspace backend run db:migrate`; or pass it inline:
    ```bash
    DATABASE_URL="postgres://..." npm --workspace backend run db:migrate
    ```
@@ -60,7 +62,7 @@ columns: the Worker does not migrate on startup (the Node server still does).
 ```bash
 cd backend
 npx wrangler r2 bucket create al-hayat-files
-npx wrangler secret put JWT_ACCESS_SECRET      # 32+ random characters; required
+npx wrangler secret put BETTER_AUTH_SECRET     # openssl rand -base64 32; required (sign-in, see docs/BETTER_AUTH.md)
 npx wrangler secret put AGENT_TOKEN_SECRET     # 32+, different from the above (AI assistant)
 npx wrangler secret put STOREFRONT_API_KEY     # 24+ (website order requests)
 # Product photos for the website (R2 S3 API token, see the R2 dashboard):
@@ -137,11 +139,11 @@ Nothing changes: `npm run dev:backend` still runs the Node server (see
 
 ```bash
 cd backend
-# .dev.vars (not committed): JWT_ACCESS_SECRET=..., NODE_ENV=development
+# .dev.vars (not committed): BETTER_AUTH_SECRET=..., BETTER_AUTH_URL=http://localhost:8787, NODE_ENV=development
 npm run dev:worker     # uses hyperdrive.localConnectionString from wrangler.jsonc
 ```
 
-The backend tests can also run against the Worker build:
+The backend tests can also run against the Worker build (one file per run; several in parallel can stall the local runtime):
 
 ```bash
 TEST_TARGET=worker TEST_DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/postgres \

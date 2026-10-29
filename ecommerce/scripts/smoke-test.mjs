@@ -11,6 +11,22 @@
 // The staff steps create a sales order, so they refuse any ERP that is not on
 // this computer. Never point this script at production with a login.
 
+import http from 'node:http';
+import https from 'node:https';
+
+function nativeSignIn(url, credentials) {
+  const body = JSON.stringify(credentials);
+  const mod = url.startsWith('https:') ? https : http;
+  return new Promise((resolve, reject) => {
+    const req = mod.request(url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body), 'X-Client-Type': 'native' } }, (res) => {
+      res.resume();
+      res.on('end', () => resolve({ status: res.statusCode, token: res.headers['set-auth-token'] || null }));
+    });
+    req.on('error', reject);
+    req.end(body);
+  });
+}
+
 const SHOP = (process.env.SHOP_URL || 'http://localhost:3001').replace(/\/$/, '');
 const ERP = (process.env.ERP_API_URL || 'http://localhost:3100/api/v1').replace(/\/$/, '');
 const { STAFF_EMAIL, STAFF_PASSWORD } = process.env;
@@ -130,10 +146,11 @@ if (STAFF_EMAIL && STAFF_PASSWORD && requestNumber) {
     };
 
     await check('staff sign-in', async () => {
-      const res = await fetch(`${ERP}/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-csrf-protection': '1' }, body: JSON.stringify({ email: STAFF_EMAIL, password: STAFF_PASSWORD }) });
-      const body = await res.json();
-      assert(res.ok && body.accessToken, `HTTP ${res.status}`);
-      token = body.accessToken;
+      // Better Auth sign-in, as the mobile app does: the session token comes back in set-auth-token.
+      // Plain node:http, because fetch adds Sec-Fetch-Mode, and Better Auth treats that as a browser.
+      const res = await nativeSignIn(`${ERP.replace(/\/api\/v1$/, '/api/auth')}/sign-in/email`, { email: STAFF_EMAIL, password: STAFF_PASSWORD });
+      token = res.token;
+      assert(res.status === 200 && token, `HTTP ${res.status}`);
     });
 
     let request = null;

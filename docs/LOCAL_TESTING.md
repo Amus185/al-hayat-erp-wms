@@ -43,7 +43,7 @@ cd C:\al-hayat-erp-wms
 node backend\scripts\dev-photo-store.mjs
 ```
 
-**2. Backend.** Replace `YOUR_PG_PASSWORD`, and **never** paste the Railway database address here:
+**2. Backend.** Replace `YOUR_PG_PASSWORD`, and **never** paste the production (Layerbase) database address here:
 ```powershell
 cd C:\al-hayat-erp-wms\backend
 $env:DATABASE_URL = "postgresql://postgres:YOUR_PG_PASSWORD@localhost:5432/alhayat_local"
@@ -56,7 +56,7 @@ $env:R2_PUBLIC_BASE_URL = "http://127.0.0.1:9100/photos"
 $env:CORS_ORIGINS = "http://localhost:5173,http://localhost:3001"
 npx tsx src/server.ts
 ```
-The first start creates all the tables.
+The first start creates all the tables, including Better Auth's (`user`, `session`, `account`, `verification`). Without `BETTER_AUTH_SECRET` a development secret is used; sign-in works at `http://localhost:5173` (`BETTER_AUTH_URL`'s default).
 
 Then, in a **separate** PowerShell window with the same `$env:DATABASE_URL` set:
 ```powershell

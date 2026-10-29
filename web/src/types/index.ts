@@ -7,14 +7,6 @@ export interface LoginRequest {
   password: string;
 }
 
-export interface LoginResponse {
-  accessToken: string;
-  expiresIn: number;
-  /** Native clients only; browsers receive the refresh token as an HttpOnly cookie. */
-  refreshToken?: string;
-  user: AuthUser;
-}
-
 export interface AuthUser {
   id: string;
   email: string;

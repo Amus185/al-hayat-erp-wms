@@ -1,5 +1,7 @@
 # Authentication hardening (branch `security/auth-hardening`)
 
+> **Superseded for sign-in and sessions.** Staff now sign in with Better Auth (`docs/BETTER_AUTH.md`): the access-token / refresh-cookie flow below (`/api/v1/auth/login`, `/refresh`, `/logout`, `auth_sessions`, `refresh_tokens`) is no longer used. The CSRF, CORS, throttling, fail-closed secret, print-view escaping and database-backed authorization described here still apply. Kept as the audit record.
+
 Status: implemented and tested locally. **Not deployed.** This document covers what was found, what changed, how it was verified, how to deploy it and roll it back, and what is still open. It does not claim the system is fully secure.
 
 ## 1. Audit findings

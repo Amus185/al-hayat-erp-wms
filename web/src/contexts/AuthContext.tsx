@@ -1,6 +1,7 @@
 import { createContext, useContext, useCallback, useEffect, useState, type ReactNode } from 'react';
 import type { AuthUser, LoginRequest } from '../types';
-import { loginRequest, logoutRequest, refreshSession, onSessionExpired, setAccessToken } from '../api/client';
+import { fetchProfile, invalidateApiCache, onSessionExpired } from '../api/client';
+import { authClient } from '../lib/auth-client';
 
 interface AuthContextType {
   user: AuthUser | null;
@@ -18,39 +19,42 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | null>(null);
 
 // The signed-in user is kept in memory only and always comes from the server
-// (login or refresh response). It drives what the UI shows; the server never
+// (GET /api/v1/auth/me, after Better Auth signs in). It drives what the UI shows; the server never
 // trusts it — every request is authorised from the database.
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  // Restore the session on load from the HttpOnly refresh cookie
+  // Restore the session on load from the HttpOnly session cookie
   useEffect(() => {
     let cancelled = false;
-    refreshSession<AuthUser>()
-      .then((session) => { if (!cancelled) setUser(session?.user ?? null); })
+    fetchProfile<AuthUser>()
+      .then((profile) => { if (!cancelled) setUser(profile); })
       .catch(() => { if (!cancelled) setUser(null); })
       .finally(() => { if (!cancelled) setIsLoading(false); });
     return () => { cancelled = true; };
   }, []);
 
-  // A session that can no longer be renewed (logged out elsewhere, password
-  // changed, revoked) returns the user to the sign-in page.
+  // A session that has ended (signed out elsewhere, password changed,
+  // deactivated, disabled) returns the user to the sign-in page.
   useEffect(() => {
     onSessionExpired(() => {
-      setAccessToken(null);
       setUser(null);
       if (!window.location.pathname.includes('/login')) window.location.href = '/login';
     });
   }, []);
 
   const login = useCallback(async (credentials: LoginRequest) => {
-    const session = await loginRequest<AuthUser>(credentials);
-    setUser(session.user);
+    const { error } = await authClient.signIn.email(credentials);
+    if (error) throw new Error(error.status === 429 || error.status === 403 ? (error.message || 'Sign-in refused') : 'Invalid email or password');
+    const profile = await fetchProfile<AuthUser>();
+    if (!profile) throw new Error('Signed in, but your account has no access. Contact your administrator.');
+    setUser(profile);
   }, []);
 
   const logout = useCallback(() => {
-    logoutRequest().finally(() => {
+    authClient.signOut().finally(() => {
+      invalidateApiCache();
       setUser(null);
       window.location.href = '/login';
     });

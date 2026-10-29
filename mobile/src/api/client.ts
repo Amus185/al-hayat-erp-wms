@@ -19,15 +19,15 @@ export const API_BASE_URL = 'http://localhost:3000/api/v1'; // On Android emulat
 // Legacy builds persisted the access token in AsyncStorage (unencrypted).
 const LEGACY_TOKEN_KEY = 'al_hayat_wms_token';
 
-// Tokens are kept in memory only. Persisting the refresh token requires the
-// platform keystore (expo-secure-store / Keychain / Android Keystore); until
-// that dependency is added (see docs/audit/AUTHENTICATION.md), the user signs
-// in again after the app is closed. AsyncStorage is never used for tokens.
+// Better Auth sign-in (/api/auth). The session token is kept in memory only
+// and sent as Authorization: Bearer. Persisting it requires the platform
+// keystore (expo-secure-store / Keychain / Android Keystore); until that
+// dependency is added, the user signs in again after the app is closed.
+// AsyncStorage is never used for tokens.
+const AUTH_BASE_URL = API_BASE_URL.replace(/\/api\/v1$/, '/api/auth');
 let authToken: string | null = null;
-let refreshToken: string | null = null;
 
-// Native clients identify themselves so the server returns the refresh token
-// in the body (no cookie) and accepts it back in the body.
+// Identifies the mobile app, so sign-in hands back the session token.
 const NATIVE_HEADERS = { 'X-Client-Type': 'native' };
 
 export async function initializeClient(): Promise<string | null> {
@@ -41,39 +41,10 @@ export async function initializeClient(): Promise<string | null> {
 
 export async function setAuthToken(token: string | null) {
   authToken = token;
-  if (!token) refreshToken = null;
 }
 
 export function getAuthToken() {
   return authToken;
-}
-
-let refreshing: Promise<boolean> | null = null;
-
-/** Exchange the refresh token for a new pair (single-flight). */
-async function refreshTokens(): Promise<boolean> {
-  if (!refreshToken) return false;
-  if (!refreshing) {
-    refreshing = (async () => {
-      try {
-        const res = await fetch(`${API_BASE_URL}/auth/refresh`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', ...NATIVE_HEADERS },
-          body: JSON.stringify({ refreshToken }),
-        });
-        if (!res.ok) { authToken = null; refreshToken = null; return false; }
-        const data = await res.json();
-        authToken = data.accessToken;
-        refreshToken = data.refreshToken;
-        return true;
-      } catch {
-        return false;
-      } finally {
-        refreshing = null;
-      }
-    })();
-  }
-  return refreshing;
 }
 
 // HTTP Helpers
@@ -97,11 +68,7 @@ async function request<T>(
     headers,
   };
 
-  let response = await fetch(url, config);
-  if (response.status === 401 && !path.startsWith('/auth/') && await refreshTokens()) {
-    headers.set('Authorization', `Bearer ${authToken}`);
-    response = await fetch(url, { ...config, headers });
-  }
+  const response = await fetch(url, config);
 
   if (!response.ok) {
     let errorMessage = `HTTP Request failed with status ${response.status}`;
@@ -148,23 +115,31 @@ export const api = {
 // ── Specific Endpoints ─────────────────────────────────
 
 export async function login(data: LoginRequest): Promise<LoginResponse> {
-  const res = await api.post<LoginResponse>('/auth/login', data, { headers: NATIVE_HEADERS });
-  authToken = res?.accessToken ?? null;
-  refreshToken = res?.refreshToken ?? null;
-  return res;
+  const res = await fetch(`${AUTH_BASE_URL}/sign-in/email`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...NATIVE_HEADERS },
+    body: JSON.stringify(data),
+  });
+  const token = res.headers.get('set-auth-token');
+  if (!res.ok || !token) {
+    const body = await res.json().catch(() => null);
+    throw new Error(res.status === 401 ? 'Invalid email or password' : body?.message || `Sign-in failed (${res.status})`);
+  }
+  authToken = token;
+  const me = await request<{ user: LoginResponse['user'] }>('/auth/me');
+  return { token, user: me.user };
 }
 
-/** Ends the session on the server, then forgets the tokens. */
+/** Ends the session on the server, then forgets the token. */
 export async function logout(): Promise<void> {
-  const token = refreshToken;
+  const token = authToken;
   authToken = null;
-  refreshToken = null;
   if (token) {
     try {
-      await fetch(`${API_BASE_URL}/auth/logout`, {
+      await fetch(`${AUTH_BASE_URL}/sign-out`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...NATIVE_HEADERS },
-        body: JSON.stringify({ refreshToken: token }),
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, ...NATIVE_HEADERS },
+        body: '{}',
       });
     } catch {
       // offline: the session still expires server-side

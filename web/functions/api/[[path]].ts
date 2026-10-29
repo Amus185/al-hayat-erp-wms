@@ -1,10 +1,10 @@
 // Same-origin API proxy (Cloudflare Pages Function).
 //
-// The browser calls https://<pages-host>/api/v1/... and this function forwards
-// the request to the backend Worker. Because the page and the API share one
-// origin, the refresh token can be a first-party, host-only,
-// SameSite=Strict, HttpOnly cookie — browsers block third-party cookies
-// between *.pages.dev and *.workers.dev.
+// The browser calls https://<pages-host>/api/v1/... (ERP) and /api/auth/...
+// (Better Auth sign-in) and this function forwards the request to the backend
+// Worker. Because the page and the API share one origin, the session can be a
+// first-party, SameSite=Strict, HttpOnly cookie — browsers block third-party
+// cookies between *.pages.dev and *.workers.dev.
 //
 // The backend is reached through the API service binding (Pages project →
 // Settings → Bindings → Service binding "API" → Worker al-hayat-api) or, if
@@ -15,7 +15,7 @@ type Env = { API?: { fetch(input: Request | string, init?: RequestInit): Promise
 export async function onRequest(context: { request: Request; env: Env }): Promise<Response> {
   const { request, env } = context;
   const incoming = new URL(request.url);
-  if (!incoming.pathname.startsWith('/api/v1/')) {
+  if (!incoming.pathname.startsWith('/api/v1/') && !incoming.pathname.startsWith('/api/auth/')) {
     return new Response(JSON.stringify({ error: 'Route not found' }), { status: 404, headers: { 'Content-Type': 'application/json' } });
   }
   if (!env.API && !env.API_ORIGIN) {

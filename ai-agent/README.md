@@ -42,7 +42,7 @@ Cost limits in `src/agent.ts`: short system prompt, last 8 messages only, 600 to
    ```powershell
    [Convert]::ToHexString([Security.Cryptography.RandomNumberGenerator]::GetBytes(32))
    ```
-2. On the backend Worker: `cd backend` then `npx wrangler secret put AGENT_TOKEN_SECRET` with that value. It must be 32+ characters and different from `JWT_ACCESS_SECRET`. Without it the assistant stays switched off.
+2. On the backend Worker: `cd backend` then `npx wrangler secret put AGENT_TOKEN_SECRET` with that value. It must be 32+ characters and different from `BETTER_AUTH_SECRET`. Without it the assistant stays switched off.
 3. `wrangler.jsonc` reaches the backend through the `ALHAYAT_API` service binding (Worker `al-hayat-api`, deployed first; see `docs/DEPLOY_CLOUDFLARE.md`). Check `ALLOWED_ORIGINS` is your staff app address (default `https://al-hayat-erp.pages.dev`).
 4. Deploy the Worker:
    ```powershell
