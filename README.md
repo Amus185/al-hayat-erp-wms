@@ -12,6 +12,11 @@ Production-grade TypeScript scaffold for Al Hayat Furniture Group covering ERP, 
 - React Native mobile WMS app for scan-first warehouse workflows
 - Docker Compose for PostgreSQL and MinIO
 
+## Deployment
+
+Production runs on Cloudflare (Workers, Pages, Hyperdrive, R2) with a hosted
+Postgres database: see `docs/DEPLOY_CLOUDFLARE.md`.
+
 ## Local Startup
 
 1. Install dependencies:
