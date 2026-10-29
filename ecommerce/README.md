@@ -9,7 +9,7 @@ Built with Next.js 16 (App Router), React 19 and Tailwind 4. Layout adapted from
 ## How it fits together
 
 ```
-Browser ──► this site (Next.js)  ──server-to-server──►  ERP backend (Railway)
+Browser ──► this site (Next.js)  ──server-to-server──►  ERP backend (Worker)
             /, /search, /product/…                       GET  /storefront/products …   (public, whitelisted fields)
             /api/cart  (fresh prices)                    POST /storefront/requests     (needs STOREFRONT_API_KEY)
             /api/request (order request)
@@ -24,7 +24,7 @@ Browser ──► this site (Next.js)  ──server-to-server──►  ERP back
 
 | Variable | Where | Purpose |
 |---|---|---|
-| `ERP_API_URL` | server | ERP base URL, e.g. `https://<your-backend>.up.railway.app/api/v1` |
+| `ERP_API_URL` | server | ERP base URL, e.g. `https://al-hayat-api.<your-subdomain>.workers.dev/api/v1` (`vars` in `wrangler.jsonc`) |
 | `STOREFRONT_API_KEY` | server, **secret** | Must equal `STOREFRONT_API_KEY` on the ERP. 24+ random characters. Never prefix with `NEXT_PUBLIC_`. |
 | `IMAGE_HOSTNAME` | server (needed at build and run time) | Public host of the photo bucket, e.g. `photos.example.com` or `pub-xxxx.r2.dev`. Must be the host of the ERP's `R2_PUBLIC_BASE_URL`, which must be a bare origin with no path. |
 | `NEXT_PUBLIC_SITE_NAME` | public | Shop name |
@@ -50,18 +50,25 @@ npm run dev -- -p 3001
 
 To see photos from a local stand-in storage on `127.0.0.1:9100`, also set `ALLOW_LOCAL_IMAGES=1`. It is ignored in production builds.
 
-## Deploy (second Railway service)
+## Deploy (Cloudflare Worker)
 
-1. Railway project → **New → GitHub Repo** → this repo. Name the service `storefront`.
-2. **Settings → Source → Root Directory:** `/ecommerce`.
-3. **Settings → Config-as-code → Railway Config File:** `/ecommerce/railway.json`. This step matters: Railway's config file does **not** follow the Root Directory, so without it the repo-root `railway.json` (the backend's start command) would be applied to this service and it would fail to start.
-4. **Settings → Source → Watch Paths:** `/ecommerce/**`, so backend-only changes do not rebuild the site.
-5. **Variables:** the settings listed above. `STOREFRONT_API_KEY` must equal the one on the backend service. `NEXT_PUBLIC_*` and `IMAGE_HOSTNAME` are read at build time, so set them before the first deploy.
-6. **Settings → Networking → Generate Domain** (or add a custom domain), then set `NEXT_PUBLIC_SITE_URL` to that address and redeploy.
+The site runs as the Worker `al-hayat-storefront`, built by the OpenNext adapter (`@opennextjs/cloudflare`); settings are in `wrangler.jsonc` and `open-next.config.ts`. Full steps, including the backend it depends on, are in `docs/DEPLOY_CLOUDFLARE.md`. In short:
 
-Railway builds with Railpack: it runs `npm run build`, then `npm run start`, on the current Node LTS (Next 16 needs 20.9 or newer).
+```bash
+cd ecommerce
+npx wrangler r2 bucket create al-hayat-storefront-cache   # once: the 60 s catalog cache
+npx wrangler secret put STOREFRONT_API_KEY                 # once: same value as the backend
+npm ci
+npm run deploy
+```
 
-On the backend service, the request endpoint answers 503 until `STOREFRONT_API_KEY` is set there.
+- `ERP_API_URL` is a runtime variable in `wrangler.jsonc`; `STOREFRONT_API_KEY` is a Worker secret.
+- `IMAGE_HOSTNAME` and `NEXT_PUBLIC_*` are read at build time: put them in `.env.production` (not committed) before `npm run deploy`.
+- Photos are resized by Cloudflare Images (the `IMAGES` binding).
+- `npm run preview` builds and runs the Worker locally; put runtime values in `.dev.vars`.
+- `src/proxy.ts` runs as OpenNext's Node.js middleware, which OpenNext marks experimental. It was checked locally: every script carries the nonce and the smoke test passes. Re-check the CSP header after upgrading Next or OpenNext.
+
+On the backend, the request endpoint answers 503 until `STOREFRONT_API_KEY` is set there.
 
 ## Checks
 
