@@ -27,11 +27,15 @@ if (!url) {
 const isLocal = /@(localhost|127\.0\.0\.1|\[::1\])[:/]/.test(url);
 const pool = new pg.Pool({ connectionString: url, max: 1, ssl: isLocal ? false : { rejectUnauthorized: false } });
 
-// ensurePostgresInit logs a failed step and carries on (so the server still
-// starts); here any logged failure must fail the run.
+// ensurePostgresInit logs a failed step (prefixed ❌) and carries on, so the
+// server still starts; here any such failure must fail the run. Other
+// console.error output, such as pg's sslmode warning, is not a failure.
 let failures = 0;
 const logError = console.error;
-console.error = (...args: unknown[]) => { failures++; logError(...args); };
+console.error = (...args: unknown[]) => {
+  if (typeof args[0] === 'string' && args[0].startsWith('❌')) failures++;
+  logError(...args);
+};
 
 async function main() {
   try {
