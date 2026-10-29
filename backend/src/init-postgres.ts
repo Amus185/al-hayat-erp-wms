@@ -1,6 +1,4 @@
 import { Pool } from 'pg';
-import { readFileSync, existsSync } from 'fs';
-import { join } from 'path';
 
 // Auth & Structural Reference Seed Data
 export const DEFAULT_AUTH_SEED = {

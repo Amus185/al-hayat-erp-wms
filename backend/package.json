@@ -5,11 +5,14 @@
   "scripts": {
     "start": "tsx src/server.ts",
     "dev": "tsx watch src/server.ts",
+    "dev:worker": "npx wrangler dev",
     "typecheck": "tsc --noEmit",
     "build": "tsc --noEmit",
     "db:init": "node init_pg_db.mjs",
+    "db:migrate": "tsx scripts/migrate.ts",
     "db:wipe": "node wipe_operational_data.mjs",
-    "test": "node --import tsx --test --test-force-exit \"tests/*.test.ts\""
+    "test": "node --import tsx --test --test-force-exit \"tests/*.test.ts\"",
+    "deploy": "npx wrangler deploy"
   },
   "dependencies": {
     "@hono/node-server": "^1.12.0",
@@ -22,6 +25,7 @@
     "@types/bcryptjs": "^2.4.6",
     "@types/node": "^20.14.10",
     "@types/pg": "^8.20.2",
-    "typescript": "^5.5.3"
+    "typescript": "^5.5.3",
+    "wrangler": "^4.156.0"
   }
 }

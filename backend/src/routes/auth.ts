@@ -27,8 +27,10 @@ const cookieOptions = {
 };
 
 // A fixed bcrypt hash so a login for an unknown email costs the same time
-// as one for a known email (no account enumeration by timing).
-const DUMMY_HASH = bcrypt.hashSync('not-a-real-password-placeholder', 10);
+// as one for a known email (no account enumeration by timing). Computed on
+// first use: Workers forbid random number generation at module load.
+let dummyHash: string | null = null;
+const getDummyHash = () => (dummyHash ??= bcrypt.hashSync('not-a-real-password-placeholder', 10));
 
 const clientTypeOf = (c: Context): ClientType => (c.req.header('X-Client-Type') === 'native' ? 'native' : 'browser');
 const clientIp = (c: Context) =>
@@ -102,7 +104,7 @@ auth.post('/login', async (c) => {
 
   const found = await pool.query('SELECT id, password_hash FROM users WHERE LOWER(email) = $1 AND is_active = 1', [email]);
   const row = found.rows[0];
-  const ok = bcrypt.compareSync(password, (row?.password_hash as string) || DUMMY_HASH) && Boolean(row);
+  const ok = bcrypt.compareSync(password, (row?.password_hash as string) || getDummyHash()) && Boolean(row);
   if (!ok) {
     await recordLoginFailure(pool, email, ip);
     return c.json({ message: 'Invalid credentials' }, 401);

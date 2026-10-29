@@ -37,6 +37,7 @@ export async function setupTestApp() {
   const { ensurePostgresInit } = await import('../src/init-postgres');
   await ensurePostgresInit(pool);
   const { default: app } = await import('../src/index');
+  const worker = process.env.TEST_TARGET === 'worker' ? await startWorker(url.toString()) : null;
 
   // A real server-side session plus a session-bound access token. Role,
   // branch and permission claims are deliberately ignored by the server (it
@@ -63,11 +64,14 @@ export async function setupTestApp() {
   const adminToken = await tokenFor({ sub: ADMIN_ID });
 
   async function api(method: string, path: string, body?: unknown, token = adminToken) {
-    const res = await app.request(`/api/v1${path}`, {
+    const init = {
       method,
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
       body: body === undefined ? undefined : JSON.stringify(body),
-    });
+    };
+    const res = worker
+      ? await worker.fetch(`http://worker.test/api/v1${path}`, init)
+      : await app.request(`/api/v1${path}`, init);
     const text = await res.text();
     let json: any = null;
     try { json = text ? JSON.parse(text) : null; } catch { json = text; }
@@ -135,6 +139,7 @@ export async function setupTestApp() {
   }
 
   async function teardown() {
+    await worker?.dispose();
     await pool.end();
     if (process.env.KEEP_TEST_DB) { console.log(`Kept test database: ${dbName}`); return; }
     const a = new pg.Client({ connectionString: base });
@@ -144,4 +149,27 @@ export async function setupTestApp() {
   }
 
   return { app, api, q, pool, tokenFor, adminToken, createUser, createProduct, setStock, stockOf, createCustomer, accountBalance, journalCount, teardown, ensurePostgresInit };
+}
+
+/**
+ * TEST_TARGET=worker: serve api() calls from the Worker build (worker.ts) in
+ * the local Workers runtime, reaching this test database through a local
+ * Hyperdrive binding, instead of calling the app in-process under Node.
+ */
+async function startWorker(databaseUrl: string) {
+  const { unstable_startWorker } = await import('wrangler');
+  const plain = (value: string) => ({ type: 'plain_text' as const, value });
+  const worker = await unstable_startWorker({
+    config: new URL('../wrangler.jsonc', import.meta.url).pathname,
+    envFiles: [],
+    bindings: {
+      HYPERDRIVE: { type: 'hyperdrive', id: 'test', localConnectionString: databaseUrl },
+      JWT_ACCESS_SECRET: plain('test-access-secret'),
+      JWT_REFRESH_SECRET: plain('test-refresh-secret'),
+      NODE_ENV: plain('test'),
+    },
+    dev: { server: { hostname: '127.0.0.1', port: 0 }, inspector: false, logLevel: 'error' },
+  });
+  await worker.ready;
+  return worker;
 }

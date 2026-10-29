@@ -67,7 +67,7 @@ app.use('*', async (c, next) => {
   c.header('X-Frame-Options', 'DENY');
 });
 
-// Environment & Database Binding Middleware for Railway / Node.js
+// Environment & Database Binding Middleware (Node server and Cloudflare Workers)
 app.use('*', async (c, next) => {
   const envObj = (c.env || {}) as Record<string, any>;
   (c as any).env = envObj;
@@ -81,9 +81,12 @@ app.use('*', async (c, next) => {
     return c.json({ message: 'Service misconfigured. Contact the administrator.' }, 503);
   }
 
-  const pgConnStr = typeof process !== 'undefined' ? (process.env.DATABASE_URL || process.env.POSTGRES_URL || process.env.PG_URL) : undefined;
-
-  if (pgConnStr) {
+  // On Cloudflare Workers, worker.ts opens a per-request database adapter
+  // (through Hyperdrive) and passes it in as env.DB. Under Node, one pool is
+  // shared by every request.
+  if (!envObj.DB) {
+    const pgConnStr = typeof process !== 'undefined' ? (process.env.DATABASE_URL || process.env.POSTGRES_URL || process.env.PG_URL) : undefined;
+    if (!pgConnStr) throw new Error('Fatal Error: DATABASE_URL is missing. Backend runs 100% on PostgreSQL.');
     if (!globalPgAdapter) {
       console.log('⚡ Initializing native PostgreSQL Connection Pool adapter...');
       globalPgAdapter = new PgAdapter(pgConnStr);
@@ -93,8 +96,6 @@ app.use('*', async (c, next) => {
       });
     }
     envObj.DB = globalPgAdapter;
-  } else if (!envObj.DB) {
-    throw new Error('Fatal Error: DATABASE_URL is missing. Backend runs 100% on PostgreSQL.');
   }
 
   await next();

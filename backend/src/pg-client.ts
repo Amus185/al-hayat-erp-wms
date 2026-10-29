@@ -129,23 +129,36 @@ export class PgPreparedStatement {
 export class PgAdapter {
   public pool: Pool;
 
-  constructor(connectionString: string) {
+  /**
+   * `perRequest`: a pool that lives for one Worker request. Workers cannot
+   * share sockets between requests, and Hyperdrive already pools connections
+   * to the database, so this pool stays small and is closed after the response.
+   * `ssl` applies to per-request pools; Hyperdrive connections do not use it.
+   */
+  constructor(connectionString: string, opts: { perRequest?: boolean; ssl?: boolean } = {}) {
     const isLocal =
       connectionString.includes('localhost') ||
       connectionString.includes('127.0.0.1');
 
-    this.pool = new Pool({
-      connectionString,
-      // Railway colocates Postgres in the same project — connections are cheap.
-      // 20 pooled connections handles concurrent request bursts without exhaustion.
-      max: 20,
-      // Release idle connections after 30 s to avoid accumulating idle handles
-      idleTimeoutMillis: 30_000,
-      // Fail fast on connection timeout — better than hanging
-      connectionTimeoutMillis: 5_000,
-      // Railway Postgres requires SSL; local does not
-      ssl: isLocal ? false : { rejectUnauthorized: false },
-    });
+    this.pool = new Pool(opts.perRequest
+      ? {
+        connectionString,
+        // Workers allow at most 6 simultaneous outbound connections per request.
+        max: 5,
+        connectionTimeoutMillis: 5_000,
+        ssl: opts.ssl && !isLocal ? { rejectUnauthorized: false } : false,
+      }
+      : {
+        connectionString,
+        // 20 pooled connections handles concurrent request bursts without exhaustion.
+        max: 20,
+        // Release idle connections after 30 s to avoid accumulating idle handles
+        idleTimeoutMillis: 30_000,
+        // Fail fast on connection timeout — better than hanging
+        connectionTimeoutMillis: 5_000,
+        // Hosted Postgres requires SSL; local does not
+        ssl: isLocal ? false : { rejectUnauthorized: false },
+      });
 
     // Log pool errors so they don't silently swallow issues
     this.pool.on('error', (err) => {

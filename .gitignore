@@ -45,3 +45,4 @@ mobile/ios/
 
 # Cloudflare wrangler local dev state
 .wrangler/
+.dev.vars
