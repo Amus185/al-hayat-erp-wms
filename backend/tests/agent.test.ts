@@ -122,7 +122,7 @@ test('changes: a proposal changes nothing; only the same user can confirm it, on
   const proposed = await raw('POST', '/agent/proposals', token, { action: 'adjust_stock', args: { product: name, quantity: 20, location: 'HQ', reason: 'delivery from supplier' } });
   assert.equal(proposed.status, 200, proposed.text);
   const { id, summary } = proposed.body.proposal;
-  assert.match(summary, /Add 20 units .* \(5 -> 25\)/);
+  assert.match(summary, /Ku dar 20 xabbo .* \(5 -> 25\)/);
   assert.equal(await t.stockOf(p, { branchId: HQ }), 5, 'proposing changed stock');
 
   // the Worker's token cannot confirm; another user cannot confirm
@@ -145,7 +145,7 @@ test('changes: price changes, refusals, cancel and expiry', async () => {
   const token = await agentToken();
 
   const price = await raw('POST', '/agent/proposals', token, { action: 'set_price', args: { product: name, price: 120 } });
-  assert.match(price.body.proposal.summary, /from 100\.00 to 120\.00/);
+  assert.match(price.body.proposal.summary, /100\.00 -> 120\.00/);
   assert.equal((await t.api('POST', `/agent/actions/${price.body.proposal.id}/execute`)).status, 200);
   assert.equal(Number((await t.q('SELECT selling_price FROM products WHERE id = $1', [p]))[0].selling_price), 120);
 

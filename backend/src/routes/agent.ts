@@ -16,7 +16,8 @@
 import { Hono, type Context } from 'hono';
 import { sign, verify } from 'hono/jwt';
 import { Env, uuidv4 } from '../db';
-import { authMiddleware, loadAuthState, payloadFrom, type JwtPayload } from '../middleware/auth';
+import { asUser, authMiddleware, loadAuthState, payloadFrom, type JwtPayload } from '../middleware/auth';
+import { resultForModel, sourceUrl } from '../services/agent-data';
 import { hasAllBranchAccess } from '../services/branch-scope';
 import { logAudit } from '../services/audit';
 import { getAgentSecret } from '../security-config';
@@ -27,10 +28,15 @@ type Vars = { jwtPayload: JwtPayload };
 const agent = new Hono<{ Bindings: Env; Variables: Vars }>();
 
 export const AGENT_TOKEN_TTL_S = 5 * 60;
-export const MAX_MESSAGES_PER_HOUR = 60;
+const DEFAULT_MESSAGES_PER_HOUR = 60;
+/** Assistant messages per user per hour (AGENT_MESSAGES_PER_HOUR; raise it on a paid plan). */
+export function messagesPerHour(): number {
+  const n = Math.floor(Number(typeof process !== 'undefined' ? process.env.AGENT_MESSAGES_PER_HOUR : undefined));
+  return n > 0 ? Math.min(n, 10_000) : DEFAULT_MESSAGES_PER_HOUR;
+}
 const PROPOSAL_TTL_MIN = 15;
 
-const notConfigured = (c: Context) => c.json({ message: 'The assistant is not set up on the server yet.' }, 503);
+const notConfigured = (c: Context) => c.json({ message: 'Kaaliyaha weli laguma diyaarin nidaamka. La xiriir maamulaha.' }, 503);
 
 // ── tokens ───────────────────────────────────────────────────────────────────
 
@@ -43,8 +49,9 @@ agent.post('/session', authMiddleware, async (c) => {
   await db.prepare(`DELETE FROM agent_usage WHERE created_at < CURRENT_TIMESTAMP - INTERVAL '1 day'`).run();
   const used = await db.prepare(`SELECT COUNT(*)::int AS n FROM agent_usage WHERE user_id = ? AND created_at > CURRENT_TIMESTAMP - INTERVAL '1 hour'`)
     .bind(p.sub).first() as any;
-  if (Number(used?.n) >= MAX_MESSAGES_PER_HOUR) {
-    return c.json({ message: `You have reached ${MAX_MESSAGES_PER_HOUR} assistant messages this hour. Please try again later.` }, 429);
+  const limit = messagesPerHour();
+  if (Number(used?.n) >= limit) {
+    return c.json({ message: `Waxaad gaartay xadka ${limit} fariimood ee saacaddan. Fadlan dib isku day goor dambe.` }, 429);
   }
   await db.prepare('INSERT INTO agent_usage (id, user_id) VALUES (?, ?)').bind(uuidv4(), p.sub).run();
   const now = Math.floor(Date.now() / 1000);
@@ -237,6 +244,27 @@ tools.post('/list_orders', async (c) => {
   });
 });
 
+/**
+ * Any part of the ERP, read through its own API route as this user: the same
+ * permission checks, branch scope and figures as the staff screens.
+ * Body: { source, id?, filters? } (see services/agent-data.ts).
+ */
+tools.post('/get_data', async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const target = sourceUrl(String(body.source ?? ''), body.id, body.filters);
+  if ('error' in target) return refuse(c, target.error);
+  const p = c.get('jwtPayload');
+  const { default: app } = await import('../index');
+  const res = await app.fetch(new Request(target.url), asUser(c.env, p));
+  const data: any = await res.json().catch(() => null);
+  if (res.status === 401 || res.status === 403) {
+    return refuse(c, `You do not have permission to see this (${data?.message || 'access denied'}). Tell the user so; do not guess.`);
+  }
+  if (res.status === 404) return refuse(c, 'Not found. Check the id or look it up again.');
+  if (!res.ok || data === null) return refuse(c, `The system could not load this (${data?.message || data?.error || res.status}).`);
+  return c.body(resultForModel(data, !can(p, 'view_reports')), 200, { 'Content-Type': 'application/json' });
+});
+
 agent.route('/tools', tools);
 
 // ── proposals: the assistant may only suggest changes ───────────────────────
@@ -274,7 +302,8 @@ agent.post('/proposals', agentAuth, async (c) => {
     if (before + qty < 0) return refuse(c, `Only ${before} in stock at ${branch.name}; cannot remove ${-qty}.`);
     const reason = text(args.reason, 200) || 'Stock adjustment';
     stored = { productId: found.product.id, branchId: branch.id, quantity: qty, reason };
-    summary = `${qty > 0 ? 'Add' : 'Remove'} ${Math.abs(qty)} unit${Math.abs(qty) === 1 ? '' : 's'} of ${found.product.name} at ${branch.name} (${before} -> ${before + qty}). Reason: ${reason}`;
+    // Shown to the manager on the Confirm card, in Somali.
+    summary = `${qty > 0 ? 'Ku dar' : 'Ka dhim'} ${Math.abs(qty)} xabbo oo ${found.product.name} ah, ${branch.name} (${before} -> ${before + qty}). Sababta: ${reason}`;
   } else if (action === 'set_price') {
     if (!can(p, 'manage_inventory')) return refuse(c, 'You do not have permission to change prices.');
     const price = Math.round(Number(args.price) * 100) / 100;
@@ -282,7 +311,7 @@ agent.post('/proposals', agentAuth, async (c) => {
     const found = await findProduct(db, text(args.product));
     if (!found.product) return refuse(c, found.candidates?.length ? `Several products match: ${JSON.stringify(found.candidates)}. Ask which one.` : 'No product matches that name or SKU.');
     stored = { productId: found.product.id, price };
-    summary = `Change the selling price of ${found.product.name} from ${money(found.product.selling_price).toFixed(2)} to ${price.toFixed(2)}.`;
+    summary = `Beddel qiimaha iibka ee ${found.product.name}: ${money(found.product.selling_price).toFixed(2)} -> ${price.toFixed(2)}.`;
   } else {
     return refuse(c, 'Unknown action. Only adjust_stock and set_price can be proposed.');
   }
@@ -310,9 +339,11 @@ agent.post('/actions/:id/execute', authMiddleware, async (c) => {
   if (!row) return c.json({ message: 'This suggestion was already handled or has expired. Ask the assistant again.' }, 409);
   const args = JSON.parse(row.args);
 
-  // Run it through the normal route with the user's own login, so permissions,
-  // branch rules, validation, audit and accounting are exactly the usual ones.
-  const headers = { 'Content-Type': 'application/json', Authorization: c.req.header('Authorization') || '' };
+  // Run it through the normal route as this user, so permissions, branch
+  // rules, validation, audit and accounting are exactly the usual ones. (The
+  // user's login may be a cookie, which a forwarded header would not carry.)
+  const headers = { 'Content-Type': 'application/json' };
+  const env = asUser(c.env, p);
   let res: Response;
   if (row.action === 'adjust_stock') {
     res = await inventory.fetch(new Request('http://internal/adjust', {
@@ -321,11 +352,11 @@ agent.post('/actions/:id/execute', authMiddleware, async (c) => {
         productId: args.productId, branchId: args.branchId, quantity: Math.abs(args.quantity),
         direction: args.quantity > 0 ? 'INCREASE' : 'DECREASE', notes: `AI assistant (confirmed): ${args.reason}`,
       }),
-    }), c.env as any);
+    }), env as any);
   } else if (row.action === 'set_price') {
     res = await products.fetch(new Request(`http://internal/${args.productId}`, {
       method: 'PATCH', headers, body: JSON.stringify({ sellingPrice: args.price }),
-    }), c.env as any);
+    }), env as any);
   } else {
     res = new Response(JSON.stringify({ message: 'Unknown action.' }), { status: 400 });
   }

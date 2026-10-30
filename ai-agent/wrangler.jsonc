@@ -9,14 +9,19 @@
   // ALHAYAT_API_URL below still supplies the /api/v1 path.
   "services": [{ "binding": "ALHAYAT_API", "service": "al-hayat-api" }],
   "vars": {
-    // The model, in one place. Cheapest Workers AI model with function calling
-    // that is reliable enough for tool use (see README.md for the comparison).
-    "AI_MODEL": "@cf/qwen/qwen3-30b-a3b-fp8",
+    // The model, in one place. Gemma 4 is trained on 140+ languages including
+    // Somali and supports tool calling (README.md: choice and alternatives).
+    "AI_MODEL": "@cf/google/gemma-4-26b-a4b-it",
     // Path to the backend API. The host is not used while the ALHAYAT_API
     // binding exists; without it, use the backend's public address.
     "ALHAYAT_API_URL": "https://al-hayat-api.internal/api/v1",
     // The staff app's address(es), comma-separated.
     "ALLOWED_ORIGINS": "https://al-hayat-erp.pages.dev"
+    // Optional, for heavier use (e.g. on Workers Paid); defaults in src/agent.ts:
+    // "AGENT_MAX_ROUNDS": "6",          model calls per question (2-12)
+    // "AGENT_MAX_HISTORY": "10",        earlier messages sent along (2-40)
+    // "AGENT_MAX_REPLY_TOKENS": "1000", reply length (200-4000)
+    // "AI_GATEWAY_ID": "al-hayat",      route model calls through AI Gateway (logs, caching, rate limits)
   }
   // Secret (never in this file): npx wrangler secret put AGENT_TOKEN_SECRET
 }

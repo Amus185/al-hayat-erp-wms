@@ -18,6 +18,14 @@ export type JwtPayload = {
   pwd_ver: number;        // password_version, carried in agent tokens
 };
 
+/** env key for requests the server makes as an already-authenticated user. */
+export const INTERNAL_AUTH = Symbol('internal-auth');
+
+/** env for an in-process request to the app as this user (see authMiddleware). */
+export function asUser(env: unknown, payload: JwtPayload) {
+  return { ...(env as object), [INTERNAL_AUTH]: payload };
+}
+
 /**
  * Kept for callers that used to clear the per-process user cache. There is no
  * cache: every request reads the user and session from the database, so a
@@ -84,6 +92,14 @@ export function payloadFrom(user: any, userId: string, sessionId: string): JwtPa
  * from the ERP tables, never from anything the client sends.
  */
 export const authMiddleware = async (c: Context<{ Bindings: Env }>, next: Next) => {
+  // A request the server makes on behalf of an already-authenticated user
+  // (the assistant's reads, a confirmed suggestion). Only server code can set
+  // a symbol-keyed env entry: requests, config and bindings cannot.
+  const internal = (c.env as any)?.[INTERNAL_AUTH] as JwtPayload | undefined;
+  if (internal) {
+    c.set('jwtPayload', internal);
+    return next();
+  }
   const bearer = /^bearer /i.test(c.req.header('Authorization') || '');
   const result = await authFor(poolOf(c)).api.getSession({ headers: c.req.raw.headers, returnHeaders: true });
   const found = result.response;

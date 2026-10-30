@@ -2,9 +2,13 @@
 // Alhayat backend, and repeat until it answers. No database access here: every
 // lookup is an HTTP call to /api/v1/agent with the user's short-lived agent
 // token, and changes can only be proposed (the user confirms them in the app).
+// It answers in Somali (somali.ts), only about Al-Hayat, and only with figures
+// the system returned.
+import { DATA_SOURCES } from '../../backend/src/services/agent-data';
+import { OFF_TOPIC_REPLY, SAY, systemPrompt, todayInSomaliland } from './somali';
 
 export interface AiBinding {
-  run(model: string, input: Record<string, unknown>): Promise<unknown>;
+  run(model: string, input: Record<string, unknown>, options?: Record<string, unknown>): Promise<unknown>;
 }
 
 export interface AgentEnv {
@@ -18,6 +22,12 @@ export interface AgentEnv {
    * through it (Workers cannot fetch another Worker's workers.dev address).
    */
   ALHAYAT_API?: { fetch: typeof fetch };
+  /** Optional limits (wrangler.jsonc vars); raise them on a paid plan. */
+  AGENT_MAX_ROUNDS?: string;
+  AGENT_MAX_HISTORY?: string;
+  AGENT_MAX_REPLY_TOKENS?: string;
+  /** Optional Cloudflare AI Gateway id: logs, caching and rate limits for model calls. */
+  AI_GATEWAY_ID?: string;
 }
 
 export interface ChatMessage {
@@ -38,20 +48,24 @@ export interface ChatResult {
   toolsUsed: string[];
 }
 
-// Cost limits.
-export const MAX_HISTORY = 8;          // messages sent to the model
+// Default limits, each overridable in wrangler.jsonc vars (see limitsOf).
+export const MAX_HISTORY = 10;         // messages sent to the model
 export const MAX_MESSAGE_CHARS = 2000; // per message
-export const MAX_REPLY_TOKENS = 600;
-export const MAX_ROUNDS = 4;           // model calls per question
-const MAX_TOOL_RESULT_CHARS = 4000;
+export const MAX_REPLY_TOKENS = 1000;  // Somali answers run longer than English ones
+export const MAX_ROUNDS = 6;           // model calls per question
+const MAX_TOOL_RESULT_CHARS = 8000;
 
-const SYSTEM_PROMPT = [
-  'You are the assistant of Al Hayat Furniture staff, inside their management system.',
-  'Use the tools for every fact about products, stock, sales and orders. Never guess numbers.',
-  'You cannot change data. For stock or price changes call a propose_ tool: the user then sees a Confirm button. Never say a change was made.',
-  'If a tool returns "error", explain it simply. If several products match, ask which one.',
-  'Be brief. Reply in the language of the user\'s last message.',
-].join(' ');
+const int = (v: unknown, def: number, min: number, max: number) => {
+  const n = Math.floor(Number(v));
+  return Number.isFinite(n) && n > 0 ? Math.min(max, Math.max(min, n)) : def;
+};
+export function limitsOf(env: Partial<AgentEnv>) {
+  return {
+    rounds: int(env.AGENT_MAX_ROUNDS, MAX_ROUNDS, 2, 12),
+    history: int(env.AGENT_MAX_HISTORY, MAX_HISTORY, 2, 40),
+    replyTokens: int(env.AGENT_MAX_REPLY_TOKENS, MAX_REPLY_TOKENS, 200, 4000),
+  };
+}
 
 type JsonSchema = Record<string, unknown>;
 const fn = (name: string, description: string, properties: JsonSchema = {}, required: string[] = []) => ({
@@ -59,6 +73,10 @@ const fn = (name: string, description: string, properties: JsonSchema = {}, requ
   function: { name, description, parameters: { type: 'object', properties, required } },
 });
 const str = (description: string) => ({ type: 'string', description });
+
+const SOURCE_LIST = Object.entries(DATA_SOURCES)
+  .map(([name, s]) => `${name}${s.path.includes(':id') ? '(id)' : ''}: ${s.about}${s.query.length ? ` [${s.query.join(', ')}]` : ''}`)
+  .join('\n');
 
 /** What the model may call. Read tools map 1:1 to /agent/tools/<name>. */
 export const TOOLS = [
@@ -72,6 +90,12 @@ export const TOOLS = [
     status: str('optional: DRAFT, CONFIRMED, INVOICED, PAID, DELIVERED or CANCELLED'),
     limit: { type: 'integer', description: '1 to 10, default 5' },
   }),
+  fn('get_data', `Read any part of the Al-Hayat ERP as the signed-in user, with the same permissions and branch as their screens. Sources ("(id)" needs a record id; filters in brackets):\n${SOURCE_LIST}`, {
+    source: { type: 'string', enum: Object.keys(DATA_SOURCES), description: 'which part of the ERP to read' },
+    id: str('the record id, for sources marked (id)'),
+    filters: { type: 'object', description: 'optional filters listed for the source, e.g. {"dateFrom":"2026-10-01","dateTo":"2026-10-31"}; dates as YYYY-MM-DD' },
+  }, ['source']),
+  fn('decline_off_topic', 'Call this when the question is not about Al-Hayat, its business or its ERP. The user then gets the standard reply.'),
   fn('propose_stock_adjustment', 'Propose adding (positive) or removing (negative) stock. Nothing changes until the user confirms.', {
     product: str('product name or SKU'),
     quantity: { type: 'integer', description: 'units to add (positive) or remove (negative)' },
@@ -84,7 +108,7 @@ export const TOOLS = [
   }, ['product', 'price']),
 ];
 
-const READ_TOOLS = new Set(['search_products', 'get_stock', 'get_low_stock', 'get_sales_summary', 'list_orders']);
+const READ_TOOLS = new Set(['search_products', 'get_stock', 'get_low_stock', 'get_sales_summary', 'list_orders', 'get_data']);
 const PROPOSE: Record<string, string> = { propose_stock_adjustment: 'adjust_stock', propose_price_change: 'set_price' };
 
 interface ToolCall { id: string; name: string; args: Record<string, unknown> }
@@ -112,15 +136,31 @@ export function readModelOutput(out: unknown): { text: string; calls: ToolCall[]
   return { text: stripThinking(text), calls };
 }
 
+/** Numbers of two or more digits in a text, normalised (12,450.00 -> 12450). */
+export function figuresIn(text: string): string[] {
+  return (text.match(/\d[\d,.]*\d/g) || [])
+    .map((n) => n.replace(/,/g, '').replace(/\.$/, ''))
+    .map((n) => (Number.isFinite(Number(n)) ? String(Number(n)) : n));
+}
+
+/** Figures in the reply that came from nowhere: not in any tool result, the conversation or today's date. */
+export function unsupportedFigures(reply: string, sources: string[]): string[] {
+  const known = new Set(sources.flatMap(figuresIn));
+  return figuresIn(reply).filter((n) => !known.has(n));
+}
+
+/** Whether the model's text is the off-topic reply (possibly quoted or with extra words). */
+const isOffTopicReply = (text: string) => text.replace(/["'“”]/g, '').includes(OFF_TOPIC_REPLY.replace(/["'“”]/g, '').slice(0, 40));
+
 /** Reasoning models may include their thinking; users only see the answer. */
 const stripThinking = (s: string) => s.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
 
 /** Keeps the last few messages, trimmed, starting with a user message. */
-export function trimHistory(messages: ChatMessage[]): ChatMessage[] {
+export function trimHistory(messages: ChatMessage[], max = MAX_HISTORY): ChatMessage[] {
   const clean = messages
     .filter((m) => (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string' && m.content.trim())
     .map((m) => ({ role: m.role, content: m.content.slice(0, MAX_MESSAGE_CHARS) }))
-    .slice(-MAX_HISTORY);
+    .slice(-max);
   while (clean.length && clean[0].role !== 'user') clean.shift();
   return clean;
 }
@@ -129,7 +169,7 @@ export async function runAgent(
   env: AgentEnv,
   agentToken: string,
   history: ChatMessage[],
-  opts: { cache?: (key: string, load: () => Promise<string>) => Promise<string>; fetchImpl?: typeof fetch } = {},
+  opts: { cache?: (key: string, load: () => Promise<string>) => Promise<string>; fetchImpl?: typeof fetch; now?: Date } = {},
 ): Promise<ChatResult> {
   const doFetch = opts.fetchImpl ?? (env.ALHAYAT_API ? env.ALHAYAT_API.fetch.bind(env.ALHAYAT_API) : fetch);
   const api = env.ALHAYAT_API_URL.replace(/\/$/, '');
@@ -145,21 +185,50 @@ export async function runAgent(
     return data;
   };
 
-  const messages: any[] = [{ role: 'system', content: SYSTEM_PROMPT }, ...trimHistory(history)];
+  const limits = limitsOf(env);
+  const { today, weekday } = todayInSomaliland(opts.now);
+  const conversation = trimHistory(history, limits.history);
+  const messages: any[] = [{ role: 'system', content: systemPrompt(today, weekday) }, ...conversation];
   const proposals: Proposal[] = [];
   const toolsUsed: string[] = [];
+  const toolResults: string[] = [];
   const seen = new Map<string, string>(); // the same lookup twice in one question runs once
+  const aiOptions = env.AI_GATEWAY_ID ? { gateway: { id: env.AI_GATEWAY_ID } } : undefined;
+  let nudged = false;
 
-  for (let round = 0; round < MAX_ROUNDS; round++) {
-    const finalRound = round === MAX_ROUNDS - 1;
-    const out = await env.AI.run(env.AI_MODEL, {
+  for (let round = 0; round < limits.rounds; round++) {
+    const finalRound = round === limits.rounds - 1;
+    const input = {
       messages,
       ...(finalRound ? {} : { tools: TOOLS }),
-      max_tokens: MAX_REPLY_TOKENS,
+      max_tokens: limits.replyTokens,
       temperature: 0.2,
-    });
+    };
+    const out = aiOptions ? await env.AI.run(env.AI_MODEL, input, aiOptions) : await env.AI.run(env.AI_MODEL, input);
     const { text, calls } = readModelOutput(out);
-    if (!calls.length) return { reply: text || 'Sorry, I could not answer that.', proposals, toolsUsed };
+
+    if (calls.some((c) => c.name === 'decline_off_topic') || (!calls.length && isOffTopicReply(text))) {
+      return { reply: OFF_TOPIC_REPLY, proposals, toolsUsed: [...toolsUsed, 'decline_off_topic'] };
+    }
+
+    if (!calls.length) {
+      if (!text) return { reply: SAY.noAnswer, proposals, toolsUsed };
+      // No figures without data: when nothing was looked up for this question,
+      // a number that is not in the conversation or today's date was made up.
+      // Ask once to look it up. (After a lookup the model may also state totals
+      // it calculated from the results, which this check could not tell apart.)
+      const invented = toolResults.length ? [] : unsupportedFigures(text, [...conversation.map((m) => m.content), today]);
+      if (invented.length) {
+        if (!nudged && !finalRound) {
+          nudged = true;
+          messages.push({ role: 'assistant', content: text });
+          messages.push({ role: 'system', content: `Your answer contains figures (${invented.slice(0, 5).join(', ')}) that no tool returned. Never state figures without data: call the right tool now, or say in Somali that you do not have the data.` });
+          continue;
+        }
+        return { reply: SAY.noData, proposals, toolsUsed };
+      }
+      return { reply: text, proposals, toolsUsed };
+    }
 
     messages.push({
       role: 'assistant',
@@ -185,10 +254,12 @@ export async function runAgent(
       } else {
         result = JSON.stringify({ error: `There is no tool called ${call.name}.` });
       }
-      messages.push({ role: 'tool', tool_call_id: call.id, name: call.name, content: result.slice(0, MAX_TOOL_RESULT_CHARS) });
+      result = result.slice(0, MAX_TOOL_RESULT_CHARS);
+      toolResults.push(result);
+      messages.push({ role: 'tool', tool_call_id: call.id, name: call.name, content: result });
     }
   }
-  return { reply: 'Sorry, that took too many steps. Please ask a more specific question.', proposals, toolsUsed };
+  return { reply: SAY.tooManySteps, proposals, toolsUsed };
 }
 
 export class AuthError extends Error {

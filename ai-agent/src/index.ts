@@ -5,6 +5,7 @@
 // Worker checks it, runs the model with tools, and returns { reply, proposals }.
 // It holds no API keys the browser could see, and no database access.
 import { AuthError, runAgent, type AgentEnv, type ChatMessage } from './agent';
+import { SAY } from './somali';
 
 export interface Env extends AgentEnv {
   /** Same value as AGENT_TOKEN_SECRET on the backend (wrangler secret put AGENT_TOKEN_SECRET). */
@@ -78,18 +79,18 @@ export default {
 
     const token = (request.headers.get('Authorization') || '').replace(/^Bearer /, '');
     const claims = await verifyAgentToken(token, env.AGENT_TOKEN_SECRET);
-    if (!claims) return json({ message: 'Invalid or expired assistant token.' }, 401);
+    if (!claims) return json({ message: SAY.signIn }, 401);
 
     const body = (await request.json().catch(() => null)) as { messages?: ChatMessage[] } | null;
-    if (!body || !Array.isArray(body.messages) || !body.messages.length) return json({ message: 'Send at least one message.' }, 400);
+    if (!body || !Array.isArray(body.messages) || !body.messages.length) return json({ message: SAY.badRequest }, 400);
 
     try {
       const result = await runAgent(env, token, body.messages, { cache: lookupCache(claims.sub) });
       return json(result);
     } catch (err) {
-      if (err instanceof AuthError) return json({ message: err.message }, 401);
+      if (err instanceof AuthError) return json({ message: SAY.signIn }, 401);
       console.error('assistant failed', err instanceof Error ? err.message : err);
-      return json({ message: 'The assistant is not available right now. Please try again.' }, 502);
+      return json({ message: SAY.unavailable }, 502);
     }
   },
 };

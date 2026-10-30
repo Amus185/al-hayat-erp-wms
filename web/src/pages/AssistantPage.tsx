@@ -6,7 +6,8 @@ import { AGENT_URL, askAssistant, confirmProposal, dismissProposal, type ChatMes
 type ProposalState = Proposal & { state: 'open' | 'busy' | 'done' | 'dismissed' | 'failed'; note?: string };
 type Entry = { role: 'user' | 'assistant'; content: string; proposals?: ProposalState[] };
 
-const EXAMPLES = ['Which products are low on stock?', 'Sales this week?', 'Show the last 5 orders', 'Add 20 units to Oslo Corner Sofa'];
+// Examples in Somali: managers use the assistant in Somali (any dialect or spelling works).
+const EXAMPLES = ['Alaabta kaydkeedu yaraaday waa kuwee?', 'Iibka toddobaadkan intee buu ahaa?', 'Yaa deyn nagu leh, intee le\'eg?', 'Faa\'iidada bishan maxay ahayd?', 'Xaashida dheelitirka i tus', 'Gaarsiimaha maanta xaaladdoodu waa sidee?'];
 
 /**
  * Chat with the business assistant. It answers from live data through
@@ -34,7 +35,7 @@ export function AssistantPage() {
       const res = await askAssistant(history);
       setEntries((cur) => [...cur, { role: 'assistant', content: res.reply, proposals: res.proposals.map((p) => ({ ...p, state: 'open' })) }]);
     } catch (err: any) {
-      setEntries((cur) => [...cur, { role: 'assistant', content: err?.message || 'Something went wrong. Please try again.' }]);
+      setEntries((cur) => [...cur, { role: 'assistant', content: err?.message || 'Wax qalad ah ayaa dhacay. Fadlan mar kale isku day.' }]);
     } finally {
       setBusy(false);
     }
@@ -49,17 +50,17 @@ export function AssistantPage() {
     setProposal(p.id, { state: 'busy' });
     try {
       await confirmProposal(p.id);
-      setProposal(p.id, { state: 'done', note: 'Done.' });
+      setProposal(p.id, { state: 'done', note: 'Waa la sameeyay.' });
       addToast('success', p.summary);
     } catch (err: any) {
-      setProposal(p.id, { state: 'failed', note: err?.message || 'The change could not be made.' });
+      setProposal(p.id, { state: 'failed', note: err?.message || 'Isbeddelka lama samayn karin.' });
     }
   };
 
   const dismiss = async (p: ProposalState) => {
     setProposal(p.id, { state: 'busy' });
     try { await dismissProposal(p.id); } catch { /* already handled or expired: nothing to undo */ }
-    setProposal(p.id, { state: 'dismissed', note: 'Not done.' });
+    setProposal(p.id, { state: 'dismissed', note: 'Lama samayn.' });
   };
 
   const onSubmit = (e: FormEvent) => { e.preventDefault(); send(input); };
@@ -79,15 +80,15 @@ export function AssistantPage() {
       <section className="module-header">
         <div className="module-header__icon"><Sparkles size={24} /></div>
         <div>
-          <p>Ask about products, stock, sales and orders. Changes always wait for your confirmation.</p>
-          <h2>Assistant</h2>
+          <p>Wax ka weydii iibka, kaydka, deymaha, gaarsiinta, iibsashada, xisaabaadka iyo qaybaha kale ee Al-Hayat. Isbeddel kasta wuxuu sugayaa ansixintaada.</p>
+          <h2>Kaaliyaha</h2>
         </div>
       </section>
 
       <div className="card" style={{ flex: 1, overflowY: 'auto', padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }} aria-live="polite">
         {entries.length === 0 && (
           <div style={{ margin: 'auto', textAlign: 'center', color: '#64748b', maxWidth: '520px' }}>
-            <p style={{ marginTop: 0 }}>Try one of these, in any language:</p>
+            <p style={{ marginTop: 0 }}>Isku day mid ka mid ah kuwan, ama si kasta oo aad doonto u qor:</p>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', justifyContent: 'center' }}>
               {EXAMPLES.map((ex) => (
                 <button key={ex} type="button" className="btn btn-secondary" onClick={() => send(ex)}>{ex}</button>
@@ -105,18 +106,18 @@ export function AssistantPage() {
               {e.content}
             </div>
             {e.proposals?.map((p) => (
-              <div key={p.id} role="group" aria-label="Suggested change" style={{ marginTop: '8px', border: '1px solid #fcd34d', background: '#fffbeb', borderRadius: '10px', padding: '10px 12px', fontSize: '13px' }}>
+              <div key={p.id} role="group" aria-label="Isbeddel la soo jeediyay" style={{ marginTop: '8px', border: '1px solid #fcd34d', background: '#fffbeb', borderRadius: '10px', padding: '10px 12px', fontSize: '13px' }}>
                 <div style={{ fontWeight: 600, marginBottom: '6px' }}>
-                  {p.state === 'done' ? 'Change made' : p.state === 'dismissed' ? 'Suggested change (not done)' : p.state === 'failed' ? 'Change not made' : 'Suggested change (not done yet)'}
+                  {p.state === 'done' ? 'Isbeddelka waa la sameeyay' : p.state === 'dismissed' ? 'Isbeddel la soo jeediyay (lama samayn)' : p.state === 'failed' ? 'Isbeddelka lama samayn' : 'Isbeddel la soo jeediyay (weli lama samayn)'}
                 </div>
                 <div>{p.summary}</div>
                 {p.state === 'open' || p.state === 'busy' ? (
                   <div style={{ display: 'flex', gap: '8px', marginTop: '10px' }}>
                     <button type="button" className="btn btn-primary" disabled={p.state === 'busy'} onClick={() => confirm(p)}>
-                      {p.state === 'busy' ? <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> : <Check size={14} />} Confirm
+                      {p.state === 'busy' ? <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> : <Check size={14} />} Ansixi
                     </button>
                     <button type="button" className="btn btn-secondary" disabled={p.state === 'busy'} onClick={() => dismiss(p)}>
-                      <X size={14} /> Don&apos;t do it
+                      <X size={14} /> Ha samayn
                     </button>
                   </div>
                 ) : (
@@ -128,24 +129,24 @@ export function AssistantPage() {
         ))}
         {busy && (
           <div style={{ alignSelf: 'flex-start', color: '#64748b', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> Looking it up…
+            <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> Waan raadinayaa…
           </div>
         )}
         <div ref={endRef} />
       </div>
 
       <form onSubmit={onSubmit} style={{ display: 'flex', gap: '8px', marginTop: '12px' }}>
-        <label htmlFor="assistant-input" className="sr-only" style={{ position: 'absolute', left: '-9999px' }}>Message</label>
+        <label htmlFor="assistant-input" className="sr-only" style={{ position: 'absolute', left: '-9999px' }}>Fariin</label>
         <input
           id="assistant-input"
           value={input}
           onChange={(e) => setInput(e.target.value)}
           maxLength={2000}
-          placeholder="Ask about stock, sales, orders…"
+          placeholder="Wax weydii: iib, kayd, deyn, xisaab…"
           autoComplete="off"
           style={{ flex: 1, padding: '10px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '14px' }}
         />
-        <button type="submit" className="btn btn-primary" disabled={busy || !input.trim()}><Send size={16} /> Send</button>
+        <button type="submit" className="btn btn-primary" disabled={busy || !input.trim()}><Send size={16} /> Dir</button>
       </form>
     </div>
   );
