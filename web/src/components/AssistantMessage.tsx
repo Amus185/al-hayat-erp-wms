@@ -53,7 +53,11 @@ export function parseBlocks(text: string): Block[] {
       continue;
     }
 
-    const para: string[] = [];
+    // A paragraph always takes its first line, so every pass moves forward: a
+    // line nothing else claimed (e.g. a table row whose separator has not
+    // streamed in yet) must not be looked at again forever.
+    const para: string[] = [line.trim()];
+    i++;
     while (i < lines.length && lines[i].trim() && !HEADING.test(lines[i]) && !BULLET.test(lines[i]) && !NUMBERED.test(lines[i]) && !TABLE_ROW.test(lines[i])) {
       para.push(lines[i].trim());
       i++;
