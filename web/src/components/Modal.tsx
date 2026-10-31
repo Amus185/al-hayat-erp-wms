@@ -1,5 +1,12 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { X } from 'lucide-react';
+import { createPortal } from 'react-dom';
+
+// Pop-ups are drawn straight into <body>, not where they are used: a parent
+// with a transform (e.g. a .card lifting on hover) or overflow: hidden would
+// otherwise trap and clip the fixed overlay, and moving the mouse over it
+// would make it jump and flicker.
+const toBody = (node: ReactNode) => (typeof document === 'undefined' ? node : createPortal(node, document.body));
 
 const activeModalStack: string[] = [];
 const stackListeners = new Set<() => void>();
@@ -131,7 +138,7 @@ export function Modal(props: ModalProps) {
 
   if (!isModalOpen) return null;
 
-  return (
+  return toBody(
     <div
       className="modal-backdrop"
       id={`${id}-backdrop`}
@@ -189,7 +196,7 @@ export function SlideOver({
 
   if (!isOpen) return null;
 
-  return (
+  return toBody(
     <div
       className="slide-over-backdrop"
       id={`${id}-backdrop`}
