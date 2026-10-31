@@ -8,7 +8,7 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { Env, uuidv4 } from '../db';
 import { getR2Config, publicUrl } from '../services/r2';
 import {
-  availabilityOf, getSettings, loadImages, reserveStockStmt, sellableAfterBuffer, sellableUnits, stockRequirements, toPublicProduct,
+  availabilityOf, getSettings, loadImages, reserveStockStmt, sellableAfterBuffer, stockRequirements, takeWebQuantityStmt, toPublicProduct, webUnits,
   webOrderStage, type PublicImage, type StorefrontSettings,
 } from '../services/storefront';
 
@@ -107,7 +107,7 @@ storefront.get('/products', async (c) => {
   const rows = (results || []) as any[];
   const ids = rows.map((r) => r.id as string);
   const settings = await getSettings(c.env.DB);
-  const [units, images] = await Promise.all([sellableUnits(c.env.DB, ids, settings.locationId), loadImages(c.env.DB, ids)]);
+  const [units, images] = await Promise.all([webUnits(c.env.DB, ids, settings), loadImages(c.env.DB, ids)]);
 
   cacheable(c);
   return c.json({
@@ -123,7 +123,7 @@ storefront.get('/products/:slug', async (c) => {
   ).bind(slug).first() as any;
   if (!row) return c.json({ message: 'Product not found' }, 404);
   const settings = await getSettings(c.env.DB);
-  const [units, images] = await Promise.all([sellableUnits(c.env.DB, [row.id], settings.locationId), loadImages(c.env.DB, [row.id])]);
+  const [units, images] = await Promise.all([webUnits(c.env.DB, [row.id], settings), loadImages(c.env.DB, [row.id])]);
   cacheable(c);
   return c.json(publicProduct(row, images.get(row.id) || [], units.get(row.id) ?? 0, settings));
 });
@@ -198,7 +198,7 @@ storefront.post('/requests', async (c) => {
   for (const slug of slugs) {
     if (!products.has(slug)) return c.json({ message: 'One of the items is no longer available. Please refresh and try again.' }, 409);
   }
-  const units = await sellableUnits(db, Array.from(products.values()).map((p) => p.id), settings.locationId);
+  const units = await webUnits(db, Array.from(products.values()).map((p) => p.id), settings);
   for (const [slug, qty] of wanted) {
     const p = products.get(slug);
     if (qty > sellableAfterBuffer(units.get(p.id) ?? 0, settings)) {
@@ -213,9 +213,14 @@ storefront.post('/requests', async (c) => {
   for (const [slug, qty] of wanted) {
     const p = products.get(slug);
     total += Number(p.selling_price) * qty;
-    lineStmts.push(db.prepare(
-      'INSERT INTO storefront_request_lines (id, request_id, product_id, product_name, quantity, unit_price) VALUES (?, ?, ?, ?, ?, ?)',
-    ).bind(uuidv4(), requestId, p.id, p.name, qty, Number(p.selling_price)));
+    // Take the units from the product's online quantity first (this locks the
+    // product row), then note on the line whether it took any, so a cancel
+    // gives back exactly what was taken.
+    lineStmts.push(takeWebQuantityStmt(db, { productId: p.id, quantity: qty, productName: p.name }));
+    lineStmts.push(db.prepare(`
+      INSERT INTO storefront_request_lines (id, request_id, product_id, product_name, quantity, unit_price, web_quantity_taken)
+      SELECT ?, ?, ?, ?, ?, ?, CASE WHEN web_quantity IS NULL THEN 0 ELSE 1 END FROM products WHERE id = ?
+    `).bind(uuidv4(), requestId, p.id, p.name, qty, Number(p.selling_price), p.id));
   }
   // Hold the stock in the same transaction: if another request took the last
   // units a moment ago, a reservation affects no row and nothing is saved.

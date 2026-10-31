@@ -808,6 +808,9 @@ export async function ensureStorefrontSchema(pool: Pool) {
       -- requests always use selling_price.
       ALTER TABLE products ADD COLUMN IF NOT EXISTS compare_at_price DOUBLE PRECISION;
       ALTER TABLE products ADD COLUMN IF NOT EXISTS is_featured INTEGER NOT NULL DEFAULT 0;
+      -- Units still for sale online (NULL = no limit: all stock at the web branch).
+      -- Each online order lowers it; a cancelled online order puts it back.
+      ALTER TABLE products ADD COLUMN IF NOT EXISTS web_quantity INTEGER;
       -- First time the product was published; drives "New arrivals".
       ALTER TABLE products ADD COLUMN IF NOT EXISTS published_at TIMESTAMP WITH TIME ZONE;
       -- Optional category photo for the website (R2 object key).
@@ -859,6 +862,8 @@ export async function ensureStorefrontSchema(pool: Pool) {
         quantity INTEGER NOT NULL,
         unit_price DOUBLE PRECISION NOT NULL
       );
+      -- 1 while the line holds units from the product's online quantity (given back on cancel).
+      ALTER TABLE storefront_request_lines ADD COLUMN IF NOT EXISTS web_quantity_taken INTEGER NOT NULL DEFAULT 0;
 
       CREATE TABLE IF NOT EXISTS storefront_request_log (
         id TEXT PRIMARY KEY,

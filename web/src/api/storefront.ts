@@ -24,6 +24,11 @@ export interface ProductWeb {
   /** "Was" price shown crossed out on the website; display only. */
   compareAtPrice: number | null;
   isFeatured: boolean;
+  /** Units still for sale online; null = all stock at the web branch. */
+  webQuantity: number | null;
+  /** The branch the shop sells from, and this product's stock there (after the safety buffer). */
+  sellsFrom: string | null;
+  stockAtWebBranch: number;
   images: WebImage[];
 }
 
@@ -84,7 +89,7 @@ export const getProductWeb = (id: string) => apiGet<ProductWeb>(`${base}/product
 
 export const saveProductWeb = (
   id: string,
-  body: { isPublished?: boolean; slug?: string; webDescription?: string; compareAtPrice?: number | null; isFeatured?: boolean },
+  body: { isPublished?: boolean; slug?: string; webDescription?: string; compareAtPrice?: number | null; isFeatured?: boolean; webQuantity?: number | null },
 ) =>
   apiPatch<ProductWeb>(`${base}/products/${id}`, body);
 
@@ -181,6 +186,8 @@ export interface StoreProduct {
   /** Units the shop can sell now: on hand - reserved - safety buffer, at the web branch. */
   webUnits: number;
   availability: 'IN_STOCK' | 'LOW' | 'OUT';
+  /** Units still for sale online; null = no limit. */
+  webQuantity: number | null;
 }
 
 export const getStoreOverview = () => apiGet<StoreOverview>(`${base}/overview`);

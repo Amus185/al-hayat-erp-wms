@@ -174,6 +174,60 @@ export function releaseReservationsStmt(db: any, by: { requestId: string } | { o
   `).bind(reason, 'requestId' in by ? by.requestId : by.orderId);
 }
 
+// ── Online quantity (units put on the shop per product) ──────────────────────
+
+/**
+ * Units the website may sell, before the safety buffer, with each product's
+ * online quantity applied: min(stock at the web branch, online quantity). The
+ * buffer is added to the limit so that "stock - buffer" never goes past it.
+ */
+export async function webUnits(db: any, productIds: string[], s: StorefrontSettings): Promise<Map<string, number>> {
+  const units = await sellableUnits(db, productIds, s.locationId);
+  if (!productIds.length) return units;
+  const ph = productIds.map(() => '?').join(', ');
+  const { results } = await db.prepare(
+    `SELECT id, web_quantity FROM products WHERE id IN (${ph}) AND web_quantity IS NOT NULL`,
+  ).bind(...productIds).all();
+  for (const r of (results || []) as any[]) {
+    units.set(r.id, Math.min(units.get(r.id) ?? 0, Math.max(0, Number(r.web_quantity)) + s.safetyBuffer));
+  }
+  return units;
+}
+
+/**
+ * Takes an order's units from the product's online quantity, inside the order's
+ * transaction. Products without a limit are unaffected; a limit that is no
+ * longer enough affects no row, which rolls the order back (409).
+ */
+export function takeWebQuantityStmt(db: any, r: { productId: string; quantity: number; productName: string }) {
+  return db.prepare(`
+    UPDATE products SET web_quantity = CASE WHEN web_quantity IS NULL THEN NULL ELSE web_quantity - ? END
+    WHERE id = ? AND (web_quantity IS NULL OR web_quantity >= ?)
+  `).bind(r.quantity, r.productId, r.quantity)
+    .mustAffect(`Sorry, "${r.productName}" is not available in that quantity.`);
+}
+
+/**
+ * Gives a cancelled online order's units back to the products' online
+ * quantity (only lines that took from one, and only once).
+ */
+export function returnWebQuantityStmt(db: any, by: { requestId: string } | { orderId: string }) {
+  const match = 'requestId' in by
+    ? 'request_id = ?'
+    : 'request_id IN (SELECT id FROM storefront_requests WHERE converted_order_id = ?)';
+  return db.prepare(`
+    WITH given AS (
+      UPDATE storefront_request_lines SET web_quantity_taken = 0
+      WHERE web_quantity_taken = 1 AND ${match}
+      RETURNING product_id, quantity
+    ), totals AS (
+      SELECT product_id, SUM(quantity) AS qty FROM given GROUP BY product_id
+    )
+    UPDATE products p SET web_quantity = p.web_quantity + totals.qty
+    FROM totals WHERE p.id = totals.product_id AND p.web_quantity IS NOT NULL
+  `).bind('requestId' in by ? by.requestId : by.orderId);
+}
+
 export function availabilityOf(units: number, s: StorefrontSettings): Availability {
   const sellable = units - s.safetyBuffer;
   if (sellable <= 0) return 'OUT';

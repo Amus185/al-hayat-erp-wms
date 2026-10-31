@@ -9,7 +9,7 @@ import {
   ALLOWED_IMAGE_TYPES, MAX_IMAGE_BYTES, deleteObject, getR2Config, headObject, presignPut, publicUrl,
 } from '../services/r2';
 import {
-  SLUG_PATTERN, availabilityOf, getSettings, releaseReservationsStmt, sellableAfterBuffer, sellableUnits, uniqueSlug, webOrderStage,
+  SLUG_PATTERN, availabilityOf, getSettings, releaseReservationsStmt, returnWebQuantityStmt, sellableAfterBuffer, sellableUnits, uniqueSlug, webOrderStage, webUnits,
 } from '../services/storefront';
 
 export { webOrderStage };
@@ -78,7 +78,7 @@ admin.get('/overview', async (c) => {
     `SELECT id, name FROM products WHERE is_published = 1 AND COALESCE(is_active, 1) = 1 AND slug IS NOT NULL ORDER BY name`,
   ).all();
   const list = (published || []) as any[];
-  const units = await sellableUnits(db, list.map((r) => r.id), settings.locationId);
+  const units = await webUnits(db, list.map((r) => r.id), settings);
   const low = list
     .map((r) => ({ id: r.id, name: r.name, raw: units.get(r.id) ?? 0 }))
     .filter((r) => availabilityOf(r.raw, settings) !== 'IN_STOCK')
@@ -104,7 +104,7 @@ admin.get('/products', requirePermissions(['manage_inventory']), async (c) => {
   const db = c.env.DB;
   const q = (c.req.query('search') || '').trim().slice(0, 80);
   const { results } = await db.prepare(`
-    SELECT p.id, p.name, p.sku, p.selling_price, p.compare_at_price, p.is_published, p.is_featured, p.slug,
+    SELECT p.id, p.name, p.sku, p.selling_price, p.compare_at_price, p.is_published, p.is_featured, p.slug, p.web_quantity,
            COALESCE(cat.name, '') AS category,
            (SELECT COUNT(*) FROM product_images pi WHERE pi.product_id = p.id)::int AS photo_count,
            (SELECT pi.object_key FROM product_images pi WHERE pi.product_id = p.id ORDER BY pi.is_primary DESC, pi.sort_order ASC LIMIT 1) AS photo_key
@@ -114,7 +114,7 @@ admin.get('/products', requirePermissions(['manage_inventory']), async (c) => {
   `).bind(q, `%${q}%`, `%${q}%`).all();
   const rows = (results || []) as any[];
   const settings = await getSettings(db);
-  const units = await sellableUnits(db, rows.map((r) => r.id), settings.locationId);
+  const units = await webUnits(db, rows.map((r) => r.id), settings);
   const cfg = getR2Config();
   return c.json(rows.map((r) => {
     const sellable = sellableAfterBuffer(units.get(r.id) ?? 0, settings);
@@ -124,6 +124,7 @@ admin.get('/products', requirePermissions(['manage_inventory']), async (c) => {
       isPublished: Number(r.is_published) === 1, isFeatured: Number(r.is_featured) === 1, slug: r.slug ?? null,
       photoCount: Number(r.photo_count), photoUrl: cfg && r.photo_key ? publicUrl(cfg, r.photo_key) : null,
       webUnits: sellable, availability: availabilityOf(units.get(r.id) ?? 0, settings),
+      webQuantity: r.web_quantity == null ? null : Number(r.web_quantity),
     };
   }));
 });
@@ -131,7 +132,7 @@ admin.get('/products', requirePermissions(['manage_inventory']), async (c) => {
 // ── Product web fields and photos (manage_inventory) ────────────────────────
 
 async function loadProduct(c: any, id: string) {
-  return c.env.DB.prepare('SELECT id, name, selling_price, compare_at_price, is_featured, COALESCE(is_active, 1) AS is_active, is_published, slug, web_description FROM products WHERE id = ?').bind(id).first();
+  return c.env.DB.prepare('SELECT id, name, selling_price, compare_at_price, is_featured, COALESCE(is_active, 1) AS is_active, is_published, slug, web_description, web_quantity FROM products WHERE id = ?').bind(id).first();
 }
 
 async function imagesOf(c: any, productId: string) {
@@ -181,8 +182,20 @@ const productWebView = async (c: any, p: any) => ({
   sellingPrice: Number(p.selling_price),
   compareAtPrice: p.compare_at_price == null ? null : Number(p.compare_at_price),
   isFeatured: Number(p.is_featured) === 1,
+  webQuantity: p.web_quantity == null ? null : Number(p.web_quantity),
+  ...(await webStockOf(c, p.id)),
   images: await imagesOf(c, p.id),
 });
+
+/** Where the shop sells from and how much of this product is there (after the safety buffer). */
+async function webStockOf(c: any, productId: string) {
+  const settings = await getSettings(c.env.DB);
+  const units = await sellableUnits(c.env.DB, [productId], settings.locationId);
+  const branch = settings.locationId
+    ? await c.env.DB.prepare('SELECT name FROM branches WHERE id = ?').bind(settings.locationId).first() as any
+    : null;
+  return { sellsFrom: branch?.name ?? null, stockAtWebBranch: sellableAfterBuffer(units.get(productId) ?? 0, settings) };
+}
 
 admin.get('/products/:id', requirePermissions(['manage_inventory']), async (c) => {
   const p = await loadProduct(c, param(c, 'id')) as any;
@@ -229,15 +242,27 @@ admin.patch('/products/:id', requirePermissions(['manage_inventory']), async (c)
   }
   const featured = body.isFeatured === undefined ? Number(p.is_featured) === 1 : Boolean(body.isFeatured);
 
+  // Units for sale online: empty = all stock at the web branch; a number = at most that many.
+  let webQuantity: number | null = p.web_quantity == null ? null : Number(p.web_quantity);
+  if (body.webQuantity !== undefined) {
+    if (body.webQuantity === null || body.webQuantity === '') {
+      webQuantity = null;
+    } else {
+      const n = Number(body.webQuantity);
+      if (!Number.isInteger(n) || n < 0 || n > 1_000_000) return c.json({ message: 'Units for sale online must be a whole number, 0 or more.' }, 400);
+      webQuantity = n;
+    }
+  }
+
   await c.env.DB.prepare(`
-    UPDATE products SET is_published = ?, slug = ?, web_description = ?, compare_at_price = ?, is_featured = ?,
+    UPDATE products SET is_published = ?, slug = ?, web_description = ?, compare_at_price = ?, is_featured = ?, web_quantity = ?,
            published_at = CASE WHEN ? = 1 THEN COALESCE(published_at, CURRENT_TIMESTAMP) ELSE published_at END,
            updated_at = CURRENT_TIMESTAMP
     WHERE id = ?
-  `).bind(publish ? 1 : 0, slug, description, compareAt, featured ? 1 : 0, publish ? 1 : 0, id).run();
+  `).bind(publish ? 1 : 0, slug, description, compareAt, featured ? 1 : 0, webQuantity, publish ? 1 : 0, id).run();
   await logAudit(c, publish ? 'PRODUCT_PUBLISH' : 'PRODUCT_UNPUBLISH', 'products', id,
-    { isPublished: Number(p.is_published) === 1, compareAtPrice: p.compare_at_price ?? null, isFeatured: Number(p.is_featured) === 1 },
-    { isPublished: publish, slug, compareAtPrice: compareAt, isFeatured: featured });
+    { isPublished: Number(p.is_published) === 1, compareAtPrice: p.compare_at_price ?? null, isFeatured: Number(p.is_featured) === 1, webQuantity: p.web_quantity ?? null },
+    { isPublished: publish, slug, compareAtPrice: compareAt, isFeatured: featured, webQuantity });
   return c.json(await productWebView(c, await loadProduct(c, id)));
 });
 
@@ -400,6 +425,7 @@ admin.post('/requests/:id/cancel', requirePermissions(['manage_sales']), async (
       WHERE id = ? AND status = 'NEW'
     `).bind(userId, param(c, 'id')).mustAffect('Only new requests can be cancelled.'),
     releaseReservationsStmt(db, { requestId: param(c, 'id') }, 'Request cancelled'),
+    returnWebQuantityStmt(db, { requestId: param(c, 'id') }),
   ]);
   await logAudit(c, 'STOREFRONT_REQUEST_CANCEL', 'storefront_requests', param(c, 'id'));
   return c.json({ success: true });

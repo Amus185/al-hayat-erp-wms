@@ -164,3 +164,36 @@ test('products: every active product with its shop state, photos and web stock',
   const warehouse = await t.createUser({ branchId: HQ, roleId: 'role-sales-rep', role: 'sales_rep' });
   assert.equal((await t.api('GET', '/storefront-admin/products', undefined, warehouse.token)).status, 403);
 });
+
+test('online quantity: sell only N online; orders lower it, a cancel gives it back, 0 shows sold out', async () => {
+  const p = await publishedProduct(10, 300);
+  const row = async () => (await t.api('GET', '/storefront-admin/products')).body.find((r: any) => r.id === p.id);
+  const set = (webQuantity: unknown) => t.api('PATCH', `/storefront-admin/products/${p.id}`, { webQuantity });
+
+  assert.equal((await set(-1)).status, 400);
+  assert.equal((await set(2.5)).status, 400);
+  const saved = await set(5);
+  assert.equal(saved.status, 200, JSON.stringify(saved.body));
+  assert.deepEqual([saved.body.webQuantity, saved.body.stockAtWebBranch, typeof saved.body.sellsFrom], [5, 10, 'string']);
+  assert.deepEqual([(await row()).webUnits, (await row()).webQuantity], [5, 5], '10 in stock, 5 for sale online');
+
+  const first = await order(p.slug, 3, '+252 63 555 0001');
+  assert.equal(first.status, 201, JSON.stringify(first.body));
+  assert.equal((await row()).webQuantity, 2);
+  assert.equal((await order(p.slug, 3, '+252 63 555 0002')).status, 409, 'only 2 left online although 7 are in stock');
+  assert.equal((await order(p.slug, 2, '+252 63 555 0003')).status, 201);
+  const out = await row();
+  assert.deepEqual([out.webQuantity, out.webUnits, out.availability], [0, 0, 'OUT']);
+  assert.equal((await pub('GET', `/storefront/products/${p.slug}`)).body.availability, 'OUT', 'the shop shows sold out');
+
+  // Cancelling the first order gives its 3 back, once.
+  const reqId = (await t.q('SELECT id FROM storefront_requests WHERE request_number = $1', [first.body.requestNumber]))[0].id;
+  assert.equal((await t.api('POST', `/storefront-admin/requests/${reqId}/cancel`)).status, 200);
+  assert.equal((await row()).webQuantity, 3);
+  assert.notEqual((await t.api('POST', `/storefront-admin/requests/${reqId}/cancel`)).status, 200);
+  assert.equal((await row()).webQuantity, 3);
+
+  // Clearing the limit sells all free stock again: 10 on hand - 2 still reserved.
+  assert.equal((await set(null)).status, 200);
+  assert.deepEqual([(await row()).webQuantity, (await row()).webUnits], [null, 8]);
+});

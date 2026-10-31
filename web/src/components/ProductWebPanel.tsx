@@ -26,6 +26,7 @@ export function ProductWebPanel({ product, onClose, onChanged }: Props) {
   const [description, setDescription] = useState('');
   const [wasPrice, setWasPrice] = useState('');
   const [featured, setFeatured] = useState(false);
+  const [webQty, setWebQty] = useState('');
   const fileInput = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -41,6 +42,7 @@ export function ProductWebPanel({ product, onClose, onChanged }: Props) {
         setDescription(w.webDescription ?? '');
         setWasPrice(w.compareAtPrice == null ? '' : String(w.compareAtPrice));
         setFeatured(w.isFeatured);
+        setWebQty(w.webQuantity == null ? '' : String(w.webQuantity));
       })
       .catch((err) => { if (!cancelled) addToast('error', err?.message || 'Could not load website details'); })
       .finally(() => { if (!cancelled) setLoading(false); });
@@ -100,10 +102,12 @@ export function ProductWebPanel({ product, onClose, onChanged }: Props) {
         webDescription: description,
         compareAtPrice: wasPrice.trim() === '' ? null : Number(wasPrice),
         isFeatured: featured,
+        webQuantity: webQty.trim() === '' ? null : Number(webQty),
       });
       setWeb(saved);
       setSlug(saved.slug ?? '');
       setWasPrice(saved.compareAtPrice == null ? '' : String(saved.compareAtPrice));
+      setWebQty(saved.webQuantity == null ? '' : String(saved.webQuantity));
       onChanged(product.id, saved.isPublished);
       addToast('success', publish ? (web?.isPublished ? 'Website details saved' : 'Published to the website') : 'Removed from the website');
     }, 'Could not save');
@@ -187,6 +191,26 @@ export function ProductWebPanel({ product, onClose, onChanged }: Props) {
             rows={5}
             placeholder="Materials, dimensions, colours, care instructions…"
           />
+
+          <div>
+            <InputField
+              label="Units for sale online (optional)"
+              id="web-quantity"
+              type="number"
+              min={0}
+              step={1}
+              value={webQty}
+              onChange={setWebQty}
+              placeholder={`leave empty to sell all ${web.stockAtWebBranch} in stock`}
+            />
+            <p style={{ margin: '4px 0 0', fontSize: '11px', color: '#64748b' }}>
+              {web.sellsFrom
+                ? <>The shop sells from <strong>{web.sellsFrom}</strong>, which has <strong>{web.stockAtWebBranch}</strong> of this product. </>
+                : <>Choose the branch the shop sells from in Settings first. </>}
+              Enter a number to sell only that many online: each online order lowers it, a cancelled order puts it back, and at 0 the shop shows Sold out.
+              {web.sellsFrom && web.stockAtWebBranch === 0 && <span style={{ color: '#b45309' }}> This product has no stock at {web.sellsFrom}, so the shop shows it as Sold out: move stock there, or change the branch in Settings.</span>}
+            </p>
+          </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '12px', alignItems: 'end' }}>
             <div>

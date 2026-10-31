@@ -4,7 +4,7 @@ import { PgAdapter } from '../pg-client';
 import { authMiddleware, requirePermissions, isAdminUser } from '../middleware/auth';
 import { resolveBranchScope, resolveWriteBranch, branchSql, inScope, ScopeError, type BranchScope } from '../services/branch-scope';
 import { logAudit, createAuditLogStmt } from '../services/audit';
-import { releaseReservationsStmt } from '../services/storefront';
+import { releaseReservationsStmt, returnWebQuantityStmt } from '../services/storefront';
 import {
   prepareSaleJournalEntry,
   prepareCustomerPaymentJournalEntry,
@@ -2202,6 +2202,8 @@ sales.post('/orders/:id/cancel', requirePermissions(['manage_sales']), async (c)
 
   // Free any stock a website request still holds for this order.
   stmts.push(releaseReservationsStmt(c.env.DB, { orderId: String(orderId) }, 'Sales order cancelled'));
+  // ...and give its units back to the products' online quantity.
+  stmts.push(returnWebQuantityStmt(c.env.DB, { orderId: String(orderId) }));
 
   // Check if invoice exists
   const invoice = await c.env.DB.prepare('SELECT * FROM invoices WHERE sales_order_id = ?').bind(orderId).first() as any;

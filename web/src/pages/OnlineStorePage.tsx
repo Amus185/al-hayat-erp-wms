@@ -173,7 +173,11 @@ function StoreProducts() {
         <span>{money(p.price)}{p.compareAtPrice && p.compareAtPrice > p.price ? <span style={{ marginLeft: '6px', color: '#94a3b8', textDecoration: 'line-through', fontSize: '12px' }}>{money(p.compareAtPrice)}</span> : null}</span>
       ),
     },
-    { key: 'webUnits', label: 'Shop stock', render: stock },
+    {
+      key: 'webUnits', label: 'Shop stock', render: (p) => (
+        <div>{stock(p)}{p.webQuantity != null && <div style={{ fontSize: '11px', color: '#64748b', marginTop: '2px' }}>limit: {p.webQuantity} left to sell</div>}</div>
+      ),
+    },
     { key: 'photoCount', label: 'Photos', render: (p) => <span style={{ color: p.photoCount ? undefined : '#b45309' }}>{p.photoCount || 'None'}</span> },
     { key: 'isPublished', label: 'On the shop', render: (p) => <StatusBadge label={p.isPublished ? 'Published' : 'Hidden'} tone={p.isPublished ? 'green' : 'neutral'} /> },
     {
