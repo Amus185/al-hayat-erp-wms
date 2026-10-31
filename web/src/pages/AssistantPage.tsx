@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Check, Loader2, Send, Sparkles, X } from 'lucide-react';
 import { useToast } from '../contexts/ToastContext';
+import { AssistantMessage } from '../components/AssistantMessage';
 import { AGENT_URL, askAssistant, confirmProposal, dismissProposal, type ChatMessage, type Proposal } from '../api/assistant';
 
 type ProposalState = Proposal & { state: 'open' | 'busy' | 'done' | 'dismissed' | 'failed'; note?: string };
@@ -100,10 +101,11 @@ export function AssistantPage() {
         {entries.map((e, i) => (
           <div key={i} style={{ alignSelf: e.role === 'user' ? 'flex-end' : 'flex-start', maxWidth: '80%' }}>
             <div style={{
-              whiteSpace: 'pre-wrap', padding: '10px 14px', borderRadius: '12px', fontSize: '14px', lineHeight: 1.5,
-              background: e.role === 'user' ? 'var(--primary, #0b8f08)' : '#f1f5f9', color: e.role === 'user' ? '#fff' : '#0f172a',
+              whiteSpace: e.role === 'user' ? 'pre-wrap' : 'normal', padding: e.role === 'user' ? '10px 14px' : '12px 16px', borderRadius: '12px', fontSize: '14px', lineHeight: 1.55,
+              background: e.role === 'user' ? 'var(--primary, #0b8f08)' : '#f8fafc', color: e.role === 'user' ? '#fff' : '#0f172a',
+              border: e.role === 'user' ? 'none' : '1px solid #e2e8f0',
             }}>
-              {e.content}
+              {e.role === 'user' ? e.content : <AssistantMessage text={e.content} />}
             </div>
             {e.proposals?.map((p) => (
               <div key={p.id} role="group" aria-label="Isbeddel la soo jeediyay" style={{ marginTop: '8px', border: '1px solid #fcd34d', background: '#fffbeb', borderRadius: '10px', padding: '10px 12px', fontSize: '13px' }}>
