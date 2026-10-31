@@ -10,6 +10,7 @@ export interface StorefrontSettings {
   locationId: string | null;     // the branch the website sells from
   safetyBuffer: number;          // units held back from the website
   lowStockThreshold: number;     // at or below this many sellable units: LOW
+  showQuantities: boolean;       // show customers the sellable count, not only In stock / Few left
 }
 
 export async function getSettings(db: any): Promise<StorefrontSettings> {
@@ -23,6 +24,7 @@ export async function getSettings(db: any): Promise<StorefrontSettings> {
     locationId: map.get('location_id') || null,
     safetyBuffer: int('safety_buffer', 0),
     lowStockThreshold: int('low_stock_threshold', 3),
+    showQuantities: map.get('show_quantities') === '1',
   };
 }
 
@@ -219,7 +221,7 @@ export async function loadImages(db: any, productIds: string[]): Promise<Map<str
 export const NEW_FOR_DAYS = 30;
 
 /** The only shape the public API ever returns for a product. */
-export function toPublicProduct(row: any, images: PublicImage[], availability: Availability) {
+export function toPublicProduct(row: any, images: PublicImage[], availability: Availability, unitsAvailable?: number) {
   const price = Number(row.selling_price);
   const compareAt = row.compare_at_price == null ? null : Number(row.compare_at_price);
   return {
@@ -235,5 +237,24 @@ export function toPublicProduct(row: any, images: PublicImage[], availability: A
     category: row.category_id ? { id: row.category_id as string, name: (row.category_name ?? null) as string | null } : null,
     images,
     availability,
+    // Only when staff chose to show quantities (Online store settings).
+    ...(unitsAvailable !== undefined ? { unitsAvailable } : {}),
   };
 }
+
+/**
+ * Where a web order is, from the request through the sales order and its
+ * delivery: NEW → ORDERED → INVOICED → PAID → DELIVERY_SCHEDULED →
+ * OUT_FOR_DELIVERY → DELIVERED, or CANCELLED at any point.
+ */
+export function webOrderStage(r: { status: string; order_status?: string | null; delivery_status?: string | null }): string {
+  if (r.status === 'CANCELLED' || r.order_status === 'CANCELLED') return 'CANCELLED';
+  if (r.status !== 'CONVERTED') return 'NEW';
+  if (r.order_status === 'DELIVERED' || r.delivery_status === 'DELIVERED') return 'DELIVERED';
+  if (r.delivery_status === 'DISPATCHED') return 'OUT_FOR_DELIVERY';
+  if (r.delivery_status === 'PENDING' || r.delivery_status === 'SCHEDULED') return 'DELIVERY_SCHEDULED';
+  if (r.order_status === 'PAID') return 'PAID';
+  if (r.order_status === 'INVOICED') return 'INVOICED';
+  return 'ORDERED';
+}
+

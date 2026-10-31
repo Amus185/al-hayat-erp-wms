@@ -31,6 +31,7 @@ export async function Footer() {
           <h2 className="mb-4 font-sans text-xs font-semibold uppercase tracking-widest text-gold">Help</h2>
           <ul className="space-y-2.5">
             <li><Link href="/how-to-order" className={linkClass}>How to order</Link></li>
+            <li><Link href="/track" className={linkClass}>Track your order</Link></li>
             <li><Link href="/contact" className={linkClass}>Contact us</Link></li>
             <li><Link href="/saved" className={linkClass}>Saved items</Link></li>
             <li><Link href="/cart" className={linkClass}>Your cart</Link></li>

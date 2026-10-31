@@ -8,7 +8,6 @@ const isDev = process.env.NODE_ENV === "development";
 // In development the backend runs on port 3100 (docs/LOCAL_TESTING.md). In
 // production ERP_API_URL must be set; a missing value is reported, not guessed.
 const API = (process.env.ERP_API_URL || (isDev ? "http://localhost:3100/api/v1" : "")).replace(/\/$/, "");
-const REVALIDATE_SECONDS = 60;
 
 export class ErpError extends Error {
   constructor(
@@ -61,8 +60,8 @@ async function get<T>(path: string): Promise<T | null> {
   try {
     res = await fetch(url, {
       headers: { Accept: "application/json" },
-      // Short cache: prices and availability stay fresh without hitting the ERP on every view.
-      next: { revalidate: REVALIDATE_SECONDS },
+      // Never cached: a price, photo or stock change in the ERP shows on the next page view.
+      cache: "no-store",
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
   } catch (err) {
@@ -199,4 +198,42 @@ export async function submitRequest(payload: RequestPayload, clientIp: string): 
     status: expected ? res.status : 502,
     message: expected && body?.message ? body.message : "Something went wrong. Please try again or call us.",
   };
+}
+
+export type OrderStage = "NEW" | "ORDERED" | "INVOICED" | "PAID" | "DELIVERY_SCHEDULED" | "OUT_FOR_DELIVERY" | "DELIVERED" | "CANCELLED";
+
+export interface TrackedOrder {
+  requestNumber: string;
+  stage: OrderStage;
+  placedAt: string;
+  total: number;
+  items: { name: string; quantity: number; unitPrice: number }[];
+}
+
+export type TrackResult = { ok: true; order: TrackedOrder } | { ok: false; status: number; message: string };
+
+/** A customer's order status, by order number and the phone it was placed with. */
+export async function trackOrder(requestNumber: string, phone: string, clientIp: string): Promise<TrackResult> {
+  const key = process.env.STOREFRONT_API_KEY;
+  if (!key || !API) {
+    logFailure("STOREFRONT_API_KEY or ERP_API_URL is not set, so orders cannot be tracked.");
+    return { ok: false, status: 503, message: "Order tracking is not available yet. Please call us." };
+  }
+  let res: Response;
+  try {
+    res = await fetch(`${API}/storefront/track`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-storefront-key": key, "x-client-ip": clientIp },
+      body: JSON.stringify({ requestNumber, phone }),
+      cache: "no-store",
+      signal: AbortSignal.timeout(10000),
+    });
+  } catch {
+    return { ok: false, status: 503, message: "We could not reach the shop. Please try again in a moment." };
+  }
+  const body = (await res.json().catch(() => null)) as (TrackedOrder & { message?: string }) | null;
+  if (res.ok && body?.stage) return { ok: true, order: body };
+  const expected = [400, 404, 429, 503].includes(res.status);
+  if (!expected) logFailure(`POST ${API}/storefront/track returned HTTP ${res.status}`);
+  return { ok: false, status: expected ? res.status : 502, message: expected && body?.message ? body.message : "Something went wrong. Please try again or call us." };
 }

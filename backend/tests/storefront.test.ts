@@ -203,7 +203,7 @@ test('public catalog: only published, active products, and only whitelisted fiel
 
   const list = await pub('GET', '/storefront/products');
   assert.equal(list.status, 200);
-  assert.equal(list.headers.get('cache-control'), 'public, max-age=60');
+  assert.equal(list.headers.get('cache-control'), 'no-store'); // live: ERP changes show on the next request
   const slugs = list.body.items.map((i: any) => i.slug);
   assert.ok(slugs.includes(shown.slug));
   assert.equal(list.body.items.length, list.body.total);

@@ -31,7 +31,8 @@ const stageOf = (s: WebOrderStage | undefined) => STAGE[s ?? 'NEW'] ?? { label: 
 
 type Tab = 'NEW' | 'CONVERTED' | 'CANCELLED' | 'ALL';
 
-export function WebRequestsPage() {
+/** The web orders inbox. Embedded in the Online store page (its header and settings live there). */
+export function WebRequestsPage({ embedded = false }: { embedded?: boolean } = {}) {
   const { addToast } = useToast();
   const { isAdmin } = useAuth();
   const navigate = useNavigate();
@@ -128,16 +129,18 @@ export function WebRequestsPage() {
   ];
 
   return (
-    <div className="module-page">
-      <section className="module-header">
-        <div className="module-header__icon"><Globe size={24} /></div>
-        <div>
-          <p>Website</p>
-          <h2>Web orders</h2>
-        </div>
-      </section>
+    <div className={embedded ? undefined : 'module-page'} style={embedded ? { display: 'grid', gap: '16px' } : undefined}>
+      {!embedded && (
+        <section className="module-header">
+          <div className="module-header__icon"><Globe size={24} /></div>
+          <div>
+            <p>Website</p>
+            <h2>Web orders</h2>
+          </div>
+        </section>
+      )}
 
-      {isAdmin && <StorefrontSettingsCard />}
+      {isAdmin && !embedded && <StorefrontSettingsCard />}
 
       {blocked ? (
         <div className="card" style={{ padding: '20px', color: '#64748b' }}>{blocked}</div>
@@ -222,17 +225,18 @@ export function WebRequestsPage() {
 }
 
 /** Administrators choose which branch the website sells from, and the stock buffers. */
-function StorefrontSettingsCard() {
+export function StorefrontSettingsCard() {
   const { addToast } = useToast();
   const [settings, setSettings] = useState<StorefrontSettings | null>(null);
   const [locationId, setLocationId] = useState('');
   const [buffer, setBuffer] = useState('0');
   const [low, setLow] = useState('3');
+  const [showQty, setShowQty] = useState(false);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     getStorefrontSettings()
-      .then((s) => { setSettings(s); setLocationId(s.locationId ?? ''); setBuffer(String(s.safetyBuffer)); setLow(String(s.lowStockThreshold)); })
+      .then((s) => { setSettings(s); setLocationId(s.locationId ?? ''); setBuffer(String(s.safetyBuffer)); setLow(String(s.lowStockThreshold)); setShowQty(Boolean(s.showQuantities)); })
       .catch((err) => addToast('error', err?.message || 'Could not load website settings'));
   }, [addToast]);
 
@@ -241,7 +245,7 @@ function StorefrontSettingsCard() {
   const save = async () => {
     setSaving(true);
     try {
-      const body: { locationId?: string; safetyBuffer: number; lowStockThreshold: number } = { safetyBuffer: Number(buffer), lowStockThreshold: Number(low) };
+      const body: { locationId?: string; safetyBuffer: number; lowStockThreshold: number; showQuantities: boolean } = { safetyBuffer: Number(buffer), lowStockThreshold: Number(low), showQuantities: showQty };
       if (locationId) body.locationId = locationId;
       const saved = await saveStorefrontSettings(body);
       // keep the warnings in step with what was just saved
@@ -279,6 +283,10 @@ function StorefrontSettingsCard() {
         <InputField label="Safety buffer (units held back)" id="web-buffer" type="number" min={0} value={buffer} onChange={setBuffer} />
         <InputField label="Show “low stock” at or below" id="web-low" type="number" min={0} value={low} onChange={setLow} />
       </div>
+      <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '14px', cursor: 'pointer' }}>
+        <input type="checkbox" checked={showQty} onChange={(e) => setShowQty(e.target.checked)} />
+        Show customers the exact number in stock (otherwise only “In stock”, “Only a few left” or “Sold out”)
+      </label>
       <p style={{ margin: 0, fontSize: '12px', color: '#64748b' }}>
         The website shows stock of the chosen branch only, minus the safety buffer. Stock held in a warehouse must be transferred to this branch before it can be sold online.
       </p>

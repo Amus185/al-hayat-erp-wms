@@ -21,6 +21,8 @@ export interface Product {
   category: { id: string; name: string | null } | null;
   images: ProductImage[];
   availability: Availability;
+  /** Units for sale, only when the shop chose to show quantities. */
+  unitsAvailable?: number;
 }
 
 export interface ProductPage {

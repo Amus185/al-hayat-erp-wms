@@ -102,7 +102,10 @@ order is confirmed automatically, without the phone call.
 
 ## Phases
 
-**Phase 1: live and connected** (no business decisions needed)
+**Phase 1: live and connected** (no business decisions needed). Built: the
+ERP's Online Store section, live catalog, staff alerts, Track your order,
+the quantities setting, deploy configuration. Setup steps:
+`docs/DEPLOY_CLOUDFLARE.md` section 4.
 1. Configure R2 photo storage: bucket, public domain, CORS, backend secrets.
 2. Deploy the shop Worker, with a service binding to the backend.
 3. Real-time: no cache on product, cart and checkout; instant refresh on changes.

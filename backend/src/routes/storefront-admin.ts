@@ -8,7 +8,11 @@ import { logAudit } from '../services/audit';
 import {
   ALLOWED_IMAGE_TYPES, MAX_IMAGE_BYTES, deleteObject, getR2Config, headObject, presignPut, publicUrl,
 } from '../services/r2';
-import { SLUG_PATTERN, getSettings, releaseReservationsStmt, uniqueSlug } from '../services/storefront';
+import {
+  SLUG_PATTERN, availabilityOf, getSettings, releaseReservationsStmt, sellableAfterBuffer, sellableUnits, uniqueSlug, webOrderStage,
+} from '../services/storefront';
+
+export { webOrderStage };
 import sales from './sales';
 
 const admin = new Hono<{ Bindings: Env; Variables: { jwtPayload: any } }>();
@@ -43,6 +47,7 @@ admin.patch('/settings', requireAdmin, async (c) => {
       writes.push([key, String(n)]);
     }
   }
+  if (body.showQuantities !== undefined) writes.push(['show_quantities', body.showQuantities ? '1' : '0']);
   if (!writes.length) return c.json({ message: 'Nothing to update.' }, 400);
   const db = c.env.DB;
   await db.batch(writes.map(([k, v]) => db.prepare(`
@@ -51,6 +56,76 @@ admin.patch('/settings', requireAdmin, async (c) => {
   `).bind(k, v)));
   await logAudit(c, 'STOREFRONT_SETTINGS_UPDATE', 'storefront_settings', null, null, Object.fromEntries(writes));
   return c.json(await getSettings(db));
+});
+
+// ── Online store overview and products (the ERP's Online store section) ────
+
+/** Today's and open web orders, what is on the shop, and what is running low there. */
+admin.get('/overview', async (c) => {
+  const p = c.get('jwtPayload');
+  if (!p.permissions.includes('manage_sales') && !p.permissions.includes('manage_inventory')) return c.json({ message: 'Forbidden' }, 403);
+  const db = c.env.DB;
+  const settings = await getSettings(db);
+  const orders = await db.prepare(`
+    SELECT COUNT(*) FILTER (WHERE status = 'NEW')::int AS awaiting,
+           COUNT(*) FILTER (WHERE created_at >= date_trunc('day', CURRENT_TIMESTAMP))::int AS today,
+           COALESCE(SUM(total_amount) FILTER (WHERE created_at >= date_trunc('day', CURRENT_TIMESTAMP) AND status <> 'CANCELLED'), 0) AS today_value,
+           COUNT(*) FILTER (WHERE created_at >= date_trunc('month', CURRENT_TIMESTAMP))::int AS month,
+           COALESCE(SUM(total_amount) FILTER (WHERE created_at >= date_trunc('month', CURRENT_TIMESTAMP) AND status <> 'CANCELLED'), 0) AS month_value
+    FROM storefront_requests
+  `).first() as any;
+  const { results: published } = await db.prepare(
+    `SELECT id, name FROM products WHERE is_published = 1 AND COALESCE(is_active, 1) = 1 AND slug IS NOT NULL ORDER BY name`,
+  ).all();
+  const list = (published || []) as any[];
+  const units = await sellableUnits(db, list.map((r) => r.id), settings.locationId);
+  const low = list
+    .map((r) => ({ id: r.id, name: r.name, raw: units.get(r.id) ?? 0 }))
+    .filter((r) => availabilityOf(r.raw, settings) !== 'IN_STOCK')
+    .map((r) => ({ id: r.id, name: r.name, units: sellableAfterBuffer(r.raw, settings) }))
+    .sort((a, b) => a.units - b.units)
+    .slice(0, 20);
+  const branch = settings.locationId ? await db.prepare('SELECT name FROM branches WHERE id = ?').bind(settings.locationId).first() as any : null;
+  return c.json({
+    orders: {
+      awaiting: Number(orders?.awaiting || 0), today: Number(orders?.today || 0), todayValue: Number(orders?.today_value || 0),
+      month: Number(orders?.month || 0), monthValue: Number(orders?.month_value || 0),
+    },
+    publishedProducts: list.length,
+    lowOrOut: low,
+    sellsFrom: branch?.name ?? null,
+    imagesConfigured: Boolean(getR2Config()),
+    requestsConfigured: Boolean(process.env.STOREFRONT_API_KEY),
+  });
+});
+
+/** Every active product with its shop state: published, photos, price, sellable units at the web branch. */
+admin.get('/products', requirePermissions(['manage_inventory']), async (c) => {
+  const db = c.env.DB;
+  const q = (c.req.query('search') || '').trim().slice(0, 80);
+  const { results } = await db.prepare(`
+    SELECT p.id, p.name, p.sku, p.selling_price, p.compare_at_price, p.is_published, p.is_featured, p.slug,
+           COALESCE(cat.name, '') AS category,
+           (SELECT COUNT(*) FROM product_images pi WHERE pi.product_id = p.id)::int AS photo_count,
+           (SELECT pi.object_key FROM product_images pi WHERE pi.product_id = p.id ORDER BY pi.is_primary DESC, pi.sort_order ASC LIMIT 1) AS photo_key
+    FROM products p LEFT JOIN categories cat ON cat.id = p.category_id
+    WHERE COALESCE(p.is_active, 1) = 1 AND (? = '' OR p.name ILIKE ? OR p.sku ILIKE ?)
+    ORDER BY p.is_published DESC, p.name LIMIT 500
+  `).bind(q, `%${q}%`, `%${q}%`).all();
+  const rows = (results || []) as any[];
+  const settings = await getSettings(db);
+  const units = await sellableUnits(db, rows.map((r) => r.id), settings.locationId);
+  const cfg = getR2Config();
+  return c.json(rows.map((r) => {
+    const sellable = sellableAfterBuffer(units.get(r.id) ?? 0, settings);
+    return {
+      id: r.id, name: r.name, sku: r.sku, category: r.category || null,
+      price: Number(r.selling_price), compareAtPrice: r.compare_at_price == null ? null : Number(r.compare_at_price),
+      isPublished: Number(r.is_published) === 1, isFeatured: Number(r.is_featured) === 1, slug: r.slug ?? null,
+      photoCount: Number(r.photo_count), photoUrl: cfg && r.photo_key ? publicUrl(cfg, r.photo_key) : null,
+      webUnits: sellable, availability: availabilityOf(units.get(r.id) ?? 0, settings),
+    };
+  }));
 });
 
 // ── Product web fields and photos (manage_inventory) ────────────────────────
@@ -301,22 +376,6 @@ admin.get('/requests', requirePermissions(['manage_sales']), async (c) => {
   `).bind(status, status).all();
   return c.json((results || []).map((r: any) => ({ ...r, stage: webOrderStage(r) })));
 });
-
-/**
- * Where a web order is, from the request through the sales order and its
- * delivery: NEW → ORDERED → INVOICED → PAID → DELIVERY_SCHEDULED →
- * OUT_FOR_DELIVERY → DELIVERED, or CANCELLED at any point.
- */
-export function webOrderStage(r: { status: string; order_status?: string | null; delivery_status?: string | null }): string {
-  if (r.status === 'CANCELLED' || r.order_status === 'CANCELLED') return 'CANCELLED';
-  if (r.status !== 'CONVERTED') return 'NEW';
-  if (r.order_status === 'DELIVERED' || r.delivery_status === 'DELIVERED') return 'DELIVERED';
-  if (r.delivery_status === 'DISPATCHED') return 'OUT_FOR_DELIVERY';
-  if (r.delivery_status === 'PENDING' || r.delivery_status === 'SCHEDULED') return 'DELIVERY_SCHEDULED';
-  if (r.order_status === 'PAID') return 'PAID';
-  if (r.order_status === 'INVOICED') return 'INVOICED';
-  return 'ORDERED';
-}
 
 admin.get('/requests/:id', requirePermissions(['manage_sales']), async (c) => {
   const denied = await assertRequestsAccess(c);

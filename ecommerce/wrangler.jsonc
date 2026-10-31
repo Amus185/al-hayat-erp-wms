@@ -10,19 +10,12 @@
     "directory": ".open-next/assets",
     "binding": "ASSETS"
   },
-  "services": [
-    // OpenNext calls itself to revalidate cached pages; must match "name".
-    { "binding": "WORKER_SELF_REFERENCE", "service": "al-hayat-storefront" }
-  ],
-  "r2_buckets": [
-    // Next.js data cache. Create with: npx wrangler r2 bucket create al-hayat-storefront-cache
-    { "binding": "NEXT_INC_CACHE_R2_BUCKET", "bucket_name": "al-hayat-storefront-cache" }
-  ],
   // Resizes product photos for /_next/image (Cloudflare Images).
   "images": { "binding": "IMAGES" },
   "vars": {
     // The ERP backend Worker (backend/wrangler.jsonc), ending in /api/v1.
-    "ERP_API_URL": "https://al-hayat-api.YOUR-SUBDOMAIN.workers.dev/api/v1"
+    // The shop reads it live on every page: there is no cache to refresh.
+    "ERP_API_URL": "https://al-hayat-api.biggestfunofpes.workers.dev/api/v1"
   }
   // Secret (never in this file): npx wrangler secret put STOREFRONT_API_KEY
   // IMAGE_HOSTNAME and NEXT_PUBLIC_* are read at build time: put them in

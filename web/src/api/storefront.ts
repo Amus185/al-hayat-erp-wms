@@ -38,6 +38,7 @@ export interface StorefrontSettings {
   locationId: string | null;
   safetyBuffer: number;
   lowStockThreshold: number;
+  showQuantities: boolean;
   branches: { id: string; name: string }[];
   imagesConfigured: boolean;
   requestsConfigured: boolean;
@@ -141,7 +142,7 @@ export const removeCategoryPhoto = (categoryId: string) => apiDelete<{ imageUrl:
 
 export const getStorefrontSettings = () => apiGet<StorefrontSettings>(`${base}/settings`);
 
-export const saveStorefrontSettings = (body: { locationId?: string; safetyBuffer?: number; lowStockThreshold?: number }) =>
+export const saveStorefrontSettings = (body: { locationId?: string; safetyBuffer?: number; lowStockThreshold?: number; showQuantities?: boolean }) =>
   apiPatch<Omit<StorefrontSettings, 'branches' | 'imagesConfigured' | 'requestsConfigured'>>(`${base}/settings`, body);
 
 export const listWebRequests = (status?: RequestStatus) =>
@@ -153,3 +154,37 @@ export const convertWebRequest = (id: string) =>
   apiPost<{ orderId: string; orderNumber: string | null }>(`${base}/requests/${id}/convert`);
 
 export const cancelWebRequest = (id: string) => apiPost<{ success: boolean }>(`${base}/requests/${id}/cancel`);
+
+// ── Online store section ────────────────────────────────────────────────────
+
+export interface StoreOverview {
+  orders: { awaiting: number; today: number; todayValue: number; month: number; monthValue: number };
+  publishedProducts: number;
+  lowOrOut: { id: string; name: string; units: number }[];
+  sellsFrom: string | null;
+  imagesConfigured: boolean;
+  requestsConfigured: boolean;
+}
+
+export interface StoreProduct {
+  id: string;
+  name: string;
+  sku: string | null;
+  category: string | null;
+  price: number;
+  compareAtPrice: number | null;
+  isPublished: boolean;
+  isFeatured: boolean;
+  slug: string | null;
+  photoCount: number;
+  photoUrl: string | null;
+  /** Units the shop can sell now: on hand - reserved - safety buffer, at the web branch. */
+  webUnits: number;
+  availability: 'IN_STOCK' | 'LOW' | 'OUT';
+}
+
+export const getStoreOverview = () => apiGet<StoreOverview>(`${base}/overview`);
+export const listStoreProducts = (search?: string) => apiGet<StoreProduct[]>(`${base}/products`, search ? { search } : undefined);
+
+/** The public shop's address (VITE_SHOP_URL), for "Open the shop" links. */
+export const SHOP_URL = ((import.meta as any).env?.VITE_SHOP_URL as string | undefined)?.replace(/\/$/, '') || '';

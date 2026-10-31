@@ -864,6 +864,13 @@ export async function ensureStorefrontSchema(pool: Pool) {
       );
       CREATE INDEX IF NOT EXISTS idx_storefront_reservations_open ON storefront_reservations(request_id) WHERE released_at IS NULL;
       CREATE INDEX IF NOT EXISTS idx_storefront_request_log_phone ON storefront_request_log(phone, created_at);
+      -- Order-tracking lookups per IP, for throttling.
+      CREATE TABLE IF NOT EXISTS storefront_track_log (
+        id TEXT PRIMARY KEY,
+        ip TEXT,
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS idx_storefront_track_log_ip ON storefront_track_log(ip, created_at);
     `);
     await client.query('COMMIT');
   } catch (err) {

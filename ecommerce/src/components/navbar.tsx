@@ -56,6 +56,7 @@ export async function Navbar() {
   ];
   const help: MenuLink[] = [
     { href: "/how-to-order", label: "How to order" },
+    { href: "/track", label: "Track order" },
     { href: "/contact", label: "Contact" },
   ];
 

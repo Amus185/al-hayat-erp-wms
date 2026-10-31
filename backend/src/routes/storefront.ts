@@ -9,6 +9,7 @@ import { Env, uuidv4 } from '../db';
 import { getR2Config, publicUrl } from '../services/r2';
 import {
   availabilityOf, getSettings, loadImages, reserveStockStmt, sellableAfterBuffer, sellableUnits, stockRequirements, toPublicProduct,
+  webOrderStage, type PublicImage, type StorefrontSettings,
 } from '../services/storefront';
 
 const storefront = new Hono<{ Bindings: Env }>();
@@ -21,8 +22,10 @@ const MAX_QTY = 20;
 const MAX_PER_IP_PER_HOUR = 5;
 const MAX_PER_PHONE_PER_HOUR = 3;
 
+// Prices and stock must be current the moment staff change them: nothing is
+// cached on the way to the shop.
 function cacheable(c: any) {
-  c.header('Cache-Control', 'public, max-age=60');
+  c.header('Cache-Control', 'no-store');
 }
 
 // Categories that have something on sale. Each gets a picture: the photo staff
@@ -58,6 +61,9 @@ const SORTS: Record<string, string> = {
   price_asc: 'p.selling_price ASC, p.name ASC',
   price_desc: 'p.selling_price DESC, p.name ASC',
 };
+
+const publicProduct = (row: any, images: PublicImage[], units: number, settings: StorefrontSettings) =>
+  toPublicProduct(row, images, availabilityOf(units, settings), settings.showQuantities ? sellableAfterBuffer(units, settings) : undefined);
 
 storefront.get('/products', async (c) => {
   const page = Math.max(1, Math.floor(Number(c.req.query('page'))) || 1);
@@ -105,7 +111,7 @@ storefront.get('/products', async (c) => {
 
   cacheable(c);
   return c.json({
-    items: rows.map((r) => toPublicProduct(r, images.get(r.id) || [], availabilityOf(units.get(r.id) ?? 0, settings))),
+    items: rows.map((r) => publicProduct(r, images.get(r.id) || [], units.get(r.id) ?? 0, settings)),
     page, pageSize, total,
   });
 });
@@ -119,7 +125,7 @@ storefront.get('/products/:slug', async (c) => {
   const settings = await getSettings(c.env.DB);
   const [units, images] = await Promise.all([sellableUnits(c.env.DB, [row.id], settings.locationId), loadImages(c.env.DB, [row.id])]);
   cacheable(c);
-  return c.json(toPublicProduct(row, images.get(row.id) || [], availabilityOf(units.get(row.id) ?? 0, settings)));
+  return c.json(publicProduct(row, images.get(row.id) || [], units.get(row.id) ?? 0, settings));
 });
 
 // ── Order requests ──────────────────────────────────────────────────────────
@@ -227,8 +233,70 @@ storefront.post('/requests', async (c) => {
       clean(body.notes, 500) || null, Math.round(total * 100) / 100, ip),
     ...lineStmts,
     ...reserveStmts,
+    // Alert the staff who handle web orders: sales staff of the web branch and all-branch staff.
+    db.prepare(`
+      INSERT INTO notifications (id, user_id, title, message, type)
+      SELECT gen_random_uuid()::text, u.id, ?, ?, 'WEB_ORDER'
+      FROM users u
+      WHERE u.is_active = 1
+        AND EXISTS (SELECT 1 FROM user_roles ur JOIN role_permissions rp ON rp.role_id = ur.role_id
+                    JOIN permissions pm ON pm.id = rp.permission_id WHERE ur.user_id = u.id AND pm.code = 'manage_sales')
+        AND (u.branch_id IS NULL OR u.branch_id = ?
+             OR EXISTS (SELECT 1 FROM user_roles ur JOIN roles r ON r.id = ur.role_id WHERE ur.user_id = u.id AND r.code IN ('admin', 'accountant')))
+    `).bind(
+      `New online order ${requestNumber}`,
+      `${name}, ${phone}: ${wanted.size} item${wanted.size === 1 ? '' : 's'}, $${(Math.round(total * 100) / 100).toFixed(2)}. Open Online store → Orders to confirm.`,
+      settings.locationId,
+    ),
   ]);
   return c.json({ requestNumber, message: 'Request received. We will contact you shortly to confirm.' }, 201);
+});
+
+// ── Order tracking (customers) ──────────────────────────────────────────────
+
+const MAX_TRACK_PER_IP_PER_HOUR = 30;
+
+/**
+ * A customer's order status, by order number AND the phone number used to
+ * order (both must match; the answer is the same "not found" otherwise, so
+ * order numbers cannot be probed). Server-to-server like order placement.
+ */
+storefront.post('/track', async (c) => {
+  if (!keyMatches(c.req.header('x-storefront-key'))) return c.json({ message: 'Unauthorized' }, 401);
+  const body = await c.req.json().catch(() => null);
+  const number = clean(body?.requestNumber, 40).toUpperCase();
+  const phone = digitsOf(clean(body?.phone, 30)).replace(/\D/g, '');
+  if (!number || phone.length < 7) return c.json({ message: 'Enter your order number and the phone number you ordered with.' }, 400);
+
+  const ip = clean(c.req.header('x-client-ip'), 64) || 'unknown';
+  const db = c.env.DB;
+  await db.prepare(`DELETE FROM storefront_track_log WHERE created_at < CURRENT_TIMESTAMP - INTERVAL '1 day'`).run();
+  const tries = await db.prepare(`SELECT COUNT(*)::int AS n FROM storefront_track_log WHERE ip = ? AND created_at > CURRENT_TIMESTAMP - INTERVAL '1 hour'`).bind(ip).first() as any;
+  if (Number(tries?.n) >= MAX_TRACK_PER_IP_PER_HOUR) return c.json({ message: 'Too many attempts. Please try again later.' }, 429);
+  await db.prepare('INSERT INTO storefront_track_log (id, ip) VALUES (?, ?)').bind(uuidv4(), ip).run();
+
+  const r = await db.prepare(`
+    SELECT r.id, r.request_number, r.phone, r.status, r.total_amount, r.created_at, r.handled_at,
+           so.status AS order_status,
+           (SELECT d.status FROM deliveries d WHERE d.sales_order_id = so.id AND d.status <> 'CANCELLED'
+             ORDER BY d.created_at DESC LIMIT 1) AS delivery_status
+    FROM storefront_requests r LEFT JOIN sales_orders so ON so.id = r.converted_order_id
+    WHERE r.request_number = ?
+  `).bind(number).first() as any;
+  // Compare the last 7+ digits, so +252 63 ... and 063 ... both match.
+  const tail = (p: string) => p.replace(/\D/g, '').slice(-9);
+  if (!r || tail(r.phone) !== tail(phone)) return c.json({ message: 'No order matches that number and phone.' }, 404);
+
+  const { results: lines } = await db.prepare(
+    'SELECT product_name, quantity, unit_price FROM storefront_request_lines WHERE request_id = ? ORDER BY product_name',
+  ).bind(r.id).all();
+  return c.json({
+    requestNumber: r.request_number,
+    stage: webOrderStage(r),
+    placedAt: r.created_at,
+    total: Number(r.total_amount),
+    items: (lines || []).map((l: any) => ({ name: l.product_name, quantity: Number(l.quantity), unitPrice: Number(l.unit_price) })),
+  });
 });
 
 export default storefront;

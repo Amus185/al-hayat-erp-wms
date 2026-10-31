@@ -38,7 +38,8 @@ export default async function ThankYouPage({ searchParams }: { searchParams: Sea
           ))}
         </ol>
         <div className="mt-8 flex flex-wrap justify-center gap-3">
-          <Link href="/search" className="btn btn-gold">Keep browsing</Link>
+          {reference && <Link href={`/track?ref=${encodeURIComponent(reference)}`} className="btn btn-gold">Track this order</Link>}
+          <Link href="/search" className={reference ? "btn btn-outline" : "btn btn-gold"}>Keep browsing</Link>
           {PHONE_HREF && <a href={PHONE_HREF} className="btn btn-outline"><PhoneIcon /> Call {CONTACT_PHONE}</a>}
         </div>
       </div>

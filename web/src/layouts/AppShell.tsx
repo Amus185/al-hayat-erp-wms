@@ -44,7 +44,7 @@ const navItems = [
   { label: 'Sales', path: '/sales', icon: ShoppingCart, permission: 'manage_sales' },
   { label: 'Deliveries', path: '/deliveries', icon: Truck, permission: 'manage_sales' },
   { label: 'Customers', path: '/customers', icon: UserCheck, permission: 'manage_sales' },
-  { label: 'Web Orders', path: '/web-requests', icon: Globe, permission: 'manage_sales' },
+  { label: 'Online Store', path: '/online-store', icon: Globe, permission: 'manage_sales|manage_inventory' },
   // Shown once the assistant Worker is deployed (VITE_AGENT_URL); every user, the server checks permissions per question.
   ...(AGENT_URL ? [{ label: 'Assistant', path: '/assistant', icon: Sparkles, permission: '' }] : []),
   { label: 'Expenses', path: '/expenses', icon: Receipt, permission: 'manage_purchasing' },
@@ -72,7 +72,7 @@ const pageTitles: Record<string, { section: string; title: string }> = {
   '/assets':        { section: 'Owner Investments',      title: "Owner's Assets & Investments" },
   '/reports':       { section: 'Analytics',              title: 'Reports' },
   '/accounting':    { section: 'Finance',                title: 'Accounting' },
-  '/web-requests':  { section: 'Website',                title: 'Web Orders' },
+  '/online-store':  { section: 'Website',                title: 'Online Store' },
   '/assistant':     { section: 'Help',                   title: 'Assistant' },
   '/audit':         { section: 'Compliance',             title: 'Audit Log' },
   '/users':         { section: 'Administration',         title: 'Users & Permissions' },
@@ -219,7 +219,7 @@ export function AppShell({ children }: AppShellProps) {
                 return null;
               }
               // Check permission
-              if (item.permission && !hasPermission(item.permission)) {
+              if (item.permission && !item.permission.split('|').some(hasPermission)) {
                 return null;
               }
 

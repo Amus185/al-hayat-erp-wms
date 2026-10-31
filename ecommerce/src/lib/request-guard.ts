@@ -1,4 +1,4 @@
-// Helpers for the shop's own API routes (/api/cart, /api/request).
+// Helpers for the shop's own API routes (/api/cart, /api/request, /api/track).
 
 /**
  * True only when the request was sent by a page of this site. Browsers always
@@ -31,6 +31,9 @@ export function isJson(request: Request): boolean {
  * earlier entries can be written by the client.
  */
 export function clientIp(request: Request): string {
+  // On Cloudflare Workers the visitor's address is set by Cloudflare itself.
+  const cf = request.headers.get("cf-connecting-ip");
+  if (cf) return cf.trim().slice(0, 64);
   const real = request.headers.get("x-real-ip");
   if (real) return real.trim().slice(0, 64);
   const xff = request.headers.get("x-forwarded-for");

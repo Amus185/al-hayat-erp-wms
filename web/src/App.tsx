@@ -26,7 +26,7 @@ import { ExpensesPage } from './pages/ExpensesPage';
 import { AssetsPage } from './pages/AssetsPage';
 import { DeliveriesPage } from './pages/DeliveriesPage';
 import { ManufacturingPage } from './pages/ManufacturingPage';
-import { WebRequestsPage } from './pages/WebRequestsPage';
+import { OnlineStorePage } from './pages/OnlineStorePage';
 import { AssistantPage } from './pages/AssistantPage';
 
 function ProtectedRoute({ permission }: { permission?: string }) {
@@ -47,7 +47,8 @@ function ProtectedRoute({ permission }: { permission?: string }) {
     return <Navigate to="/login" replace />;
   }
 
-  if (permission && !hasPermission(permission)) {
+  // "a|b": any one of the permissions is enough
+  if (permission && !permission.split('|').some(hasPermission)) {
     return <Navigate to="/" replace />;
   }
 
@@ -136,9 +137,10 @@ export function App() {
             {/* Expenses */}
             <Route path="/expenses" element={<ExpensesPage />} />
 
-            {/* Website order requests (the server also enforces permission and branch) */}
-            <Route element={<ProtectedRoute permission="manage_sales" />}>
-              <Route path="/web-requests" element={<WebRequestsPage />} />
+            {/* Online store: overview, products on the shop, web orders, settings (the server also enforces permission and branch) */}
+            <Route element={<ProtectedRoute permission="manage_sales|manage_inventory" />}>
+              <Route path="/online-store" element={<OnlineStorePage />} />
+              <Route path="/web-requests" element={<Navigate to="/online-store?tab=orders" replace />} />
             </Route>
 
             {/* Business assistant: answers through read-only tools; changes need the user's confirmation */}

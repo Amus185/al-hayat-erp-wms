@@ -114,7 +114,9 @@ export default async function ProductPage({ params }: { params: Params }) {
 
             <p className="mt-4 flex items-center gap-2 text-sm font-semibold">
               <span className={`h-2.5 w-2.5 rounded-full ${stockTone}`} aria-hidden="true" />
-              {availabilityLabel(product.availability)}
+              {product.unitsAvailable !== undefined && product.availability !== "OUT"
+                ? `${product.unitsAvailable} in stock`
+                : availabilityLabel(product.availability)}
               {product.availability !== "OUT" && <span className="font-normal text-muted">· in our showroom</span>}
             </p>
 

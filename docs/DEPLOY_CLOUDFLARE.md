@@ -116,26 +116,55 @@ npm run deploy:web
 To enable the assistant, set `VITE_AGENT_URL` (step 5) in `web/.env.production`
 before building.
 
-## 4. Website (ecommerce)
+## 4. Online store: photos and the shop (ecommerce)
+
+How it fits together: `docs/ECOMMERCE.md`. Staff manage it in the ERP under
+**Online Store**; customers use the shop's own address.
+
+**Photo storage (R2), once.** Product photos are uploaded by the staff app
+straight to an R2 bucket and shown on the shop from the bucket's public address.
 
 ```bash
-cd ecommerce
-npx wrangler r2 bucket create al-hayat-storefront-cache
-npx wrangler secret put STOREFRONT_API_KEY     # same value as on the backend
+cd backend
+npx wrangler r2 bucket create al-hayat-photos
+npx wrangler r2 bucket dev-url enable al-hayat-photos        # prints https://pub-<id>.r2.dev
+npx wrangler r2 bucket cors set al-hayat-photos --file ../docs/r2-photos-cors.json
 ```
 
-Edit `ecommerce/wrangler.jsonc` → `vars.ERP_API_URL` to the backend's
-`https://al-hayat-api.<your-subdomain>.workers.dev/api/v1`. Build-time settings go
-in `ecommerce/.env.production` (not committed):
+Then, in the Cloudflare dashboard, **R2 → Manage API tokens → Create API token**:
+permission **Object Read & Write**, bucket **al-hayat-photos** only. It shows an
+Access Key ID and a Secret Access Key once. Store them on the backend:
+
+```bash
+npx wrangler secret put R2_ACCOUNT_ID            # the Cloudflare account id
+npx wrangler secret put R2_ACCESS_KEY_ID
+npx wrangler secret put R2_SECRET_ACCESS_KEY
+npx wrangler secret put R2_BUCKET                # al-hayat-photos
+npx wrangler secret put R2_PUBLIC_BASE_URL       # https://pub-<id>.r2.dev (no path, no trailing slash)
+```
+
+The "Photo storage is not configured" warning in Online Store disappears.
+
+**The shop, each deploy.** `ecommerce/` has its own `package-lock.json`.
+Build-time settings go in `ecommerce/.env.production` (not committed):
 
 ```
-IMAGE_HOSTNAME=photos.example.com
+IMAGE_HOSTNAME=pub-<id>.r2.dev
 NEXT_PUBLIC_SITE_URL=https://al-hayat-storefront.<your-subdomain>.workers.dev
 NEXT_PUBLIC_CONTACT_PHONE=+252 ...
 ```
 
-Then `npm ci && npm run deploy`. A custom domain is added under the Worker's
-**Settings → Domains & Routes**; update `NEXT_PUBLIC_SITE_URL` and redeploy.
+```bash
+cd ecommerce
+npm ci
+npx wrangler secret put STOREFRONT_API_KEY       # once: the same value as the backend's
+npm run deploy
+```
+
+`vars.ERP_API_URL` in `ecommerce/wrangler.jsonc` is the backend's address. The
+shop reads it live on every page (no cache to clear). A custom domain is added
+under the Worker's **Settings → Domains & Routes**; then update
+`NEXT_PUBLIC_SITE_URL` and `VITE_SHOP_URL` (`web/.env.production`) and redeploy both.
 
 ## 5. AI assistant
 
