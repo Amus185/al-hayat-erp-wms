@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Truck, ArrowLeft, Plus, Trash2, Search, Loader2 } from 'lucide-react';
 import { apiGet, apiPost } from '../api/client';
@@ -49,6 +49,7 @@ export function CreateTransferPage() {
   // Selected lines
   const [lines, setLines] = useState<{ productId: string; sku: string; name: string; quantity: number }[]>([]);
   const [submitting, setSubmitting] = useState(false);
+  const inFlight = useRef(false);
 
   useEffect(() => {
     async function loadMetadata() {
@@ -154,21 +155,34 @@ export function CreateTransferPage() {
       })),
     };
 
+    // A ref, not only state: two quick taps arrive before the re-render that
+    // disables the buttons, and would create two transfers.
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setSubmitting(true);
+    let created: any = null;
     try {
-      setSubmitting(true);
-      const created = await apiPost<any>('/transfers', payload);
-      if (dispatchImmediately && created?.id) {
-        await apiPost(`/transfers/${created.id}/dispatch`, {});
-        addToast('success', 'Transfer created and dispatched immediately — stock deducted from origin!');
-      } else {
-        addToast('success', 'Transfer order created successfully');
-      }
-      navigate('/transfers');
+      created = await apiPost<any>('/transfers', payload);
     } catch (err: any) {
       addToast('error', err?.message || 'Failed to create Transfer Order');
-    } finally {
+      inFlight.current = false;
       setSubmitting(false);
+      return;
     }
+    // The transfer exists from here on. If dispatching it fails, staying on
+    // this form invites a retry that creates a second transfer, so always go
+    // to the list, where the new transfer waits for approval.
+    if (dispatchImmediately && created?.id) {
+      try {
+        await apiPost(`/transfers/${created.id}/dispatch`, {});
+        addToast('success', 'Transfer created and dispatched immediately — stock deducted from origin!');
+      } catch (err: any) {
+        addToast('error', `Transfer ${created.transfer_number || created.transferNumber || ''} was created but not dispatched: ${err?.message || 'unknown error'}. It is in the list as Pending approval; fix the problem and dispatch it from there instead of creating it again.`);
+      }
+    } else {
+      addToast('success', 'Transfer order created successfully');
+    }
+    navigate('/transfers');
   };
 
   return (
