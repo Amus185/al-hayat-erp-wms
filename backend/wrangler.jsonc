@@ -11,7 +11,8 @@
   "limits": { "cpu_ms": 30000 },
 
   // Connection pooling in front of Postgres. Create it once with
-  //   npx wrangler hyperdrive create al-hayat-db --connection-string="postgres://..."
+  //   npx wrangler hyperdrive create al-hayat-db --connection-string="postgres://..." --caching-disabled
+  // (caching off: an ERP must show what was just saved, not a 60-second-old read)
   // and paste the id it prints here. (An id is not a secret: the connection
   // string lives in Cloudflare.)
   "hyperdrive": [

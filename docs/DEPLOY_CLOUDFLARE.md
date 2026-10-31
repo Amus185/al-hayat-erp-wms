@@ -70,8 +70,12 @@ deploy again without a code change: Actions → Test and deploy → Run workflow
    Railway keeps a paused database's data, but it must be running for `pg_dump`.
 4. Create the Hyperdrive config and put its id into `backend/wrangler.jsonc` (`hyperdrive[0].id`):
    ```bash
-   npx wrangler hyperdrive create al-hayat-db --connection-string="postgres://..."
+   npx wrangler hyperdrive create al-hayat-db --connection-string="postgres://..." --caching-disabled
    ```
+   `--caching-disabled` matters: otherwise Hyperdrive answers repeated reads
+   from a 60-second cache, so a product or sale just saved does not show in
+   lists for up to a minute. For an existing config:
+   `npx wrangler hyperdrive update <id> --caching-disabled`.
 
 Run `db:migrate` again before deploying a backend change that adds tables or
 columns: the Worker does not migrate on startup (the Node server still does).
