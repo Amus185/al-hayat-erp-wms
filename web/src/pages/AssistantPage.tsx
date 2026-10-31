@@ -2,13 +2,34 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Check, Loader2, Send, Sparkles, X } from 'lucide-react';
 import { useToast } from '../contexts/ToastContext';
 import { AssistantMessage } from '../components/AssistantMessage';
-import { AGENT_URL, askAssistant, confirmProposal, dismissProposal, type ChatMessage, type Proposal } from '../api/assistant';
+import { AGENT_URL, askAssistant, confirmProposal, dismissProposal, type AssistantEvent, type ChatMessage, type Proposal } from '../api/assistant';
 
 type ProposalState = Proposal & { state: 'open' | 'busy' | 'done' | 'dismissed' | 'failed'; note?: string };
 type Entry = { role: 'user' | 'assistant'; content: string; proposals?: ProposalState[] };
 
 // Examples in Somali: managers use the assistant in Somali (any dialect or spelling works).
 const EXAMPLES = ['Alaabta kaydkeedu yaraaday waa kuwee?', 'Iibka toddobaadkan intee buu ahaa?', 'Yaa deyn nagu leh, intee le\'eg?', 'Faa\'iidada bishan maxay ahayd?', 'Xaashida dheelitirka i tus', 'Gaarsiimaha maanta xaaladdoodu waa sidee?'];
+
+/** What the assistant is looking at, in Somali, by data source or tool. */
+const LOOKUP_LABELS: [RegExp, string][] = [
+  [/income_statement|balance_sheet|trial_balance|cash_flow|owners_equity|journal|general_ledger|chart_of_accounts|fiscal_periods|accounting|depreciation|branch_accounts/, 'xisaabaadka'],
+  [/debt|customer|receivable/, 'deymaha iyo macaamiisha'],
+  [/sales|order|quote/, 'iibka'],
+  [/stock|product|inventory|warehouse|transfer|low/, 'kaydka iyo alaabta'],
+  [/deliver/, 'gaarsiinta'],
+  [/purchase|supplier/, 'iibsashada'],
+  [/expense/, 'kharashaadka'],
+  [/asset|rental|propert|livestock/, 'hantida'],
+  [/manufactur|work_order/, 'wax-soo-saarka'],
+  [/branch/, 'laamaha'],
+];
+function statusText(e: AssistantEvent): string | null {
+  if (e.type !== 'status') return null;
+  if (e.step === 'thinking') return 'Waan ka fikirayaa su\'aashaada…';
+  const key = `${e.source ?? ''} ${e.tool}`;
+  const label = LOOKUP_LABELS.find(([re]) => re.test(key))?.[1] ?? 'xogta nidaamka';
+  return `Waan eegayaa ${label}…`;
+}
 
 /**
  * Chat with the business assistant. It answers from live data through
@@ -20,9 +41,11 @@ export function AssistantPage() {
   const [entries, setEntries] = useState<Entry[]>([]);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
+  // The answer being written: status line and the text so far (streamed).
+  const [live, setLive] = useState<{ status: string | null; text: string }>({ status: null, text: '' });
   const endRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' }); }, [entries, busy]);
+  useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' }); }, [entries, busy, live.text]);
 
   const send = async (text: string) => {
     const content = text.trim();
@@ -31,14 +54,20 @@ export function AssistantPage() {
     setEntries(next);
     setInput('');
     setBusy(true);
+    setLive({ status: 'Waan ka fikirayaa su\'aashaada…', text: '' });
     try {
       const history: ChatMessage[] = next.map((e) => ({ role: e.role, content: e.content }));
-      const res = await askAssistant(history);
+      const res = await askAssistant(history, (ev) => {
+        if (ev.type === 'delta') setLive((cur) => ({ status: null, text: cur.text + ev.text }));
+        else if (ev.type === 'reset') setLive({ status: 'Waan ka fikirayaa su\'aashaada…', text: '' });
+        else setLive((cur) => (cur.text ? cur : { ...cur, status: statusText(ev) }));
+      });
       setEntries((cur) => [...cur, { role: 'assistant', content: res.reply, proposals: res.proposals.map((p) => ({ ...p, state: 'open' })) }]);
     } catch (err: any) {
       setEntries((cur) => [...cur, { role: 'assistant', content: err?.message || 'Wax qalad ah ayaa dhacay. Fadlan mar kale isku day.' }]);
     } finally {
       setBusy(false);
+      setLive({ status: null, text: '' });
     }
   };
 
@@ -129,11 +158,20 @@ export function AssistantPage() {
             ))}
           </div>
         ))}
-        {busy && (
-          <div style={{ alignSelf: 'flex-start', color: '#64748b', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> Waan raadinayaa…
+        {busy && live.text && (
+          <div style={{ alignSelf: 'flex-start', maxWidth: '80%' }} aria-live="polite">
+            <div style={{ padding: '12px 16px', borderRadius: '12px', fontSize: '14px', lineHeight: 1.55, background: '#f8fafc', border: '1px solid #e2e8f0', color: '#0f172a' }}>
+              <AssistantMessage text={live.text} />
+              <span style={{ display: 'inline-block', width: '7px', height: '15px', marginTop: '4px', background: '#0b8f08', borderRadius: '2px', animation: 'assistant-caret 1s steps(2) infinite' }} />
+            </div>
           </div>
         )}
+        {busy && !live.text && (
+          <div style={{ alignSelf: 'flex-start', color: '#64748b', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px' }} aria-live="polite">
+            <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> {live.status ?? 'Waan raadinayaa…'}
+          </div>
+        )}
+        <style>{`@keyframes assistant-caret { 0% { opacity: 1 } 100% { opacity: 0 } }`}</style>
         <div ref={endRef} />
       </div>
 

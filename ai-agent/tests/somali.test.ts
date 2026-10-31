@@ -48,10 +48,9 @@ test('instructions: Somali first, today\'s date, the glossary, the off-topic rul
 test('tools: every ERP module is reachable through get_data, accounting included', () => {
   const getData = TOOLS.find((t) => t.function.name === 'get_data')!;
   const params = getData.function.parameters as any;
-  assert.deepEqual(params.properties.source.enum, Object.keys(DATA_SOURCES));
+  for (const name of Object.keys(DATA_SOURCES)) assert.ok(getData.function.description.includes(`\n${name}`), `${name} not listed`);
   for (const source of ['income_statement', 'balance_sheet', 'trial_balance', 'cash_flow', 'general_ledger', 'journal_entries', 'expenses_summary',
     'debts_summary', 'customer_ledger', 'deliveries', 'purchase_orders', 'suppliers', 'inventory_valuation', 'assets_dashboard', 'livestock', 'work_orders', 'branch_performance']) {
-    assert.ok(params.properties.source.enum.includes(source), `${source} missing`);
     assert.ok(getData.function.description.includes(`${source}`), `${source} not described`);
   }
   assert.ok(TOOLS.some((t) => t.function.name === 'decline_off_topic'));

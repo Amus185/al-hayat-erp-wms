@@ -6,6 +6,7 @@
 // the system returned.
 import { DATA_SOURCES } from '../../backend/src/services/agent-data';
 import { OFF_TOPIC_REPLY, SAY, systemPrompt, todayInSomaliland } from './somali';
+import { readModelStream } from './stream';
 
 export interface AiBinding {
   run(model: string, input: Record<string, unknown>, options?: Record<string, unknown>): Promise<unknown>;
@@ -48,6 +49,18 @@ export interface ChatResult {
   toolsUsed: string[];
 }
 
+/**
+ * Progress while answering, for streaming to the chat page:
+ * status (what it is doing), delta (answer text as it is written), reset
+ * (discard text shown so far: the model went on to look something up, or the
+ * answer was replaced). The final ChatResult is always the authoritative answer.
+ */
+export type AgentEvent =
+  | { type: 'status'; step: 'thinking' }
+  | { type: 'status'; step: 'lookup'; tool: string; source?: string }
+  | { type: 'delta'; text: string }
+  | { type: 'reset' };
+
 // Default limits, each overridable in wrangler.jsonc vars (see limitsOf).
 export const MAX_HISTORY = 10;         // messages sent to the model
 export const MAX_MESSAGE_CHARS = 2000; // per message
@@ -75,36 +88,36 @@ const fn = (name: string, description: string, properties: JsonSchema = {}, requ
 const str = (description: string) => ({ type: 'string', description });
 
 const SOURCE_LIST = Object.entries(DATA_SOURCES)
-  .map(([name, s]) => `${name}${s.path.includes(':id') ? '(id)' : ''}: ${s.about}${s.query.length ? ` [${s.query.join(', ')}]` : ''}`)
+  .map(([name, s]) => `${name}${s.path.includes(':id') ? '(id)' : ''}: ${s.about}${s.query.length ? ` [${s.query.join(',')}]` : ''}`)
   .join('\n');
 
-/** What the model may call. Read tools map 1:1 to /agent/tools/<name>. */
+/** What the model may call. Read tools map 1:1 to /agent/tools/<name>. Kept short: sent with every model call. */
 export const TOOLS = [
-  fn('search_products', 'Find products by name, SKU or category. Returns price, category, whether it is on the website and units on hand.', { query: str('words to search for; empty for all') }),
-  fn('get_stock', 'Stock of one product per branch and warehouse, including units held for website orders.', { product: str('product name or SKU') }, ['product']),
-  fn('get_low_stock', 'Products at or below their reorder level.'),
-  fn('get_sales_summary', 'Sales totals (invoices, net sales, paid) and top products for a period.', {
-    period: { type: 'string', enum: ['today', 'week', 'month', 'year'], description: 'the period; this week if not said' },
+  fn('search_products', 'Find products by name, SKU or category: price, category, on website, units on hand.', { query: str('search words; empty for all') }),
+  fn('get_stock', 'Stock of one product per branch and warehouse.', { product: str('product name or SKU') }, ['product']),
+  fn('get_low_stock', 'Products at or below reorder level.'),
+  fn('get_sales_summary', 'Sales totals and top products for a period.', {
+    period: { type: 'string', enum: ['today', 'week', 'month', 'year'] },
   }),
-  fn('list_orders', 'Recent sales orders, newest first, and how many website requests are new.', {
-    status: str('optional: DRAFT, CONFIRMED, INVOICED, PAID, DELIVERED or CANCELLED'),
-    limit: { type: 'integer', description: '1 to 10, default 5' },
+  fn('list_orders', 'Recent sales orders and new website requests.', {
+    status: str('optional: DRAFT, CONFIRMED, INVOICED, PAID, DELIVERED, CANCELLED'),
+    limit: { type: 'integer', description: '1-10' },
   }),
-  fn('get_data', `Read any part of the Al-Hayat ERP as the signed-in user, with the same permissions and branch as their screens. Sources ("(id)" needs a record id; filters in brackets):\n${SOURCE_LIST}`, {
-    source: { type: 'string', enum: Object.keys(DATA_SOURCES), description: 'which part of the ERP to read' },
-    id: str('the record id, for sources marked (id)'),
-    filters: { type: 'object', description: 'optional filters listed for the source, e.g. {"dateFrom":"2026-10-01","dateTo":"2026-10-31"}; dates as YYYY-MM-DD' },
+  fn('get_data', `Read any part of the ERP as the signed-in user (same permissions as their screens). source: one of (id) = needs a record id, [filters]:\n${SOURCE_LIST}`, {
+    source: str('a source name from the list'),
+    id: str('record id, for (id) sources'),
+    filters: { type: 'object', description: 'filters from the list, dates YYYY-MM-DD' },
   }, ['source']),
-  fn('decline_off_topic', 'Call this when the question is not about Al-Hayat, its business or its ERP. The user then gets the standard reply.'),
-  fn('propose_stock_adjustment', 'Propose adding (positive) or removing (negative) stock. Nothing changes until the user confirms.', {
+  fn('decline_off_topic', 'The question is not about Al-Hayat or its ERP.'),
+  fn('propose_stock_adjustment', 'Propose adding (+) or removing (-) stock; the user confirms.', {
     product: str('product name or SKU'),
-    quantity: { type: 'integer', description: 'units to add (positive) or remove (negative)' },
-    location: str('branch name, if the user said one'),
+    quantity: { type: 'integer', description: '+ add, - remove' },
+    location: str('branch name, if given'),
     reason: str('short reason'),
   }, ['product', 'quantity']),
-  fn('propose_price_change', 'Propose a new selling price. Nothing changes until the user confirms.', {
+  fn('propose_price_change', 'Propose a new selling price; the user confirms.', {
     product: str('product name or SKU'),
-    price: { type: 'number', description: 'the new selling price' },
+    price: { type: 'number', description: 'new selling price' },
   }, ['product', 'price']),
 ];
 
@@ -169,8 +182,15 @@ export async function runAgent(
   env: AgentEnv,
   agentToken: string,
   history: ChatMessage[],
-  opts: { cache?: (key: string, load: () => Promise<string>) => Promise<string>; fetchImpl?: typeof fetch; now?: Date } = {},
+  opts: {
+    cache?: (key: string, load: () => Promise<string>) => Promise<string>;
+    fetchImpl?: typeof fetch;
+    now?: Date;
+    /** Receive progress and the answer as it is written (streams the model's output). */
+    onEvent?: (event: AgentEvent) => void;
+  } = {},
 ): Promise<ChatResult> {
+  const emit = opts.onEvent ?? (() => {});
   const doFetch = opts.fetchImpl ?? (env.ALHAYAT_API ? env.ALHAYAT_API.fetch.bind(env.ALHAYAT_API) : fetch);
   const api = env.ALHAYAT_API_URL.replace(/\/$/, '');
   const post = async (path: string, body: unknown) => {
@@ -196,6 +216,33 @@ export async function runAgent(
   const aiOptions = env.AI_GATEWAY_ID ? { gateway: { id: env.AI_GATEWAY_ID } } : undefined;
   let nudged = false;
 
+  /**
+   * One model call. Without a listener: the whole answer at once. With one:
+   * streamed, passing text on as it is written; if streaming fails or the
+   * model does not stream, the whole answer is fetched and passed on at once.
+   */
+  const callModel = async (input: Record<string, unknown>, onText: (piece: string) => void) => {
+    const run = (body: Record<string, unknown>) => (aiOptions ? env.AI.run(env.AI_MODEL, body, aiOptions) : env.AI.run(env.AI_MODEL, body));
+    if (opts.onEvent) {
+      let sent = false;
+      try {
+        const out = await run({ ...input, stream: true });
+        if (out && typeof (out as any).getReader === 'function') {
+          return await readModelStream(out as ReadableStream<Uint8Array>, (piece) => { sent = true; onText(piece); });
+        }
+        const whole = readModelOutput(out);
+        if (whole.text && !whole.calls.length) onText(whole.text);
+        return whole;
+      } catch (err) {
+        if (err instanceof AuthError) throw err;
+        if (sent) emit({ type: 'reset' }); // fall back to a normal call below, from a clean slate
+      }
+    }
+    const whole = readModelOutput(await run(input));
+    if (opts.onEvent && whole.text && !whole.calls.length) onText(whole.text);
+    return whole;
+  };
+
   for (let round = 0; round < limits.rounds; round++) {
     const finalRound = round === limits.rounds - 1;
     const input = {
@@ -204,10 +251,13 @@ export async function runAgent(
       max_tokens: limits.replyTokens,
       temperature: 0.2,
     };
-    const out = aiOptions ? await env.AI.run(env.AI_MODEL, input, aiOptions) : await env.AI.run(env.AI_MODEL, input);
-    const { text, calls } = readModelOutput(out);
+    emit({ type: 'status', step: 'thinking' });
+    let shown = false; // answer text already sent to the page in this round
+    const { text, calls } = await callModel(input, (piece) => { shown = true; emit({ type: 'delta', text: piece }); });
+    if (shown && calls.length) emit({ type: 'reset' });
 
     if (calls.some((c) => c.name === 'decline_off_topic') || (!calls.length && isOffTopicReply(text))) {
+      if (shown) emit({ type: 'reset' });
       return { reply: OFF_TOPIC_REPLY, proposals, toolsUsed: [...toolsUsed, 'decline_off_topic'] };
     }
 
@@ -219,6 +269,7 @@ export async function runAgent(
       // it calculated from the results, which this check could not tell apart.)
       const invented = toolResults.length ? [] : unsupportedFigures(text, [...conversation.map((m) => m.content), today]);
       if (invented.length) {
+        if (shown) emit({ type: 'reset' });
         if (!nudged && !finalRound) {
           nudged = true;
           messages.push({ role: 'assistant', content: text });
@@ -237,6 +288,7 @@ export async function runAgent(
     });
     for (const call of calls) {
       toolsUsed.push(call.name);
+      emit({ type: 'status', step: 'lookup', tool: call.name, ...(call.name === 'get_data' && typeof call.args.source === 'string' ? { source: call.args.source } : {}) });
       let result: string;
       if (READ_TOOLS.has(call.name)) {
         const key = `${call.name}:${JSON.stringify(call.args)}`;

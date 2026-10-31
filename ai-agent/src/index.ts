@@ -84,6 +84,33 @@ export default {
     const body = (await request.json().catch(() => null)) as { messages?: ChatMessage[] } | null;
     if (!body || !Array.isArray(body.messages) || !body.messages.length) return json({ message: SAY.badRequest }, 400);
 
+    // Streaming (Accept: text/event-stream): progress and the answer as it is
+    // written, as server-sent events, ending with "done" (the full result) or
+    // "error". Otherwise one JSON answer, as before.
+    if ((request.headers.get('Accept') || '').includes('text/event-stream')) {
+      const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
+      const writer = writable.getWriter();
+      const encoder = new TextEncoder();
+      const send = (event: string, data: unknown) => writer.write(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)).catch(() => {});
+      (async () => {
+        try {
+          const result = await runAgent(env, token, body.messages!, {
+            cache: lookupCache(claims.sub),
+            onEvent: (e) => { send(e.type, e); },
+          });
+          await send('done', result);
+        } catch (err) {
+          if (!(err instanceof AuthError)) console.error('assistant failed', err instanceof Error ? err.message : err);
+          await send('error', { status: err instanceof AuthError ? 401 : 502, message: err instanceof AuthError ? SAY.signIn : SAY.unavailable });
+        } finally {
+          await writer.close().catch(() => {});
+        }
+      })();
+      return new Response(readable, {
+        headers: { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no', ...cors },
+      });
+    }
+
     try {
       const result = await runAgent(env, token, body.messages, { cache: lookupCache(claims.sub) });
       return json(result);
