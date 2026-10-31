@@ -109,7 +109,8 @@ export function ProductWebPanel({ product, onClose, onChanged }: Props) {
       setWasPrice(saved.compareAtPrice == null ? '' : String(saved.compareAtPrice));
       setWebQty(saved.webQuantity == null ? '' : String(saved.webQuantity));
       onChanged(product.id, saved.isPublished);
-      addToast('success', publish ? (web?.isPublished ? 'Website details saved' : 'Published to the website') : 'Removed from the website');
+      addToast('success', publish ? (web?.isPublished ? 'Website details saved' : 'Published to the website') : (web?.isPublished ? 'Removed from the website' : 'Draft saved'));
+      onClose(); // done: back to the list (on an error the window stays open with what was typed)
     }, 'Could not save');
 
   const published = web?.isPublished ?? false;
