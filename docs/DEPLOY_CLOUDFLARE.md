@@ -29,6 +29,25 @@ logins would fail on Free. Hyperdrive, service bindings and Pages are included.
 All commands below run from the repository root unless stated. `npx wrangler login`
 once first.
 
+## Automatic deploys (GitHub Actions)
+
+After the one-time setup below (database, Hyperdrive, R2, Worker secrets, the
+Pages `API` binding), every push to `main` or `claude/friendly-noether-g968s1`
+runs `.github/workflows/deploy.yml`: tests, then `db:migrate`, then the backend
+Worker, the assistant Worker and the staff app. Nothing deploys if a test fails.
+It needs, under GitHub → repository → Settings → Secrets and variables → Actions:
+
+| Name | Kind | Value |
+|---|---|---|
+| `CLOUDFLARE_API_TOKEN` | secret | Cloudflare → My Profile → API Tokens → Create Token → template **Edit Cloudflare Workers**, then add **Account · Cloudflare Pages · Edit** and **Account · Hyperdrive · Edit**; account `c3066ec0…` only |
+| `DATABASE_URL` | secret | the Layerbase connection string |
+| `AGENT_TOKEN_SECRET` | secret | the same value as in `backend/.env` |
+| `VITE_AGENT_URL` | variable | `https://alhayat-ai-agent.biggestfunofpes.workers.dev` (after its first deploy) |
+| `PAGES_BRANCH` | variable | the Pages project's production branch, if not `main` |
+
+Without `CLOUDFLARE_API_TOKEN` the tests run and the deploy is skipped. To
+deploy again without a code change: Actions → Test and deploy → Run workflow.
+
 ## 1. Database
 
 1. Create the Postgres database at your provider and copy its connection string

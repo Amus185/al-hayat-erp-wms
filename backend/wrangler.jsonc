@@ -12,11 +12,12 @@
 
   // Connection pooling in front of Postgres. Create it once with
   //   npx wrangler hyperdrive create al-hayat-db --connection-string="postgres://..."
-  // and paste the id it prints here.
+  // and paste the id it prints here. (An id is not a secret: the connection
+  // string lives in Cloudflare.)
   "hyperdrive": [
     {
       "binding": "HYPERDRIVE",
-      "id": "REPLACE_WITH_HYPERDRIVE_ID",
+      "id": "e6edd6f04685449cbb35e29616080008",
       // Used by `wrangler dev` only.
       "localConnectionString": "postgres://postgres:postgres@127.0.0.1:5432/al_hayat_erp"
     }
