@@ -377,4 +377,118 @@ agent.post('/actions/:id/cancel', authMiddleware, async (c) => {
   return c.json({ success: true });
 });
 
+// ── chat history (the signed-in user's own conversations) ───────────────────
+
+export const MAX_CONVERSATIONS_LISTED = 100;
+export const MAX_MESSAGES_PER_CONVERSATION = 400;
+const MAX_MESSAGE_CHARS = 20_000;
+const SAFE_ID = /^[A-Za-z0-9_-]{1,64}$/;
+
+/** The conversation, if it is this user's; otherwise null (answered as "not found"). */
+async function ownConversation(c: Context<{ Bindings: Env; Variables: Vars }>, id: string) {
+  if (!SAFE_ID.test(id)) return null;
+  return c.env.DB.prepare('SELECT id, title, created_at, updated_at FROM agent_conversations WHERE id = ? AND user_id = ?')
+    .bind(id, c.get('jwtPayload').sub).first() as Promise<any>;
+}
+const notFound = (c: Context) => c.json({ message: 'Wada-hadalkan lama helin.' }, 404);
+const titleFrom = (v: unknown) => (typeof v === 'string' ? v.replace(/\s+/g, ' ').trim().slice(0, 80) : '') || 'Wada-hadal';
+
+agent.get('/conversations', authMiddleware, async (c) => {
+  const { results } = await c.env.DB.prepare(`
+    SELECT c.id, c.title, c.created_at, c.updated_at, (SELECT COUNT(*) FROM agent_messages m WHERE m.conversation_id = c.id)::int AS message_count
+    FROM agent_conversations c WHERE c.user_id = ? ORDER BY c.updated_at DESC LIMIT ?
+  `).bind(c.get('jwtPayload').sub, MAX_CONVERSATIONS_LISTED).all();
+  return c.json((results || []).map((r: any) => ({
+    id: r.id, title: r.title, createdAt: r.created_at, updatedAt: r.updated_at, messageCount: Number(r.message_count),
+  })));
+});
+
+agent.post('/conversations', authMiddleware, async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const id = uuidv4();
+  await c.env.DB.prepare('INSERT INTO agent_conversations (id, user_id, title) VALUES (?, ?, ?)')
+    .bind(id, c.get('jwtPayload').sub, titleFrom(body.title)).run();
+  return c.json({ id, title: titleFrom(body.title) }, 201);
+});
+
+/**
+ * One conversation with its messages. Suggested changes come with their
+ * current state from agent_actions (done, cancelled, expired or still open),
+ * so a reopened chat never offers to confirm something already handled.
+ */
+agent.get('/conversations/:id', authMiddleware, async (c) => {
+  const conv = await ownConversation(c, c.req.param('id') ?? '');
+  if (!conv) return notFound(c);
+  const p = c.get('jwtPayload');
+  const { results } = await c.env.DB.prepare(
+    'SELECT id, role, content, proposal_ids, created_at FROM agent_messages WHERE conversation_id = ? ORDER BY created_at ASC, id ASC',
+  ).bind(conv.id).all();
+  const rows = (results || []) as any[];
+  const proposalIds = rows.flatMap((r) => { try { return JSON.parse(r.proposal_ids || '[]') as string[]; } catch { return []; } })
+    .filter((x) => typeof x === 'string' && SAFE_ID.test(x));
+  const actions = new Map<string, any>();
+  if (proposalIds.length) {
+    const ph = proposalIds.map(() => '?').join(', ');
+    const { results: acts } = await c.env.DB.prepare(`
+      SELECT id, action, summary, status, expires_at > CURRENT_TIMESTAMP AS live,
+             GREATEST(0, CEIL(EXTRACT(EPOCH FROM (expires_at - CURRENT_TIMESTAMP)) / 60))::int AS minutes_left
+      FROM agent_actions WHERE user_id = ? AND id IN (${ph})
+    `).bind(p.sub, ...proposalIds).all();
+    for (const a of (acts || []) as any[]) actions.set(a.id, a);
+  }
+  const stateOf = (a: any) => a.status === 'DONE' ? 'done' : a.status === 'CANCELLED' ? 'dismissed' : a.status === 'FAILED' ? 'failed'
+    : a.status === 'PENDING' && a.live ? 'open' : 'expired';
+  return c.json({
+    id: conv.id, title: conv.title, createdAt: conv.created_at, updatedAt: conv.updated_at,
+    messages: rows.map((r) => {
+      let ids: string[] = [];
+      try { ids = JSON.parse(r.proposal_ids || '[]'); } catch { /* none */ }
+      return {
+        id: r.id, role: r.role, content: r.content, createdAt: r.created_at,
+        proposals: ids.map((pid) => actions.get(pid)).filter(Boolean).map((a: any) => ({
+          id: a.id, action: a.action, summary: a.summary, state: stateOf(a), expiresInMinutes: Number(a.minutes_left),
+        })),
+      };
+    }),
+  });
+});
+
+agent.post('/conversations/:id/messages', authMiddleware, async (c) => {
+  const conv = await ownConversation(c, c.req.param('id') ?? '');
+  if (!conv) return notFound(c);
+  const body = await c.req.json().catch(() => ({}));
+  const role = body.role === 'user' || body.role === 'assistant' ? body.role : null;
+  const content = typeof body.content === 'string' ? body.content.slice(0, MAX_MESSAGE_CHARS) : '';
+  if (!role || !content.trim()) return c.json({ message: 'A message needs a role (user or assistant) and text.' }, 400);
+  const proposalIds = Array.isArray(body.proposalIds) ? body.proposalIds.filter((x: unknown) => typeof x === 'string' && SAFE_ID.test(x)).slice(0, 20) : [];
+  const db = c.env.DB;
+  const count = await db.prepare('SELECT COUNT(*)::int AS n FROM agent_messages WHERE conversation_id = ?').bind(conv.id).first() as any;
+  if (Number(count?.n) >= MAX_MESSAGES_PER_CONVERSATION) {
+    return c.json({ message: 'Wada-hadalkan aad buu u dheer yahay. Fadlan bilow wada-hadal cusub.' }, 409);
+  }
+  const id = uuidv4();
+  await db.batch([
+    db.prepare('INSERT INTO agent_messages (id, conversation_id, role, content, proposal_ids) VALUES (?, ?, ?, ?, ?)')
+      .bind(id, conv.id, role, content, proposalIds.length ? JSON.stringify(proposalIds) : null),
+    db.prepare('UPDATE agent_conversations SET updated_at = CURRENT_TIMESTAMP WHERE id = ?').bind(conv.id),
+  ]);
+  return c.json({ id }, 201);
+});
+
+agent.patch('/conversations/:id', authMiddleware, async (c) => {
+  const conv = await ownConversation(c, c.req.param('id') ?? '');
+  if (!conv) return notFound(c);
+  const body = await c.req.json().catch(() => ({}));
+  const title = titleFrom(body.title);
+  await c.env.DB.prepare('UPDATE agent_conversations SET title = ? WHERE id = ?').bind(title, conv.id).run();
+  return c.json({ id: conv.id, title });
+});
+
+agent.delete('/conversations/:id', authMiddleware, async (c) => {
+  const conv = await ownConversation(c, c.req.param('id') ?? '');
+  if (!conv) return notFound(c);
+  await c.env.DB.prepare('DELETE FROM agent_conversations WHERE id = ?').bind(conv.id).run();
+  return c.body(null, 204);
+});
+
 export default agent;

@@ -1,4 +1,4 @@
-import { apiPost } from './client';
+import { apiDelete, apiGet, apiPatch, apiPost } from './client';
 
 /** Where the assistant Worker runs (ai-agent/). Unset: the assistant is hidden. */
 export const AGENT_URL = (import.meta.env.VITE_AGENT_URL as string | undefined)?.replace(/\/$/, '') || '';
@@ -69,3 +69,24 @@ export async function askAssistant(messages: ChatMessage[], onEvent?: (e: Assist
 /** The user pressed Confirm: the backend runs the change through the normal route. */
 export const confirmProposal = (id: string) => apiPost<{ success: true; summary: string }>(`/agent/actions/${id}/execute`);
 export const dismissProposal = (id: string) => apiPost<{ success: true }>(`/agent/actions/${id}/cancel`);
+
+// ── Chat history (the signed-in user's own conversations, kept on the server) ──
+
+export type ProposalStatus = 'open' | 'done' | 'dismissed' | 'failed' | 'expired';
+export interface ConversationSummary { id: string; title: string; createdAt: string; updatedAt: string; messageCount: number }
+export interface StoredMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  createdAt: string;
+  proposals: (Proposal & { state: ProposalStatus })[];
+}
+export interface Conversation { id: string; title: string; createdAt: string; updatedAt: string; messages: StoredMessage[] }
+
+export const listConversations = () => apiGet<ConversationSummary[]>('/agent/conversations');
+export const getConversation = (id: string) => apiGet<Conversation>(`/agent/conversations/${encodeURIComponent(id)}`);
+export const createConversation = (title: string) => apiPost<{ id: string; title: string }>('/agent/conversations', { title });
+export const saveMessage = (id: string, role: 'user' | 'assistant', content: string, proposalIds: string[] = []) =>
+  apiPost<{ id: string }>(`/agent/conversations/${encodeURIComponent(id)}/messages`, { role, content, proposalIds });
+export const renameConversation = (id: string, title: string) => apiPatch<{ id: string; title: string }>(`/agent/conversations/${encodeURIComponent(id)}`, { title });
+export const deleteConversation = (id: string) => apiDelete(`/agent/conversations/${encodeURIComponent(id)}`);
