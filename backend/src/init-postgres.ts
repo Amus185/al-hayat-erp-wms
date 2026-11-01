@@ -721,7 +721,143 @@ export async function ensurePostgresInit(pool: Pool) {
   await ensureStorefrontSchema(pool);
   await ensureAgentSchema(pool);
   await ensureBetterAuth(pool);
+  await ensurePerformanceIndexes(pool);
 }
+
+/**
+ * Indexes for the columns that link tables together. Postgres does not index
+ * foreign keys by itself, so without these every "lines of this order" or
+ * "stock of this product" lookup reads the whole table, which gets slower as
+ * the data grows. Additive and idempotent; a table that does not exist in
+ * this database is skipped.
+ */
+const LINK_INDEXES: Array<[string, string]> = [
+  ['bill_of_materials', 'product_id'],
+  ['bom_items', 'bom_id'],
+  ['bom_items', 'material_product_id'],
+  ['categories', 'parent_id'],
+  ['chart_of_accounts', 'branch_id'],
+  ['chart_of_accounts', 'parent_id'],
+  ['customer_debts', 'branch_id'],
+  ['customer_debts', 'customer_id'],
+  ['customer_payments', 'branch_id'],
+  ['customer_payments', 'customer_id'],
+  ['customer_payments', 'invoice_id'],
+  ['customer_payments', 'manual_debt_id'],
+  ['deliveries', 'sales_order_id'],
+  ['deliveries', 'source_warehouse_id'],
+  ['delivery_items', 'delivery_id'],
+  ['delivery_items', 'product_id'],
+  ['delivery_runs', 'delivery_id'],
+  ['depreciation_schedules', 'accum_dep_account_id'],
+  ['depreciation_schedules', 'asset_account_id'],
+  ['depreciation_schedules', 'dep_expense_account_id'],
+  ['depreciation_schedules', 'fiscal_period_id'],
+  ['expenses', 'branch_id'],
+  ['goods_receipt_lines', 'goods_receipt_id'],
+  ['goods_receipt_lines', 'product_id'],
+  ['goods_receipt_lines', 'warehouse_location_id'],
+  ['goods_receipts', 'destination_branch_id'],
+  ['goods_receipts', 'destination_warehouse_id'],
+  ['goods_receipts', 'purchase_order_id'],
+  ['goods_receipts', 'warehouse_id'],
+  ['inventory_period_counts', 'branch_id'],
+  ['inventory_period_counts', 'fiscal_period_id'],
+  ['inventory_period_counts', 'warehouse_id'],
+  ['inventory_stock', 'branch_id'],
+  ['inventory_stock', 'location_id'],
+  ['inventory_stock', 'product_id'],
+  ['inventory_stock', 'warehouse_id'],
+  ['inventory_stock', 'warehouse_location_id'],
+  ['inventory_transactions', 'dest_branch_id'],
+  ['inventory_transactions', 'dest_warehouse_id'],
+  ['inventory_transactions', 'destination_branch_id'],
+  ['inventory_transactions', 'destination_location_id'],
+  ['inventory_transactions', 'destination_warehouse_id'],
+  ['inventory_transactions', 'product_id'],
+  ['inventory_transactions', 'source_branch_id'],
+  ['inventory_transactions', 'source_location_id'],
+  ['inventory_transactions', 'source_warehouse_id'],
+  ['invoice_lines', 'invoice_id'],
+  ['invoice_lines', 'product_id'],
+  ['invoice_payments', 'invoice_id'],
+  ['invoices', 'sales_order_id'],
+  ['journal_entries', 'branch_id'],
+  ['journal_entries', 'fiscal_period_id'],
+  ['journal_entry_lines', 'account_id'],
+  ['journal_entry_lines', 'branch_id'],
+  ['journal_entry_lines', 'journal_entry_id'],
+  ['lease_agreements', 'property_id'],
+  ['lease_agreements', 'tenant_id'],
+  ['livestock_expenses', 'livestock_id'],
+  ['livestock_transactions', 'livestock_id'],
+  ['notifications', 'user_id'],
+  ['product_group_items', 'component_product_id'],
+  ['products', 'brand_id'],
+  ['products', 'category_id'],
+  ['property_expenses', 'property_id'],
+  ['purchase_invoice_payments', 'purchase_invoice_id'],
+  ['purchase_invoices', 'purchase_order_id'],
+  ['purchase_order_lines', 'product_id'],
+  ['purchase_order_lines', 'purchase_order_id'],
+  ['purchase_orders', 'branch_id'],
+  ['purchase_orders', 'supplier_id'],
+  ['purchase_orders', 'warehouse_id'],
+  ['quotations', 'branch_id'],
+  ['quotations', 'customer_id'],
+  ['refresh_tokens', 'session_id'],
+  ['refresh_tokens', 'user_id'],
+  ['rental_payments', 'lease_agreement_id'],
+  ['role_permissions', 'permission_id'],
+  ['role_permissions', 'role_id'],
+  ['sales_order_lines', 'product_id'],
+  ['sales_order_lines', 'sales_order_id'],
+  ['sales_orders', 'branch_id'],
+  ['sales_orders', 'customer_id'],
+  ['storefront_request_lines', 'product_id'],
+  ['storefront_request_lines', 'request_id'],
+  ['storefront_requests', 'converted_order_id'],
+  ['storefront_reservations', 'product_id'],
+  ['storefront_reservations', 'stock_id'],
+  ['transfer_lines', 'product_id'],
+  ['transfer_lines', 'transfer_id'],
+  ['transfers', 'destination_branch_id'],
+  ['transfers', 'destination_warehouse_id'],
+  ['transfers', 'source_branch_id'],
+  ['transfers', 'source_warehouse_id'],
+  ['user_roles', 'role_id'],
+  ['user_roles', 'user_id'],
+  ['users', 'branch_id'],
+  ['users', 'warehouse_id'],
+  ['warehouse_locations', 'warehouse_id'],
+  ['work_order_materials', 'material_product_id'],
+  ['work_order_materials', 'work_order_id'],
+  ['work_order_stages', 'work_order_id'],
+  ['work_orders', 'bom_id'],
+  ['work_orders', 'product_id'],
+  ['work_orders', 'supervisor_id'],
+  ['work_orders', 'warehouse_id'],
+];
+const EXTRA_INDEXES: Array<[string, string]> = [
+  ['sales_orders', 'created_at DESC'],
+  ['journal_entries', 'entry_date'],
+  ['inventory_transactions', 'created_at DESC'],
+  ['notifications', 'user_id, created_at DESC'],
+  ['audit_logs', 'created_at DESC'],
+  ['storefront_requests', 'created_at'],
+];
+
+export async function ensurePerformanceIndexes(pool: Pool) {
+  for (const [table, cols] of [...LINK_INDEXES, ...EXTRA_INDEXES]) {
+    const name = `idx_${table}_${cols.replace(/ DESC/g, '_desc').replace(/[^a-z0-9_]+/gi, '_')}`.slice(0, 63);
+    try {
+      await pool.query(`CREATE INDEX IF NOT EXISTS ${name} ON ${table} (${cols})`);
+    } catch (err: any) {
+      if (err?.code !== '42P01' && err?.code !== '42703') console.warn(`Index ${name} skipped:`, err?.message);
+    }
+  }
+}
+
 
 /**
  * Better Auth's tables (its own migration) and an identity for every ERP user

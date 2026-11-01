@@ -816,17 +816,20 @@ sales.get('/orders', async (c) => {
            b.name AS branch_name, i.id AS invoice_id,
            i.total_amount AS invoice_total, i.discount_amount AS invoice_discount, i.status AS invoice_status,
            COALESCE((SELECT SUM(ip.amount) FROM invoice_payments ip WHERE ip.invoice_id = i.id), 0) AS amount_paid,
-           (SELECT d.status FROM deliveries d WHERE d.sales_order_id = so.id AND d.status != 'CANCELLED' ORDER BY d.created_at DESC LIMIT 1) AS delivery_status,
-           (SELECT d.id FROM deliveries d WHERE d.sales_order_id = so.id AND d.status != 'CANCELLED' ORDER BY d.created_at DESC LIMIT 1) AS delivery_id,
-           (SELECT d.delivery_number FROM deliveries d WHERE d.sales_order_id = so.id AND d.status != 'CANCELLED' ORDER BY d.created_at DESC LIMIT 1) AS delivery_number,
-           (SELECT d.delivered_at FROM deliveries d WHERE d.sales_order_id = so.id AND d.status != 'CANCELLED' ORDER BY d.created_at DESC LIMIT 1) AS delivered_at,
-           (SELECT d.total_boxes FROM deliveries d WHERE d.sales_order_id = so.id AND d.status != 'CANCELLED' ORDER BY d.created_at DESC LIMIT 1) AS total_boxes,
+           d.status AS delivery_status, d.id AS delivery_id, d.delivery_number, d.delivered_at, d.total_boxes,
            -- the order's own value, for orders not invoiced yet (drafts, web orders)
            (SELECT COALESCE(SUM(sol.line_total), 0) FROM sales_order_lines sol WHERE sol.sales_order_id = so.id) AS lines_total
     FROM sales_orders so
     LEFT JOIN customers c ON c.id = so.customer_id
     JOIN branches b ON b.id = so.branch_id
     LEFT JOIN invoices i ON i.sales_order_id = so.id
+    -- the order's latest delivery that is not cancelled (one lookup instead of five)
+    LEFT JOIN LATERAL (
+      SELECT dd.status, dd.id, dd.delivery_number, dd.delivered_at, dd.total_boxes
+      FROM deliveries dd
+      WHERE dd.sales_order_id = so.id AND dd.status != 'CANCELLED'
+      ORDER BY dd.created_at DESC LIMIT 1
+    ) d ON TRUE
     WHERE 1=1
   `;
   const params: any[] = [];

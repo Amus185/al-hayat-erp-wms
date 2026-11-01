@@ -29,24 +29,39 @@ logins would fail on Free. Hyperdrive, service bindings and Pages are included.
 All commands below run from the repository root unless stated. `npx wrangler login`
 once first.
 
-## Automatic deploys (GitHub Actions)
+## Automatic deploys (Cloudflare, from GitHub)
 
-After the one-time setup below (database, Hyperdrive, R2, Worker secrets, the
-Pages `API` binding), every push to `main` or `claude/friendly-noether-g968s1`
-runs `.github/workflows/deploy.yml`: tests, then `db:migrate`, then the backend
-Worker, the assistant Worker and the staff app. Nothing deploys if a test fails.
-It needs, under GitHub → repository → Settings → Secrets and variables → Actions:
+Each piece is connected to the GitHub repository in Cloudflare, so a push to
+the production branch deploys it within a few minutes. No computer of yours
+is involved. The staff app (Pages) is already connected; connect the three
+Workers the same way: **Workers & Pages → the Worker → Settings → Build →
+Connect** → repository `arabayto/al-hayat-erp-wms`.
 
-| Name | Kind | Value |
-|---|---|---|
-| `CLOUDFLARE_API_TOKEN` | secret | Cloudflare → My Profile → API Tokens → Create Token → template **Edit Cloudflare Workers**, then add **Account · Cloudflare Pages · Edit** and **Account · Hyperdrive · Edit**; account `c3066ec0…` only |
-| `DATABASE_URL` | secret | the Layerbase connection string |
-| `AGENT_TOKEN_SECRET` | secret | the same value as in `backend/.env` |
-| `VITE_AGENT_URL` | variable | `https://alhayat-ai-agent.biggestfunofpes.workers.dev` (after its first deploy) |
-| `PAGES_BRANCH` | variable | the Pages project's production branch, if not `main` |
+Use the **repository root** as the root directory for all of them: the root
+`package-lock.json` installs every workspace (the backend has no lockfile of
+its own).
 
-Without `CLOUDFLARE_API_TOKEN` the tests run and the deploy is skipped. To
-deploy again without a code change: Actions → Test and deploy → Run workflow.
+| Worker | Production branch | Root directory | Build command | Deploy command | Build variables (Settings → Build → Variables) |
+|---|---|---|---|---|---|
+| `al-hayat-api` (backend) | `claude/friendly-noether-g968s1` | `/` | *(empty)* | `cd backend && npm run db:migrate && npx wrangler deploy` | `DATABASE_URL` = the Layerbase connection string, **as a secret** |
+| `alhayat-ai-agent` (assistant) | same | `/` | *(empty)* | `cd ai-agent && npx wrangler deploy` | — |
+| `al-hayat-storefront` (shop) | same | `ecommerce` | *(empty)* | `npm run deploy` | `IMAGE_HOSTNAME`, `NEXT_PUBLIC_SITE_URL`, `NEXT_PUBLIC_CONTACT_PHONE` (the values in your local `ecommerce/.env.production`) |
+
+For every Worker, turn **off** "Builds for non-production branches": the
+backend's deploy runs the database migration, which must only ever run for
+production. The migration runs before the deploy, and a failed migration
+stops the deploy (`&&`).
+
+Runtime secrets (`BETTER_AUTH_SECRET`, `STOREFRONT_API_KEY`, the R2 keys…)
+stay where they are, under each Worker's Settings → Variables and Secrets.
+Build variables are separate and only exist during the build.
+
+Order of a change that touches several pieces: the backend is backwards
+compatible with the previous staff app and shop (additive changes), so the
+pieces can finish deploying in any order.
+
+**GitHub Actions** (`.github/workflows/deploy.yml`) now only runs the tests
+on each push; it never deploys, so it cannot deploy twice alongside Cloudflare.
 
 ## 1. Database
 
