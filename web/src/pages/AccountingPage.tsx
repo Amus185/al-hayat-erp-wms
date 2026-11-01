@@ -586,16 +586,16 @@ export function AccountingPage() {
   const jeBalanced = Math.abs(jeLineTotalDr - jeLineTotalCr) < 0.005 && jeLineTotalDr > 0;
 
   // ── Columns ──────────────────────────────────────────────────────
-  const jeCols: Column[] = [
-    { key: 'entry_number', header: 'Entry #', render: (r) => <span style={{ fontFamily: 'monospace', fontWeight: 700, color: G, cursor: 'pointer' }} onClick={() => openJEDetail(r.id)}>{r.entry_number}</span> },
-    { key: 'entry_date', header: 'Date' },
-    { key: 'description', header: 'Description', render: (r) => <span style={{ fontSize: '13px' }}>{r.description}</span> },
-    { key: 'reference_type', header: 'Type', render: (r) => r.reference_type ? <Badge label={r.reference_type} color={BLUE} /> : <span style={{ color: '#999' }}>—</span> },
-    { key: 'total_debit', header: 'Debit', render: (r) => <span style={{ fontFamily: 'monospace', color: G }}>{fmt(r.total_debit)}</span> },
-    { key: 'total_credit', header: 'Credit', render: (r) => <span style={{ fontFamily: 'monospace', color: TEAL }}>{fmt(r.total_credit)}</span> },
-    { key: 'status', header: 'Status', render: (r) => <Badge label={r.status} color={statusColor(r.status)} /> },
+  const jeCols: Column<any>[] = [
+    { key: 'entry_number', label: 'Entry #', render: (r) => <span style={{ fontFamily: 'monospace', fontWeight: 700, color: G, cursor: 'pointer' }} onClick={() => openJEDetail(r.id)}>{r.entry_number}</span> },
+    { key: 'entry_date', label: 'Date' },
+    { key: 'description', label: 'Description', render: (r) => <span style={{ fontSize: '13px' }}>{r.description}</span> },
+    { key: 'reference_type', label: 'Type', render: (r) => r.reference_type ? <Badge label={r.reference_type} color={BLUE} /> : <span style={{ color: '#999' }}>—</span> },
+    { key: 'total_debit', label: 'Debit', render: (r) => <span style={{ fontFamily: 'monospace', color: G }}>{fmt(r.total_debit)}</span> },
+    { key: 'total_credit', label: 'Credit', render: (r) => <span style={{ fontFamily: 'monospace', color: TEAL }}>{fmt(r.total_credit)}</span> },
+    { key: 'status', label: 'Status', render: (r) => <Badge label={r.status} color={statusColor(r.status)} /> },
     {
-      key: 'actions', header: '', render: (r) => (
+      key: 'actions', label: '', render: (r) => (
         <div style={{ display: 'flex', gap: '6px' }}>
           {r.status === 'DRAFT' && (
             <button onClick={() => postEntry(r.id)} style={{ background: G + '18', border: 'none', color: G, borderRadius: '6px', padding: '4px 10px', cursor: 'pointer', fontSize: '12px', fontWeight: 600 }}>
@@ -619,43 +619,43 @@ export function AccountingPage() {
     },
   ];
 
-  const coaCols: Column[] = [
-    { key: 'code', header: 'Code', render: (r) => <span style={{ fontFamily: 'monospace', fontWeight: 700 }}>{r.code}</span> },
-    { key: 'name', header: 'Account Name' },
-    { key: 'account_type', header: 'Type', render: (r) => <Badge label={r.account_type} color={accountTypeColor(r.account_type)} /> },
-    { key: 'normal_balance', header: 'Normal', render: (r) => <span style={{ fontSize: '12px', color: r.normal_balance === 'DEBIT' ? G : TEAL }}>{r.normal_balance}</span> },
-    { key: 'description', header: 'Description', render: (r) => <span style={{ fontSize: '12px', color: '#6b7280' }}>{r.description || '—'}</span> },
+  const coaCols: Column<any>[] = [
+    { key: 'code', label: 'Code', render: (r) => <span style={{ fontFamily: 'monospace', fontWeight: 700 }}>{r.code}</span> },
+    { key: 'name', label: 'Account Name' },
+    { key: 'account_type', label: 'Type', render: (r) => <Badge label={r.account_type} color={accountTypeColor(r.account_type)} /> },
+    { key: 'normal_balance', label: 'Normal', render: (r) => <span style={{ fontSize: '12px', color: r.normal_balance === 'DEBIT' ? G : TEAL }}>{r.normal_balance}</span> },
+    { key: 'description', label: 'Description', render: (r) => <span style={{ fontSize: '12px', color: '#6b7280' }}>{r.description || '—'}</span> },
   ];
 
-  const tbCols: Column[] = [
-    { key: 'code', header: 'Code', render: (r: any) => <span style={{ fontFamily: 'monospace', fontWeight: 700 }}>{r.code}</span> },
-    { key: 'account_name', header: 'Account Name', render: (r: any) => <button type='button' onClick={() => openLedgerDrill(r)} style={{ border: 0, background: 'transparent', color: G, cursor: 'pointer', fontWeight: 700, padding: 0 }}>{r.account_name}</button> },
-    { key: 'account_type', header: 'Type', render: (r: any) => <Badge label={r.account_type} color={accountTypeColor(r.account_type)} /> },
-    { key: 'total_debit', header: 'Debit ($)', render: (r: any) => <span style={{ fontFamily: 'monospace', color: G }}>{r.total_debit > 0 ? fmtN(r.total_debit) : '—'}</span> },
-    { key: 'total_credit', header: 'Credit ($)', render: (r: any) => <span style={{ fontFamily: 'monospace', color: TEAL }}>{r.total_credit > 0 ? fmtN(r.total_credit) : '—'}</span> },
-    { key: 'net_balance', header: 'Balance ($)', render: (r: any) => <span style={{ fontFamily: 'monospace', fontWeight: 700, color: Number(r.net_balance) >= 0 ? G : RED }}>{fmtN(r.net_balance)}</span> },
+  const tbCols: Column<any>[] = [
+    { key: 'code', label: 'Code', render: (r: any) => <span style={{ fontFamily: 'monospace', fontWeight: 700 }}>{r.code}</span> },
+    { key: 'account_name', label: 'Account Name', render: (r: any) => <button type='button' onClick={() => openLedgerDrill(r)} style={{ border: 0, background: 'transparent', color: G, cursor: 'pointer', fontWeight: 700, padding: 0 }}>{r.account_name}</button> },
+    { key: 'account_type', label: 'Type', render: (r: any) => <Badge label={r.account_type} color={accountTypeColor(r.account_type)} /> },
+    { key: 'total_debit', label: 'Debit ($)', render: (r: any) => <span style={{ fontFamily: 'monospace', color: G }}>{r.total_debit > 0 ? fmtN(r.total_debit) : '—'}</span> },
+    { key: 'total_credit', label: 'Credit ($)', render: (r: any) => <span style={{ fontFamily: 'monospace', color: TEAL }}>{r.total_credit > 0 ? fmtN(r.total_credit) : '—'}</span> },
+    { key: 'net_balance', label: 'Balance ($)', render: (r: any) => <span style={{ fontFamily: 'monospace', fontWeight: 700, color: Number(r.net_balance) >= 0 ? G : RED }}>{fmtN(r.net_balance)}</span> },
   ];
 
-  const ledgerCols: Column[] = [
-    { key: 'account_code', header: 'Account', render: (r: any) => <span style={{ fontFamily: 'monospace', fontWeight: 700, color: G }}>{r.account_code}</span> },
-    { key: 'account_name', header: 'Account Name', render: (r: any) => <span style={{ fontSize: '13px' }}>{r.account_name}</span> },
-    { key: 'entry_date', header: 'Date' },
-    { key: 'entry_number', header: 'Entry #', render: (r: any) => <span style={{ fontFamily: 'monospace', fontSize: '12px' }}>{r.entry_number}</span> },
-    { key: 'description', header: 'Description', render: (r: any) => <span style={{ fontSize: '12px' }}>{r.description}</span> },
-    { key: 'debit_amount', header: 'Debit ($)', render: (r: any) => <span style={{ fontFamily: 'monospace', color: G }}>{r.debit_amount > 0 ? fmtN(r.debit_amount) : '—'}</span> },
-    { key: 'credit_amount', header: 'Credit ($)', render: (r: any) => <span style={{ fontFamily: 'monospace', color: TEAL }}>{r.credit_amount > 0 ? fmtN(r.credit_amount) : '—'}</span> },
-    { key: 'running_balance', header: 'Balance', render: (r: any) => <span style={{ fontFamily: 'monospace', fontWeight: 700, color: Number(r.running_balance) >= 0 ? G : RED }}>{fmtN(r.running_balance)}</span> },
+  const ledgerCols: Column<any>[] = [
+    { key: 'account_code', label: 'Account', render: (r: any) => <span style={{ fontFamily: 'monospace', fontWeight: 700, color: G }}>{r.account_code}</span> },
+    { key: 'account_name', label: 'Account Name', render: (r: any) => <span style={{ fontSize: '13px' }}>{r.account_name}</span> },
+    { key: 'entry_date', label: 'Date' },
+    { key: 'entry_number', label: 'Entry #', render: (r: any) => <span style={{ fontFamily: 'monospace', fontSize: '12px' }}>{r.entry_number}</span> },
+    { key: 'description', label: 'Description', render: (r: any) => <span style={{ fontSize: '12px' }}>{r.description}</span> },
+    { key: 'debit_amount', label: 'Debit ($)', render: (r: any) => <span style={{ fontFamily: 'monospace', color: G }}>{r.debit_amount > 0 ? fmtN(r.debit_amount) : '—'}</span> },
+    { key: 'credit_amount', label: 'Credit ($)', render: (r: any) => <span style={{ fontFamily: 'monospace', color: TEAL }}>{r.credit_amount > 0 ? fmtN(r.credit_amount) : '—'}</span> },
+    { key: 'running_balance', label: 'Balance', render: (r: any) => <span style={{ fontFamily: 'monospace', fontWeight: 700, color: Number(r.running_balance) >= 0 ? G : RED }}>{fmtN(r.running_balance)}</span> },
   ];
 
-  const invCountCols: Column[] = [
-    { key: 'period_name', header: 'Period', render: (r: any) => <span style={{ fontSize: '13px', fontWeight: 600 }}>{r.period_name}</span> },
-    { key: 'branch_name', header: 'Branch', render: (r: any) => r.branch_name || <span style={{ color: '#999' }}>HQ / Warehouse</span> },
-    { key: 'count_date', header: 'Count Date' },
-    { key: 'total_value', header: 'Ending Inventory Value', render: (r: any) => <span style={{ fontFamily: 'monospace', fontWeight: 700, color: G }}>{fmt(r.total_value)}</span> },
-    { key: 'status', header: 'Status', render: (r: any) => <Badge label={r.status} color={statusColor(r.status)} /> },
-    { key: 'counted_by_name', header: 'Counted By', render: (r: any) => r.counted_by_name || '—' },
+  const invCountCols: Column<any>[] = [
+    { key: 'period_name', label: 'Period', render: (r: any) => <span style={{ fontSize: '13px', fontWeight: 600 }}>{r.period_name}</span> },
+    { key: 'branch_name', label: 'Branch', render: (r: any) => r.branch_name || <span style={{ color: '#999' }}>HQ / Warehouse</span> },
+    { key: 'count_date', label: 'Count Date' },
+    { key: 'total_value', label: 'Ending Inventory Value', render: (r: any) => <span style={{ fontFamily: 'monospace', fontWeight: 700, color: G }}>{fmt(r.total_value)}</span> },
+    { key: 'status', label: 'Status', render: (r: any) => <Badge label={r.status} color={statusColor(r.status)} /> },
+    { key: 'counted_by_name', label: 'Counted By', render: (r: any) => r.counted_by_name || '—' },
     {
-      key: 'actions', header: '', render: (r: any) => r.status === 'DRAFT' ? (
+      key: 'actions', label: '', render: (r: any) => r.status === 'DRAFT' ? (
         <button onClick={async () => {
           try {
             await apiPatch(`/accounting/inventory-counts/${r.id}/approve`, {});
@@ -669,15 +669,15 @@ export function AccountingPage() {
     },
   ];
 
-  const depCols: Column[] = [
-    { key: 'asset_name', header: 'Asset Name', render: (r: any) => <span style={{ fontWeight: 600 }}>{r.asset_name}</span> },
-    { key: 'acquisition_date', header: 'Acquired' },
-    { key: 'cost', header: 'Cost', render: (r: any) => <span style={{ fontFamily: 'monospace' }}>{fmt(r.cost)}</span> },
-    { key: 'salvage_value', header: 'Salvage', render: (r: any) => <span style={{ fontFamily: 'monospace' }}>{fmt(r.salvage_value)}</span> },
-    { key: 'useful_life_years', header: 'Life (Yrs)' },
-    { key: 'method', header: 'Method', render: (r: any) => <Badge label={r.method.replace('_', ' ')} color={TEAL} /> },
-    { key: 'period_depreciation', header: 'Period Dep.', render: (r: any) => <span style={{ fontFamily: 'monospace', fontWeight: 700, color: AMBER }}>{fmt(r.period_depreciation)}</span> },
-    { key: 'period_name', header: 'Period', render: (r: any) => r.period_name || '—' },
+  const depCols: Column<any>[] = [
+    { key: 'asset_name', label: 'Asset Name', render: (r: any) => <span style={{ fontWeight: 600 }}>{r.asset_name}</span> },
+    { key: 'acquisition_date', label: 'Acquired' },
+    { key: 'cost', label: 'Cost', render: (r: any) => <span style={{ fontFamily: 'monospace' }}>{fmt(r.cost)}</span> },
+    { key: 'salvage_value', label: 'Salvage', render: (r: any) => <span style={{ fontFamily: 'monospace' }}>{fmt(r.salvage_value)}</span> },
+    { key: 'useful_life_years', label: 'Life (Yrs)' },
+    { key: 'method', label: 'Method', render: (r: any) => <Badge label={r.method.replace('_', ' ')} color={TEAL} /> },
+    { key: 'period_depreciation', label: 'Period Dep.', render: (r: any) => <span style={{ fontFamily: 'monospace', fontWeight: 700, color: AMBER }}>{fmt(r.period_depreciation)}</span> },
+    { key: 'period_name', label: 'Period', render: (r: any) => r.period_name || '—' },
   ];
 
   // ─── Shared filter bar ─────────────────────────────────────────
@@ -995,7 +995,7 @@ export function AccountingPage() {
                       <CartesianGrid strokeDasharray='3 3' stroke='#f0f4f0' />
                       <XAxis dataKey='name' tick={{ fontSize: 12 }} />
                       <YAxis tick={{ fontSize: 12 }} tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`} />
-                      <Tooltip formatter={(v: number) => fmt(v)} />
+                      <Tooltip formatter={(v) => fmt(Number(v))} />
                       <Bar dataKey='amount' fill={G} radius={[6, 6, 0, 0]}>
                         {[G, AMBER, G2].map((color, i) => <Cell key={i} fill={color} />)}
                       </Bar>
@@ -1172,7 +1172,7 @@ export function AccountingPage() {
                                     <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
                                   ))}
                                 </Pie>
-                                <Tooltip formatter={(v: number) => [fmt(v), 'Revenue']} />
+                                <Tooltip formatter={(v) => [fmt(Number(v)), 'Revenue']} />
                               </PieChart>
                             </ResponsiveContainer>
                           </div>

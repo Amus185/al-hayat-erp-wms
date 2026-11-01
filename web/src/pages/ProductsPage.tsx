@@ -53,7 +53,7 @@ export interface Product {
   product_type?: 'STANDARD' | 'GROUPED';
   price_tiers?: PriceTier[];
   group_items?: GroupItem[];
-  is_active: boolean;
+  is_active: boolean | number; // the API sends 1/0
   is_published?: number | boolean;
   category_name?: string;
   brand_name?: string;

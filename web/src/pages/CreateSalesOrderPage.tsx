@@ -770,7 +770,7 @@ export function CreateSalesOrderPage() {
                           <td style={{ padding: '8px 12px', textAlign: 'center' }}>
                             <input
                               type="number"
-                              min="1"
+                              min={1}
                               value={l.quantity}
                               onChange={(e) => updateLine(idx, 'quantity', parseInt(e.target.value) || 1)}
                               style={{ width: '65px', padding: '4px 6px', textAlign: 'center', borderRadius: '4px', border: '1px solid #c8d8c8' }}
@@ -782,8 +782,8 @@ export function CreateSalesOrderPage() {
                                 <span style={{ fontSize: '12px', color: '#667066' }}>$</span>
                                 <input
                                   type="number"
-                                  min="0"
-                                  step="0.01"
+                                  min={0}
+                                  step={0.01}
                                   value={l.unitPrice}
                                   onChange={(e) => updateLine(idx, 'unitPrice', parseFloat(e.target.value) || 0)}
                                   style={{ width: '85px', padding: '4px 6px', textAlign: 'right', borderRadius: '4px', border: '1px solid #c8d8c8', fontWeight: 600 }}
@@ -809,8 +809,8 @@ export function CreateSalesOrderPage() {
                           <td style={{ padding: '8px 12px', textAlign: 'right' }}>
                             <input
                               type="number"
-                              min="0"
-                              step="0.01"
+                              min={0}
+                              step={0.01}
                               value={l.discount}
                               onChange={(e) => updateLine(idx, 'discount', parseFloat(e.target.value) || 0)}
                               style={{ width: '75px', padding: '4px 6px', textAlign: 'right', borderRadius: '4px', border: '1px solid #c8d8c8' }}
@@ -927,8 +927,8 @@ export function CreateSalesOrderPage() {
                 label="Fee Amount ($) *"
                 id="installFeeAmount"
                 type="number"
-                min="0"
-                step="0.01"
+                min={0}
+                step={0.01}
                 value={String(installationFee)}
                 onChange={(val) => setInstallationFee(Math.max(0, Number(val) || 0))}
                 placeholder="40.00"

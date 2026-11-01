@@ -582,7 +582,7 @@ export function CustomersPage() {
 
     const c = ledgerData.customer;
     const currentBal = ledgerData.current_balance ?? ledgerData.customer?.current_balance ?? 0;
-    const entries = ledgerData.entries || (ledgerData as any).ledger || [];
+    const entries: any[] = ledgerData.entries || (ledgerData as any).ledger || [];
 
     writePrintDocument(w, html`
       <!DOCTYPE html>
@@ -1268,7 +1268,7 @@ export function CustomersPage() {
             Failed to load customer ledger. Please try again.
           </div>
         ) : (() => {
-          const ledgerEntries = ledgerData.entries || (ledgerData as any).ledger || [];
+          const ledgerEntries: any[] = ledgerData.entries || (ledgerData as any).ledger || [];
           const currentBal = ledgerData.current_balance ?? ledgerData.customer?.current_balance ?? 0;
 
           return (

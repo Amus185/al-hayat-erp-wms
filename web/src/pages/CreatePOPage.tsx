@@ -132,7 +132,7 @@ export function CreatePOPage() {
   }, [searchQuery, productsList]);
 
   const addLine = (v: ProductSearchItem | SelectableProduct) => {
-    const name = (v as any).productName || v.name;
+    const name = (v as any).productName || (v as any).name;
     const cost = (v as any).costPrice ?? (v as any).price ?? 0;
     const existingIndex = lines.findIndex((l) => l.productId === v.id);
     if (existingIndex !== -1) {

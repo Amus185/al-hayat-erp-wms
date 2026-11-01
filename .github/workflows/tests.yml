@@ -39,5 +39,7 @@ jobs:
           TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
       - name: Assistant tests
         run: node --import tsx --test ai-agent/tests/*.test.ts
+      - name: Staff app typecheck
+        run: npm --workspace web run typecheck
       - name: Staff app tests
         run: node --import tsx --test web/src/components/*.test.ts

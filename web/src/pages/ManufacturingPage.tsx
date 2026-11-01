@@ -978,8 +978,8 @@ export function ManufacturingPage() {
                   label="Target Selling Price ($)"
                   id="newWoSellPrice"
                   type="number"
-                  min="0"
-                  step="0.01"
+                  min={0}
+                  step={0.01}
                   value={String(woNewItem.sellingPrice)}
                   onChange={(val) => setWoNewItem((p) => ({ ...p, sellingPrice: Number(val) || 0 }))}
                 />
@@ -988,8 +988,8 @@ export function ManufacturingPage() {
                   label="Target Estimated Cost ($)"
                   id="newWoUnitCost"
                   type="number"
-                  min="0"
-                  step="0.01"
+                  min={0}
+                  step={0.01}
                   value={String(woNewItem.unitCost)}
                   onChange={(val) => setWoNewItem((p) => ({ ...p, unitCost: Number(val) || 0 }))}
                 />
@@ -1074,7 +1074,7 @@ export function ManufacturingPage() {
               label="Target Quantity (Units) *"
               id="woTargetQty"
               type="number"
-              min="1"
+              min={1}
               value={String(woForm.targetQuantity)}
               onChange={(val) => setWoForm((p) => ({ ...p, targetQuantity: Math.max(1, Number(val) || 1) }))}
               required
@@ -1084,7 +1084,7 @@ export function ManufacturingPage() {
               label="Estimated Labor Cost ($)"
               id="woLaborCost"
               type="number"
-              min="0"
+              min={0}
               value={String(woForm.laborCost)}
               onChange={(val) => setWoForm((p) => ({ ...p, laborCost: Number(val) || 0 }))}
             />
@@ -1223,8 +1223,8 @@ export function ManufacturingPage() {
                   label="Target Selling Price ($)"
                   id="newBomSellPrice"
                   type="number"
-                  min="0"
-                  step="0.01"
+                  min={0}
+                  step={0.01}
                   value={String(bomNewItem.sellingPrice)}
                   onChange={(val) => setBomNewItem((p) => ({ ...p, sellingPrice: Number(val) || 0 }))}
                 />
@@ -1313,8 +1313,8 @@ export function ManufacturingPage() {
                         <td>
                           <input
                             type="number"
-                            min="0.1"
-                            step="0.1"
+                            min={0.1}
+                            step={0.1}
                             value={item.quantityRequired}
                             onChange={(e) => {
                               const val = Number(e.target.value) || 0;
@@ -1375,7 +1375,7 @@ export function ManufacturingPage() {
               label="Completed & Inspected Units *"
               id="compUnits"
               type="number"
-              min="1"
+              min={1}
               value={String(completeForm.completedQuantity)}
               onChange={(val) => setCompleteForm((p) => ({ ...p, completedQuantity: Number(val) || 0 }))}
               required
@@ -1385,7 +1385,7 @@ export function ManufacturingPage() {
               label="Rejected / Scrap Units"
               id="rejUnits"
               type="number"
-              min="0"
+              min={0}
               value={String(completeForm.rejectedQuantity)}
               onChange={(val) => setCompleteForm((p) => ({ ...p, rejectedQuantity: Number(val) || 0 }))}
             />

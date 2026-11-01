@@ -45,6 +45,15 @@ interface InventoryTransaction {
   name?: string;
   sku?: string;
   barcode?: string;
+  // joined by the transactions list
+  destination_owner_type?: string | null;
+  destination_warehouse?: string | null;
+  destination_branch?: string | null;
+  aisle?: string | null;
+  rack?: string | null;
+  shelf?: string | null;
+  bin?: string | null;
+  user_name?: string | null;
 }
 
 export function InventoryPage() {

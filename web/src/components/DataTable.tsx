@@ -25,7 +25,8 @@ interface DataTableProps<T> {
   pageSize?: number;
 }
 
-export function DataTable<T extends Record<string, unknown>>({
+// Any row type: typed pages pass their own interfaces (Column<Product>, …).
+export function DataTable<T extends object>({
   columns,
   data,
   keyExtractor,
@@ -102,7 +103,7 @@ export function DataTable<T extends Record<string, unknown>>({
               >
                 {columns.map((col) => (
                   <td key={col.key}>
-                    {col.render ? col.render(row) : (row[col.key] as ReactNode)}
+                    {col.render ? col.render(row) : ((row as Record<string, unknown>)[col.key] as ReactNode)}
                   </td>
                 ))}
               </tr>
