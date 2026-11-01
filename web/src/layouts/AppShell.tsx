@@ -33,6 +33,7 @@ import { apiGet, apiPost } from '../api/client';
 import { AGENT_URL } from '../api/assistant';
 import { ActivityBar } from '../components/ActivityBar';
 import { IdleGuard } from '../components/IdleGuard';
+import { UpdateNotice } from '../components/UpdateNotice';
 
 const navItems = [
   { label: 'Dashboard', path: '/', icon: Home, permission: '' },
@@ -186,6 +187,7 @@ export function AppShell({ children }: AppShellProps) {
   return (
     <div className="app-shell">
       <ActivityBar />
+      <UpdateNotice />
       {user && <IdleGuard minutes={user.idleTimeoutMinutes ?? 30} onTimeout={logout} />}
       {/* Mobile Overlay Backdrop */}
       {isMobileOpen && (

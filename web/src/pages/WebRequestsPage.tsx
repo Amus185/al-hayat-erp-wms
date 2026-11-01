@@ -11,6 +11,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { confirmAction } from '../utils/swal';
 import { ModalLoading } from '../components/ModalLoading';
 import { useLatest } from '../utils/latest';
+import { useLiveRefresh } from '../utils/live';
 import {
   cancelWebRequest, convertWebRequest, getStorefrontSettings, getWebRequest, listWebRequests, saveStorefrontSettings,
   type StorefrontSettings, type WebOrderStage, type WebRequestDetail, type WebRequestRow,
@@ -49,21 +50,25 @@ export function WebRequestsPage({ embedded = false }: { embedded?: boolean } = {
   const closeDetail = () => { detailRequest.cancel(); setDetail(null); setDetailRow(null); };
   const [busy, setBusy] = useState(false);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  // quiet: a background refresh (no spinner, no error toast)
+  const load = useCallback(async (quiet = false) => {
+    if (!quiet) setLoading(true);
     try {
       setRows(await listWebRequests(tab === 'ALL' ? undefined : tab));
       setBlocked(null);
     } catch (err: any) {
+      if (quiet) return;
       // 403: this user's branch is not the web branch
       if (err?.status === 403) setBlocked(err.message);
       else addToast('error', err?.message || 'Could not load website requests');
     } finally {
-      setLoading(false);
+      if (!quiet) setLoading(false);
     }
   }, [tab, addToast]);
 
   useEffect(() => { load(); }, [load]);
+  // New online orders appear without refreshing the page.
+  useLiveRefresh(() => load(true));
 
   // The window opens at once with the row; its lines load inside it.
   const open = async (row: WebRequestRow) => {
@@ -190,6 +195,7 @@ export function WebRequestsPage({ embedded = false }: { embedded?: boolean } = {
               {detail.email && <div><div style={{ fontSize: '11px', color: '#64748b' }}>EMAIL</div>{detail.email}</div>}
               {(detail.address || detail.city) && <div><div style={{ fontSize: '11px', color: '#64748b' }}>DELIVERY ADDRESS</div>{[detail.address, detail.city].filter(Boolean).join(', ')}</div>}
             </div>
+            {detail.cancel_reason && <div role="note" style={{ background: '#fffbeb', border: '1px solid #fcd34d', color: '#7c4a03', borderRadius: '8px', padding: '10px 12px', fontSize: '13px' }}><strong>Cancelled automatically:</strong> {detail.cancel_reason}</div>}
             {detail.notes && <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '10px 12px', fontSize: '13px' }}><strong>Customer note:</strong> {detail.notes}</div>}
 
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
@@ -243,11 +249,12 @@ export function StorefrontSettingsCard() {
   const [buffer, setBuffer] = useState('0');
   const [low, setLow] = useState('3');
   const [showQty, setShowQty] = useState(false);
+  const [hold, setHold] = useState('48');
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     getStorefrontSettings()
-      .then((s) => { setSettings(s); setLocationId(s.locationId ?? ''); setBuffer(String(s.safetyBuffer)); setLow(String(s.lowStockThreshold)); setShowQty(Boolean(s.showQuantities)); })
+      .then((s) => { setSettings(s); setLocationId(s.locationId ?? ''); setBuffer(String(s.safetyBuffer)); setLow(String(s.lowStockThreshold)); setShowQty(Boolean(s.showQuantities)); setHold(String(s.holdHours ?? 48)); })
       .catch((err) => addToast('error', err?.message || 'Could not load website settings'));
   }, [addToast]);
 
@@ -256,7 +263,7 @@ export function StorefrontSettingsCard() {
   const save = async () => {
     setSaving(true);
     try {
-      const body: { locationId?: string; safetyBuffer: number; lowStockThreshold: number; showQuantities: boolean } = { safetyBuffer: Number(buffer), lowStockThreshold: Number(low), showQuantities: showQty };
+      const body: { locationId?: string; safetyBuffer: number; lowStockThreshold: number; showQuantities: boolean; holdHours: number } = { safetyBuffer: Number(buffer), lowStockThreshold: Number(low), showQuantities: showQty, holdHours: Number(hold) };
       if (locationId) body.locationId = locationId;
       const saved = await saveStorefrontSettings(body);
       // keep the warnings in step with what was just saved
@@ -293,6 +300,10 @@ export function StorefrontSettingsCard() {
         />
         <InputField label="Safety buffer (units held back)" id="web-buffer" type="number" min={0} value={buffer} onChange={setBuffer} />
         <InputField label="Show “low stock” at or below" id="web-low" type="number" min={0} value={low} onChange={setLow} />
+        <div>
+          <InputField label="Release unconfirmed orders after (hours)" id="web-hold" type="number" min={0} value={hold} onChange={setHold} />
+          <p style={{ margin: '4px 0 0', fontSize: '11px', color: '#64748b' }}>A new online order holds its stock this long. If nobody creates its sales order by then, it is cancelled and the stock goes back on the shop. 0 = hold until handled.</p>
+        </div>
       </div>
       <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '14px', cursor: 'pointer' }}>
         <input type="checkbox" checked={showQty} onChange={(e) => setShowQty(e.target.checked)} />

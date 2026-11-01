@@ -48,6 +48,11 @@ admin.patch('/settings', requireAdmin, async (c) => {
     }
   }
   if (body.showQuantities !== undefined) writes.push(['show_quantities', body.showQuantities ? '1' : '0']);
+  if (body.holdHours !== undefined) {
+    const n = Number(body.holdHours);
+    if (!Number.isInteger(n) || n < 0 || n > 720) return c.json({ message: 'Hold time must be a whole number of hours from 0 (never release) to 720.' }, 400);
+    writes.push(['hold_hours', String(n)]);
+  }
   if (!writes.length) return c.json({ message: 'Nothing to update.' }, 400);
   const db = c.env.DB;
   await db.batch(writes.map(([k, v]) => db.prepare(`

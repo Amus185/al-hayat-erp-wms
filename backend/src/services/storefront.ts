@@ -11,6 +11,7 @@ export interface StorefrontSettings {
   safetyBuffer: number;          // units held back from the website
   lowStockThreshold: number;     // at or below this many sellable units: LOW
   showQuantities: boolean;       // show customers the sellable count, not only In stock / Few left
+  holdHours: number;             // an unconfirmed web order releases its stock after this many hours (0 = never)
 }
 
 export async function getSettings(db: any): Promise<StorefrontSettings> {
@@ -25,6 +26,7 @@ export async function getSettings(db: any): Promise<StorefrontSettings> {
     safetyBuffer: int('safety_buffer', 0),
     lowStockThreshold: int('low_stock_threshold', 3),
     showQuantities: map.get('show_quantities') === '1',
+    holdHours: int('hold_hours', 48),
   };
 }
 
@@ -226,6 +228,44 @@ export function returnWebQuantityStmt(db: any, by: { requestId: string } | { ord
     UPDATE products p SET web_quantity = p.web_quantity + totals.qty
     FROM totals WHERE p.id = totals.product_id AND p.web_quantity IS NOT NULL
   `).bind('requestId' in by ? by.requestId : by.orderId);
+}
+
+// ── Expiry of unconfirmed web orders ────────────────────────────────────────
+
+/**
+ * Cancels web orders still NEW (nobody confirmed them) after the hold time,
+ * giving their reserved stock and online quantity back, so a forgotten order
+ * never blocks the shop. Each order is cancelled on its own, all or nothing,
+ * and only while it is still NEW (one being converted right now is left alone).
+ * Runs on a schedule; safe to run any number of times. Returns how many it cancelled.
+ */
+export async function expireStaleRequests(db: any): Promise<number> {
+  const s = await getSettings(db);
+  if (!s.holdHours) return 0;
+  const { results } = await db.prepare(`
+    SELECT id FROM storefront_requests
+    WHERE status = 'NEW' AND created_at < CURRENT_TIMESTAMP - make_interval(hours => ?)
+    ORDER BY created_at LIMIT 200
+  `).bind(s.holdHours).all();
+  let n = 0;
+  for (const r of (results || []) as any[]) {
+    try {
+      await db.batch([
+        db.prepare(`
+          UPDATE storefront_requests
+          SET status = 'CANCELLED', handled_at = CURRENT_TIMESTAMP,
+              cancel_reason = 'Not confirmed within ' || ? || ' hours: stock released automatically.'
+          WHERE id = ? AND status = 'NEW'
+        `).bind(String(s.holdHours), r.id).mustAffect('already handled'),
+        releaseReservationsStmt(db, { requestId: r.id }, 'Expired: not confirmed in time'),
+        returnWebQuantityStmt(db, { requestId: r.id }),
+      ]);
+      n += 1;
+    } catch {
+      // Handled by staff a moment ago: nothing to do.
+    }
+  }
+  return n;
 }
 
 export function availabilityOf(units: number, s: StorefrontSettings): Availability {

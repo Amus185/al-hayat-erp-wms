@@ -44,6 +44,8 @@ export interface StorefrontSettings {
   safetyBuffer: number;
   lowStockThreshold: number;
   showQuantities: boolean;
+  /** An unconfirmed web order releases its stock after this many hours (0 = never). */
+  holdHours: number;
   branches: { id: string; name: string }[];
   imagesConfigured: boolean;
   requestsConfigured: boolean;
@@ -77,6 +79,8 @@ export interface WebRequestDetail extends Omit<WebRequestRow, 'line_count' | 'or
   address: string | null;
   city: string | null;
   notes: string | null;
+  /** Set when the order was cancelled automatically (e.g. not confirmed in time). */
+  cancel_reason?: string | null;
   lines: { product_id: string; product_name: string; quantity: number; unit_price: number }[];
 }
 
@@ -147,7 +151,7 @@ export const removeCategoryPhoto = (categoryId: string) => apiDelete<{ imageUrl:
 
 export const getStorefrontSettings = () => apiGet<StorefrontSettings>(`${base}/settings`);
 
-export const saveStorefrontSettings = (body: { locationId?: string; safetyBuffer?: number; lowStockThreshold?: number; showQuantities?: boolean }) =>
+export const saveStorefrontSettings = (body: { locationId?: string; safetyBuffer?: number; lowStockThreshold?: number; showQuantities?: boolean; holdHours?: number }) =>
   apiPatch<Omit<StorefrontSettings, 'branches' | 'imagesConfigured' | 'requestsConfigured'>>(`${base}/settings`, body);
 
 export const listWebRequests = (status?: RequestStatus) =>

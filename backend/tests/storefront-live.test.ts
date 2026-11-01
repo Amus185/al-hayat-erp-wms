@@ -224,3 +224,44 @@ test('a refused order lists each item the shop cannot fill, with a fix the custo
     await t.api('PATCH', '/storefront-admin/settings', { showQuantities: false });
   }
 });
+
+test('an unconfirmed web order releases its stock after the hold time; handled orders are never touched', async () => {
+  const { expireStaleRequests } = await import('../src/services/storefront');
+  const p = await publishedProduct(5, 100);
+  await t.api('PATCH', `/storefront-admin/products/${p.id}`, { webQuantity: 4 });
+  const stale = await order(p.slug, 2, '+252 63 777 0001');
+  const fresh = await order(p.slug, 1, '+252 63 777 0002');
+  assert.equal(stale.status, 201);
+  assert.equal(fresh.status, 201);
+  const idOf = async (n: string) => (await t.q('SELECT id FROM storefront_requests WHERE request_number = $1', [n]))[0].id;
+  const staleId = await idOf(stale.body.requestNumber);
+  await t.q(`UPDATE storefront_requests SET created_at = CURRENT_TIMESTAMP - INTERVAL '49 hours' WHERE id = $1`, [staleId]);
+  const reservedNow = async () => Number((await t.q(`SELECT COALESCE(SUM(quantity), 0) AS n FROM storefront_reservations WHERE product_id = $1 AND released_at IS NULL`, [p.id]))[0].n);
+  assert.equal(await reservedNow(), 3);
+
+  assert.equal((await t.api('PATCH', '/storefront-admin/settings', { holdHours: -1 })).status, 400);
+  assert.equal((await t.api('GET', '/storefront-admin/settings')).body.holdHours, 48, 'default: 48 hours');
+
+  const { PgAdapter } = await import('../src/pg-client');
+  const db = new PgAdapter(process.env.DATABASE_URL as string, { perRequest: true });
+  after(() => db.close());
+  const n = await expireStaleRequests(db);
+  assert.equal(n, 1);
+  const row = (await t.q('SELECT status, cancel_reason FROM storefront_requests WHERE id = $1', [staleId]))[0];
+  assert.equal(row.status, 'CANCELLED');
+  assert.match(row.cancel_reason, /48 hours/);
+  assert.equal(await reservedNow(), 1, 'its 2 units are free again; the fresh order keeps its 1');
+  const web = (await t.api('GET', '/storefront-admin/products')).body.find((r: any) => r.id === p.id);
+  assert.equal(web.webQuantity, 3, 'the online quantity got its 2 back');
+  assert.equal(await expireStaleRequests(db), 0, 'running again changes nothing');
+  assert.equal((await t.q('SELECT status FROM storefront_requests WHERE id = $1', [await idOf(fresh.body.requestNumber)]))[0].status, 'NEW');
+
+  // 0 = hold until handled
+  await t.q(`UPDATE storefront_requests SET created_at = CURRENT_TIMESTAMP - INTERVAL '100 hours' WHERE id = $1`, [await idOf(fresh.body.requestNumber)]);
+  await t.api('PATCH', '/storefront-admin/settings', { holdHours: 0 });
+  try {
+    assert.equal(await expireStaleRequests(db), 0);
+  } finally {
+    await t.api('PATCH', '/storefront-admin/settings', { holdHours: 48 });
+  }
+});

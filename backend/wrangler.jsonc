@@ -25,6 +25,10 @@
   ],
 
   // Uploads for /api/v1/files. Create with: npx wrangler r2 bucket create al-hayat-files
+  // Housekeeping every 15 minutes (worker.ts "scheduled"): unconfirmed web
+  // orders release their stock after the hold time set in Online Store.
+  "triggers": { "crons": ["*/15 * * * *"] },
+
   "r2_buckets": [
     { "binding": "STORAGE", "bucket_name": "al-hayat-files" }
   ],

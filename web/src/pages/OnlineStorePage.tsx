@@ -17,6 +17,7 @@ import { Tabs } from '../components/Tabs';
 import { WebCategoriesPanel } from '../components/WebCategoriesPanel';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
+import { useLiveRefresh } from '../utils/live';
 import {
   SHOP_URL, getStoreOverview, listStoreProducts, saveProductWeb, type StoreOverview, type StoreProduct,
 } from '../api/storefront';
@@ -72,6 +73,8 @@ function Overview({ onOpen }: { onOpen: (t: Tab) => void }) {
   useEffect(() => {
     getStoreOverview().then(setData).catch((err) => addToast('error', err?.message || 'Could not load the online store overview'));
   }, [addToast]);
+  // Today's orders and low-stock alerts stay current while the page is open.
+  useLiveRefresh(() => { getStoreOverview().then(setData).catch(() => {}); });
 
   if (!data) return <div className="card" style={{ padding: '20px', color: '#64748b' }}>Loading…</div>;
 

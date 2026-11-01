@@ -870,6 +870,8 @@ export async function ensureStorefrontSchema(pool: Pool) {
         quantity INTEGER NOT NULL,
         unit_price DOUBLE PRECISION NOT NULL
       );
+      -- Why a request was cancelled automatically (e.g. not confirmed in time).
+      ALTER TABLE storefront_requests ADD COLUMN IF NOT EXISTS cancel_reason TEXT;
       -- 1 while the line holds units from the product's online quantity (given back on cancel).
       ALTER TABLE storefront_request_lines ADD COLUMN IF NOT EXISTS web_quantity_taken INTEGER NOT NULL DEFAULT 0;
 
