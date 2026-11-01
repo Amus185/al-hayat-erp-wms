@@ -731,6 +731,14 @@ export async function ensureBetterAuth(pool: Pool) {
   try {
     await migrateAuthSchema(pool);
     await backfillIdentities(pool);
+    // Last time a person used each browser session (for the inactivity sign-out).
+    // Removed with the session.
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS erp_session_activity (
+        session_id TEXT PRIMARY KEY REFERENCES "session"(id) ON DELETE CASCADE,
+        last_active_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
   } catch (err) {
     console.error('❌ Better Auth migration failed:', err);
   }

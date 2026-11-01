@@ -316,3 +316,51 @@ test('sessions end 30 days after sign-in however active they are (as before Bett
   await t.q(`UPDATE "session" SET "createdAt" = CURRENT_TIMESTAMP - INTERVAL '31 days', "expiresAt" = CURRENT_TIMESTAMP + INTERVAL '6 days' WHERE "userId" = $1`, [u.id]);
   assert.equal((await me(cookie)).status, 401);
 });
+
+test('browser sessions end after 30 minutes without use; background requests do not count as use', async () => {
+  const u = await makeUser();
+  const { cookie } = await browserSignIn(u.email, u.password);
+  const first = await me(cookie);
+  assert.equal(first.status, 200);
+  assert.equal(first.body.user.idleTimeoutMinutes, 30, 'the staff app learns the limit from the server');
+  const [{ sid }] = await t.q(`SELECT id AS sid FROM "session" WHERE "userId" = $1`, [u.id]);
+  const lastActive = async () => Number((await t.q(`SELECT EXTRACT(EPOCH FROM CURRENT_TIMESTAMP - last_active_at) AS s FROM erp_session_activity WHERE session_id = $1`, [sid]))[0].s);
+  const setIdle = (minutes: number) => t.q(`UPDATE erp_session_activity SET last_active_at = CURRENT_TIMESTAMP - make_interval(mins => $2) WHERE session_id = $1`, [sid, minutes]);
+
+  // a background request (no activity header) does not keep the session alive
+  await setIdle(10);
+  assert.equal((await me(cookie)).status, 200);
+  assert.ok(await lastActive() > 9 * 60, 'polling must not count as activity');
+  // a request the person caused does
+  assert.equal((await me(cookie, { ...BROWSER, 'X-User-Activity': '1' })).status, 200);
+  assert.ok(await lastActive() < 5, 'a click counts as activity');
+
+  // 36 minutes without use (30 + the grace for activity pings): signed out, and the session is gone
+  await setIdle(36);
+  const late = await me(cookie, { ...BROWSER, 'X-User-Activity': '1' });
+  assert.equal(late.status, 401);
+  assert.equal(late.body.reason, 'idle');
+  assert.equal((await t.q(`SELECT COUNT(*)::int AS n FROM "session" WHERE id = $1`, [sid]))[0].n, 0);
+  assert.equal((await me(cookie)).status, 401);
+});
+
+test('inactivity sign-out: mobile sessions are not affected, and SESSION_IDLE_MINUTES=0 turns it off', async () => {
+  const u = await makeUser();
+  const native = await signIn(u.email, u.password, { 'X-Client-Type': 'native' });
+  const token = native.headers.get('set-auth-token');
+  const [{ sid }] = await t.q(`SELECT id AS sid FROM "session" WHERE "userId" = $1`, [u.id]);
+  await t.q(`INSERT INTO erp_session_activity (session_id, last_active_at) VALUES ($1, CURRENT_TIMESTAMP - INTERVAL '3 hours')`, [sid]);
+  assert.equal((await raw('GET', '/api/v1/auth/me', { headers: { Authorization: `Bearer ${token}` } })).status, 200);
+
+  const b = await makeUser();
+  const { cookie } = await browserSignIn(b.email, b.password);
+  await me(cookie);
+  await t.q(`UPDATE erp_session_activity SET last_active_at = CURRENT_TIMESTAMP - INTERVAL '3 hours' WHERE session_id IN (SELECT id FROM "session" WHERE "userId" = $1)`, [b.id]);
+  process.env.SESSION_IDLE_MINUTES = '0';
+  try {
+    assert.equal((await me(cookie)).status, 200);
+  } finally {
+    delete process.env.SESSION_IDLE_MINUTES;
+  }
+  assert.equal((await me(cookie)).status, 401, 'back on: the 3-hour-old session ends');
+});

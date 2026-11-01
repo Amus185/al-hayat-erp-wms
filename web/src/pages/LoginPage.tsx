@@ -1,8 +1,8 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { useNavigate } from 'react-router-dom';
-import { Mail, Lock, Eye, EyeOff, ShieldCheck, ArrowRight, AlertCircle } from 'lucide-react';
+import { Mail, Lock, Eye, EyeOff, ShieldCheck, ArrowRight, AlertCircle, Clock } from 'lucide-react';
 
 export function LoginPage() {
   const { login } = useAuth();
@@ -13,6 +13,20 @@ export function LoginPage() {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Shown once after an automatic sign-out for inactivity.
+  const [notice] = useState<string | null>(() => {
+    try {
+      return sessionStorage.getItem('ah_signout_reason') === 'idle'
+        ? 'You were signed out because there was no activity for a while, to keep your account safe. Please sign in again.'
+        : null;
+    } catch {
+      return null;
+    }
+  });
+  // Read once, then forget it (cleared after rendering so it shows exactly once).
+  useEffect(() => {
+    try { sessionStorage.removeItem('ah_signout_reason'); } catch { /* ignore */ }
+  }, []);
   const [loading, setLoading] = useState(false);
 
   const handleSubmit = async (e: FormEvent) => {
@@ -136,6 +150,10 @@ export function LoginPage() {
         }
 
         /* Error */
+        .login-notice {
+          display: flex; align-items: center; gap: 12px; padding: 12px 14px; margin-bottom: 16px;
+          border-radius: 10px; background: #fffbeb; border: 1px solid #fcd34d; color: #7c4a03; font-size: 13px; line-height: 1.4;
+        }
         .login-error {
           display: flex;
           align-items: center;
@@ -290,6 +308,13 @@ export function LoginPage() {
             <h1 className="login-title">Sign in to Al Hayat</h1>
             <p className="login-subtitle">Enterprise Resource Planning System</p>
           </div>
+
+          {notice && !error && (
+            <div className="login-notice" role="status">
+              <Clock size={16} />
+              <span>{notice}</span>
+            </div>
+          )}
 
           {/* Error alert */}
           {error && (

@@ -61,6 +61,13 @@ Changing `BETTER_AUTH_SECRET` signs everyone out.
 
 - Sign-in looks the same. Everyone signs in once after deploying.
 - Sessions end after 7 days without use, and are extended while in use (at most once a day), but never past 30 days after sign-in: then the user signs in again. This matches the custom sessions used before Better Auth.
+- Browser sessions also end after **30 minutes without activity**
+  (`SESSION_IDLE_MINUTES` on the backend Worker; `0` turns it off). The
+  staff app warns during the last minute ("Are you still there?") and signs
+  out; the server enforces the same rule (plus 5 minutes' grace for the
+  app's activity pings), so a closed tab or a copied cookie cannot outlive
+  it. Only requests a person caused (`X-User-Activity`) count as activity;
+  background polling does not. Mobile (bearer) sessions are not affected.
 - Password change, deactivation, disabling in Layerbase and "sign out
   everywhere" end sessions immediately on every server.
 - Failed sign-ins are still throttled in the database: 10 per email and IP,

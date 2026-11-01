@@ -3,6 +3,7 @@
 import { Hono, type Context } from 'hono';
 import { Env } from '../db';
 import { authMiddleware } from '../middleware/auth';
+import { idleTimeoutMinutes } from '../auth';
 import { poolOf } from '../services/auth-sessions';
 
 const auth = new Hono<{ Bindings: Env }>();
@@ -39,7 +40,8 @@ auth.get('/me', authMiddleware, async (c) => {
   noStore(c);
   const user = await loadProfile(c, (c as any).get('jwtPayload').sub);
   if (!user) return c.json({ message: 'Unauthorized' }, 401);
-  return c.json({ user });
+  // The staff app's inactivity timer uses the server's setting.
+  return c.json({ user: { ...user, idleTimeoutMinutes: idleTimeoutMinutes() } });
 });
 
 /** Ends every session of the signed-in user, on every device. */

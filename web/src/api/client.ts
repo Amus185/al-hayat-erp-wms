@@ -48,10 +48,41 @@ export function onApiActivity(fn: (active: number) => void): () => void {
 // Only requests a person caused (started shortly after a click, tap or key)
 // show the bar; background polling such as notifications does not.
 let lastInteraction = 0;
+
+// ── Activity, for the inactivity sign-out ──────────────────────────────────
+// Any sign of a person (click, tap, key, scroll, mouse movement) counts. It is
+// shared between tabs through localStorage, so working in one tab keeps the
+// others signed in too. Requests sent within a minute of it carry
+// X-User-Activity, which is what keeps the session alive on the server.
+const ACTIVITY_KEY = 'ah_last_activity';
+let lastActivity = Date.now();
+let lastShared = 0;
+
+/** Marks the person as active now (also called by "Stay signed in"). */
+export function markActivity() {
+  lastActivity = Date.now();
+  if (lastActivity - lastShared > 5000) {
+    lastShared = lastActivity;
+    try { localStorage.setItem(ACTIVITY_KEY, String(lastActivity)); } catch { /* storage unavailable */ }
+  }
+}
+
+/** The last time a person used the app, in any tab. */
+export function getLastActivity(): number {
+  let shared = 0;
+  try { shared = Number(localStorage.getItem(ACTIVITY_KEY)) || 0; } catch { /* storage unavailable */ }
+  return Math.max(lastActivity, shared);
+}
+
+const isRecentlyActive = () => Date.now() - getLastActivity() < 60_000;
+
 if (typeof window !== 'undefined') {
-  const note = () => { lastInteraction = Date.now(); };
+  const note = () => { lastInteraction = Date.now(); markActivity(); };
   window.addEventListener('pointerdown', note, true);
   window.addEventListener('keydown', note, true);
+  let moved = 0;
+  const passive = () => { const now = Date.now(); if (now - moved > 2000) { moved = now; markActivity(); } };
+  for (const ev of ['mousemove', 'wheel', 'scroll', 'touchstart']) window.addEventListener(ev, passive, { capture: true, passive: true });
 }
 
 function tracked<T>(work: () => Promise<T>): Promise<T> {
@@ -74,7 +105,12 @@ async function authorizedFetchOnce(url: string, init: RequestInit, retryOnNetwor
   for (let i = 0; i <= retryOnNetworkError; i += 1) {
     try {
       const res = await fetch(url, { ...init, credentials: 'same-origin', headers: buildHeaders(init.headers as Record<string, string>) });
-      if (res.status === 401) sessionExpiredHandler?.();
+      if (res.status === 401) {
+        // Say why on the sign-in page when it was the inactivity rule.
+        res.clone().json().then((b: any) => {
+          if (b?.reason === 'idle') try { sessionStorage.setItem('ah_signout_reason', 'idle'); } catch { /* ignore */ }
+        }).catch(() => {}).finally(() => sessionExpiredHandler?.());
+      }
       return res;
     } catch (error) {
       lastError = error;
@@ -105,6 +141,7 @@ function buildHeaders(extra?: Record<string, string>): HeadersInit {
   return {
     'Content-Type': 'application/json',
     'X-CSRF-Protection': '1',
+    ...(isRecentlyActive() ? { 'X-User-Activity': '1' } : {}),
     ...extra,
   };
 }

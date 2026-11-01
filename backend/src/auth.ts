@@ -27,6 +27,21 @@ import { clearLoginFailures, isLoginThrottled, recordLoginFailure } from './serv
 export const SESSION_TTL_S = 7 * 24 * 3600;   // idle lifetime; extended at most once a day while used
 /** Absolute lifetime, as before Better Auth: however active, a session ends this long after sign-in. */
 export const SESSION_MAX_TTL_S = 30 * 24 * 3600;
+
+/**
+ * Browser sessions end after this many minutes without the person using the
+ * app (SESSION_IDLE_MINUTES, default 30; 0 turns it off). The staff app warns
+ * a minute before and signs out; the server enforces it as well, with a few
+ * minutes' grace for the app's activity pings. Mobile (bearer) sessions are
+ * not affected.
+ */
+export function idleTimeoutMinutes(): number {
+  const raw = process.env.SESSION_IDLE_MINUTES;
+  if (raw === undefined || raw === '') return 30;
+  const n = Number(raw);
+  return Number.isInteger(n) && n >= 0 && n <= 24 * 60 ? n : 30;
+}
+export const IDLE_GRACE_MINUTES = 5;
 const BCRYPT_COST = 12;                         // same as the ERP has always used
 
 // Better Auth's own admin API (/api/auth/admin/*) may list, ban and end

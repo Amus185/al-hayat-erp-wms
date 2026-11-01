@@ -1,6 +1,6 @@
 import { Context, Next } from 'hono';
 import { Env } from '../db';
-import { authFor, SESSION_MAX_TTL_S } from '../auth';
+import { authFor, IDLE_GRACE_MINUTES, idleTimeoutMinutes, SESSION_MAX_TTL_S } from '../auth';
 import { isAllowedOrigin } from '../security-config';
 import { poolOf } from '../services/auth-sessions';
 
@@ -119,11 +119,47 @@ export const authMiddleware = async (c: Context<{ Bindings: Env }>, next: Next) 
   if (!user.session_live) {
     return c.json({ message: 'Session ended. Please sign in again.' }, 401);
   }
+  if (!bearer && !(await touchBrowserSession(c, found.session.id))) {
+    return c.json({ message: 'Signed out after a period of inactivity. Please sign in again.', reason: 'idle' }, 401);
+  }
 
   c.set('jwtPayload', payloadFrom(user, found.user.id, found.session.id));
   await next();
 };
 
+
+/**
+ * The inactivity rule for browser sessions. Records activity when the request
+ * says a person caused it (X-User-Activity: 1, sent by the staff app after a
+ * click, key press or scroll; background polling does not send it), at most
+ * once a minute. Returns false, and ends the session, when it has been unused
+ * for longer than the limit. A session seen for the first time starts now.
+ */
+async function touchBrowserSession(c: Context<{ Bindings: Env }>, sessionId: string): Promise<boolean> {
+  const minutes = idleTimeoutMinutes();
+  if (minutes === 0) return true;
+  const limit = minutes + IDLE_GRACE_MINUTES;
+  const active = c.req.header('X-User-Activity') === '1' ? 1 : 0;
+  const row = await c.env.DB.prepare(`
+    WITH prev AS (
+      SELECT last_active_at FROM erp_session_activity WHERE session_id = ?
+    ), touched AS (
+      INSERT INTO erp_session_activity (session_id, last_active_at) VALUES (?, CURRENT_TIMESTAMP)
+      ON CONFLICT (session_id) DO UPDATE SET last_active_at = CURRENT_TIMESTAMP
+      WHERE ? = 1
+        AND erp_session_activity.last_active_at < CURRENT_TIMESTAMP - INTERVAL '1 minute'
+        AND erp_session_activity.last_active_at > CURRENT_TIMESTAMP - make_interval(mins => ?)
+      RETURNING 1
+    )
+    SELECT COALESCE((SELECT last_active_at > CURRENT_TIMESTAMP - make_interval(mins => ?) FROM prev), TRUE) AS fresh,
+           (SELECT COUNT(*) FROM touched) AS n
+  `).bind(sessionId, sessionId, active, limit, limit).first() as any;
+  if (row?.fresh === false || row?.fresh === 'f') {
+    await c.env.DB.prepare('DELETE FROM "session" WHERE id = ?').bind(sessionId).run();
+    return false;
+  }
+  return true;
+}
 
 /**
  * requirePermissions — ensure caller has ALL listed permission codes.

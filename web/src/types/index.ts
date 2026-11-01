@@ -14,6 +14,8 @@ export interface AuthUser {
   permissions: string[];
   branchId: string | null;
   role: string; // 'admin' | 'branch_user' | 'manager' | etc.
+  /** Sign out after this many minutes without activity (0 = never). Set by the server. */
+  idleTimeoutMinutes?: number;
 }
 
 // ── Users ───────────────────────────────────────────
