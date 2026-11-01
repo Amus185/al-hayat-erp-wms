@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react';
 import { FileClock, Search, Calendar, ShieldCheck } from 'lucide-react';
 import { apiGet } from '../api/client';
 import { DataTable, type Column } from '../components/DataTable';
-import { SearchInput } from '../components/SearchInput';
+import { ListToolbar } from '../components/ListToolbar';
+import { useServerList } from '../utils/serverList';
 import { FormField } from '../components/FormField';
 import { LoadingSpinner } from '../components/LoadingSpinner';
 import { Modal } from '../components/Modal';
@@ -23,65 +24,37 @@ interface AuditLog {
 export function AuditPage() {
   const { addToast } = useToast();
 
-  const [logs, setLogs] = useState<AuditLog[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [selectedEntity, setSelectedEntity] = useState('');
-  const [searchText, setSearchText] = useState('');
-  
+  // The audit trail: searched, filtered, sorted and paged on the server.
+  const list = useServerList<AuditLog>('/audit', {
+    key: 'audit',
+    filters: ['entityType', 'action', 'actor', 'dateFrom', 'dateTo'],
+    defaultSort: 'date',
+    defaultDir: 'desc',
+  });
+  const [facets, setFacets] = useState<{ entityTypes: string[]; actions: string[] }>({ entityTypes: [], actions: [] });
+  useEffect(() => {
+    apiGet<{ entityTypes: string[]; actions: string[] }>('/audit/facets').then(setFacets).catch(() => addToast('error', 'Could not load the audit filters'));
+  }, [addToast]);
   // Detail log viewer state
   const [selectedLog, setSelectedLog] = useState<AuditLog | null>(null);
-
-  const fetchLogs = async () => {
-    try {
-      setLoading(true);
-      const params: any = {};
-      if (selectedEntity) {
-        params.entityType = selectedEntity;
-      }
-      if (searchText && searchText.trim() !== '') {
-        params.search = searchText.trim();
-      }
-      const data = await apiGet<AuditLog[]>('/audit', params);
-      setLogs(data || []);
-    } catch (err: any) {
-      addToast('error', err?.message || 'Failed to retrieve governance logs');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      fetchLogs();
-    }, 300);
-    return () => clearTimeout(timer);
-  }, [selectedEntity, searchText]);
-
-  // Client-side text filter fallback
-  const filteredLogs = logs.filter((log) => {
-    const text = searchText.toLowerCase();
-    if (!text) return true;
-    return (
-      log.action.toLowerCase().includes(text) ||
-      log.entity_type.toLowerCase().includes(text) ||
-      (log.actor_name && log.actor_name.toLowerCase().includes(text)) ||
-      (log.actor_email && log.actor_email.toLowerCase().includes(text))
-    );
-  });
 
   const columns: Column<AuditLog>[] = [
     {
       key: 'created_at',
       label: 'Timestamp',
+      sortable: true,
+      sortKey: 'date',
       render: (row) => new Date(row.created_at).toLocaleString(),
     },
-    { key: 'actor_name', label: 'Actor', render: (row) => row.actor_name || 'System / Batch Job' },
+    { key: 'actor_name', label: 'Actor', sortable: true, sortKey: 'who', render: (row) => row.actor_name || 'System / Batch Job' },
     {
       key: 'action',
       label: 'Action',
+      sortable: true,
+      sortKey: 'action',
       render: (row) => <span style={{ fontFamily: 'monospace', fontWeight: '700', fontSize: '13px' }}>{row.action}</span>,
     },
-    { key: 'entity_type', label: 'Entity Type' },
+    { key: 'entity_type', label: 'Entity Type', sortable: true, sortKey: 'type' },
     { key: 'entity_id', label: 'Entity Reference ID', render: (row) => row.entity_id || '—' },
     {
       key: 'details',
@@ -114,41 +87,34 @@ export function AuditPage() {
         <div></div>
       </section>
 
-      {/* Filters */}
-      <section className="panel" style={{ display: 'flex', gap: '14px', alignItems: 'center', flexWrap: 'wrap' }}>
-        <div style={{ flex: '1', minWidth: '240px' }}>
-          <SearchInput
-            value={searchText}
-            onChange={setSearchText}
-            placeholder="Search by action keyword or actor user name..."
-          />
-        </div>
-        <div>
-          <select
-            value={selectedEntity}
-            onChange={(e) => setSelectedEntity(e.target.value)}
-            className="form-select"
-            style={{ minHeight: '38px', borderRadius: '8px', border: '1px solid #d9e2d9', padding: '0 10px' }}
-          >
-            <option value="">All Entities</option>
-            <option value="users">users</option>
-            <option value="products">products</option>
-            <option value="transfers">transfers</option>
-            <option value="sales_orders">sales_orders</option>
-            <option value="purchase_orders">purchase_orders</option>
-            <option value="branches">branches</option>
-            <option value="warehouses">warehouses</option>
-          </select>
-        </div>
-      </section>
-
       <section className="panel">
+        <ListToolbar
+          id="audit-toolbar"
+          list={list}
+          searchPlaceholder="Search action, record, values or person…"
+          dateRange
+          filters={[
+            { key: 'entityType', label: 'All record types', options: facets.entityTypes.map((t) => ({ value: t, label: t.replace(/_/g, ' ') })) },
+            { key: 'action', label: 'All actions', options: facets.actions.map((a) => ({ value: a, label: a.replace(/_/g, ' ').toLowerCase() })) },
+          ]}
+        >
+          <input
+            className="list-toolbar__select"
+            aria-label="Person"
+            placeholder="Person (name or email)…"
+            defaultValue={list.filters.actor}
+            onBlur={(e) => list.setFilter('actor', e.target.value.trim())}
+            onKeyDown={(e) => { if (e.key === 'Enter') list.setFilter('actor', (e.target as HTMLInputElement).value.trim()); }}
+            style={{ width: '200px' }}
+          />
+        </ListToolbar>
         <DataTable
+          id="audit-table"
           columns={columns}
-          data={filteredLogs}
+          data={list.items}
+          server={list}
           keyExtractor={(row) => row.id}
-          loading={loading}
-          emptyMessage="No security/audit logs match the current criteria"
+          emptyMessage={list.activeFilters ? 'No audit entries match your filters' : 'No audit entries yet'}
         />
       </section>
 

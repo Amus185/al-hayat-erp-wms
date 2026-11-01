@@ -4,6 +4,7 @@ import { PgAdapter } from '../pg-client';
 import { authMiddleware, requirePermissions } from '../middleware/auth';
 import { logAudit, createAuditLogStmt } from '../services/audit';
 import { prepareJournalEntryPosting } from '../services/accounting-service';
+import { csvResponse, likeTerm, listRequest, pagedResponse, pagedRows, type ListOptions } from '../services/listing';
 
 const purchasing = new Hono<{ Bindings: Env; Variables: { jwtPayload: any } }>();
 
@@ -96,6 +97,38 @@ purchasing.delete('/suppliers/:id', requirePermissions(['manage_purchasing']), a
 // ──────────────────────────────────────────────────────────────────────
 // PURCHASE ORDERS — LIST & GET
 // ──────────────────────────────────────────────────────────────────────
+const PO_LIST: ListOptions = {
+  sortable: {
+    date: 'created_at', number: 'po_number', supplier: 'supplier_name', status: 'status', total: 'net_calc',
+    balance: 'balance_calc', payment: 'payment_status_calc', expected: 'expected_date',
+  },
+  defaultSort: 'date', defaultDir: 'desc', tieBreaker: 'id',
+};
+
+/** Net total, payment status, balance and remaining quantities of a PO row. */
+function enrichPurchaseOrder(row: any) {
+  const orderTotal = Number(row.order_total || row.total_amount || 0);
+  const invoiceTotal = row.invoice_total != null ? Number(row.invoice_total) : orderTotal;
+  const invoiceDiscount = Number(row.invoice_discount || 0);
+  const computedNet = invoiceTotal > invoiceDiscount ? (invoiceTotal - invoiceDiscount) : orderTotal;
+  const netTotal = orderTotal > 0 ? orderTotal : computedNet;
+  const paid = Number(row.amount_paid || 0);
+  const balance = Math.max(0, netTotal - paid);
+  let payment_status = 'UNPAID';
+  if (paid >= netTotal && netTotal > 0) payment_status = 'PAID';
+  else if (paid > 0) payment_status = 'PARTIALLY_PAID';
+  return {
+    ...row,
+    total_amount: orderTotal,
+    net_total: netTotal,
+    balance,
+    payment_status,
+    total_qty_ordered: Number(row.total_qty_ordered || 0),
+    total_qty_received: Number(row.total_qty_received || 0),
+    total_qty_remaining: Math.max(0, Number(row.total_qty_ordered || 0) - Number(row.total_qty_received || 0)),
+  };
+}
+
 purchasing.get('/orders', async (c) => {
   const { search, paymentStatus, dateFrom, dateTo, supplierId } = c.req.query();
 
@@ -132,35 +165,66 @@ purchasing.get('/orders', async (c) => {
     params.push(dateTo);
   }
 
+  const listReq = listRequest(c, PO_LIST);
+  if (listReq.paged) {
+    // Paged: the same query, with the computed totals and statuses in SQL so
+    // the server can filter, sort and count on them.
+    const q = (k: string) => (c.req.query(k) || '').trim();
+    const where: string[] = [];
+    const extra: unknown[] = [];
+    if (q('q')) {
+      const t = likeTerm(q('q'));
+      where.push('(po_number ILIKE ? OR supplier_name ILIKE ? OR COALESCE(notes, \'\') ILIKE ?)');
+      extra.push(t, t, t);
+    }
+    if (q('warehouseId')) { where.push('warehouse_id = ?'); extra.push(q('warehouseId')); }
+    if (q('paymentStatus')) { where.push('payment_status_calc = ?'); extra.push(q('paymentStatus')); }
+    if (q('receiving') === 'pending') where.push('total_qty_received < total_qty_ordered');
+    if (q('receiving') === 'complete') where.push('total_qty_ordered > 0 AND total_qty_received >= total_qty_ordered');
+    const statusWhere = [...where];
+    const statusExtra = [...extra];
+    if (q('status')) { statusWhere.push('status = ?'); statusExtra.push(q('status')); }
+    const inner = `FROM (
+      SELECT y.*, CASE WHEN amount_paid >= net_calc AND net_calc > 0 THEN 'PAID' WHEN amount_paid > 0 THEN 'PARTIALLY_PAID' ELSE 'UNPAID' END AS payment_status_calc,
+             GREATEST(0, net_calc - amount_paid) AS balance_calc
+      FROM (
+        SELECT x.*, CASE WHEN COALESCE(order_total, 0) > 0 THEN order_total
+                         WHEN COALESCE(invoice_total, 0) > COALESCE(invoice_discount, 0) THEN invoice_total - invoice_discount
+                         ELSE COALESCE(order_total, 0) END AS net_calc
+        FROM (${query}) x
+      ) y
+    ) z`;
+    const base = `${inner} ${statusWhere.length ? 'WHERE ' + statusWhere.join(' AND ') : ''}`;
+    const { rows, total } = await pagedRows(c.env.DB, '*', base, [...params, ...statusExtra], listReq);
+    const items = rows.map(enrichPurchaseOrder);
+    if (listReq.csv) {
+      return csvResponse(c, 'purchase-orders', [
+        { label: 'PO', value: (o: any) => o.po_number },
+        { label: 'Date', value: (o: any) => (o.created_at instanceof Date ? o.created_at.toISOString() : String(o.created_at)).slice(0, 10) },
+        { label: 'Supplier', value: (o: any) => o.supplier_name },
+        { label: 'Status', value: (o: any) => o.status },
+        { label: 'Ordered', value: (o: any) => o.total_qty_ordered },
+        { label: 'Received', value: (o: any) => o.total_qty_received },
+        { label: 'Total', value: (o: any) => Number(o.net_total).toFixed(2) },
+        { label: 'Paid', value: (o: any) => Number(o.amount_paid || 0).toFixed(2) },
+        { label: 'Balance', value: (o: any) => Number(o.balance).toFixed(2) },
+        { label: 'Payment', value: (o: any) => o.payment_status },
+      ], items);
+    }
+    const sum = await c.env.DB.prepare(`SELECT COALESCE(SUM(net_calc), 0) AS value, COALESCE(SUM(balance_calc), 0) AS owed ${base}`).bind(...params, ...statusExtra).first() as any;
+    const { results: grouped } = await c.env.DB.prepare(`SELECT status, COUNT(*)::int AS n ${inner} ${where.length ? 'WHERE ' + where.join(' AND ') : ''} GROUP BY status`).bind(...params, ...extra).all();
+    const counts: Record<string, number> = { ALL: 0 };
+    for (const g of (grouped || []) as any[]) { counts[g.status] = Number(g.n); counts.ALL += Number(g.n); }
+    return pagedResponse(c, listReq, items, total, { counts, totals: { value: Math.round(Number(sum?.value || 0) * 100) / 100, outstanding: Math.round(Number(sum?.owed || 0) * 100) / 100 } });
+  }
+
   query += ` ORDER BY po.created_at DESC LIMIT 200`;
 
   const stmt = c.env.DB.prepare(query);
   const { results } = params.length > 0 ? await stmt.bind(...params).all() : await stmt.all();
 
   // Compute net_total, payment_status, balance and remaining items for each row
-  const enriched = (results || []).map((row: any) => {
-    const orderTotal = Number(row.order_total || row.total_amount || 0);
-    const invoiceTotal = row.invoice_total != null ? Number(row.invoice_total) : orderTotal;
-    const invoiceDiscount = Number(row.invoice_discount || 0);
-    const computedNet = invoiceTotal > invoiceDiscount ? (invoiceTotal - invoiceDiscount) : orderTotal;
-    const netTotal = orderTotal > 0 ? orderTotal : computedNet;
-    const paid = Number(row.amount_paid || 0);
-    const balance = Math.max(0, netTotal - paid);
-    let payment_status = 'UNPAID';
-    if (paid >= netTotal && netTotal > 0) payment_status = 'PAID';
-    else if (paid > 0) payment_status = 'PARTIALLY_PAID';
-
-    return {
-      ...row,
-      total_amount: orderTotal,
-      net_total: netTotal,
-      balance,
-      payment_status,
-      total_qty_ordered: Number(row.total_qty_ordered || 0),
-      total_qty_received: Number(row.total_qty_received || 0),
-      total_qty_remaining: Math.max(0, Number(row.total_qty_ordered || 0) - Number(row.total_qty_received || 0))
-    };
-  });
+  const enriched = (results || []).map(enrichPurchaseOrder);
 
   // Filter by computed payment status if requested
   if (paymentStatus && paymentStatus !== 'ALL') {

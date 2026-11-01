@@ -6,7 +6,8 @@ import {
 } from 'lucide-react';
 import { apiGet, apiPost } from '../api/client';
 import { DataTable, type Column } from '../components/DataTable';
-import { FilterBar } from '../components/FilterBar';
+import { ListToolbar } from '../components/ListToolbar';
+import { StatusTabs } from '../components/StatusTabs';
 import { Tabs } from '../components/Tabs';
 import { Modal } from '../components/Modal';
 import { ModalLoading } from '../components/ModalLoading';
@@ -18,7 +19,7 @@ import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
 import type { PaymentMethod, PurchaseInvoicePayment, PaymentSummary } from '../types';
 import { html, writePrintDocument } from '../utils/html';
-import { useOpenParam } from '../utils/serverList';
+import { useOpenParam, useServerList } from '../utils/serverList';
 
 // ── Local types ────────────────────────────────────────────────────
 interface Supplier {
@@ -142,16 +143,14 @@ export function PurchasingPage() {
   const { addToast } = useToast();
   const { hasPermission } = useAuth();
 
-  const [pos, setPos] = useState<PurchaseOrder[]>([]);
-  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState('ALL');
-
-  // FilterBar
-  const [poSearch, setPoSearch] = useState('');
-  const [poFilters, setPoFilters] = useState<Record<string, string>>({
-    supplier: '', dateFrom: '', dateTo: '', paymentStatus: '',
+  // Purchase orders: searched, filtered, sorted and paged on the server.
+  const list = useServerList<PurchaseOrder>('/purchasing/orders', {
+    key: 'purchase-orders',
+    filters: ['status', 'supplierId', 'paymentStatus', 'receiving', 'warehouseId', 'dateFrom', 'dateTo'],
+    defaultSort: 'date',
+    defaultDir: 'desc',
   });
+  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
 
   // Supplier modal
   const [isSupplierOpen, setIsSupplierOpen] = useState(false);
@@ -189,16 +188,11 @@ export function PurchasingPage() {
   // ── Data loading ─────────────────────────────────────────────────
   const loadData = async () => {
     try {
-      const [orders, sups] = await Promise.all([
-        apiGet<PurchaseOrder[]>('/purchasing/orders'),
-        apiGet<Supplier[]>('/purchasing/suppliers'),
-      ]);
+      list.refresh();
+      const sups = await apiGet<Supplier[]>('/purchasing/suppliers');
       setSuppliers(sups || []);
-      setPos(orders || []);
     } catch (err: any) {
       addToast('error', err?.message || 'Failed to load purchasing data');
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -522,30 +516,11 @@ export function PurchasingPage() {
     setIsReceiptOpen(false);
   };
 
-  // ── Filtering ─────────────────────────────────────────────────────
-  const filteredPOs = pos.filter((po) => {
-    if (poFilters.status && poFilters.status !== 'ALL' && po.status !== poFilters.status) return false;
-    const q = poSearch.trim().toLowerCase();
-    if (q && !po.po_number.toLowerCase().includes(q) && !String(po.supplier_name || '').toLowerCase().includes(q)) return false;
-    if (poFilters.supplier && po.supplier_id !== poFilters.supplier) return false;
-    if (poFilters.dateFrom && po.created_at < poFilters.dateFrom) return false;
-    if (poFilters.dateTo && po.created_at > poFilters.dateTo + 'T23:59:59') return false;
-    if (poFilters.paymentStatus && po.payment_status !== poFilters.paymentStatus) return false;
-    return true;
-  });
-
-  const tabItems = [
-    { key: 'ALL', label: 'All POs', count: pos.length },
-    { key: 'DRAFT', label: 'Drafts', count: pos.filter(p => p.status === 'DRAFT').length },
-    { key: 'SUBMITTED', label: 'Submitted', count: pos.filter(p => p.status === 'SUBMITTED').length },
-    { key: 'APPROVED', label: 'Approved', count: pos.filter(p => p.status === 'APPROVED').length },
-    { key: 'PARTIALLY_RECEIVED', label: 'Partial', count: pos.filter(p => p.status === 'PARTIALLY_RECEIVED').length },
-    { key: 'RECEIVED', label: 'Received', count: pos.filter(p => p.status === 'RECEIVED').length },
-  ];
-
   const columns: Column<any>[] = [
     {
       key: 'po_number',
+      sortable: true,
+      sortKey: 'number',
       label: 'PO Number',
       render: (row) => (
         <span style={{ fontWeight: 700, color: '#0b8f08', fontFamily: 'monospace' }}>
@@ -555,6 +530,8 @@ export function PurchasingPage() {
     },
     {
       key: 'supplier_name',
+      sortable: true,
+      sortKey: 'supplier',
       label: 'Supplier',
       render: (row) => (
         <div>
@@ -569,11 +546,15 @@ export function PurchasingPage() {
     },
     {
       key: 'created_at',
+      sortable: true,
+      sortKey: 'date',
       label: 'Created Date',
       render: (row) => new Date(row.created_at).toLocaleDateString(),
     },
     {
       key: 'total',
+      sortable: true,
+      sortKey: 'total',
       label: 'Total Amount',
       render: (row) => (
         <span style={{ fontWeight: 600 }}>
@@ -583,6 +564,8 @@ export function PurchasingPage() {
     },
     {
       key: 'status',
+      sortable: true,
+      sortKey: 'status',
       label: 'PO Status',
       render: (row) => {
         let tone: 'green' | 'yellow' | 'red' | 'neutral' | 'blue' = 'neutral';
@@ -594,6 +577,8 @@ export function PurchasingPage() {
     },
     {
       key: 'payment_status',
+      sortable: true,
+      sortKey: 'payment',
       label: 'Payment',
       render: (row) => {
         const status = row.payment_status || 'UNPAID';
@@ -689,48 +674,48 @@ export function PurchasingPage() {
       </section>
 
       <section className="panel">
-        <FilterBar
-          searchValue={poSearch}
-          onSearchChange={setPoSearch}
-          searchPlaceholder="Search PO number or supplier name…"
-          filters={[
-            {
-              key: 'status',
-              label: 'All Statuses',
-              options: [
-                { value: 'DRAFT', label: 'Drafts' },
-                { value: 'SUBMITTED', label: 'Submitted' },
-                { value: 'APPROVED', label: 'Approved' },
-                { value: 'PARTIALLY_RECEIVED', label: 'Partial' },
-                { value: 'RECEIVED', label: 'Received' },
-              ],
-            },
-            {
-              key: 'supplier',
-              label: 'All Suppliers',
-              options: suppliers.map((s) => ({ value: s.id, label: s.name })),
-            },
-            {
-              key: 'paymentStatus',
-              label: 'All Payment Statuses',
-              options: [
-                { value: 'UNPAID', label: 'Unpaid' },
-                { value: 'PARTIALLY_PAID', label: 'Partially Paid' },
-                { value: 'PAID', label: 'Paid' },
-              ],
-            },
+        <StatusTabs
+          id="po-status-tabs"
+          value={list.filters.status}
+          counts={list.counts}
+          onChange={(v) => list.setFilter('status', v)}
+          tabs={[
+            { key: 'ALL', label: 'All' },
+            { key: 'DRAFT', label: 'Drafts' },
+            { key: 'SUBMITTED', label: 'Submitted' },
+            { key: 'APPROVED', label: 'Approved' },
+            { key: 'PARTIALLY_RECEIVED', label: 'Partly received' },
+            { key: 'RECEIVED', label: 'Received' },
+            { key: 'CANCELLED', label: 'Cancelled' },
           ]}
-          filterValues={poFilters}
-          onFilterChange={(key, val) => setPoFilters(prev => ({ ...prev, [key]: val }))}
         />
+        <ListToolbar
+          id="po-toolbar"
+          list={list}
+          searchPlaceholder="Search PO number, supplier or notes…"
+          dateRange
+          filters={[
+            { key: 'supplierId', label: 'All suppliers', options: suppliers.map((s) => ({ value: s.id, label: s.name })) },
+            { key: 'paymentStatus', label: 'All payment statuses', options: [{ value: 'UNPAID', label: 'Unpaid' }, { value: 'PARTIALLY_PAID', label: 'Partially paid' }, { value: 'PAID', label: 'Paid' }] },
+            { key: 'receiving', label: 'Any receiving', options: [{ value: 'pending', label: 'Still to receive' }, { value: 'complete', label: 'Fully received' }] },
+            { key: 'warehouseId', label: 'All warehouses', options: warehouses.map((w: any) => ({ value: w.id, label: w.name })) },
+          ]}
+        />
+        {list.totals && list.total > 0 && (
+          <div className="list-summary">
+            <span>Value: <strong>${Number(list.totals.value ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong></span>
+            <span>Still to pay: <strong style={{ color: (list.totals.outstanding ?? 0) > 0 ? '#b45309' : undefined }}>${Number(list.totals.outstanding ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong></span>
+          </div>
+        )}
 
         <DataTable
+          id="po-table"
           columns={columns}
-          data={filteredPOs}
+          data={list.items}
+          server={list}
           keyExtractor={(row) => row.id as string}
-          loading={loading}
           onRowClick={(row) => viewPoDetails(row as PurchaseOrder)}
-          emptyMessage="No purchase orders match your filters"
+          emptyMessage={list.activeFilters ? 'No purchase orders match your filters' : 'No purchase orders yet'}
         />
       </section>
 

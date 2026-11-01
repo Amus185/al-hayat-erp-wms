@@ -3,6 +3,7 @@ import { Env, uuidv4 } from '../db';
 import { authMiddleware, requirePermissions } from '../middleware/auth';
 import { logAudit, createAuditLogStmt } from '../services/audit';
 import { prepareJournalEntryPosting } from '../services/accounting-service';
+import { csvResponse, dateRange, listRequest, pagedResponse, pagedRows, type ListOptions } from '../services/listing';
 
 const manufacturing = new Hono<{ Bindings: Env; Variables: { jwtPayload: any } }>();
 
@@ -166,8 +167,15 @@ manufacturing.post('/boms', requirePermissions(['manage_inventory']), async (c) 
 // ──────────────────────────────────────────────────────────────────────
 // WORK ORDERS (PRODUCTION RUNS) — LIST & GET
 // ──────────────────────────────────────────────────────────────────────
+const WORK_ORDER_LIST: ListOptions = {
+  sortable: { date: 'created_at', number: 'wo_number', product: 'product_name', status: 'status', stage: 'current_stage', warehouse: 'warehouse_name', quantity: 'target_quantity', due: 'target_completion_date' },
+  defaultSort: 'date', defaultDir: 'desc', tieBreaker: 'id',
+};
+
 manufacturing.get('/work-orders', async (c) => {
-  const { status, stage, warehouseId, search } = c.req.query();
+  const { status, stage, warehouseId } = c.req.query();
+  const search = c.req.query('search') || c.req.query('q');
+  const listReq = listRequest(c, WORK_ORDER_LIST);
 
   let query = `
     SELECT wo.*, p.name AS product_name, p.sku AS product_sku, w.name AS warehouse_name,
@@ -181,7 +189,7 @@ manufacturing.get('/work-orders', async (c) => {
   `;
   const params: any[] = [];
 
-  if (status && status !== 'ALL') {
+  if (status && status !== 'ALL' && !listReq.paged) {
     query += ` AND wo.status = ?`;
     params.push(status);
   }
@@ -194,8 +202,36 @@ manufacturing.get('/work-orders', async (c) => {
     params.push(warehouseId);
   }
   if (search) {
-    query += ` AND (wo.wo_number LIKE ? OR p.name LIKE ? OR p.sku LIKE ?)`;
+    query += ` AND (wo.wo_number ILIKE ? OR p.name ILIKE ? OR p.sku ILIKE ?)`;
     params.push(`%${search}%`, `%${search}%`, `%${search}%`);
+  }
+
+  if (listReq.paged) {
+    const where: string[] = [];
+    const extra: unknown[] = [];
+    dateRange(c, 'created_at', where, extra);
+    const statusWhere = [...where];
+    const statusParams = [...extra];
+    if (status && status !== 'ALL') { statusWhere.push('status = ?'); statusParams.push(status); }
+    const base = `FROM (${query}) x ${statusWhere.length ? 'WHERE ' + statusWhere.join(' AND ') : ''}`;
+    const { rows, total } = await pagedRows(c.env.DB, '*', base, [...params, ...statusParams], listReq);
+    if (listReq.csv) {
+      return csvResponse(c, 'work-orders', [
+        { label: 'Work order', value: (w: any) => w.wo_number },
+        { label: 'Created', value: (w: any) => String(w.created_at instanceof Date ? w.created_at.toISOString() : w.created_at).slice(0, 10) },
+        { label: 'Product', value: (w: any) => w.product_name },
+        { label: 'SKU', value: (w: any) => w.product_sku },
+        { label: 'Target quantity', value: (w: any) => w.target_quantity },
+        { label: 'Completed', value: (w: any) => w.completed_quantity },
+        { label: 'Warehouse', value: (w: any) => w.warehouse_name },
+        { label: 'Status', value: (w: any) => w.status },
+        { label: 'Stage', value: (w: any) => w.current_stage },
+      ], rows);
+    }
+    const { results: grouped } = await c.env.DB.prepare(`SELECT status, COUNT(*)::int AS n FROM (${query}) x ${where.length ? 'WHERE ' + where.join(' AND ') : ''} GROUP BY status`).bind(...params, ...extra).all();
+    const counts: Record<string, number> = { ALL: 0 };
+    for (const g of (grouped || []) as any[]) { counts[g.status] = Number(g.n); counts.ALL += Number(g.n); }
+    return pagedResponse(c, listReq, rows, total, { counts });
   }
 
   query += ` ORDER BY wo.created_at DESC LIMIT 200`;

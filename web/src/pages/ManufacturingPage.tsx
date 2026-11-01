@@ -9,6 +9,9 @@ import { DataTable, type Column } from '../components/DataTable';
 import { Tabs } from '../components/Tabs';
 import { Modal } from '../components/Modal';
 import { useProductCatalog } from '../utils/productCatalog';
+import { useServerList } from '../utils/serverList';
+import { ListToolbar } from '../components/ListToolbar';
+import { StatusTabs } from '../components/StatusTabs';
 import { ModalLoading } from '../components/ModalLoading';
 import { useLatest } from '../utils/latest';
 import { InputField, TextareaField } from '../components/FormField';
@@ -114,11 +117,16 @@ export function ManufacturingPage() {
   const { hasPermission } = useAuth();
 
   const [topTab, setTopTab] = useState<'WORK_ORDERS' | 'BOM'>('WORK_ORDERS');
-  const [woStatusFilter, setWoStatusFilter] = useState('ALL');
-  const [searchQuery, setSearchQuery] = useState('');
+  // Work orders: searched, filtered, sorted and paged on the server.
+  const woList = useServerList<WorkOrder>('/manufacturing/work-orders', {
+    key: 'work-orders',
+    filters: ['status', 'stage', 'warehouseId', 'dateFrom', 'dateTo'],
+    defaultSort: 'date',
+    defaultDir: 'desc',
+  });
 
   const [stats, setStats] = useState<Stats>({ activeWorkOrders: 0, inProductionUnits: 0, completedThisMonth: 0, totalBoms: 0 });
-  const [workOrders, setWorkOrders] = useState<WorkOrder[]>([]);
+  const workOrders = woList.items;
   const [boms, setBoms] = useState<BOM[]>([]);
   // Products are searched on the server in the pickers (every product reachable).
   const catalog = useProductCatalog({ status: 'active' });
@@ -210,15 +218,14 @@ export function ManufacturingPage() {
   const loadData = async () => {
     try {
       setLoading(true);
-      const [statsRes, woRes, bomRes, whRes, catRes] = await Promise.all([
+      woList.refresh();
+      const [statsRes, bomRes, whRes, catRes] = await Promise.all([
         apiGet<Stats>('/manufacturing/stats'),
-        apiGet<WorkOrder[]>('/manufacturing/work-orders'),
         apiGet<BOM[]>('/manufacturing/boms'),
         apiGet<any[]>('/warehouses'),
         apiGet<any[]>('/products/categories').catch(() => []),
       ]);
       setStats(statsRes || { activeWorkOrders: 0, inProductionUnits: 0, completedThisMonth: 0, totalBoms: 0 });
-      setWorkOrders(woRes || []);
       setBoms(bomRes || []);
       setWarehouses(whRes || []);
       setCategories(catRes || []);
@@ -506,23 +513,11 @@ export function ManufacturingPage() {
     }));
   };
 
-  // Filtered work orders
-  const filteredWo = workOrders.filter((wo) => {
-    if (woStatusFilter !== 'ALL' && wo.status !== woStatusFilter) return false;
-    const q = searchQuery.toLowerCase().trim();
-    if (q) {
-      const matchNum = wo.wo_number.toLowerCase().includes(q);
-      const matchProd = wo.product_name.toLowerCase().includes(q);
-      const matchSku = wo.product_sku.toLowerCase().includes(q);
-      const matchWh = wo.warehouse_name.toLowerCase().includes(q);
-      if (!matchNum && !matchProd && !matchSku && !matchWh) return false;
-    }
-    return true;
-  });
-
   const woColumns: Column<WorkOrder>[] = [
     {
       key: 'wo_number',
+      sortable: true,
+      sortKey: 'number',
       label: 'Work Order #',
       render: (row) => (
         <div>
@@ -566,6 +561,8 @@ export function ManufacturingPage() {
     },
     {
       key: 'current_stage',
+      sortable: true,
+      sortKey: 'stage',
       label: 'Production Stage',
       render: (row) => {
         const curIdx = STAGES.findIndex((s) => s === row.current_stage);
@@ -814,7 +811,7 @@ export function ManufacturingPage() {
               boxShadow: topTab === 'WORK_ORDERS' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
             }}
           >
-            Production Work Orders ({workOrders.length})
+            Production Work Orders ({woList.counts?.ALL ?? woList.total})
           </button>
           <button
             type="button"
@@ -835,44 +832,44 @@ export function ManufacturingPage() {
           </button>
         </div>
 
-        {topTab === 'WORK_ORDERS' && (
-          <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-            <select
-              className="form-input"
-              value={woStatusFilter}
-              onChange={(e) => setWoStatusFilter(e.target.value)}
-              style={{ minHeight: '36px', fontSize: '13px' }}
-            >
-              <option value="ALL">All Statuses</option>
-              <option value="PLANNED">Planned</option>
-              <option value="IN_PROGRESS">In Progress</option>
-              <option value="COMPLETED">Completed</option>
-            </select>
-
-            <div style={{ position: 'relative', width: '240px' }}>
-              <Search size={15} style={{ position: 'absolute', left: '10px', top: '10px', color: '#94a3b8' }} />
-              <input
-                type="text"
-                className="form-input"
-                placeholder="Search order # or product..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                style={{ paddingLeft: '32px', minHeight: '36px' }}
-              />
-            </div>
-          </div>
-        )}
       </div>
 
       {/* Main Table */}
       <div className="panel" style={{ padding: '0', overflow: 'hidden' }}>
         {topTab === 'WORK_ORDERS' ? (
-          <DataTable
-            data={Array.isArray(filteredWo) ? filteredWo : []}
-            columns={woColumns}
-            keyExtractor={(row) => row.id}
-            emptyMessage="No manufacturing work orders recorded yet. Click 'New Work Order' to start production."
-          />
+          <div style={{ padding: '12px' }}>
+            <StatusTabs
+              id="wo-status-tabs"
+              value={woList.filters.status}
+              counts={woList.counts}
+              onChange={(v) => woList.setFilter('status', v)}
+              tabs={[
+                { key: 'ALL', label: 'All' },
+                { key: 'PLANNED', label: 'Planned' },
+                { key: 'IN_PROGRESS', label: 'In progress' },
+                { key: 'COMPLETED', label: 'Completed' },
+                { key: 'CANCELLED', label: 'Cancelled' },
+              ]}
+            />
+            <ListToolbar
+              id="wo-toolbar"
+              list={woList}
+              searchPlaceholder="Search work order number, product or SKU…"
+              dateRange
+              filters={[
+                { key: 'stage', label: 'All stages', options: STAGES.map((st) => ({ value: st, label: st })) },
+                { key: 'warehouseId', label: 'All warehouses', options: warehouses.map((w: any) => ({ value: w.id, label: w.name })) },
+              ]}
+            />
+            <DataTable
+              id="wo-table"
+              data={workOrders}
+              columns={woColumns}
+              server={woList}
+              keyExtractor={(row) => row.id}
+              emptyMessage={woList.activeFilters ? 'No work orders match your filters' : "No manufacturing work orders recorded yet. Click 'New Work Order' to start production."}
+            />
+          </div>
         ) : (
           <DataTable
             data={Array.isArray(boms) ? boms : []}

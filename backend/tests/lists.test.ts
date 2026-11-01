@@ -135,3 +135,45 @@ test('quick search: finds orders, customers and products by number, name or phon
   const asWh = await t.api('GET', '/search?q=Quicksearch', undefined, wh.token);
   assert.ok(!asWh.body.results.some((r: any) => r.kind === 'customer' || r.kind === 'order'), 'no sales data without sales access');
 });
+
+test('every paged list answers with filters, every sort key and CSV export (phase 2 lists)', async () => {
+  const today = new Date().toISOString().slice(0, 10);
+  const lists: Array<[string, string[], string]> = [
+    ['/purchasing/orders', ['date', 'number', 'supplier', 'status', 'total', 'balance', 'payment', 'expected'], '&paymentStatus=UNPAID&receiving=pending&status=DRAFT'],
+    ['/transfers', ['date', 'number', 'status', 'from', 'to', 'lines'], `&status=PENDING_APPROVAL&from=W:${WH_MAIN}`],
+    ['/deliveries', ['date', 'number', 'customer', 'status', 'scheduled', 'driver', 'order', 'branch'], '&status=PENDING'],
+    ['/manufacturing/work-orders', ['date', 'number', 'product', 'status', 'stage', 'warehouse', 'quantity', 'due'], '&status=PLANNED'],
+    ['/expenses', ['date', 'amount', 'title', 'category', 'branch', 'method'], '&method=CASH'],
+    ['/audit', ['date', 'action', 'type', 'who'], ''],
+    ['/storefront-admin/requests', ['date', 'number', 'customer', 'total', 'status'], '&status=NEW'],
+    ['/accounting/journal-entries', ['date', 'number', 'status', 'type', 'debit', 'created'], '&status=POSTED'],
+    ['/accounting/general-ledger', ['date'], ''],
+    ['/inventory/transactions', ['date', 'product', 'type', 'quantity', 'user'], ''],
+  ];
+  for (const [path, sorts, filters] of lists) {
+    for (const sort of sorts) {
+      for (const dir of ['asc', 'desc']) {
+        const res = await t.api('GET', `${path}?page=1&pageSize=25&sort=${sort}&dir=${dir}&q=a&dateFrom=2020-01-01&dateTo=${today}${filters}`);
+        assert.equal(res.status, 200, `${path} sort=${sort} ${dir}: ${JSON.stringify(res.body).slice(0, 300)}`);
+        assert.ok(Array.isArray(res.body.items) && typeof res.body.total === 'number', `${path}: paged shape`);
+      }
+    }
+    const legacy = await t.api('GET', path);
+    assert.ok(Array.isArray(legacy.body), `${path}: without ?page the old array answer stays`);
+    const csv = await t.app.request(`/api/v1${path}?format=csv`, { headers: { Authorization: `Bearer ${t.adminToken}` } });
+    assert.equal(csv.status, 200, `${path} csv`);
+  }
+});
+
+test('transfers and purchase orders: older records are reachable and counts cover everything', async () => {
+  const before = (await t.api('GET', '/transfers?page=1')).body.counts?.ALL ?? 0;
+  const pid = await t.createProduct({});
+  await t.setStock(pid, 500, { warehouseId: WH_MAIN });
+  for (let i = 0; i < 3; i++) {
+    const r = await t.api('POST', '/transfers', { sourceOwnerType: 'WAREHOUSE', sourceWarehouseId: WH_MAIN, destinationOwnerType: 'BRANCH', destinationBranchId: HQ, lines: [{ productId: pid, quantityRequested: 1 }] });
+    assert.equal(r.status, 201, JSON.stringify(r.body));
+  }
+  const after = await t.api('GET', `/transfers?page=1&productId=${pid}`);
+  assert.equal(after.body.total, 3, 'filter by product');
+  assert.equal((await t.api('GET', '/transfers?page=1')).body.counts.ALL, before + 3);
+});

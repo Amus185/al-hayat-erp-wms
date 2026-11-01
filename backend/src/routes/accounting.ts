@@ -3,6 +3,7 @@ import { Env } from '../db';
 import { authMiddleware, requirePermissions } from '../middleware/auth';
 import { prepareJournalReversal, prepareJournalEntryPosting, prepareOpeningStock, fetchOpenFiscalPeriodId, reconcileMissingReceiptJournalEntries, reconcileMissingSalesJournalEntries } from '../services/accounting-service';
 import { resolveBranchScope, branchSql, inScope, assertAllBranchAccess, resolveWriteBranch, ScopeError, type BranchScope } from '../services/branch-scope';
+import { csvResponse, dateRange, likeTerm, listRequest, pagedResponse, pagedRows, type ListOptions } from '../services/listing';
 
 // Every report below is computed from journal lines restricted to the caller's
 // branch scope (see services/branch-scope.ts). An entry belongs to exactly one
@@ -162,6 +163,17 @@ accounting.patch('/chart-of-accounts/:id', requirePermissions(['manage_purchasin
 // ══════════════════════════════════════════════════════════
 // JOURNAL ENTRIES
 // ══════════════════════════════════════════════════════════
+/** Journal entry reference types that occur (for the type filter). */
+accounting.get('/journal-reference-types', requirePermissions(['view_reports']), async (c) => {
+  const { results } = await c.env.DB.prepare('SELECT DISTINCT reference_type AS t FROM journal_entries WHERE reference_type IS NOT NULL ORDER BY 1').all();
+  return c.json(((results || []) as any[]).map((r) => r.t));
+});
+
+const JOURNAL_LIST: ListOptions = {
+  sortable: { date: 'entry_date', number: 'entry_number', status: 'status', type: 'reference_type', debit: 'total_debit', created: 'created_at' },
+  defaultSort: 'date', defaultDir: 'desc', tieBreaker: 'created_at',
+};
+
 accounting.get('/journal-entries', requirePermissions(['view_reports']), async (c) => {
   const scope = await resolveBranchScope(c);
   const status = c.req.query('status') || null;
@@ -184,6 +196,36 @@ accounting.get('/journal-entries', requirePermissions(['view_reports']), async (
   if (periodId) { query += ' AND je.fiscal_period_id = ?'; params.push(periodId); }
   query += branchSql(scope, 'je.branch_id');
   if (scope.kind !== 'ALL') query += ` AND NOT ${MIXED_ENTRY_SQL}`;
+
+  const listReq = listRequest(c, JOURNAL_LIST);
+  if (listReq.paged) {
+    const q = (k: string) => (c.req.query(k) || '').trim();
+    const where: string[] = [];
+    if (q('q')) {
+      const t = likeTerm(q('q'));
+      where.push("(entry_number ILIKE ? OR COALESCE(description, '') ILIKE ? OR COALESCE(reference_type, '') ILIKE ? OR COALESCE(CAST(reference_id AS TEXT), '') ILIKE ?)");
+      params.push(t, t, t, t);
+    }
+    if (q('referenceType')) { where.push('reference_type = ?'); params.push(q('referenceType')); }
+    if (q('branchId') && scope.kind === 'ALL') { where.push('branch_id = ?'); params.push(q('branchId')); }
+    dateRange(c, 'entry_date', where, params);
+    const base = `FROM (${query}) x ${where.length ? 'WHERE ' + where.join(' AND ') : ''}`;
+    const { rows, total } = await pagedRows(c.env.DB, '*', base, params, listReq);
+    if (listReq.csv) {
+      return csvResponse(c, 'journal-entries', [
+        { label: 'Entry', value: (r: any) => r.entry_number },
+        { label: 'Date', value: (r: any) => String(r.entry_date instanceof Date ? r.entry_date.toISOString() : r.entry_date).slice(0, 10) },
+        { label: 'Description', value: (r: any) => r.description },
+        { label: 'Type', value: (r: any) => r.reference_type },
+        { label: 'Debit', value: (r: any) => Number(r.total_debit || 0).toFixed(2) },
+        { label: 'Credit', value: (r: any) => Number(r.total_credit || 0).toFixed(2) },
+        { label: 'Status', value: (r: any) => r.status },
+        { label: 'Period', value: (r: any) => r.period_name },
+        { label: 'Branch', value: (r: any) => r.branch_name },
+      ], rows);
+    }
+    return pagedResponse(c, listReq, rows, total);
+  }
   query += ' ORDER BY je.entry_date DESC, je.created_at DESC LIMIT ? OFFSET ?';
   params.push(limit, offset);
 
@@ -350,6 +392,11 @@ accounting.post('/journal-entries/:id/reverse', requirePermissions(['manage_purc
 // ══════════════════════════════════════════════════════════
 // GENERAL LEDGER
 // ══════════════════════════════════════════════════════════
+const LEDGER_LIST: ListOptions = {
+  sortable: { date: 'ROW(l.entry_date, l.created_at, l.journal_entry_id, l.line_order)' },
+  defaultSort: 'date', defaultDir: 'asc', tieBreaker: 'l.id',
+};
+
 accounting.get('/general-ledger', requirePermissions(['view_reports']), async (c) => {
   const scope = await resolveBranchScope(c);
   const accountId = c.req.query('account_id') || null;
@@ -376,6 +423,33 @@ accounting.get('/general-ledger', requirePermissions(['view_reports']), async (c
   if (accountId) { inner += ' AND gl.account_id = ?'; params.push(accountId); }
   inner += branchSql(scope, 'gl.branch_id');
   let query = `SELECT * FROM (${inner}) l WHERE 1=1`;
+  const listReq = listRequest(c, LEDGER_LIST);
+  if (listReq.paged) {
+    // In ledger order; the running balance is already computed across all dates.
+    const where: string[] = [];
+    dateRange(c, 'l.entry_date', where, params);
+    const qq = (c.req.query('q') || '').trim();
+    if (qq) {
+      const t = likeTerm(qq);
+      where.push("(l.entry_number ILIKE ? OR COALESCE(l.description, '') ILIKE ?)");
+      params.push(t, t);
+    }
+    const base = `FROM (${inner}) l ${where.length ? 'WHERE ' + where.join(' AND ') : ''}`;
+    const { rows, total } = await pagedRows(c.env.DB, 'l.*', base, params, listReq);
+    if (listReq.csv) {
+      return csvResponse(c, 'general-ledger', [
+        { label: 'Date', value: (r: any) => String(r.entry_date instanceof Date ? r.entry_date.toISOString() : r.entry_date).slice(0, 10) },
+        { label: 'Entry', value: (r: any) => r.entry_number },
+        { label: 'Account', value: (r: any) => `${r.account_code} ${r.account_name}` },
+        { label: 'Description', value: (r: any) => r.description },
+        { label: 'Debit', value: (r: any) => Number(r.debit_amount || 0).toFixed(2) },
+        { label: 'Credit', value: (r: any) => Number(r.credit_amount || 0).toFixed(2) },
+        { label: 'Balance', value: (r: any) => Number(r.running_balance || 0).toFixed(2) },
+        { label: 'Branch', value: (r: any) => r.branch_name },
+      ], rows);
+    }
+    return pagedResponse(c, listReq, rows, total);
+  }
   if (fromDate) { query += ' AND l.entry_date >= ?'; params.push(fromDate); }
   if (toDate) { query += ' AND l.entry_date <= ?'; params.push(toDate); }
   query += ' ORDER BY l.account_id ASC, l.entry_date ASC, l.created_at ASC, l.journal_entry_id ASC, l.line_order ASC';

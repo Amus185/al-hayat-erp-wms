@@ -17,6 +17,8 @@ import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
 import { confirmAction } from '../utils/swal';
 import { createPortal } from 'react-dom';
+import { useServerList } from '../utils/serverList';
+import { ListToolbar } from '../components/ListToolbar';
 import { ModalLoading } from '../components/ModalLoading';
 import { useLatest } from '../utils/latest';
 
@@ -215,6 +217,29 @@ export function AccountingPage() {
 
   // Ledger filter
   const [ledgerAccountId, setLedgerAccountId] = useState('');
+  // Journal entries and the general ledger page, search and filter on the
+  // server (journal entries used to show only the latest 50).
+  const branchParam = canChooseBranch && branchFilter !== 'ALL' ? branchFilter : undefined;
+  const jeList = useServerList<any>('/accounting/journal-entries', {
+    key: 'journal-entries', prefix: 'je',
+    filters: ['status', 'referenceType', 'dateFrom', 'dateTo'],
+    defaultSort: 'date', defaultDir: 'desc',
+    fixed: { period_id: selectedPeriod || undefined, branch_id: branchParam },
+    enabled: activeTab === 'journal',
+  });
+  const glList = useServerList<any>('/accounting/general-ledger', {
+    key: 'general-ledger', prefix: 'gl',
+    filters: ['dateFrom', 'dateTo'],
+    defaultSort: 'date', defaultDir: 'asc',
+    fixed: { account_id: ledgerAccountId || undefined, branch_id: branchParam },
+    enabled: activeTab === 'ledger',
+  });
+  const [jeTypes, setJeTypes] = useState<string[]>([]);
+  useEffect(() => {
+    if (activeTab === 'journal' && !jeTypes.length) apiGet<string[]>('/accounting/journal-reference-types').then((t) => setJeTypes(t || [])).catch(() => {});
+  }, [activeTab, jeTypes.length]);
+  // a copy of the journal page, so "Post" updates the row at once
+  useEffect(() => { setJournalEntries(jeList.items); }, [jeList.items]);
 
   // ── Load base data ────────────────────────────────────────────────
   useEffect(() => {
@@ -260,11 +285,9 @@ export function AccountingPage() {
         setDashboard(d);
         setBranchSummary(s);
       } else if (tab === 'journal') {
-        const rows = await apiGet<any[]>(withBranch(`/accounting/journal-entries${period ? `?period_id=${period}` : ''}`)).catch(() => []);
-        setJournalEntries(rows || []);
+        jeList.refresh();
       } else if (tab === 'ledger') {
-        const rows = await apiGet<any[]>(withBranch(`/accounting/general-ledger${ledgerAccountId ? `?account_id=${ledgerAccountId}` : ''}`)).catch(() => []);
-        setLedger(rows || []);
+        glList.refresh();
       } else if (tab === 'trial-balance') {
         const d = await apiGet<any>(withBranch(`/accounting/trial-balance?type=${trialType}${period ? `&period_id=${period}` : ''}`)).catch(() => null);
         setTrialBalance(d);
@@ -1038,7 +1061,17 @@ export function AccountingPage() {
                   <Plus size={14} />New Entry
                 </button>} />
               <PeriodBar />
-              <DataTable data={journalEntries} columns={jeCols} keyExtractor={(row: any) => String(row.id ?? row.account_id ?? row.entry_number)} emptyMessage='No journal entries yet. Create your first entry.' />
+              <ListToolbar
+                id="je-toolbar"
+                list={jeList}
+                searchPlaceholder="Search entry number, description or reference…"
+                dateRange
+                filters={[
+                  { key: 'status', label: 'All statuses', options: [{ value: 'DRAFT', label: 'Draft' }, { value: 'POSTED', label: 'Posted' }, { value: 'REVERSED', label: 'Reversed' }] },
+                  { key: 'referenceType', label: 'All types', options: jeTypes.map((t) => ({ value: t, label: t.replace(/_/g, ' ').toLowerCase() })) },
+                ]}
+              />
+              <DataTable id="je-table" data={journalEntries} columns={jeCols} server={jeList} keyExtractor={(row: any) => String(row.id ?? row.account_id ?? row.entry_number)} emptyMessage={jeList.activeFilters ? 'No journal entries match your filters' : 'No journal entries yet. Create your first entry.'} />
             </div>
           )}
 
@@ -1058,7 +1091,8 @@ export function AccountingPage() {
                   <RefreshCw size={13} />Refresh
                 </button>
               </div>
-              <DataTable data={ledger} columns={ledgerCols} keyExtractor={(row: any) => String(row.id ?? row.account_id ?? row.entry_number)} emptyMessage='No ledger entries. Post journal entries to see them here.' />
+              <ListToolbar id="gl-toolbar" list={glList} searchPlaceholder="Search entry number or description…" dateRange />
+              <DataTable id="gl-table" data={glList.items} columns={ledgerCols} server={glList} keyExtractor={(row: any) => String(row.id ?? row.account_id ?? row.entry_number)} emptyMessage={glList.activeFilters ? 'No ledger lines match your filters' : 'No ledger entries. Post journal entries to see them here.'} />
             </div>
           )}
 

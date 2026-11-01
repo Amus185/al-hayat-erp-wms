@@ -14,6 +14,7 @@ import {
 
 export { webOrderStage };
 import sales from './sales';
+import { csvResponse, dateRange, likeTerm, listRequest, pagedResponse, pagedRows, type ListOptions } from '../services/listing';
 
 const admin = new Hono<{ Bindings: Env; Variables: { jwtPayload: any } }>();
 admin.use('/*', authMiddleware);
@@ -387,10 +388,58 @@ async function assertRequestsAccess(c: any): Promise<Response | null> {
   return c.json({ message: 'Website requests are handled by the web branch and administrators.' }, 403);
 }
 
+const WEB_ORDER_LIST: ListOptions = {
+  sortable: { date: 'r.created_at', number: 'r.request_number', customer: 'r.customer_name', total: 'r.total_amount', status: 'r.status' },
+  defaultSort: 'date', defaultDir: 'desc', tieBreaker: 'r.id',
+};
+
 admin.get('/requests', requirePermissions(['manage_sales']), async (c) => {
   const denied = await assertRequestsAccess(c);
   if (denied) return denied;
   const status = (c.req.query('status') || '').toUpperCase();
+  const listReq = listRequest(c, WEB_ORDER_LIST);
+  if (listReq.paged) {
+    const q = (k: string) => (c.req.query(k) || '').trim();
+    const where: string[] = [];
+    const params: unknown[] = [];
+    if (q('q')) {
+      const t = likeTerm(q('q'));
+      const digits = /^[\d\s+()-]+$/.test(q('q')) ? q('q').replace(/\D/g, '') : '';
+      where.push(`(r.request_number ILIKE ? OR r.customer_name ILIKE ? OR r.phone ILIKE ?${digits.length >= 3 ? " OR regexp_replace(r.phone, '\\D', '', 'g') LIKE ?" : ''})`);
+      params.push(t, t, t, ...(digits.length >= 3 ? [`%${digits}%`] : []));
+    }
+    dateRange(c, 'r.created_at', where, params);
+    const statusWhere = [...where];
+    const statusParams = [...params];
+    if (status && status !== 'ALL') { statusWhere.push('r.status = ?'); statusParams.push(status); }
+    const from = `
+      FROM storefront_requests r
+      LEFT JOIN sales_orders so ON so.id = r.converted_order_id`;
+    const { rows, total } = await pagedRows(c.env.DB, `
+      r.id, r.request_number, r.customer_name, r.phone, r.status, r.total_amount, r.created_at, r.converted_order_id, r.cancel_reason,
+      (SELECT COUNT(*) FROM storefront_request_lines l WHERE l.request_id = r.id) AS line_count,
+      so.order_number, so.status AS order_status,
+      (SELECT d.status FROM deliveries d WHERE d.sales_order_id = so.id AND d.status <> 'CANCELLED' ORDER BY d.created_at DESC LIMIT 1) AS delivery_status,
+      (SELECT COALESCE(SUM(sr.quantity), 0) FROM storefront_reservations sr WHERE sr.request_id = r.id AND sr.released_at IS NULL)::int AS reserved_units`,
+      `${from} ${statusWhere.length ? 'WHERE ' + statusWhere.join(' AND ') : ''}`, statusParams, listReq);
+    const items = rows.map((r: any) => ({ ...r, stage: webOrderStage(r) }));
+    if (listReq.csv) {
+      return csvResponse(c, 'online-orders', [
+        { label: 'Order', value: (r: any) => r.request_number },
+        { label: 'Received', value: (r: any) => (r.created_at instanceof Date ? r.created_at.toISOString() : String(r.created_at)).slice(0, 16).replace('T', ' ') },
+        { label: 'Customer', value: (r: any) => r.customer_name },
+        { label: 'Phone', value: (r: any) => r.phone },
+        { label: 'Total', value: (r: any) => Number(r.total_amount).toFixed(2) },
+        { label: 'Status', value: (r: any) => r.status },
+        { label: 'Stage', value: (r: any) => r.stage },
+        { label: 'Sales order', value: (r: any) => r.order_number },
+      ], items);
+    }
+    const { results: grouped } = await c.env.DB.prepare(`SELECT r.status, COUNT(*)::int AS n ${from} ${where.length ? 'WHERE ' + where.join(' AND ') : ''} GROUP BY r.status`).bind(...params).all();
+    const counts: Record<string, number> = { ALL: 0 };
+    for (const g of (grouped || []) as any[]) { counts[g.status] = Number(g.n); counts.ALL += Number(g.n); }
+    return pagedResponse(c, listReq, items, total, { counts });
+  }
   const { results } = await c.env.DB.prepare(`
     SELECT r.id, r.request_number, r.customer_name, r.phone, r.status, r.total_amount, r.created_at, r.converted_order_id,
            (SELECT COUNT(*) FROM storefront_request_lines l WHERE l.request_id = r.id) AS line_count,

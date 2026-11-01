@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Globe, Loader2, Settings as SettingsIcon } from 'lucide-react';
 import { DataTable, type Column } from '../components/DataTable';
 import { Modal } from '../components/Modal';
 import { StatusBadge } from '../components/StatusBadge';
-import { Tabs } from '../components/Tabs';
+import { StatusTabs } from '../components/StatusTabs';
+import { ListToolbar } from '../components/ListToolbar';
 import { InputField, SelectField } from '../components/FormField';
 import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -16,7 +17,7 @@ import {
   cancelWebRequest, convertWebRequest, getStorefrontSettings, getWebRequest, listWebRequests, saveStorefrontSettings,
   type StorefrontSettings, type WebOrderStage, type WebRequestDetail, type WebRequestRow,
 } from '../api/storefront';
-import { useOpenParam } from '../utils/serverList';
+import { useOpenParam, useServerList } from '../utils/serverList';
 
 const money = (n: number | string) => `$${Number(n).toFixed(2)}`;
 const when = (iso: string) => new Date(iso).toLocaleString();
@@ -41,33 +42,26 @@ export function WebRequestsPage({ embedded = false }: { embedded?: boolean } = {
   const { isAdmin } = useAuth();
   const navigate = useNavigate();
 
-  const [tab, setTab] = useState<Tab>('NEW');
-  const [rows, setRows] = useState<WebRequestRow[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [blocked, setBlocked] = useState<string | null>(null);
+  // Web orders: searched, filtered, sorted and paged on the server. New orders
+  // are shown first (no status in the address = New).
+  const [sp] = useSearchParams();
+  const statusParam = sp.get('status');
+  const list = useServerList<WebRequestRow>('/storefront-admin/requests', {
+    key: 'web-orders',
+    filters: ['status', 'dateFrom', 'dateTo'],
+    defaultSort: 'date',
+    defaultDir: 'desc',
+    fixed: { status: statusParam ? undefined : 'NEW' },
+  });
+  const tab = (statusParam || 'NEW') as Tab;
+  const blocked = list.error && /branch/i.test(list.error) ? list.error : null;
   const [detail, setDetail] = useState<WebRequestDetail | null>(null);
   const [detailRow, setDetailRow] = useState<WebRequestRow | null>(null);
   const detailRequest = useLatest();
   const closeDetail = () => { detailRequest.cancel(); setDetail(null); setDetailRow(null); };
   const [busy, setBusy] = useState(false);
 
-  // quiet: a background refresh (no spinner, no error toast)
-  const load = useCallback(async (quiet = false) => {
-    if (!quiet) setLoading(true);
-    try {
-      setRows(await listWebRequests(tab === 'ALL' ? undefined : tab));
-      setBlocked(null);
-    } catch (err: any) {
-      if (quiet) return;
-      // 403: this user's branch is not the web branch
-      if (err?.status === 403) setBlocked(err.message);
-      else addToast('error', err?.message || 'Could not load website requests');
-    } finally {
-      if (!quiet) setLoading(false);
-    }
-  }, [tab, addToast]);
-
-  useEffect(() => { load(); }, [load]);
+  const load = (_quiet = false) => list.refresh();
   // New online orders appear without refreshing the page.
   useLiveRefresh(() => load(true));
 
@@ -130,10 +124,10 @@ export function WebRequestsPage({ embedded = false }: { embedded?: boolean } = {
   };
 
   const columns: Column<WebRequestRow & Record<string, unknown>>[] = [
-    { key: 'request_number', label: 'Request', render: (r) => <strong style={{ fontFamily: 'monospace' }}>{r.request_number}</strong> },
-    { key: 'customer_name', label: 'Customer', render: (r) => <div><div>{r.customer_name}</div><div style={{ fontSize: '12px', color: '#64748b' }}>{r.phone}</div></div> },
+    { key: 'request_number', label: 'Request', sortable: true, sortKey: 'number', render: (r) => <strong style={{ fontFamily: 'monospace' }}>{r.request_number}</strong> },
+    { key: 'customer_name', label: 'Customer', sortable: true, sortKey: 'customer', render: (r) => <div><div>{r.customer_name}</div><div style={{ fontSize: '12px', color: '#64748b' }}>{r.phone}</div></div> },
     { key: 'line_count', label: 'Items', render: (r) => String(r.line_count) },
-    { key: 'total_amount', label: 'Total', render: (r) => money(r.total_amount) },
+    { key: 'total_amount', label: 'Total', sortable: true, sortKey: 'total', render: (r) => money(r.total_amount) },
     {
       key: 'stage', label: 'Stage', render: (r) => (
         <div>
@@ -143,7 +137,7 @@ export function WebRequestsPage({ embedded = false }: { embedded?: boolean } = {
       ),
     },
     { key: 'reserved_units', label: 'Stock held', render: (r) => (r.reserved_units ? `${r.reserved_units} unit${r.reserved_units === 1 ? '' : 's'}` : '—') },
-    { key: 'created_at', label: 'Received', render: (r) => when(r.created_at) },
+    { key: 'created_at', label: 'Received', sortable: true, sortKey: 'date', render: (r) => when(r.created_at) },
   ];
 
   return (
@@ -164,19 +158,21 @@ export function WebRequestsPage({ embedded = false }: { embedded?: boolean } = {
         <div className="card" style={{ padding: '20px', color: '#64748b' }}>{blocked}</div>
       ) : (
         <>
-          <Tabs
+          <StatusTabs
             id="web-request-tabs"
-            activeTab={tab}
-            onTabChange={(k) => setTab(k as Tab)}
+            value={tab}
+            counts={list.counts}
+            onChange={(v) => list.setFilter('status', v || 'ALL')}
             tabs={[{ key: 'NEW', label: 'New' }, { key: 'CONVERTED', label: 'Converted' }, { key: 'CANCELLED', label: 'Cancelled' }, { key: 'ALL', label: 'All' }]}
           />
+          <ListToolbar id="web-orders-toolbar" list={list} searchPlaceholder="Search order number, customer or phone…" dateRange />
           <DataTable
             id="web-requests"
             columns={columns}
-            data={rows as (WebRequestRow & Record<string, unknown>)[]}
+            data={list.items as (WebRequestRow & Record<string, unknown>)[]}
+            server={list}
             keyExtractor={(r) => r.id}
-            loading={loading}
-            emptyMessage={tab === 'NEW' ? 'No new requests. They appear here when a customer sends one from the website.' : 'Nothing here.'}
+            emptyMessage={list.activeFilters > (statusParam ? 1 : 0) ? 'No online orders match your filters' : tab === 'NEW' ? 'No new requests. They appear here when a customer sends one from the website.' : 'Nothing here.'}
             onRowClick={(r) => open(r)}
           />
         </>

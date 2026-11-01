@@ -9,7 +9,9 @@ import { LoadingSpinner } from '../components/LoadingSpinner';
 import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
 import { confirmAction } from '../utils/swal';
-import { useOpenParam } from '../utils/serverList';
+import { useOpenParam, useServerList } from '../utils/serverList';
+import { ListToolbar } from '../components/ListToolbar';
+import { StatusTabs } from '../components/StatusTabs';
 
 interface TransferLine {
   id: string;
@@ -60,12 +62,15 @@ export function TransfersPage() {
   const { addToast } = useToast();
   const { hasPermission } = useAuth();
 
-  const [transfers, setTransfers] = useState<Transfer[]>([]);
+  // Transfers: searched, filtered, sorted and paged on the server.
+  const list = useServerList<Transfer>('/transfers', {
+    key: 'transfers',
+    filters: ['status', 'from', 'to', 'dateFrom', 'dateTo'],
+    defaultSort: 'date',
+    defaultDir: 'desc',
+  });
   const [warehouses, setWarehouses] = useState<any[]>([]);
   const [branches, setBranches] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState('ALL');
-  const [searchQuery, setSearchQuery] = useState('');
 
   // Detail Modal
   const [selectedTransfer, setSelectedTransfer] = useState<Transfer | null>(null);
@@ -76,18 +81,15 @@ export function TransfersPage() {
 
   const loadData = async () => {
     try {
-      const [data, whs, brs] = await Promise.all([
-        apiGet<Transfer[]>('/transfers'),
+      list.refresh();
+      const [whs, brs] = await Promise.all([
         apiGet<any[]>('/warehouses'),
         apiGet<any[]>('/branches'),
       ]);
-      setTransfers(data || []);
       setWarehouses(whs || []);
       setBranches(brs || []);
     } catch (err: any) {
       addToast('error', err?.message || 'Failed to fetch transfers');
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -266,26 +268,12 @@ export function TransfersPage() {
     }
   };
 
-  const filteredTransfers = transfers.filter((t) => {
-    if (activeTab !== 'ALL') {
-      if (activeTab === 'PENDING' && t.status !== 'PENDING_APPROVAL') return false;
-      else if (activeTab === 'COMPLETED' && !['COMPLETED', 'RECEIVED'].includes(t.status)) return false;
-      else if (activeTab !== 'PENDING' && activeTab !== 'COMPLETED' && t.status !== activeTab) return false;
-    }
-    if (searchQuery) {
-      const q = searchQuery.toLowerCase();
-      const src = (t.source_name || getOwnerName(t.source_owner_type, t.source_warehouse_id, t.source_branch_id)).toLowerCase();
-      const dst = (t.destination_name || getOwnerName(t.destination_owner_type, t.destination_warehouse_id, t.destination_branch_id)).toLowerCase();
-      if (!t.transfer_number.toLowerCase().includes(q) && !src.includes(q) && !dst.includes(q)) return false;
-    }
-    return true;
-  });
-
   const columns: Column<Transfer>[] = [
     {
       key: 'transfer_number',
-      label: 'Transfer ID',
       sortable: true,
+      sortKey: 'number',
+      label: 'Transfer ID',
       render: (row) => (
         <span style={{ fontWeight: 700, color: '#0b8f08', fontFamily: 'monospace' }}>
           {row.transfer_number}
@@ -305,14 +293,16 @@ export function TransfersPage() {
     },
     {
       key: 'requested_at',
-      label: 'Requested On',
       sortable: true,
+      sortKey: 'date',
+      label: 'Requested On',
       render: (row) => new Date(row.requested_at).toLocaleDateString(),
     },
     {
       key: 'status',
-      label: 'Status',
       sortable: true,
+      sortKey: 'status',
+      label: 'Status',
       render: (row) => {
         let tone: 'green' | 'yellow' | 'red' | 'neutral' | 'blue' = 'neutral';
         if (row.status === 'APPROVED') tone = 'green';
@@ -393,49 +383,46 @@ export function TransfersPage() {
         </div>
       </section>
 
-      <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '16px', alignItems: 'center' }}>
-        <div style={{ position: 'relative', flex: '1', minWidth: '240px' }}>
-          <Search size={14} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#9ca3af' }} />
-          <input
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search by Transfer ID, origin or destination…"
-            style={{ width: '100%', padding: '9px 10px 9px 32px', border: '1px solid #e5e7eb', borderRadius: '8px', fontSize: '14px', outline: 'none', boxSizing: 'border-box' }}
-          />
-        </div>
-
-        <select
-          value={activeTab}
-          onChange={(e) => setActiveTab(e.target.value)}
-          style={{ padding: '9px 12px', border: '1px solid #e5e7eb', borderRadius: '8px', fontSize: '14px', background: '#fff', cursor: 'pointer' }}
-        >
-          <option value="ALL">All Statuses</option>
-          <option value="PENDING_APPROVAL">Pending Approval</option>
-          <option value="APPROVED">Approved</option>
-          <option value="DISPATCHED">Dispatched (In Transit)</option>
-          <option value="COMPLETED">Completed / Received</option>
-          <option value="REJECTED">Rejected</option>
-          <option value="CANCELLED">Cancelled</option>
-        </select>
-
-        {activeTab !== 'ALL' || searchQuery ? (
-          <button
-            onClick={() => { setActiveTab('ALL'); setSearchQuery(''); }}
-            style={{ padding: '9px 12px', border: '1px solid #e5e7eb', borderRadius: '8px', fontSize: '14px', background: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', color: '#6b7280' }}
-          >
-            <X size={14} /> Clear
-          </button>
-        ) : null}
-      </div>
-
       <section className="panel">
+        <StatusTabs
+          id="transfer-status-tabs"
+          value={list.filters.status}
+          counts={list.counts}
+          onChange={(v) => list.setFilter('status', v)}
+          tabs={[
+            { key: 'ALL', label: 'All' },
+            { key: 'PENDING_APPROVAL', label: 'Pending approval' },
+            { key: 'APPROVED', label: 'Approved' },
+            { key: 'DISPATCHED', label: 'In transit' },
+            { key: 'COMPLETED', label: 'Received' },
+            { key: 'REJECTED', label: 'Rejected' },
+            { key: 'CANCELLED', label: 'Cancelled' },
+          ]}
+        />
+        <ListToolbar
+          id="transfers-toolbar"
+          list={list}
+          searchPlaceholder="Search transfer number, location, requester or note…"
+          dateRange
+          filters={[
+            { key: 'from', label: 'From anywhere', options: [
+                ...warehouses.map((w: any) => ({ value: `W:${w.id}`, label: `Warehouse: ${w.name}` })),
+                ...branches.map((b: any) => ({ value: `B:${b.id}`, label: `Branch: ${b.name}` })),
+              ] },
+            { key: 'to', label: 'To anywhere', options: [
+                ...warehouses.map((w: any) => ({ value: `W:${w.id}`, label: `Warehouse: ${w.name}` })),
+                ...branches.map((b: any) => ({ value: `B:${b.id}`, label: `Branch: ${b.name}` })),
+              ] },
+          ]}
+        />
         <DataTable
+          id="transfers-table"
           columns={columns}
-          data={filteredTransfers}
+          data={list.items}
+          server={list}
           keyExtractor={(row) => row.id}
-          loading={loading}
           onRowClick={(row) => openDetailModal(row)}
-          emptyMessage="No transfers match your filters"
+          emptyMessage={list.activeFilters ? 'No transfers match your filters' : 'No transfers yet'}
         />
       </section>
 

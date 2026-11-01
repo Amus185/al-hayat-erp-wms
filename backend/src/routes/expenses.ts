@@ -4,12 +4,18 @@ import { authMiddleware, requirePermissions } from '../middleware/auth';
 import { resolveBranchScope, resolveWriteBranch, branchSql, inScope } from '../services/branch-scope';
 import { createAuditLogStmt } from '../services/audit';
 import { prepareExpenseJournal, prepareJournalReversal } from '../services/accounting-service';
+import { csvResponse, likeTerm, listRequest, pagedResponse, pagedRows, type ListOptions } from '../services/listing';
 
 const expenses = new Hono<{ Bindings: Env; Variables: { jwtPayload: any } }>();
 
 expenses.use('/*', authMiddleware);
 
 // ── GET /expenses ─────────────────────────────────────────
+const EXPENSE_LIST: ListOptions = {
+  sortable: { date: 'expense_date', amount: 'amount', title: 'title', category: 'category', branch: 'branch_name', method: 'payment_method' },
+  defaultSort: 'date', defaultDir: 'desc', tieBreaker: 'id',
+};
+
 expenses.get('/', requirePermissions(['view_reports']), async (c) => {
   const { category, dateFrom, dateTo, branch_id } = c.req.query();
   const payload = c.get('jwtPayload');
@@ -37,6 +43,38 @@ expenses.get('/', requirePermissions(['view_reports']), async (c) => {
   if (dateTo) {
     query += ` AND e.expense_date <= ?`;
     params.push(dateTo);
+  }
+
+  const listReq = listRequest(c, EXPENSE_LIST);
+  if (listReq.paged) {
+    const q = (k: string) => (c.req.query(k) || '').trim();
+    if (q('branchId') && scope.kind === 'ALL') { query += ` AND e.branch_id = ?`; params.push(q('branchId')); }
+    if (q('method')) { query += ` AND e.payment_method = ?`; params.push(q('method')); }
+    if (q('q')) {
+      const t = likeTerm(q('q'));
+      query += ` AND (e.title ILIKE ? OR COALESCE(e.notes, '') ILIKE ? OR e.category ILIKE ?)`;
+      params.push(t, t, t);
+    }
+    const base = `FROM (${query}) x`;
+    const { rows, total } = await pagedRows(c.env.DB, '*', base, params, listReq);
+    if (listReq.csv) {
+      return csvResponse(c, 'expenses', [
+        { label: 'Date', value: (e: any) => String(e.expense_date instanceof Date ? e.expense_date.toISOString() : e.expense_date).slice(0, 10) },
+        { label: 'Title', value: (e: any) => e.title },
+        { label: 'Category', value: (e: any) => e.category },
+        { label: 'Amount', value: (e: any) => Number(e.amount).toFixed(2) },
+        { label: 'Payment method', value: (e: any) => e.payment_method },
+        { label: 'Branch', value: (e: any) => e.branch_name },
+        { label: 'Recorded by', value: (e: any) => e.recorded_by_name },
+        { label: 'Notes', value: (e: any) => e.notes },
+      ], rows);
+    }
+    const sum = await c.env.DB.prepare(`SELECT COALESCE(SUM(amount), 0) AS total, COUNT(*)::int AS n ${base}`).bind(...params).first() as any;
+    const { results: cats } = await c.env.DB.prepare(`SELECT category, COALESCE(SUM(amount), 0) AS amount ${base} GROUP BY category ORDER BY 2 DESC`).bind(...params).all();
+    return pagedResponse(c, listReq, rows, total, {
+      totals: { amount: Math.round(Number(sum?.total || 0) * 100) / 100 },
+      byCategory: ((cats || []) as any[]).map((r) => ({ category: r.category, amount: Math.round(Number(r.amount) * 100) / 100 })),
+    });
   }
 
   query += ` ORDER BY e.expense_date DESC, e.created_at DESC LIMIT 200`;

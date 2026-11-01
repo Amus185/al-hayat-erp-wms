@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { Env, uuidv4 } from '../db';
 import { authMiddleware, requirePermissions } from '../middleware/auth';
 import { logAudit, createAuditLogStmt } from '../services/audit';
+import { csvResponse, listRequest, pagedResponse, pagedRows, type ListOptions } from '../services/listing';
 
 const deliveries = new Hono<{ Bindings: Env; Variables: { jwtPayload: any } }>();
 
@@ -32,8 +33,18 @@ deliveries.get('/stats', async (c) => {
 // ──────────────────────────────────────────────────────────────────────
 // LIST DELIVERIES
 // ──────────────────────────────────────────────────────────────────────
+const DELIVERY_LIST: ListOptions = {
+  sortable: {
+    date: 'created_at', number: 'delivery_number', customer: 'customer_name', status: 'status',
+    scheduled: 'scheduled_date', driver: 'driver_name', order: 'order_number', branch: 'branch_name',
+  },
+  defaultSort: 'date', defaultDir: 'desc', tieBreaker: 'id',
+};
+
 deliveries.get('/', async (c) => {
-  const { status, search, driver, dateFrom, dateTo } = c.req.query();
+  const { status, driver, dateFrom, dateTo } = c.req.query();
+  const search = c.req.query('search') || c.req.query('q');
+  const listReq = listRequest(c, DELIVERY_LIST);
 
   let query = `
     SELECT d.*, so.order_number, b.name AS branch_name, u.full_name AS created_by_name,
@@ -47,18 +58,23 @@ deliveries.get('/', async (c) => {
   `;
   const params: any[] = [];
 
-  if (status && status !== 'ALL') {
+  // (paged lists filter the status outside, so the status tabs can count them all)
+  if (status && status !== 'ALL' && !listReq.paged) {
     query += ` AND d.status = ?`;
     params.push(status);
   }
+  if (listReq.paged && c.req.query('branchId')) {
+    query += ` AND so.branch_id = ?`;
+    params.push(c.req.query('branchId'));
+  }
 
   if (search) {
-    query += ` AND (d.delivery_number LIKE ? OR d.customer_name LIKE ? OR d.customer_phone LIKE ? OR d.delivery_address LIKE ? OR so.order_number LIKE ?)`;
+    query += ` AND (d.delivery_number ILIKE ? OR d.customer_name ILIKE ? OR d.customer_phone ILIKE ? OR d.delivery_address ILIKE ? OR so.order_number ILIKE ?)`;
     params.push(`%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`);
   }
 
   if (driver) {
-    query += ` AND d.driver_name LIKE ?`;
+    query += ` AND d.driver_name ILIKE ?`;
     params.push(`%${driver}%`);
   }
 
@@ -70,6 +86,32 @@ deliveries.get('/', async (c) => {
   if (dateTo) {
     query += ` AND date(d.created_at) <= date(?)`;
     params.push(dateTo);
+  }
+
+  if (listReq.paged) {
+    const statusWhere: string[] = [];
+    const statusParams: unknown[] = [];
+    if (status && status !== 'ALL') { statusWhere.push('status = ?'); statusParams.push(status); }
+    const base = `FROM (${query}) x ${statusWhere.length ? 'WHERE ' + statusWhere.join(' AND ') : ''}`;
+    const { rows, total } = await pagedRows(c.env.DB, '*', base, [...params, ...statusParams], listReq);
+    if (listReq.csv) {
+      return csvResponse(c, 'deliveries', [
+        { label: 'Delivery', value: (d: any) => d.delivery_number },
+        { label: 'Order', value: (d: any) => d.order_number },
+        { label: 'Created', value: (d: any) => String(d.created_at instanceof Date ? d.created_at.toISOString() : d.created_at).slice(0, 10) },
+        { label: 'Scheduled', value: (d: any) => d.scheduled_date ? String(d.scheduled_date instanceof Date ? d.scheduled_date.toISOString() : d.scheduled_date).slice(0, 10) : '' },
+        { label: 'Customer', value: (d: any) => d.customer_name },
+        { label: 'Phone', value: (d: any) => d.customer_phone },
+        { label: 'Address', value: (d: any) => d.delivery_address },
+        { label: 'Driver', value: (d: any) => d.driver_name },
+        { label: 'Status', value: (d: any) => d.status },
+        { label: 'Units', value: (d: any) => d.total_units },
+      ], rows);
+    }
+    const { results: grouped } = await c.env.DB.prepare(`SELECT status, COUNT(*)::int AS n FROM (${query}) x GROUP BY status`).bind(...params).all();
+    const counts: Record<string, number> = { ALL: 0 };
+    for (const g of (grouped || []) as any[]) { counts[g.status] = Number(g.n); counts.ALL += Number(g.n); }
+    return pagedResponse(c, listReq, rows, total, { counts });
   }
 
   query += ` ORDER BY d.created_at DESC LIMIT 200`;

@@ -31,6 +31,7 @@ export interface ServerListOptions {
 }
 
 export const PAGE_SIZES = [25, 50, 100];
+const NO_ITEMS: never[] = []; // stable: safe in effect dependencies
 
 const readSize = (key: string) => {
   try {
@@ -122,10 +123,12 @@ export function useServerList<T>(endpoint: string, opts: ServerListOptions) {
   const activeFilters = (q ? 1 : 0) + Object.values(filters).filter(Boolean).length;
 
   return {
-    items: data?.items ?? [],
+    items: data?.items ?? (NO_ITEMS as T[]),
     total: data?.total ?? 0,
     counts: data?.counts,
     totals: data?.totals,
+    /** The whole answer, for list-specific extras (e.g. byCategory). */
+    response: data as (Paged<T> & Record<string, unknown>) | null,
     /** true until the first answer; later loads keep showing the current rows */
     initialLoading: loading && !data,
     loading,

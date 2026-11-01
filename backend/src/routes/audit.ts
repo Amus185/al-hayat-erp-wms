@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { Env } from '../db';
 import { authMiddleware, requirePermissions, isAdminUser } from '../middleware/auth';
+import { csvResponse, dateRange, listRequest, pagedResponse, pagedRows, type ListOptions } from '../services/listing';
 
 const audit = new Hono<{ Bindings: Env; Variables: { jwtPayload: any } }>();
 
@@ -19,14 +20,33 @@ audit.use('/*', authMiddleware, async (c, next) => {
   await next();
 });
 
+/** Record types and actions that occur (for the filters). Non-admins: their own entries only. */
+audit.get('/facets', async (c) => {
+  const payload = c.get('jwtPayload');
+  const own = !isAdminUser(payload);
+  const [types, actions] = await Promise.all([
+    c.env.DB.prepare(`SELECT DISTINCT entity_type AS v FROM audit_logs ${own ? 'WHERE actor_user_id = ?' : ''} ORDER BY 1`).bind(...(own ? [payload.sub] : [])).all(),
+    c.env.DB.prepare(`SELECT DISTINCT action AS v FROM audit_logs ${own ? 'WHERE actor_user_id = ?' : ''} ORDER BY 1`).bind(...(own ? [payload.sub] : [])).all(),
+  ]);
+  const vals = (r: any) => ((r.results || []) as any[]).map((x) => x.v).filter(Boolean);
+  return c.json({ entityTypes: vals(types), actions: vals(actions) });
+});
+
+const AUDIT_LIST: ListOptions = {
+  sortable: { date: 'created_at', action: 'action', type: 'entity_type', who: 'actor_name' },
+  defaultSort: 'date', defaultDir: 'desc', tieBreaker: 'id',
+};
+
 audit.get('/', async (c) => {
   const payload = c.get('jwtPayload');
   const entityType = c.req.query('entityType');
   const action = c.req.query('action');
   const actor = c.req.query('actor');
-  const search = c.req.query('search');
-  const startDate = c.req.query('startDate');
-  const endDate = c.req.query('endDate');
+  const search = c.req.query('search') || c.req.query('q');
+  const listReq = listRequest(c, AUDIT_LIST);
+  // Paged lists use dateFrom/dateTo (whole days, the end day included).
+  const startDate = listReq.paged ? undefined : c.req.query('startDate');
+  const endDate = listReq.paged ? undefined : c.req.query('endDate');
 
   let sql = `
     SELECT a.*, u.full_name as actor_name, u.email as actor_email 
@@ -55,7 +75,7 @@ audit.get('/', async (c) => {
     params.push(actor.trim(), `%${actor.trim()}%`, `%${actor.trim()}%`);
   }
   if (search && search.trim() !== '') {
-    sql += ' AND (a.action LIKE ? OR a.entity_type LIKE ? OR a.entity_id LIKE ? OR a.old_value LIKE ? OR a.new_value LIKE ? OR u.full_name LIKE ? OR u.email LIKE ?)';
+    sql += ' AND (a.action ILIKE ? OR a.entity_type ILIKE ? OR a.entity_id ILIKE ? OR CAST(a.old_value AS TEXT) ILIKE ? OR CAST(a.new_value AS TEXT) ILIKE ? OR u.full_name ILIKE ? OR u.email ILIKE ?)';
     const s = `%${search.trim()}%`;
     params.push(s, s, s, s, s, s, s);
   }
@@ -66,6 +86,33 @@ audit.get('/', async (c) => {
   if (endDate && endDate.trim() !== '') {
     sql += ' AND a.created_at <= ?';
     params.push(endDate.trim());
+  }
+
+  const parse = (row: any) => {
+    let oldVal = row.old_value;
+    let newVal = row.new_value;
+    try { if (oldVal && typeof oldVal === 'string') oldVal = JSON.parse(oldVal); } catch (_) {}
+    try { if (newVal && typeof newVal === 'string') newVal = JSON.parse(newVal); } catch (_) {}
+    return { ...row, old_value: oldVal, new_value: newVal };
+  };
+
+  if (listReq.paged) {
+    const where: string[] = [];
+    dateRange(c, 'created_at', where, params);
+    const base = `FROM (${sql}) x ${where.length ? 'WHERE ' + where.join(' AND ') : ''}`;
+    const { rows, total } = await pagedRows(c.env.DB, '*', base, params, listReq);
+    if (listReq.csv) {
+      return csvResponse(c, 'audit-log', [
+        { label: 'When', value: (r: any) => (r.created_at instanceof Date ? r.created_at.toISOString() : String(r.created_at)).slice(0, 19).replace('T', ' ') },
+        { label: 'Who', value: (r: any) => r.actor_name || r.actor_email },
+        { label: 'Action', value: (r: any) => r.action },
+        { label: 'Record type', value: (r: any) => r.entity_type },
+        { label: 'Record', value: (r: any) => r.entity_id },
+        { label: 'Before', value: (r: any) => (r.old_value == null ? '' : typeof r.old_value === 'string' ? r.old_value : JSON.stringify(r.old_value)) },
+        { label: 'After', value: (r: any) => (r.new_value == null ? '' : typeof r.new_value === 'string' ? r.new_value : JSON.stringify(r.new_value)) },
+      ], rows);
+    }
+    return pagedResponse(c, listReq, rows.map(parse), total);
   }
 
   sql += ' ORDER BY a.created_at DESC LIMIT 200';

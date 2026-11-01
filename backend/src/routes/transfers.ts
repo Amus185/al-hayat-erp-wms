@@ -3,10 +3,16 @@ import { Env, uuidv4 } from '../db';
 import { authMiddleware, requirePermissions, isAdminUser } from '../middleware/auth';
 import { logAudit, createAuditLogStmt } from '../services/audit';
 import { calculateLinesCogs, prepareJournalEntryPosting } from '../services/accounting-service';
+import { csvResponse, dateRange, likeTerm, listRequest, pagedResponse, pagedRows, type ListOptions } from '../services/listing';
 
 const transfers = new Hono<{ Bindings: Env; Variables: { jwtPayload: any } }>();
 
 transfers.use('/*', authMiddleware);
+
+const TRANSFER_LIST: ListOptions = {
+  sortable: { date: 'COALESCE(requested_at, created_at)', number: 'transfer_number', status: 'status', from: 'source_name', to: 'destination_name', lines: 'line_count' },
+  defaultSort: 'date', defaultDir: 'desc', tieBreaker: 'id',
+};
 
 transfers.get('/', async (c) => {
   const payload = c.get('jwtPayload');
@@ -39,6 +45,49 @@ transfers.get('/', async (c) => {
   if (scopedBranchId) {
     query += ` AND (t.source_branch_id = ? OR t.destination_branch_id = ?)`;
     params.push(scopedBranchId, scopedBranchId);
+  }
+
+  const listReq = listRequest(c, TRANSFER_LIST);
+  if (listReq.paged) {
+    const q = (k: string) => (c.req.query(k) || '').trim();
+    const where: string[] = [];
+    const extra: unknown[] = [];
+    if (q('q')) {
+      const t = likeTerm(q('q'));
+      where.push('(transfer_number ILIKE ? OR source_name ILIKE ? OR destination_name ILIKE ? OR COALESCE(requester_name, \'\') ILIKE ? OR COALESCE(notes, \'\') ILIKE ?)');
+      extra.push(t, t, t, t, t);
+    }
+    const loc = (k: string, side: 'source' | 'destination') => {
+      const v = q(k);
+      if (v.startsWith('W:')) { where.push(`${side}_warehouse_id = ?`); extra.push(v.slice(2)); }
+      if (v.startsWith('B:')) { where.push(`${side}_branch_id = ?`); extra.push(v.slice(2)); }
+    };
+    loc('from', 'source');
+    loc('to', 'destination');
+    if (q('productId')) { where.push('EXISTS (SELECT 1 FROM transfer_lines tl WHERE tl.transfer_id = x.id AND tl.product_id = ?)'); extra.push(q('productId')); }
+    dateRange(c, 'COALESCE(requested_at, created_at)', where, extra);
+    const statusWhere = [...where];
+    const statusParams = [...extra];
+    if (q('status')) { statusWhere.push('status = ?'); statusParams.push(q('status')); }
+    const base = `FROM (${query}) x ${statusWhere.length ? 'WHERE ' + statusWhere.join(' AND ') : ''}`;
+    const { rows, total } = await pagedRows(c.env.DB, '*', base, [...params, ...statusParams], listReq);
+    if (listReq.csv) {
+      return csvResponse(c, 'transfers', [
+        { label: 'Transfer', value: (r: any) => r.transfer_number },
+        { label: 'Requested', value: (r: any) => String(r.requested_at instanceof Date ? r.requested_at.toISOString() : r.requested_at ?? '').slice(0, 10) },
+        { label: 'From', value: (r: any) => r.source_name },
+        { label: 'To', value: (r: any) => r.destination_name },
+        { label: 'Status', value: (r: any) => r.status },
+        { label: 'Lines', value: (r: any) => r.line_count },
+        { label: 'Requested by', value: (r: any) => r.requester_name },
+        { label: 'Approved by', value: (r: any) => r.approver_name },
+        { label: 'Received by', value: (r: any) => r.receiver_name },
+      ], rows);
+    }
+    const { results: grouped } = await c.env.DB.prepare(`SELECT status, COUNT(*)::int AS n FROM (${query}) x ${where.length ? 'WHERE ' + where.join(' AND ') : ''} GROUP BY status`).bind(...params, ...extra).all();
+    const counts: Record<string, number> = { ALL: 0 };
+    for (const g of (grouped || []) as any[]) { counts[g.status] = Number(g.n); counts.ALL += Number(g.n); }
+    return pagedResponse(c, listReq, rows, total, { counts });
   }
 
   query += ` ORDER BY t.requested_at DESC LIMIT 200`;

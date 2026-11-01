@@ -20,7 +20,9 @@ import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
 import { confirmAction } from '../utils/swal';
 import { html, writePrintDocument } from '../utils/html';
-import { useOpenParam } from '../utils/serverList';
+import { useOpenParam, useServerList } from '../utils/serverList';
+import { ListToolbar } from '../components/ListToolbar';
+import { StatusTabs } from '../components/StatusTabs';
 
 interface DeliveryItem {
   id: string;
@@ -88,13 +90,20 @@ export function DeliveriesPage() {
   const { addToast } = useToast();
   const { hasPermission, user } = useAuth();
 
+  // Deliveries: searched, filtered, sorted and paged on the server. The page
+  // keeps a copy of the current page so actions update the row at once.
+  const list = useServerList<Delivery>('/deliveries', {
+    key: 'deliveries',
+    filters: ['status', 'branchId', 'driver', 'dateFrom', 'dateTo'],
+    defaultSort: 'date',
+    defaultDir: 'desc',
+  });
   const [deliveries, setDeliveries] = useState<Delivery[]>([]);
+  useEffect(() => { setDeliveries(list.items); }, [list.items]);
   const [stats, setStats] = useState<Stats>({ total: 0, pending: 0, dispatched: 0, deliveredToday: 0 });
   const [loading, setLoading] = useState(true);
 
   // Filter states
-  const [activeTab, setActiveTab] = useState('ALL');
-  const [searchQuery, setSearchQuery] = useState('');
 
   // Modals
   const [isCreateOpen, setIsCreateOpen] = useState(false);
@@ -173,11 +182,8 @@ export function DeliveriesPage() {
   const loadData = async (silent = false) => {
     try {
       if (!silent) setLoading(true);
-      const [delRes, statsRes] = await Promise.all([
-        apiGet<Delivery[]>('/deliveries'),
-        apiGet<Stats>('/deliveries/stats'),
-      ]);
-      setDeliveries(delRes || []);
+      list.refresh();
+      const statsRes = await apiGet<Stats>('/deliveries/stats');
       setStats(statsRes || { total: 0, pending: 0, dispatched: 0, deliveredToday: 0 });
     } catch (err: any) {
       addToast('error', err?.message || 'Failed to load deliveries');
@@ -209,7 +215,7 @@ export function DeliveriesPage() {
           } else if (rawMatch) {
             if (rawMatch.status === 'DELIVERED' || rawMatch.delivery_status === 'DELIVERED') {
               addToast('info', `Order ${rawMatch.order_number} is already marked as DELIVERED.`);
-              setSearchQuery(rawMatch.delivery_number || rawMatch.order_number || '');
+              list.setQ(rawMatch.delivery_number || rawMatch.order_number || '');
             } else {
               handleOpenCreateWithOrder(rawMatch);
             }
@@ -812,31 +818,6 @@ export function DeliveriesPage() {
     `);
   };
 
-  // Filtered deliveries
-  const deliveryList = Array.isArray(deliveries) ? deliveries : [];
-  const filtered = deliveryList.filter((d) => {
-    if (activeTab !== 'ALL' && d.status !== activeTab) return false;
-    const q = searchQuery.toLowerCase().trim();
-    if (q) {
-      const matchNum = d.delivery_number.toLowerCase().includes(q);
-      const matchCust = d.customer_name.toLowerCase().includes(q);
-      const matchPhone = d.customer_phone.toLowerCase().includes(q);
-      const matchOrder = String(d.order_number || '').toLowerCase().includes(q);
-      const matchDriver = String(d.driver_name || '').toLowerCase().includes(q);
-      if (!matchNum && !matchCust && !matchPhone && !matchOrder && !matchDriver) return false;
-    }
-    return true;
-  });
-
-  const tabItems = [
-    { key: 'ALL', label: 'All Deliveries', count: deliveryList.length },
-    { key: 'PENDING', label: 'Pending', count: deliveryList.filter((d) => d.status === 'PENDING').length },
-    { key: 'SCHEDULED', label: 'Scheduled', count: deliveryList.filter((d) => d.status === 'SCHEDULED').length },
-    { key: 'PARTIALLY_DELIVERED', label: 'Partially Delivered', count: deliveryList.filter((d) => d.status === 'PARTIALLY_DELIVERED').length },
-    { key: 'DISPATCHED', label: 'In Transit', count: deliveryList.filter((d) => d.status === 'DISPATCHED').length },
-    { key: 'DELIVERED', label: 'Delivered', count: deliveryList.filter((d) => d.status === 'DELIVERED').length },
-  ];
-
   const columns: Column<Delivery>[] = [
     {
       key: 'delivery_number',
@@ -1083,29 +1064,49 @@ export function DeliveriesPage() {
         />
       </section>
 
-      {/* Tabs & Search */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px', marginBottom: '14px' }}>
-        <Tabs tabs={tabItems} activeTab={activeTab} onTabChange={setActiveTab} />
-        <div style={{ position: 'relative', width: '280px' }}>
-          <Search size={16} style={{ position: 'absolute', left: '10px', top: '10px', color: '#94a3b8' }} />
-          <input
-            type="text"
-            className="form-input"
-            placeholder="Search tracking, order, customer..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            style={{ paddingLeft: '34px', minHeight: '36px' }}
-          />
-        </div>
-      </div>
+      {/* Status tabs, search, filters and the list (all on the server) */}
+      <StatusTabs
+        id="delivery-status-tabs"
+        value={list.filters.status}
+        counts={list.counts}
+        onChange={(v) => list.setFilter('status', v)}
+        tabs={[
+          { key: 'ALL', label: 'All' },
+          { key: 'PENDING', label: 'Pending' },
+          { key: 'SCHEDULED', label: 'Scheduled' },
+          { key: 'DISPATCHED', label: 'In transit' },
+          { key: 'PARTIALLY_DELIVERED', label: 'Partly delivered' },
+          { key: 'DELIVERED', label: 'Delivered' },
+          { key: 'CANCELLED', label: 'Cancelled' },
+        ]}
+      />
+      <ListToolbar
+        id="deliveries-toolbar"
+        list={list}
+        searchPlaceholder="Search delivery or order number, customer, phone or address…"
+        dateRange
+        filters={branches.length > 1 ? [{ key: 'branchId', label: 'All branches', options: branches.map((b: any) => ({ value: b.id, label: b.name })) }] : []}
+      >
+        <input
+          className="list-toolbar__select"
+          aria-label="Driver"
+          placeholder="Driver name…"
+          defaultValue={list.filters.driver}
+          onBlur={(e) => list.setFilter('driver', e.target.value.trim())}
+          onKeyDown={(e) => { if (e.key === 'Enter') list.setFilter('driver', (e.target as HTMLInputElement).value.trim()); }}
+          style={{ width: '160px' }}
+        />
+      </ListToolbar>
 
       {/* Table */}
       <div className="panel" style={{ padding: '0', overflow: 'hidden' }}>
         <DataTable
-          data={filtered}
+          id="deliveries-table"
+          data={deliveries}
           columns={columns}
+          server={list}
           keyExtractor={(row) => row.id}
-          emptyMessage="No delivery records found matching current criteria."
+          emptyMessage={list.activeFilters ? 'No deliveries match your filters' : 'No deliveries yet'}
         />
       </div>
 

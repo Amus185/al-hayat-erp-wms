@@ -2,7 +2,10 @@ import { useState, useEffect, useCallback } from 'react';
 import { Receipt, Plus, Search, X, Edit2, Trash2, DollarSign, TrendingDown, Filter } from 'lucide-react';
 import { apiGet, apiPost, apiPatch, apiDelete } from '../api/client';
 import { useAuth } from '../contexts/AuthContext';
-import { getCached, setCached } from '../api/cache';
+import { useToast } from '../contexts/ToastContext';
+import { useServerList } from '../utils/serverList';
+import { ListToolbar } from '../components/ListToolbar';
+import { Pagination } from '../components/Pagination';
 
 interface Expense {
   id: string;
@@ -40,14 +43,17 @@ const emptyForm = { title: '', amount: '', category: 'Other', expense_date: new 
 
 export function ExpensesPage() {
   const { isAdmin } = useAuth();
-  const [expenses, setExpenses] = useState<Expense[]>([]);
+  const { addToast } = useToast();
+  // Expenses: searched, filtered, sorted and paged on the server; the totals
+  // and the category breakdown cover everything that matches the filters.
+  const list = useServerList<Expense>('/expenses', {
+    key: 'expenses',
+    filters: ['category', 'branch_id', 'method', 'dateFrom', 'dateTo'],
+    defaultSort: 'date',
+    defaultDir: 'desc',
+  });
+  const expenses = list.items;
   const [branches, setBranches] = useState<Branch[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState('');
-  const [filterCategory, setFilterCategory] = useState('ALL');
-  const [filterBranch, setFilterBranch] = useState('ALL');
-  const [dateFrom, setDateFrom] = useState('');
-  const [dateTo, setDateTo] = useState('');
 
   // Modal
   const [showModal, setShowModal] = useState(false);
@@ -56,49 +62,16 @@ export function ExpensesPage() {
   const [saving, setSaving] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
-    const cacheKey = `expenses:${filterCategory}:${filterBranch}:${dateFrom}:${dateTo}`;
-    const cached = getCached<Expense[]>(cacheKey);
-    if (cached) {
-      // Show stale data instantly, then refresh silently in background
-      setExpenses(cached);
-      setLoading(false);
-    } else {
-      setLoading(true);
-    }
-    try {
-      const params = new URLSearchParams();
-      if (filterCategory !== 'ALL') params.set('category', filterCategory);
-      if (filterBranch !== 'ALL') params.set('branch_id', filterBranch);
-      if (dateFrom) params.set('dateFrom', dateFrom);
-      if (dateTo) params.set('dateTo', dateTo);
-      const data = await apiGet<Expense[]>(`/expenses?${params.toString()}`);
-      const rows = Array.isArray(data) ? data : [];
-      setCached(cacheKey, rows);
-      setExpenses(rows);
-    } finally {
-      setLoading(false);
-    }
-  }, [filterCategory, filterBranch, dateFrom, dateTo]);
-
-  useEffect(() => { load(); }, [load]);
+  const load = () => list.refresh();
 
   useEffect(() => {
     apiGet<Branch[]>('/branches').then((data) => setBranches(Array.isArray(data) ? data : [])).catch(() => {});
   }, []);
 
-  const filtered = expenses.filter(e =>
-    e.title.toLowerCase().includes(search.toLowerCase()) ||
-    (e.branch_name || '').toLowerCase().includes(search.toLowerCase()) ||
-    (e.notes || '').toLowerCase().includes(search.toLowerCase())
-  );
-
-  const totalAmount = filtered.reduce((s, e) => s + e.amount, 0);
-  const byCat = filtered.reduce<Record<string, number>>((acc, e) => {
-    acc[e.category] = (acc[e.category] || 0) + e.amount;
-    return acc;
-  }, {});
-  const topCategory = Object.entries(byCat).sort((a, b) => b[1] - a[1])[0];
+  const filtered = expenses;
+  const totalAmount = list.totals?.amount ?? 0;
+  const byCatList = (list.response?.byCategory ?? []) as { category: string; amount: number }[];
+  const topCategory = byCatList[0] ? [byCatList[0].category, byCatList[0].amount] as [string, number] : undefined;
 
   const openCreate = () => {
     setEditExpense(null);
@@ -132,16 +105,24 @@ export function ExpensesPage() {
         await apiPost('/expenses', payload);
       }
       setShowModal(false);
+      addToast('success', editExpense ? 'Expense updated' : 'Expense recorded');
       load();
+    } catch (err: any) {
+      addToast('error', err?.message || 'Could not save the expense');
     } finally {
       setSaving(false);
     }
   };
 
   const handleDelete = async (id: string) => {
-    await apiDelete(`/expenses/${id}`);
-    setDeleteConfirm(null);
-    load();
+    try {
+      await apiDelete(`/expenses/${id}`);
+      setDeleteConfirm(null);
+      addToast('success', 'Expense deleted');
+      load();
+    } catch (err: any) {
+      addToast('error', err?.message || 'Could not delete the expense');
+    }
   };
 
   return (
@@ -150,7 +131,7 @@ export function ExpensesPage() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '24px', gap: '16px', flexWrap: 'wrap' }}>
         <div>
           <h2 style={{ margin: 0, fontSize: '22px', fontWeight: 700, color: '#111827' }}>Expenses</h2>
-          <p style={{ margin: '4px 0 0', color: '#6b7280', fontSize: '14px' }}>{filtered.length} records · ${totalAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} total</p>
+          <p style={{ margin: '4px 0 0', color: '#6b7280', fontSize: '14px' }}>{list.total.toLocaleString()} records · ${totalAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} total</p>
         </div>
         <button
           onClick={openCreate}
@@ -172,7 +153,7 @@ export function ExpensesPage() {
         <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: '12px', padding: '16px 20px', display: 'flex', alignItems: 'center', gap: '14px' }}>
           <div style={{ background: '#f0fdf4', borderRadius: '8px', padding: '8px' }}><Receipt size={20} color="#0b8f08" /></div>
           <div>
-            <div style={{ fontSize: '20px', fontWeight: 700, color: '#111827' }}>{filtered.length}</div>
+            <div style={{ fontSize: '20px', fontWeight: 700, color: '#111827' }}>{list.total.toLocaleString()}</div>
             <div style={{ fontSize: '12px', color: '#6b7280' }}>Transactions</div>
           </div>
         </div>
@@ -185,37 +166,34 @@ export function ExpensesPage() {
         </div>
       </div>
 
-      {/* Filters */}
-      <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '16px' }}>
-        <div style={{ position: 'relative', flex: '1', minWidth: '200px' }}>
-          <Search size={14} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#9ca3af' }} />
-          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search expenses..." style={{ width: '100%', padding: '9px 10px 9px 32px', border: '1px solid #e5e7eb', borderRadius: '8px', fontSize: '14px', outline: 'none', boxSizing: 'border-box' }} />
-        </div>
-        <select value={filterCategory} onChange={e => setFilterCategory(e.target.value)} style={{ padding: '9px 12px', border: '1px solid #e5e7eb', borderRadius: '8px', fontSize: '14px', background: '#fff', cursor: 'pointer' }}>
-          <option value="ALL">All Categories</option>
-          {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+      {/* Search and filters (server side) */}
+      <ListToolbar
+        id="expenses-toolbar"
+        list={list}
+        searchPlaceholder="Search title, category or notes…"
+        dateRange
+        filters={[
+          { key: 'category', label: 'All categories', options: CATEGORIES.map((c) => ({ value: c, label: c })) },
+          { key: 'method', label: 'All payment methods', options: PAYMENT_METHODS.map((m) => ({ value: m, label: m.replace('_', ' ').toLowerCase().replace(/^./, (x) => x.toUpperCase()) })) },
+          ...(isAdmin && branches.length > 0 ? [{ key: 'branch_id', label: 'All branches', options: branches.map((b) => ({ value: b.id, label: b.name })) }] : []),
+        ]}
+      >
+        <select aria-label="Sort expenses" className="list-toolbar__select" value={`${list.sort}:${list.dir}`}
+          onChange={(e) => { const [k, d] = e.target.value.split(':'); list.setFilters({ sort: k, dir: d }); }}>
+          <option value="date:desc">Newest first</option>
+          <option value="date:asc">Oldest first</option>
+          <option value="amount:desc">Largest amount</option>
+          <option value="amount:asc">Smallest amount</option>
+          <option value="title:asc">Title A–Z</option>
         </select>
-        {isAdmin && branches.length > 0 && (
-          <select value={filterBranch} onChange={e => setFilterBranch(e.target.value)} style={{ padding: '9px 12px', border: '1px solid #e5e7eb', borderRadius: '8px', fontSize: '14px', background: '#fff', cursor: 'pointer' }}>
-            <option value="ALL">All Branches</option>
-            {branches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
-          </select>
-        )}
-        <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} style={{ padding: '9px 12px', border: '1px solid #e5e7eb', borderRadius: '8px', fontSize: '14px', background: '#fff', cursor: 'pointer' }} />
-        <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} style={{ padding: '9px 12px', border: '1px solid #e5e7eb', borderRadius: '8px', fontSize: '14px', background: '#fff', cursor: 'pointer' }} />
-        {(filterCategory !== 'ALL' || filterBranch !== 'ALL' || dateFrom || dateTo) && (
-          <button onClick={() => { setFilterCategory('ALL'); setFilterBranch('ALL'); setDateFrom(''); setDateTo(''); }} style={{ padding: '9px 12px', border: '1px solid #e5e7eb', borderRadius: '8px', fontSize: '14px', background: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', color: '#6b7280' }}>
-            <X size={14} /> Clear
-          </button>
-        )}
-      </div>
+      </ListToolbar>
 
       {/* Category breakdown mini bar */}
-      {Object.keys(byCat).length > 0 && (
+      {byCatList.length > 0 && (
         <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: '12px', padding: '16px 20px', marginBottom: '16px' }}>
           <div style={{ fontSize: '12px', fontWeight: 600, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}><Filter size={12} /> Breakdown</div>
           <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
-            {Object.entries(byCat).sort((a, b) => b[1] - a[1]).map(([cat, amt]) => (
+            {byCatList.map(({ category: cat, amount: amt }) => (
               <div key={cat} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                 <div style={{ width: '10px', height: '10px', borderRadius: '50%', background: CAT_COLORS[cat] || '#6b7280', flexShrink: 0 }} />
                 <span style={{ fontSize: '13px', color: '#374151' }}>{cat}</span>
@@ -227,13 +205,13 @@ export function ExpensesPage() {
       )}
 
       {/* Expenses list */}
-      {loading ? (
+      {list.initialLoading ? (
         <div style={{ textAlign: 'center', padding: '60px', color: '#9ca3af' }}>Loading expenses...</div>
       ) : filtered.length === 0 ? (
         <div style={{ textAlign: 'center', padding: '60px', color: '#9ca3af', background: '#fff', borderRadius: '12px', border: '1px solid #e5e7eb' }}>
           <Receipt size={40} style={{ marginBottom: '12px', opacity: 0.3 }} />
           <p style={{ margin: 0, fontWeight: 500 }}>No expenses found</p>
-          <p style={{ margin: '4px 0 0', fontSize: '13px' }}>Click "Record Expense" to log your first expense</p>
+          <p style={{ margin: '4px 0 0', fontSize: '13px' }}>{list.activeFilters ? 'Try other filters, or clear them.' : 'Click "Record Expense" to log your first expense'}</p>
         </div>
       ) : (
         <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: '12px', overflow: 'hidden' }}>
@@ -272,6 +250,10 @@ export function ExpensesPage() {
             </div>
           ))}
         </div>
+      )}
+      {list.total > 0 && (
+        <Pagination id="expenses-pages" page={list.page} pageSize={list.pageSize} total={list.total}
+          onPageChange={list.setPage} onPageSizeChange={list.setPageSize} pageSizeOptions={[25, 50, 100]} />
       )}
 
       {/* Modal */}
