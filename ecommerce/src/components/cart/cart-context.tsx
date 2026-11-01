@@ -29,6 +29,8 @@ interface CartContextValue {
   setQuantity: (slug: string, quantity: number) => void;
   remove: (slug: string) => void;
   clear: () => void;
+  /** Reload names, prices and availability from the shop. */
+  refresh: () => void;
 }
 
 const CartContext = createContext<CartContextValue | null>(null);
@@ -132,8 +134,9 @@ export function CartProvider({ children }: { children: ReactNode }) {
       subtotalText: fresh.loading && lines.length < items.length ? "…" : formatPrice(subtotal),
       isOpen,
       open, close, add, setQuantity, remove, clear,
+      refresh: fresh.refresh,
     }),
-    [items, lines, fresh.missing, fresh.loading, fresh.failed, subtotal, isOpen, open, close, add, setQuantity, remove, clear],
+    [items, lines, fresh.missing, fresh.loading, fresh.failed, fresh.refresh, subtotal, isOpen, open, close, add, setQuantity, remove, clear],
   );
 
   return <CartContext.Provider value={value}>{children}</CartContext.Provider>;

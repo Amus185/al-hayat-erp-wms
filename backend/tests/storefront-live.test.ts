@@ -197,3 +197,30 @@ test('online quantity: sell only N online; orders lower it, a cancel gives it ba
   assert.equal((await set(null)).status, 200);
   assert.deepEqual([(await row()).webQuantity, (await row()).webUnits], [null, 8]);
 });
+
+test('a refused order lists each item the shop cannot fill, with a fix the customer can act on', async () => {
+  const few = await publishedProduct(2, 100);
+  const gone = await publishedProduct(0, 100);
+  const res = await pub('POST', '/storefront/requests', {
+    headers: { 'x-storefront-key': KEY, 'x-client-ip': '10.7.7.7' },
+    body: { name: 'Mubarik Arab', phone: '+252 63 400 8221', lines: [{ slug: few.slug, quantity: 3 }, { slug: gone.slug, quantity: 1 }] },
+  });
+  assert.equal(res.status, 409);
+  assert.match(res.body.message, /not available in the quantities/);
+  const by = Object.fromEntries(res.body.problems.map((p: any) => [p.slug, p]));
+  assert.deepEqual([by[few.slug].requested, by[few.slug].available], [3, null], 'exact stock stays private when quantities are hidden');
+  assert.deepEqual([by[gone.slug].requested, by[gone.slug].available], [1, 0], 'sold out is always said');
+
+  await t.api('PATCH', '/storefront-admin/settings', { showQuantities: true });
+  try {
+    const shown = await pub('POST', '/storefront/requests', {
+      headers: { 'x-storefront-key': KEY, 'x-client-ip': '10.7.7.8' },
+      body: { name: 'Mubarik Arab', phone: '+252 63 400 8222', lines: [{ slug: few.slug, quantity: 3 }] },
+    });
+    assert.equal(shown.status, 409);
+    assert.match(shown.body.message, /not available in that quantity/);
+    assert.equal(shown.body.problems[0].available, 2, 'with quantities shown, the customer is told how many are left');
+  } finally {
+    await t.api('PATCH', '/storefront-admin/settings', { showQuantities: false });
+  }
+});

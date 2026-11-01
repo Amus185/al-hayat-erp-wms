@@ -195,15 +195,30 @@ storefront.post('/requests', async (c) => {
     `SELECT p.id, p.slug, p.name, p.selling_price FROM products p WHERE ${PUBLISHED} AND p.slug IN (${ph})`,
   ).bind(...slugs).all();
   const products = new Map<string, any>((results || []).map((r: any) => [r.slug, r]));
-  for (const slug of slugs) {
-    if (!products.has(slug)) return c.json({ message: 'One of the items is no longer available. Please refresh and try again.' }, 409);
-  }
   const units = await webUnits(db, Array.from(products.values()).map((p) => p.id), settings);
+
+  // Every line the shop cannot fill, so the customer sees each one with a fix
+  // (fewer, or remove). The exact count is shared only when it is 0 or the
+  // shop shows quantities anyway; otherwise available is null ("fewer").
+  const problems: Array<{ slug: string; name: string | null; requested: number; available: number | null }> = [];
   for (const [slug, qty] of wanted) {
     const p = products.get(slug);
-    if (qty > sellableAfterBuffer(units.get(p.id) ?? 0, settings)) {
-      return c.json({ message: `Sorry, "${p.name}" is not available in that quantity.` }, 409);
+    if (!p) { problems.push({ slug, name: null, requested: qty, available: 0 }); continue; }
+    const available = sellableAfterBuffer(units.get(p.id) ?? 0, settings);
+    if (qty > available) {
+      problems.push({ slug, name: p.name, requested: qty, available: available === 0 || settings.showQuantities ? available : null });
     }
+  }
+  if (problems.length) {
+    const only = problems[0];
+    const message = problems.length > 1
+      ? 'Some items in your cart are not available in the quantities you chose.'
+      : !only.name
+        ? 'One of the items is no longer sold.'
+        : only.available === 0
+          ? `Sorry, "${only.name}" has just sold out.`
+          : `Sorry, "${only.name}" is not available in that quantity.`;
+    return c.json({ message, problems }, 409);
   }
 
   const requestId = uuidv4();

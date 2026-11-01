@@ -6,17 +6,20 @@ import { ProductImage } from "../product-image";
 import { QuantityStepper } from "./quantity-stepper";
 import { useCart } from "./cart-context";
 import { availabilityLabel, formatPrice } from "@/lib/site";
-import { MAX_QUANTITY_PER_ITEM } from "@/lib/types";
+import { MAX_QUANTITY_PER_ITEM, type StockProblem } from "@/lib/types";
 
 /** The lines in the cart with quantity and remove controls. */
-export function CartLines({ onNavigate, compact = false }: { onNavigate?: () => void; compact?: boolean }) {
+export function CartLines({ onNavigate, compact = false, problems = [] }: { onNavigate?: () => void; compact?: boolean; problems?: StockProblem[] }) {
   const { lines, missing, loading, failed, items, setQuantity, remove } = useCart();
+  const problemOf = (slug: string) => problems.find((p) => p.slug === slug);
   const img = compact ? "h-20 w-20" : "h-24 w-24 sm:h-28 sm:w-28";
 
   return (
     <ul className="divide-y divide-line">
-      {lines.map((l) => (
-        <li key={l.slug} className="flex gap-4 py-4">
+      {lines.map((l) => {
+        const problem = problemOf(l.slug);
+        return (
+        <li key={l.slug} className={`flex gap-4 py-4 ${problem ? "-mx-2 rounded-md bg-sale/5 px-2 ring-1 ring-sale/40" : ""}`}>
           <Link href={`/product/${l.slug}`} onClick={onNavigate} className={`relative ${img} flex-none overflow-hidden rounded-md bg-canvas`} tabIndex={-1} aria-hidden="true">
             <ProductImage image={l.image} name={l.name} sizes="112px" />
           </Link>
@@ -29,7 +32,10 @@ export function CartLines({ onNavigate, compact = false }: { onNavigate?: () => 
               {formatPrice(l.price)} each
               {l.compareAtPrice != null && l.compareAtPrice > l.price && <s className="ml-2">{formatPrice(l.compareAtPrice)}</s>}
             </span>
-            {l.availability !== "IN_STOCK" && (
+            {problem && (
+              <span className="text-xs font-semibold text-sale">{problemText(problem)}</span>
+            )}
+            {!problem && l.availability !== "IN_STOCK" && (
               <span className={`text-xs font-medium ${l.availability === "OUT" ? "text-sale" : "text-amber-700"}`}>{availabilityLabel(l.availability)}</span>
             )}
             <div className="mt-auto flex items-center gap-3 pt-2">
@@ -40,7 +46,8 @@ export function CartLines({ onNavigate, compact = false }: { onNavigate?: () => 
             </div>
           </div>
         </li>
-      ))}
+        );
+      })}
       {missing.map((slug) => (
         <li key={slug} className="flex items-center justify-between gap-3 py-4 text-sm text-muted">
           <span>An item in your cart is no longer sold.</span>
@@ -62,6 +69,13 @@ export function CartLines({ onNavigate, compact = false }: { onNavigate?: () => 
       )}
     </ul>
   );
+}
+
+/** What is wrong with a line the shop refused, in a few words. */
+export function problemText(p: StockProblem): string {
+  if (p.available === 0) return "Sold out";
+  if (p.available != null) return `Only ${p.available} left: you asked for ${p.requested}`;
+  return `Not available in a quantity of ${p.requested}`;
 }
 
 /** Problems that stop an order request from being sent, or null. */

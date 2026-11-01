@@ -2,10 +2,11 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useRef, useState, type FormEvent } from "react";
-import { CartLines, useCartBlocker } from "./cart/cart-lines";
+import { useEffect, useRef, useState, type FormEvent } from "react";
+import { CartLines, problemText, useCartBlocker } from "./cart/cart-lines";
 import { useCart } from "./cart/cart-context";
-import { CartIcon } from "./icons";
+import { AlertIcon, CartIcon, CheckIcon } from "./icons";
+import type { StockProblem } from "@/lib/types";
 
 type Field = "name" | "phone" | "email" | "address" | "city" | "notes";
 type Errors = Partial<Record<Field, string>>;
@@ -32,10 +33,24 @@ const fieldClass = (bad: boolean) =>
 export function CheckoutForm() {
   const router = useRouter();
   const form = useRef<HTMLFormElement>(null);
-  const { items, lines, loading, subtotalText, count, clear } = useCart();
+  const { items, lines, loading, subtotalText, count, clear, setQuantity, remove, refresh } = useCart();
   const blocker = useCartBlocker();
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Items the shop refused on the last attempt. One stays open while the cart
+  // still has it in the quantity that was refused; changing or removing it fixes it.
+  const [problems, setProblems] = useState<StockProblem[]>([]);
+  const openProblems = problems.filter((p) => items.some((i) => i.slug === p.slug && i.quantity >= p.requested));
+  const fixed = problems.length > 0 && openProblems.length === 0;
+  const alertRef = useRef<HTMLDivElement>(null);
+  const [alertTick, setAlertTick] = useState(0);
+
+  // A refused request is shown at the top of the form, scrolled into view, so it cannot be missed.
+  useEffect(() => {
+    if (!alertTick) return;
+    alertRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    alertRef.current?.focus({ preventScroll: true });
+  }, [alertTick]);
   const [errors, setErrors] = useState<Errors>({});
   const [sent, setSent] = useState(false); // the cart is cleared before the confirmation page opens
 
@@ -58,8 +73,9 @@ export function CheckoutForm() {
 
   async function onSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    if (submitting || blocker || loading || !items.length) return;
+    if (submitting || blocker || loading || !items.length || openProblems.length) return;
     setError(null);
+    setProblems([]);
     const v = values();
     const found = validate(v);
     setErrors(found);
@@ -84,7 +100,7 @@ export function CheckoutForm() {
           lines: items,
         }),
       });
-      const body = (await res.json().catch(() => ({}))) as { requestNumber?: string; message?: string };
+      const body = (await res.json().catch(() => ({}))) as { requestNumber?: string; message?: string; problems?: StockProblem[] };
       if (res.status === 201 && body.requestNumber) {
         setSent(true);
         clear();
@@ -92,9 +108,14 @@ export function CheckoutForm() {
         return;
       }
       setError(body.message || "Something went wrong. Please try again or call us.");
+      if (res.status === 409) {
+        setProblems(Array.isArray(body.problems) ? body.problems : []);
+        refresh(); // show what is available now on every line
+      }
     } catch {
       setError("We could not reach the shop. Check your connection and try again.");
     }
+    setAlertTick((n) => n + 1);
     setSubmitting(false);
   }
 
@@ -138,6 +159,54 @@ export function CheckoutForm() {
   return (
     <div className="grid gap-8 lg:grid-cols-5 lg:gap-12">
       <form ref={form} onSubmit={onSubmit} className="space-y-8 lg:col-span-3" noValidate aria-describedby="form-note">
+        {fixed && (
+          <div role="status" className="flex items-start gap-3 rounded-lg border-2 border-brand/40 bg-brand-light p-4 text-brand-darker">
+            <CheckIcon className="h-6 w-6 flex-none" />
+            <p className="text-sm"><span className="font-semibold">Cart updated.</span> You can send your request now.</p>
+          </div>
+        )}
+        {!fixed && error && (
+          <div ref={alertRef} tabIndex={-1} role="alert" className="rounded-lg border-2 border-sale bg-sale/5 p-4 shadow-sm focus:outline-none sm:p-5">
+            <div className="flex gap-3">
+              <AlertIcon className="mt-0.5 h-6 w-6 flex-none text-sale" />
+              <div className="min-w-0 flex-1">
+                <p className="text-base font-semibold text-sale">
+                  {openProblems.length === 0
+                    ? "Your request was not sent"
+                    : openProblems.length === 1
+                      ? "An item in your cart is not available"
+                      : `${openProblems.length} items in your cart are not available`}
+                </p>
+                <p className="mt-1 text-sm text-ink">
+                  {openProblems.length ? "Your request was not sent yet. Change or remove the item below, then send it again." : error}
+                </p>
+                {openProblems.length > 0 && (
+                  <ul className="mt-3 space-y-2">
+                    {openProblems.map((p) => (
+                      <li key={p.slug} className="flex flex-wrap items-center justify-between gap-3 rounded-md bg-white p-3 ring-1 ring-line">
+                        <div className="min-w-0">
+                          <p className="font-medium text-ink">{p.name ?? "An item no longer sold"}</p>
+                          <p className="text-sm font-medium text-sale">{problemText(p)}</p>
+                          {p.available == null && <p className="text-xs text-muted">Try a smaller quantity, or call us to check.</p>}
+                        </div>
+                        <div className="flex flex-none gap-2">
+                          {p.available != null && p.available > 0 && (
+                            <button type="button" onClick={() => setQuantity(p.slug, p.available as number)} className="btn btn-gold px-4 py-2 text-sm">
+                              Change to {p.available}
+                            </button>
+                          )}
+                          <button type="button" onClick={() => remove(p.slug)} className="btn btn-outline px-4 py-2 text-sm">
+                            Remove
+                          </button>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
         {errorCount > 0 && (
           <p role="alert" className="rounded-md border border-sale/30 bg-sale/5 p-3 text-sm text-sale">
             Please check {errorCount === 1 ? "the highlighted field" : `the ${errorCount} highlighted fields`}.
@@ -182,11 +251,15 @@ export function CheckoutForm() {
           <input id="website" name="website" tabIndex={-1} autoComplete="off" />
         </div>
 
-        {error && <p role="alert" className="rounded-md border border-sale/30 bg-sale/5 p-3 text-sm text-sale">{error}</p>}
         {blocker && <p role="alert" className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">{blocker}</p>}
+        {openProblems.length > 0 && (
+          <p className="flex items-center gap-2 text-sm font-medium text-sale">
+            <AlertIcon className="h-4 w-4 flex-none" /> Fix the {openProblems.length === 1 ? "item" : "items"} marked at the top of this form to send your request.
+          </p>
+        )}
 
         <div>
-          <button type="submit" disabled={submitting || !!blocker || loading} className="btn btn-gold w-full py-4 text-base">
+          <button type="submit" disabled={submitting || !!blocker || loading || openProblems.length > 0} className="btn btn-gold w-full py-4 text-base">
             {submitting ? "Sending your request…" : "Send order request"}
           </button>
           <p id="form-note" className="mt-3 text-center text-xs text-muted">No payment is taken. We call you to confirm availability, delivery and payment.</p>
@@ -200,7 +273,7 @@ export function CheckoutForm() {
             <Link href="/cart" className="text-sm font-medium text-brand-dark hover:underline">Edit cart</Link>
           </div>
           <p className="text-sm text-muted">{count} item{count === 1 ? "" : "s"}</p>
-          <div className="mt-2 max-h-[420px] overflow-y-auto"><CartLines compact /></div>
+          <div className="mt-2 max-h-[420px] overflow-y-auto"><CartLines compact problems={openProblems} /></div>
           <dl className="mt-2 space-y-2 border-t border-line pt-4 text-sm">
             <div className="flex justify-between"><dt>Subtotal</dt><dd className="font-semibold">{subtotalText}</dd></div>
             <div className="flex justify-between text-muted"><dt>Delivery</dt><dd>Agreed by phone</dd></div>

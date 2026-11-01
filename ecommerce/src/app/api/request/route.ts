@@ -36,6 +36,6 @@ export async function POST(request: Request) {
     },
     clientIp(request),
   );
-  if (!result.ok) return Response.json({ message: result.message }, { status: result.status });
+  if (!result.ok) return Response.json({ message: result.message, ...(result.problems ? { problems: result.problems } : {}) }, { status: result.status });
   return Response.json({ requestNumber: result.requestNumber }, { status: 201 });
 }

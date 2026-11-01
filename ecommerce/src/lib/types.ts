@@ -47,6 +47,14 @@ export interface CartItem {
 }
 
 /** Fresh card data for a product the browser only knows by slug (cart, saved items, recently viewed). */
+/** An item the shop could not fill when the order was sent. available: units left (0 = sold out), or null when not disclosed. */
+export interface StockProblem {
+  slug: string;
+  name: string | null;
+  requested: number;
+  available: number | null;
+}
+
 export interface ProductSummary {
   slug: string;
   name: string;

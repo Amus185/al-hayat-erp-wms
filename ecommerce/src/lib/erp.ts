@@ -2,7 +2,7 @@
 // Only import this from server components and route handlers: it reads
 // STOREFRONT_API_KEY, which must never reach the browser.
 import { isAllowedImageUrl } from "./image-hosts";
-import type { Category, Product, ProductImage, ProductPage } from "./types";
+import type { Category, Product, ProductImage, ProductPage, StockProblem } from "./types";
 
 const isDev = process.env.NODE_ENV === "development";
 // In development the backend runs on port 3100 (docs/LOCAL_TESTING.md). In
@@ -160,7 +160,7 @@ export interface RequestPayload {
 
 export type RequestResult =
   | { ok: true; requestNumber: string }
-  | { ok: false; status: number; message: string };
+  | { ok: false; status: number; message: string; problems?: StockProblem[] };
 
 /** Send an order request to the ERP. The ERP re-checks everything and sets the prices. */
 export async function submitRequest(payload: RequestPayload, clientIp: string): Promise<RequestResult> {
@@ -185,8 +185,9 @@ export async function submitRequest(payload: RequestPayload, clientIp: string): 
   } catch {
     return { ok: false, status: 503, message: "We could not reach the shop. Please try again in a moment." };
   }
-  const body = (await res.json().catch(() => null)) as { requestNumber?: string; message?: string } | null;
+  const body = (await res.json().catch(() => null)) as { requestNumber?: string; message?: string; problems?: unknown } | null;
   if (res.status === 201 && body?.requestNumber) return { ok: true, requestNumber: body.requestNumber };
+  const problems = res.status === 409 && Array.isArray(body?.problems) ? parseProblems(body.problems) : undefined;
   // Pass through the ERP's customer-safe messages for expected problems; hide anything else.
   const expected = [400, 409, 429, 503].includes(res.status);
   if (!expected) {
@@ -197,7 +198,18 @@ export async function submitRequest(payload: RequestPayload, clientIp: string): 
     ok: false,
     status: expected ? res.status : 502,
     message: expected && body?.message ? body.message : "Something went wrong. Please try again or call us.",
+    ...(problems?.length ? { problems } : {}),
   };
+}
+
+/** Only well-formed entries, field by field. */
+function parseProblems(raw: unknown[]): StockProblem[] {
+  return raw.slice(0, 50).flatMap((x) => {
+    const o = (x ?? {}) as Record<string, unknown>;
+    if (typeof o.slug !== "string" || !Number.isInteger(o.requested)) return [];
+    const available = Number.isInteger(o.available) && (o.available as number) >= 0 ? (o.available as number) : null;
+    return [{ slug: o.slug, name: typeof o.name === "string" ? o.name : null, requested: o.requested as number, available }];
+  });
 }
 
 export type OrderStage = "NEW" | "ORDERED" | "INVOICED" | "PAID" | "DELIVERY_SCHEDULED" | "OUT_FOR_DELIVERY" | "DELIVERED" | "CANCELLED";

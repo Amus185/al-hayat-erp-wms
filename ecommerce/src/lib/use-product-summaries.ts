@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ProductSummary } from "./types";
 
 interface State {
@@ -18,6 +18,9 @@ interface State {
 export function useProductSummaries(slugs: string[]) {
   const key = slugs.join(",");
   const [state, setState] = useState<State>({ key: "", products: {}, missing: [], failed: false });
+  const [version, setVersion] = useState(0);
+  /** Load fresh availability again (e.g. after the shop refused an order). */
+  const refresh = useCallback(() => setVersion((v) => v + 1), []);
 
   useEffect(() => {
     if (!key) return;
@@ -33,13 +36,13 @@ export function useProductSummaries(slugs: string[]) {
       })
       .catch(() => { if (!cancelled) setState((s) => ({ ...s, key, failed: true })); });
     return () => { cancelled = true; };
-  }, [key]);
+  }, [key, version]);
 
   return useMemo(() => {
     const products = slugs.flatMap((s) => (state.products[s] ? [state.products[s]] : []));
     const missing = slugs.filter((s) => state.missing.includes(s));
     // Loading until this exact list has been answered (a failed answer counts).
     const loading = !!key && state.key !== key;
-    return { products, missing, loading, failed: state.key === key && state.failed };
-  }, [slugs, state, key]);
+    return { products, missing, loading, failed: state.key === key && state.failed, refresh };
+  }, [slugs, state, key, refresh]);
 }
