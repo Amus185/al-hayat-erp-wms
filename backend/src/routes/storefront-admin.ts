@@ -203,6 +203,42 @@ async function webStockOf(c: any, productId: string) {
   return { sellsFrom: branch?.name ?? null, stockAtWebBranch: sellableAfterBuffer(units.get(productId) ?? 0, settings) };
 }
 
+/**
+ * Put several products on the shop, or take them off, at once. Publishing
+ * applies the same rules as one at a time (active, priced, at least one
+ * photo); products that do not qualify are skipped and listed with the reason.
+ */
+admin.post('/products/bulk-publish', requirePermissions(['manage_inventory']), async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const ids = Array.isArray(body.ids) ? Array.from(new Set(body.ids.filter((x: unknown) => typeof x === 'string' && x.length <= 100))) as string[] : [];
+  if (!ids.length || ids.length > 500) return c.json({ message: 'Choose between 1 and 500 products.' }, 400);
+  const publish = Boolean(body.publish);
+  const db = c.env.DB;
+  const ph = ids.map(() => '?').join(', ');
+  const { results } = await db.prepare(`
+    SELECT p.id, p.name, p.slug, p.selling_price, COALESCE(p.is_active, 1) AS is_active, p.is_published,
+           (SELECT COUNT(*) FROM product_images pi WHERE pi.product_id = p.id)::int AS photos
+    FROM products p WHERE p.id IN (${ph})`).bind(...ids).all();
+  const skipped: Array<{ id: string; name: string; reason: string }> = [];
+  let changed = 0;
+  for (const p of (results || []) as any[]) {
+    if (Number(p.is_published) === (publish ? 1 : 0)) continue;
+    if (publish) {
+      const reason = Number(p.is_active) !== 1 ? 'inactive' : !(Number(p.selling_price) > 0) ? 'no selling price' : Number(p.photos) === 0 ? 'no photo' : null;
+      if (reason) { skipped.push({ id: p.id, name: p.name, reason }); continue; }
+    }
+    const slug = publish && !p.slug ? await uniqueSlug(db, p.name, p.id) : p.slug;
+    await db.prepare(`
+      UPDATE products SET is_published = ?, slug = ?,
+             published_at = CASE WHEN ? = 1 THEN COALESCE(published_at, CURRENT_TIMESTAMP) ELSE published_at END,
+             updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?`).bind(publish ? 1 : 0, slug, publish ? 1 : 0, p.id).run();
+    await logAudit(c, publish ? 'PRODUCT_PUBLISH' : 'PRODUCT_UNPUBLISH', 'products', p.id, { isPublished: !publish }, { isPublished: publish, bulk: true });
+    changed += 1;
+  }
+  return c.json({ changed, skipped });
+});
+
 admin.get('/products/:id', requirePermissions(['manage_inventory']), async (c) => {
   const p = await loadProduct(c, param(c, 'id')) as any;
   if (!p) return c.json({ message: 'Product not found.' }, 404);
@@ -465,6 +501,39 @@ admin.get('/requests/:id', requirePermissions(['manage_sales']), async (c) => {
     'SELECT product_id, product_name, quantity, unit_price FROM storefront_request_lines WHERE request_id = ?',
   ).bind(param(c, 'id')).all();
   return c.json({ ...(r as any), lines: lines || [] });
+});
+
+/**
+ * Cancel several new web orders at once (Online store → Orders selection).
+ * Each one exactly like a single cancel: all or nothing, only while still
+ * NEW, its stock and online quantity given back.
+ */
+admin.post('/requests/bulk-cancel', requirePermissions(['manage_sales']), async (c) => {
+  const denied = await assertRequestsAccess(c);
+  if (denied) return denied;
+  const body = await c.req.json().catch(() => ({}));
+  const ids = Array.isArray(body.ids) ? Array.from(new Set(body.ids.filter((x: unknown) => typeof x === 'string' && x.length <= 100))) as string[] : [];
+  if (!ids.length || ids.length > 200) return c.json({ message: 'Choose between 1 and 200 orders.' }, 400);
+  const userId = c.get('jwtPayload').sub;
+  const db = c.env.DB;
+  let cancelled = 0;
+  for (const id of ids) {
+    try {
+      await db.batch([
+        db.prepare(`
+          UPDATE storefront_requests SET status = 'CANCELLED', handled_by = ?, handled_at = CURRENT_TIMESTAMP
+          WHERE id = ? AND status = 'NEW'
+        `).bind(userId, id).mustAffect('not new'),
+        releaseReservationsStmt(db, { requestId: id }, 'Request cancelled'),
+        returnWebQuantityStmt(db, { requestId: id }),
+      ]);
+      cancelled += 1;
+      await logAudit(c, 'STOREFRONT_REQUEST_CANCEL', 'storefront_requests', id, null, { bulk: true });
+    } catch {
+      // not NEW any more (converted or cancelled meanwhile): skipped
+    }
+  }
+  return c.json({ cancelled, skipped: ids.length - cancelled });
 });
 
 admin.post('/requests/:id/cancel', requirePermissions(['manage_sales']), async (c) => {

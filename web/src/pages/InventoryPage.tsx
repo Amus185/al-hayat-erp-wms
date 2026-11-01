@@ -3,6 +3,7 @@ import { ClipboardCheck, Plus, History } from 'lucide-react';
 import { apiGet, apiPost } from '../api/client';
 import { DataTable, type Column } from '../components/DataTable';
 import { ListToolbar } from '../components/ListToolbar';
+import { useColumnChooser } from '../components/ColumnChooser';
 import { useServerList } from '../utils/serverList';
 import { searchProducts } from '../utils/lookups';
 import { Modal } from '../components/Modal';
@@ -317,6 +318,8 @@ export function InventoryPage() {
     { key: 'transactions', label: 'Ledger Audit / History' },
   ];
 
+  const { columns: shown_stockColumns, chooser: chooser_stockColumns } = useColumnChooser('inventory-stock', stockColumns, []);
+
   return (
     <div className="module-page">
       <section className="module-header">
@@ -343,6 +346,7 @@ export function InventoryPage() {
           <>
             <ListToolbar
               id="stock-toolbar"
+          columns={chooser_stockColumns}
               list={stockList}
               searchPlaceholder="Search by product name, SKU or barcode…"
               filters={[
@@ -369,7 +373,7 @@ export function InventoryPage() {
             )}
             <DataTable
               id="stock-table"
-              columns={stockColumns}
+              columns={shown_stockColumns}
               data={stockList.items}
               server={stockList}
               keyExtractor={(row) => row.id}

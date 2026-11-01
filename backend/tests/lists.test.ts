@@ -177,3 +177,50 @@ test('transfers and purchase orders: older records are reachable and counts cove
   assert.equal(after.body.total, 3, 'filter by product');
   assert.equal((await t.api('GET', '/transfers?page=1')).body.counts.ALL, before + 3);
 });
+
+test('bulk: deactivate/activate and move to a category, audited; manage_inventory only', async () => {
+  const a = await t.createProduct({}); const b = await t.createProduct({});
+  const off = await t.api('POST', '/products/bulk-update', { ids: [a, b], action: 'deactivate' });
+  assert.equal(off.status, 200, JSON.stringify(off.body));
+  assert.equal(off.body.updated, 2);
+  assert.deepEqual((await t.q('SELECT is_active FROM products WHERE id IN ($1, $2)', [a, b])).map((r: any) => r.is_active), [0, 0]);
+  assert.equal((await t.api('POST', '/products/bulk-update', { ids: [a, b], action: 'deactivate' })).body.unchanged, 2, 'nothing to change twice');
+  await t.q(`INSERT INTO categories (id, name) VALUES ('cat-bulk', 'Bulk Cat') ON CONFLICT DO NOTHING`);
+  assert.equal((await t.api('POST', '/products/bulk-update', { ids: [a, b], action: 'category', categoryId: 'cat-bulk' })).body.updated, 2);
+  assert.equal((await t.api('POST', '/products/bulk-update', { ids: [a], action: 'category', categoryId: 'nope' })).status, 400);
+  assert.equal((await t.api('POST', '/products/bulk-update', { ids: [], action: 'activate' })).status, 400);
+  const audits = await t.q(`SELECT COUNT(*)::int AS n FROM audit_logs WHERE entity_id IN ($1, $2)`, [a, b]);
+  assert.ok(audits[0].n >= 4, 'each product change is audited');
+  const rep = await t.createUser({ branchId: HQ, roleId: 'role-sales-rep', role: 'sales_rep' });
+  assert.equal((await t.api('POST', '/products/bulk-update', { ids: [a], action: 'activate' }, rep.token)).status, 403);
+});
+
+test('bulk publish: qualifying products go on the shop, the rest are listed with the reason', async () => {
+  const withPhoto = await t.createProduct({ price: 50 });
+  const noPhoto = await t.createProduct({ price: 50 });
+  await t.q(`INSERT INTO product_images (id, product_id, object_key, sort_order, is_primary) VALUES ($1, $2, 'products/x.jpg', 0, 1)`, [randomUUID(), withPhoto]);
+  const res = await t.api('POST', '/storefront-admin/products/bulk-publish', { ids: [withPhoto, noPhoto], publish: true });
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  assert.equal(res.body.changed, 1);
+  assert.deepEqual(res.body.skipped.map((x: any) => [x.id, x.reason]), [[noPhoto, 'no photo']]);
+  const row = (await t.q('SELECT is_published, slug FROM products WHERE id = $1', [withPhoto]))[0];
+  assert.equal(row.is_published, 1);
+  assert.ok(row.slug, 'gets a web address');
+  assert.equal((await t.api('POST', '/storefront-admin/products/bulk-publish', { ids: [withPhoto], publish: false })).body.changed, 1);
+});
+
+test('saved views: per person, same name replaces, never another person’s', async () => {
+  const v = await t.api('POST', '/views', { list: 'sales-orders', name: 'Unpaid this month', query: '?paymentStatus=UNPAID&dateFrom=2026-11-01&page=3&open=x' });
+  assert.equal(v.status, 201, JSON.stringify(v.body));
+  assert.equal(v.body.query, 'paymentStatus=UNPAID&dateFrom=2026-11-01', 'page and open are not saved');
+  assert.equal((await t.api('POST', '/views', { list: 'sales-orders', name: 'unpaid this month', query: 'paymentStatus=UNPAID' })).status, 200, 'same name: replaced');
+  const mine = await t.api('GET', '/views?list=sales-orders');
+  assert.deepEqual(mine.body.map((x: any) => [x.name, x.query]), [['unpaid this month', 'paymentStatus=UNPAID']]);
+  const other = await t.createUser({ branchId: HQ, roleId: 'role-sales-rep', role: 'sales_rep' });
+  assert.deepEqual((await t.api('GET', '/views?list=sales-orders', undefined, other.token)).body, []);
+  await t.api('DELETE', `/views/${v.body.id}`, undefined, other.token);
+  assert.equal((await t.api('GET', '/views?list=sales-orders')).body.length, 1, 'another person cannot delete it');
+  assert.equal((await t.api('GET', '/views?list=../x')).status, 400);
+  await t.api('DELETE', `/views/${v.body.id}`);
+  assert.equal((await t.api('GET', '/views?list=sales-orders')).body.length, 0);
+});

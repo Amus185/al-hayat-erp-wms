@@ -869,6 +869,18 @@ export async function ensureBetterAuth(pool: Pool) {
     await backfillIdentities(pool);
     // Last time a person used each browser session (for the inactivity sign-out).
     // Removed with the session.
+    // Each person's saved list views (named filter sets).
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS user_saved_views (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        list_key TEXT NOT NULL,
+        name TEXT NOT NULL,
+        query TEXT NOT NULL,
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS idx_user_saved_views_user ON user_saved_views (user_id, list_key);
+    `);
     await pool.query(`
       CREATE TABLE IF NOT EXISTS erp_session_activity (
         session_id TEXT PRIMARY KEY REFERENCES "session"(id) ON DELETE CASCADE,

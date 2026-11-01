@@ -122,6 +122,26 @@ export function useServerList<T>(endpoint: string, opts: ServerListOptions) {
 
   const activeFilters = (q ? 1 : 0) + Object.values(filters).filter(Boolean).length;
 
+  /** This list's own parameters (no prefix, no page), e.g. for a saved view. */
+  const currentQuery = () => {
+    const out = new URLSearchParams();
+    for (const k of ['q', 'sort', 'dir', ...filterNames]) {
+      const v = params.get(pre + k);
+      if (v) out.set(k, v);
+    }
+    return out.toString();
+  };
+  /** Replaces this list's parameters with a saved set (keeps other lists' and the page size). */
+  const applyQuery = (qs: string) => {
+    const saved = new URLSearchParams(qs);
+    setParams((prev) => {
+      const next = new URLSearchParams(prev);
+      for (const k of ['q', 'sort', 'dir', 'page', ...filterNames]) next.delete(pre + k);
+      saved.forEach((v, k) => { if (k !== 'page' && k !== 'pageSize') next.set(pre + k, v); });
+      return next;
+    }, { replace: false });
+  };
+
   return {
     items: data?.items ?? (NO_ITEMS as T[]),
     total: data?.total ?? 0,
@@ -146,6 +166,10 @@ export function useServerList<T>(endpoint: string, opts: ServerListOptions) {
     toggleSort: (key: string) => update(sort === key ? { sort: key, dir: dir === 'asc' ? 'desc' : 'asc' } : { sort: key, dir: 'asc' }),
     clear: () => update(Object.fromEntries(['q', ...filterNames].map((k) => [k, null]))),
     refresh: () => setTick((n) => n + 1),
+    /** the list's name (page-size memory, saved views) */
+    key: opts.key,
+    currentQuery,
+    applyQuery,
     exportCsv,
     exporting,
   };

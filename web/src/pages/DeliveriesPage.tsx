@@ -22,6 +22,7 @@ import { confirmAction } from '../utils/swal';
 import { html, writePrintDocument } from '../utils/html';
 import { useOpenParam, useServerList } from '../utils/serverList';
 import { ListToolbar } from '../components/ListToolbar';
+import { useColumnChooser } from '../components/ColumnChooser';
 import { StatusTabs } from '../components/StatusTabs';
 
 interface DeliveryItem {
@@ -1007,6 +1008,9 @@ export function DeliveriesPage() {
     },
   ];
 
+  // (before the early return below: hooks must run on every render)
+  const { columns: shown_columns, chooser: chooser_columns } = useColumnChooser('deliveries', columns, []);
+
   if (loading) {
     return <PageSkeleton />;
   }
@@ -1082,6 +1086,7 @@ export function DeliveriesPage() {
       />
       <ListToolbar
         id="deliveries-toolbar"
+          columns={chooser_columns}
         list={list}
         searchPlaceholder="Search delivery or order number, customer, phone or address…"
         dateRange
@@ -1103,7 +1108,7 @@ export function DeliveriesPage() {
         <DataTable
           id="deliveries-table"
           data={deliveries}
-          columns={columns}
+          columns={shown_columns}
           server={list}
           keyExtractor={(row) => row.id}
           emptyMessage={list.activeFilters ? 'No deliveries match your filters' : 'No deliveries yet'}

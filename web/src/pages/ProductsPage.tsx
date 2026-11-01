@@ -6,6 +6,9 @@ import { DataTable, type Column } from '../components/DataTable';
 import { SearchInput } from '../components/SearchInput';
 import { ListToolbar } from '../components/ListToolbar';
 import { useServerList } from '../utils/serverList';
+import { confirmAction } from '../utils/swal';
+import { useColumnChooser } from '../components/ColumnChooser';
+import { BulkBar, selectionColumn, useSelection } from '../components/BulkBar';
 import { searchProducts } from '../utils/lookups';
 import { Modal } from '../components/Modal';
 import { ConfirmModal } from '../components/ConfirmModal';
@@ -748,6 +751,36 @@ export function ProductsPage() {
     },
   ];
 
+  // Wide table: people choose their columns. Bulk actions on ticked rows.
+  const { columns: shownColumns, chooser } = useColumnChooser('products', columns, ['brand_name']);
+  const canBulk = hasPermission('manage_inventory');
+  const sel = useSelection(`${list.currentQuery()}|${list.page}|${list.pageSize}`);
+  const selCol = selectionColumn(sel, products);
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const runBulk = async (label: string, work: () => Promise<string>) => {
+    const ok = await confirmAction(`${label}?`, `This applies to the ${sel.count} selected product${sel.count === 1 ? '' : 's'}.`, label, 'question');
+    if (!ok) return;
+    setBulkBusy(true);
+    try {
+      addToast('success', await work());
+      sel.clear();
+      list.refresh();
+    } catch (err: any) {
+      addToast('error', err?.message || 'The bulk change failed');
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+  const bulkUpdate = (action: string, extra: Record<string, unknown> = {}) => async () => {
+    const r = await apiPost<{ updated: number; unchanged: number }>('/products/bulk-update', { ids: sel.ids, action, ...extra });
+    return `${r.updated} product${r.updated === 1 ? '' : 's'} updated${r.unchanged ? `, ${r.unchanged} already so` : ''}`;
+  };
+  const bulkShop = (publish: boolean) => async () => {
+    const r = await apiPost<{ changed: number; skipped: { name: string; reason: string }[] }>('/storefront-admin/products/bulk-publish', { ids: sel.ids, publish });
+    const skipped = r.skipped.length ? ` · skipped: ${r.skipped.slice(0, 5).map((x) => `${x.name} (${x.reason})`).join(', ')}${r.skipped.length > 5 ? '…' : ''}` : '';
+    return `${r.changed} product${r.changed === 1 ? '' : 's'} ${publish ? 'put on' : 'taken off'} the shop${skipped}`;
+  };
+
   return (
     <div className="module-page">
       <section className="module-header">
@@ -814,6 +847,7 @@ export function ProductsPage() {
         <ListToolbar
           id="products-toolbar"
           list={list}
+          columns={chooser}
           searchPlaceholder="Search by name, product ID, barcode or description…"
           filters={[
             { key: 'categoryId', label: 'All categories', options: categories.map((c) => ({ value: c.id, label: c.name })) },
@@ -824,11 +858,26 @@ export function ProductsPage() {
             { key: 'onShop', label: 'Shop & not on shop', options: [{ value: '1', label: 'On the online shop' }, { value: '0', label: 'Not on the shop' }] },
           ]}
         />
+        {canBulk && (
+          <BulkBar count={sel.count} onClear={sel.clear}>
+            <button type="button" className="btn btn-secondary" disabled={bulkBusy} onClick={() => runBulk('Activate', bulkUpdate('activate'))}>Activate</button>
+            <button type="button" className="btn btn-secondary" disabled={bulkBusy} onClick={() => runBulk('Deactivate', bulkUpdate('deactivate'))}>Deactivate</button>
+            <select aria-label="Move to category" disabled={bulkBusy} value=""
+              onChange={(e) => { const v = e.target.value; if (v) runBulk('Move to this category', bulkUpdate('category', { categoryId: v === '__none' ? null : v })); }}>
+              <option value="">Move to category…</option>
+              <option value="__none">No category</option>
+              {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+            <button type="button" className="btn btn-secondary" disabled={bulkBusy} onClick={() => runBulk('Put on the shop', bulkShop(true))}>Put on shop</button>
+            <button type="button" className="btn btn-secondary" disabled={bulkBusy} onClick={() => runBulk('Take off the shop', bulkShop(false))}>Take off shop</button>
+          </BulkBar>
+        )}
         <DataTable
           id="products-table"
-          columns={columns}
+          columns={shownColumns}
           data={products}
           server={list}
+          {...(canBulk ? selCol : {})}
           keyExtractor={(row) => row.id}
           emptyMessage={list.activeFilters ? 'No products match your filters' : 'No products yet'}
         />

@@ -5,6 +5,7 @@ import { DateRangeFilter } from './DateRangeFilter';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import type { ServerList } from '../utils/serverList';
+import { SavedViews } from './SavedViews';
 
 export interface ToolbarFilter {
   key: string;
@@ -18,7 +19,7 @@ export interface ToolbarFilter {
  * Export on every list. Works with useServerList, so everything happens on
  * the server across all records.
  */
-export function ListToolbar<T>({ list, searchPlaceholder = 'Search…', filters = [], dateRange = false, exportable = true, id, children }: {
+export function ListToolbar<T>({ list, searchPlaceholder = 'Search…', filters = [], dateRange = false, exportable = true, id, children, columns, views = true }: {
   list: ServerList<T>;
   searchPlaceholder?: string;
   filters?: ToolbarFilter[];
@@ -28,6 +29,10 @@ export function ListToolbar<T>({ list, searchPlaceholder = 'Search…', filters 
   id: string;
   /** Extra controls (e.g. a button) on the right. */
   children?: ReactNode;
+  /** A column chooser (useColumnChooser) for wide tables. */
+  columns?: ReactNode;
+  /** Saved views menu (default on). */
+  views?: boolean;
 }) {
   const { hasPermission, isAdmin } = useAuth();
   const { addToast } = useToast();
@@ -79,6 +84,10 @@ export function ListToolbar<T>({ list, searchPlaceholder = 'Search…', filters 
             <X size={13} /> Clear filters
           </button>
         )}
+        <span className="list-toolbar__tools">
+          {views && <SavedViews list={list} />}
+          {columns}
+        </span>
         {canExport && (
           <button type="button" className="list-toolbar__export" onClick={doExport} disabled={list.exporting || list.total === 0}
             title="Download everything that matches these filters (all pages) as a CSV file for Excel">

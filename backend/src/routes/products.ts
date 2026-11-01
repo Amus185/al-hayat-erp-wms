@@ -766,6 +766,45 @@ products.patch('/:id', requirePermissions(['manage_inventory']), async (c) => {
   return c.json(responseObj);
 });
 
+/**
+ * Bulk changes to several products at once (the Products list's selection):
+ * activate, deactivate, or move to a category. Each product is audited like
+ * a single change. Up to 500 at a time.
+ */
+products.post('/bulk-update', requirePermissions(['manage_inventory']), async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const ids = Array.isArray(body.ids) ? Array.from(new Set(body.ids.filter((x: unknown) => typeof x === 'string' && x.length <= 100))) as string[] : [];
+  if (!ids.length || ids.length > 500) return c.json({ message: 'Choose between 1 and 500 products.' }, 400);
+  const ph = ids.map(() => '?').join(', ');
+  const { results } = await c.env.DB.prepare(`SELECT id, is_active, category_id FROM products WHERE id IN (${ph})`).bind(...ids).all();
+  const found = (results || []) as any[];
+  if (!found.length) return c.json({ message: 'None of these products exist.' }, 404);
+  const db = c.env.DB;
+  const stmts: any[] = [];
+  if (body.action === 'activate' || body.action === 'deactivate') {
+    const v = body.action === 'activate' ? 1 : 0;
+    for (const p of found) {
+      if (Number(p.is_active ?? 1) === v) continue;
+      stmts.push(db.prepare('UPDATE products SET is_active = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').bind(v, p.id));
+      stmts.push(createAuditLogStmt(c, 'PRODUCT_STATUS_CHANGE', 'products', p.id, { is_active: p.is_active }, { is_active: v, bulk: true }));
+    }
+  } else if (body.action === 'category') {
+    const categoryId = body.categoryId ? String(body.categoryId) : null;
+    if (categoryId && !(await db.prepare('SELECT id FROM categories WHERE id = ?').bind(categoryId).first())) {
+      return c.json({ message: 'That category does not exist.' }, 400);
+    }
+    for (const p of found) {
+      if ((p.category_id ?? null) === categoryId) continue;
+      stmts.push(db.prepare('UPDATE products SET category_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').bind(categoryId, p.id));
+      stmts.push(createAuditLogStmt(c, 'PRODUCT_UPDATE', 'products', p.id, { category_id: p.category_id }, { category_id: categoryId, bulk: true }));
+    }
+  } else {
+    return c.json({ message: 'Unknown bulk action.' }, 400);
+  }
+  if (stmts.length) await db.batch(stmts);
+  return c.json({ updated: stmts.length / 2, unchanged: found.length - stmts.length / 2, missing: ids.length - found.length });
+});
+
 products.patch('/:id/status', requirePermissions(['manage_inventory']), async (c) => {
   const id = c.req.param('id');
   const body = await c.req.json();

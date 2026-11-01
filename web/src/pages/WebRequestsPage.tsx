@@ -6,6 +6,8 @@ import { Modal } from '../components/Modal';
 import { StatusBadge } from '../components/StatusBadge';
 import { StatusTabs } from '../components/StatusTabs';
 import { ListToolbar } from '../components/ListToolbar';
+import { BulkBar, selectionColumn, useSelection } from '../components/BulkBar';
+import { apiPost } from '../api/client';
 import { InputField, SelectField } from '../components/FormField';
 import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -140,6 +142,25 @@ export function WebRequestsPage({ embedded = false }: { embedded?: boolean } = {
     { key: 'created_at', label: 'Received', sortable: true, sortKey: 'date', render: (r) => when(r.created_at) },
   ];
 
+  // Several New orders can be cancelled at once (each like a single cancel).
+  const sel = useSelection(`${list.currentQuery()}|${list.page}|${list.pageSize}|${statusParam}`);
+  const selCol = selectionColumn(sel, list.items as WebRequestRow[], (r) => r.status === 'NEW');
+  const cancelSelected = async () => {
+    const ok = await confirmAction(`Cancel ${sel.count} order${sel.count === 1 ? '' : 's'}?`, 'Their stock goes back on the shop. Orders already turned into sales orders are skipped.', 'Cancel orders', 'warning');
+    if (!ok) return;
+    setBusy(true);
+    try {
+      const r = await apiPost<{ cancelled: number; skipped: number }>('/storefront-admin/requests/bulk-cancel', { ids: sel.ids });
+      addToast('success', `${r.cancelled} order${r.cancelled === 1 ? '' : 's'} cancelled${r.skipped ? `, ${r.skipped} skipped (already handled)` : ''}`);
+      sel.clear();
+      list.refresh();
+    } catch (err: any) {
+      addToast('error', err?.message || 'Could not cancel the orders');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div className={embedded ? undefined : 'module-page'} style={embedded ? { display: 'grid', gap: '16px' } : undefined}>
       {!embedded && (
@@ -166,9 +187,13 @@ export function WebRequestsPage({ embedded = false }: { embedded?: boolean } = {
             tabs={[{ key: 'NEW', label: 'New' }, { key: 'CONVERTED', label: 'Converted' }, { key: 'CANCELLED', label: 'Cancelled' }, { key: 'ALL', label: 'All' }]}
           />
           <ListToolbar id="web-orders-toolbar" list={list} searchPlaceholder="Search order number, customer or phone…" dateRange />
+          <BulkBar count={sel.count} onClear={sel.clear}>
+            <button type="button" className="btn btn-danger" disabled={busy} onClick={cancelSelected}>Cancel selected</button>
+          </BulkBar>
           <DataTable
             id="web-requests"
             columns={columns}
+            {...selCol}
             data={list.items as (WebRequestRow & Record<string, unknown>)[]}
             server={list}
             keyExtractor={(r) => r.id}

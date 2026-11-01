@@ -13,6 +13,7 @@ import { InputField, TextareaField } from '../components/FormField';
 import { StatusBadge } from '../components/StatusBadge';
 import { LoadingSpinner } from '../components/LoadingSpinner';
 import { ListToolbar } from '../components/ListToolbar';
+import { useColumnChooser } from '../components/ColumnChooser';
 import { StatusTabs } from '../components/StatusTabs';
 import { SearchableSelect } from '../components/SearchableSelect';
 import { useOpenParam, useServerList } from '../utils/serverList';
@@ -756,6 +757,8 @@ export function SalesPage() {
     orderSummary &&
     orderSummary.summary.balance > 0.001;
 
+  const { columns: shown_columns, chooser: chooser_columns } = useColumnChooser('sales-orders', columns, []);
+
   return (
     <div className="module-page">
       <section className="module-header">
@@ -798,6 +801,7 @@ export function SalesPage() {
         />
         <ListToolbar
           id="sales-toolbar"
+          columns={chooser_columns}
           list={list}
           searchPlaceholder="Search by order number, customer name or phone…"
           dateRange
@@ -843,7 +847,7 @@ export function SalesPage() {
 
         <DataTable
           id="sales-orders-table"
-          columns={columns}
+          columns={shown_columns}
           data={list.items}
           server={list}
           keyExtractor={(row) => row.id as string}
