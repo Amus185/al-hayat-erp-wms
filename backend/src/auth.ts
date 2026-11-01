@@ -25,6 +25,8 @@ import { getAllowedOrigins, getAuthBaseURL, getAuthSecret } from './security-con
 import { clearLoginFailures, isLoginThrottled, recordLoginFailure } from './services/auth-sessions';
 
 export const SESSION_TTL_S = 7 * 24 * 3600;   // idle lifetime; extended at most once a day while used
+/** Absolute lifetime, as before Better Auth: however active, a session ends this long after sign-in. */
+export const SESSION_MAX_TTL_S = 30 * 24 * 3600;
 const BCRYPT_COST = 12;                         // same as the ERP has always used
 
 // Better Auth's own admin API (/api/auth/admin/*) may list, ban and end
@@ -77,6 +79,17 @@ function createAuth(pool: Pool) {
           },
           after: async (session) => {
             await pool.query('UPDATE users SET last_login_at = CURRENT_TIMESTAMP WHERE id = $1', [session.userId]);
+          },
+        },
+        update: {
+          // Better Auth slides expiresAt forward while the session is used; never
+          // past the absolute limit from sign-in (the middleware enforces it too).
+          after: async (session) => {
+            if (!session?.id) return;
+            await pool.query(
+              `UPDATE "session" SET "expiresAt" = LEAST("expiresAt", "createdAt" + make_interval(secs => $2)) WHERE id = $1`,
+              [session.id, SESSION_MAX_TTL_S],
+            );
           },
         },
       },

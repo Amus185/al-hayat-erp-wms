@@ -303,3 +303,16 @@ test('production refuses to run with a missing or weak auth secret', async () =>
     if (saved.NODE_ENV === undefined) delete process.env.NODE_ENV;
   }
 });
+
+test('sessions end 30 days after sign-in however active they are (as before Better Auth)', async () => {
+  const u = await makeUser();
+  const { cookie } = await browserSignIn(u.email, u.password);
+  // 29 days in, last extended 2 days ago: using it extends it, but only up to day 30.
+  await t.q(`UPDATE "session" SET "createdAt" = CURRENT_TIMESTAMP - INTERVAL '29 days', "expiresAt" = CURRENT_TIMESTAMP + INTERVAL '5 days' WHERE "userId" = $1`, [u.id]);
+  assert.equal((await me(cookie)).status, 200);
+  const [row] = await t.q(`SELECT EXTRACT(EPOCH FROM ("expiresAt" - CURRENT_TIMESTAMP)) AS left_s FROM "session" WHERE "userId" = $1`, [u.id]);
+  assert.ok(Number(row.left_s) <= 24 * 3600 + 5, `extended past day 30: ${row.left_s}s left`);
+  // Past day 30 it is refused even if its expiry says otherwise.
+  await t.q(`UPDATE "session" SET "createdAt" = CURRENT_TIMESTAMP - INTERVAL '31 days', "expiresAt" = CURRENT_TIMESTAMP + INTERVAL '6 days' WHERE "userId" = $1`, [u.id]);
+  assert.equal((await me(cookie)).status, 401);
+});

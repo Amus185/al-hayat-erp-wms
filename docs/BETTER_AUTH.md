@@ -60,7 +60,7 @@ Changing `BETTER_AUTH_SECRET` signs everyone out.
 ## What changed for users
 
 - Sign-in looks the same. Everyone signs in once after deploying.
-- Sessions last 7 days and are extended while in use (at most once a day).
+- Sessions end after 7 days without use, and are extended while in use (at most once a day), but never past 30 days after sign-in: then the user signs in again. This matches the custom sessions used before Better Auth.
 - Password change, deactivation, disabling in Layerbase and "sign out
   everywhere" end sessions immediately on every server.
 - Failed sign-ins are still throttled in the database: 10 per email and IP,

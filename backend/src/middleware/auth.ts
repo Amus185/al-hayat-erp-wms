@@ -1,6 +1,6 @@
 import { Context, Next } from 'hono';
 import { Env } from '../db';
-import { authFor } from '../auth';
+import { authFor, SESSION_MAX_TTL_S } from '../auth';
 import { isAllowedOrigin } from '../security-config';
 import { poolOf } from '../services/auth-sessions';
 
@@ -62,12 +62,13 @@ export async function loadAuthState(db: any, userId: string, sessionId: string) 
               JOIN role_permissions rp ON rp.role_id = ur.role_id
               JOIN permissions p ON p.id = rp.permission_id
             WHERE ur.user_id = u.id) AS permissions,
-           EXISTS (SELECT 1 FROM "session" s WHERE s.id = ? AND s."userId" = u.id AND s."expiresAt" > CURRENT_TIMESTAMP) AS session_live,
+           EXISTS (SELECT 1 FROM "session" s WHERE s.id = ? AND s."userId" = u.id AND s."expiresAt" > CURRENT_TIMESTAMP
+                     AND s."createdAt" > CURRENT_TIMESTAMP - make_interval(secs => ?)) AS session_live,
            COALESCE(b.banned, FALSE) AND (b."banExpires" IS NULL OR b."banExpires" > CURRENT_TIMESTAMP) AS banned
     FROM users u
     LEFT JOIN "user" b ON b.id = u.id
     WHERE u.id = ?
-  `).bind(sessionId, userId).first();
+  `).bind(sessionId, SESSION_MAX_TTL_S, userId).first();
 }
 
 /** The authorization payload routes read with c.get('jwtPayload'). */
