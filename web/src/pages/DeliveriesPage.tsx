@@ -9,6 +9,8 @@ import { apiGet, apiPost, apiPatch } from '../api/client';
 import { DataTable, type Column } from '../components/DataTable';
 import { Tabs } from '../components/Tabs';
 import { Modal } from '../components/Modal';
+import { ModalLoading } from '../components/ModalLoading';
+import { useLatest } from '../utils/latest';
 import { InputField, TextareaField } from '../components/FormField';
 import { SearchableSelect } from '../components/SearchableSelect';
 import { StatusBadge } from '../components/StatusBadge';
@@ -96,6 +98,9 @@ export function DeliveriesPage() {
   // Modals
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [isDetailsOpen, setIsDetailsOpen] = useState(false);
+  // The details window opens at once and shows this while the delivery loads.
+  const [detailsLoading, setDetailsLoading] = useState(false);
+  const detailsRequest = useLatest();
   const [isDispatchOpen, setIsDispatchOpen] = useState(false);
   const [isCompleteOpen, setIsCompleteOpen] = useState(false);
   const [selectedDelivery, setSelectedDelivery] = useState<Delivery | null>(null);
@@ -494,23 +499,36 @@ export function DeliveriesPage() {
   };
 
   const handleViewDetails = async (d: Delivery) => {
+    const isCurrent = detailsRequest.start();
+    setDetailsLoading(true);
+    setIsDetailsOpen(true);
     try {
       setLoadingRuns(true);
       const [full, runs] = await Promise.all([
         apiGet<Delivery>(`/deliveries/${d.id}`),
         apiGet<DeliveryRun[]>(`/deliveries/${d.id}/runs`),
       ]);
+      if (!isCurrent()) return;
       setSelectedDelivery(full || d);
       setDeliveryRuns(runs || []);
-      setIsDetailsOpen(true);
     } catch {
+      if (!isCurrent()) return;
       setSelectedDelivery(d);
       setDeliveryRuns([]);
-      setIsDetailsOpen(true);
     } finally {
-      setLoadingRuns(false);
+      if (isCurrent()) {
+        setLoadingRuns(false);
+        setDetailsLoading(false);
+      }
     }
   };
+  const closeDetails = () => {
+    detailsRequest.cancel();
+    setDetailsLoading(false);
+    setLoadingRuns(false);
+    setIsDetailsOpen(false);
+  };
+
 
   const handleOpenRunModal = (d: Delivery) => {
     setSelectedDelivery(d);
@@ -1508,8 +1526,9 @@ export function DeliveriesPage() {
       </Modal>
 
       {/* ── DETAILS MODAL ── */}
-      <Modal isOpen={isDetailsOpen} onClose={() => setIsDetailsOpen(false)} title={`Delivery: ${selectedDelivery?.delivery_number}`} width="lg">
-        {selectedDelivery && (
+      <Modal isOpen={isDetailsOpen} onClose={closeDetails} title={detailsLoading ? 'Delivery' : `Delivery: ${selectedDelivery?.delivery_number}`} width="lg">
+        {detailsLoading && <ModalLoading />}
+        {!detailsLoading && selectedDelivery && (
           <div style={{ display: 'grid', gap: '18px' }}>
             {/* Status bar */}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#f8fafc', padding: '14px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
@@ -1713,7 +1732,7 @@ export function DeliveriesPage() {
 
             {/* Action buttons */}
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', borderTop: '1px solid #e2e8f0', paddingTop: '14px' }}>
-              <button type="button" className="btn btn-secondary" onClick={() => setIsDetailsOpen(false)}>
+              <button type="button" className="btn btn-secondary" onClick={closeDetails}>
                 Close
               </button>
               <button type="button" className="btn btn-secondary" onClick={() => handlePrintSlip(selectedDelivery)} style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>

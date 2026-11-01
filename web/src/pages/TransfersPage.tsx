@@ -101,7 +101,8 @@ export function TransfersPage() {
     setModalLoading(true);
     try {
       const full = await apiGet<Transfer>(`/transfers/${t.id}`);
-      if (full) setSelectedTransfer(full);
+      // Only into the window still showing this transfer: never reopen a closed one.
+      if (full) setSelectedTransfer((cur) => (cur && cur.id === t.id ? full : cur));
     } catch (err) {
       console.error('Failed to load transfer detail', err);
     } finally {
@@ -122,7 +123,7 @@ export function TransfersPage() {
   const refreshSelectedTransfer = async (id: string) => {
     try {
       const full = await apiGet<Transfer>(`/transfers/${id}`);
-      if (full) setSelectedTransfer(full);
+      if (full) setSelectedTransfer((cur) => (cur && cur.id === id ? full : cur));
     } catch {
       // ignore
     }

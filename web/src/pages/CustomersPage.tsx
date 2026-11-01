@@ -12,6 +12,7 @@ import { Tabs } from '../components/Tabs';
 import { StatusBadge } from '../components/StatusBadge';
 import { InputField, TextareaField } from '../components/FormField';
 import { useToast } from '../contexts/ToastContext';
+import { useLatest } from '../utils/latest';
 import { useAuth } from '../contexts/AuthContext';
 import { confirmAction } from '../utils/swal';
 import type { PaymentMethod } from '../types';
@@ -200,6 +201,7 @@ export function CustomersPage() {
 
   // Customer Ledger Modal
   const [isLedgerModalOpen, setIsLedgerModalOpen] = useState(false);
+  const ledgerRequest = useLatest();
   const [selectedLedgerCustomer, setSelectedLedgerCustomer] = useState<Customer | DebtorRow | null>(null);
   const [ledgerData, setLedgerData] = useState<CustomerLedgerData | null>(null);
   const [ledgerLoading, setLedgerLoading] = useState(false);
@@ -296,18 +298,21 @@ export function CustomersPage() {
 
   // Open Ledger Modal
   const openCustomerLedger = async (cust: Customer | DebtorRow) => {
+    const isCurrent = ledgerRequest.start();
     setSelectedLedgerCustomer(cust);
+    setLedgerData(null); // never show the previous customer's statement while this one loads
     setIsLedgerModalOpen(true);
     setLedgerLoading(true);
     const targetId = 'id' in cust ? cust.id : cust.customer_id;
     try {
       const data = await apiGet<CustomerLedgerData>(`/sales/customers/${targetId}/ledger`);
-      setLedgerData(data || null);
+      if (isCurrent()) setLedgerData(data || null);
     } catch (err: any) {
+      if (!isCurrent()) return;
       addToast('error', err?.message || 'Failed to load customer ledger');
       setLedgerData(null);
     } finally {
-      setLedgerLoading(false);
+      if (isCurrent()) setLedgerLoading(false);
     }
   };
 
@@ -891,11 +896,11 @@ export function CustomersPage() {
       <div style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '14px 18px', marginBottom: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '14px' }}>
         <Tabs
           tabs={[
-            { id: 'ALL', label: `All Customers (${customers.length})` },
-            { id: 'DEBTS', label: `Customer Debt Ledger (${activeDebtors.length})` },
+            { key: 'ALL', label: `All Customers (${customers.length})` },
+            { key: 'DEBTS', label: `Customer Debt Ledger (${activeDebtors.length})` },
           ]}
           activeTab={activeTab}
-          onChange={(tab) => setActiveTab(tab as 'ALL' | 'DEBTS')}
+          onTabChange={(tab) => setActiveTab(tab as 'ALL' | 'DEBTS')}
         />
 
         <div style={{ position: 'relative', width: '320px', maxWidth: '100%' }}>

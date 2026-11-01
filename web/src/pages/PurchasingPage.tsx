@@ -6,11 +6,11 @@ import {
 } from 'lucide-react';
 import { apiGet, apiPost } from '../api/client';
 import { DataTable, type Column } from '../components/DataTable';
-import { KanbanBoard, type KanbanColumnDef } from '../components/KanbanBoard';
-import { ViewSwitcher } from '../components/ViewSwitcher';
 import { FilterBar } from '../components/FilterBar';
 import { Tabs } from '../components/Tabs';
 import { Modal } from '../components/Modal';
+import { ModalLoading } from '../components/ModalLoading';
+import { useLatest } from '../utils/latest';
 import { InputField, TextareaField } from '../components/FormField';
 import { StatusBadge } from '../components/StatusBadge';
 import { LoadingSpinner } from '../components/LoadingSpinner';
@@ -159,6 +159,9 @@ export function PurchasingPage() {
   // PO details modal
   const [selectedPO, setSelectedPO] = useState<any | null>(null);
   const [poDetailsLoading, setPoDetailsLoading] = useState(false);
+  // The row being opened: the window shows at once while its data loads.
+  const [openingPO, setOpeningPO] = useState<PurchaseOrder | null>(null);
+  const poRequest = useLatest();
 
   // Goods receipt sub-form
   const [isReceiptOpen, setIsReceiptOpen] = useState(false);
@@ -248,7 +251,7 @@ export function PurchasingPage() {
       setPoDetailsLoading(true);
       await apiPost<any>(`/purchasing/orders/${poId}/approve`, {});
       addToast('success', 'PO approved successfully.');
-      await viewPoDetails({ id: poId } as any);
+      await viewPoDetails({ id: poId } as any, true);
       loadData();
     } catch (err: any) {
       addToast('error', err?.message || 'Failed to approve PO');
@@ -286,7 +289,7 @@ export function PurchasingPage() {
       });
       const totalUnits = linesToReceive.reduce((sum: number, l: any) => sum + l.quantityReceived, 0);
       addToast('success', `Goods receipt recorded. Received ${totalUnits} items.`);
-      await viewPoDetails({ id: selectedPO.id } as any);
+      await viewPoDetails({ id: selectedPO.id } as any, true);
       loadData();
     } catch (err: any) {
       addToast('error', err?.message || 'Failed to record Goods Receipt');
@@ -475,11 +478,18 @@ export function PurchasingPage() {
   };
 
   // ── View PO details ──────────────────────────────────────────────
-  const viewPoDetails = async (po: PurchaseOrder) => {
+  /** Opens a purchase order (the window shows at once), or reloads the open one (refresh). */
+  const viewPoDetails = async (po: PurchaseOrder, refresh = false) => {
+    const isCurrent = poRequest.start();
     setPoDetailsLoading(true);
-    setShowHistory(false);
+    if (!refresh) {
+      setShowHistory(false);
+      setSelectedPO(null);
+      setOpeningPO(po);
+    }
     try {
       const details = await apiGet<any>(`/purchasing/orders/${po.id}`);
+      if (!isCurrent()) return;
       if (details) {
         setSelectedPO(details);
         const initialReceipt: Record<string, number> = {};
@@ -490,11 +500,22 @@ export function PurchasingPage() {
       } else {
         setSelectedPO(po);
       }
-    } catch {
-      addToast('error', 'Failed to fetch PO lines');
+    } catch (err: any) {
+      if (isCurrent()) addToast('error', err?.message || 'Failed to fetch PO lines');
     } finally {
-      setPoDetailsLoading(false);
+      if (isCurrent()) {
+        setPoDetailsLoading(false);
+        setOpeningPO(null);
+      }
     }
+  };
+
+  const closePoDetails = () => {
+    poRequest.cancel();
+    setOpeningPO(null);
+    setPoDetailsLoading(false);
+    setSelectedPO(null);
+    setIsReceiptOpen(false);
   };
 
   // ── Filtering ─────────────────────────────────────────────────────
@@ -730,11 +751,12 @@ export function PurchasingPage() {
 
       {/* ── PO Details Modal ── */}
       <Modal
-        isOpen={!!selectedPO}
-        onClose={() => { setSelectedPO(null); setIsReceiptOpen(false); }}
-        title={selectedPO ? `Purchase Order: ${selectedPO.po_number}` : 'PO Details'}
+        isOpen={!!selectedPO || !!openingPO}
+        onClose={closePoDetails}
+        title={selectedPO || openingPO ? `Purchase Order: ${(selectedPO || openingPO)!.po_number}` : 'PO Details'}
         width="lg"
       >
+        {!selectedPO && openingPO && <ModalLoading />}
         {selectedPO && (() => {
           const totalOrderedQty = selectedPO.lines?.reduce((sum: number, l: any) => sum + Number(l.quantity_ordered || l.quantity || 0), 0) || 0;
           const totalReceivedQty = selectedPO.lines?.reduce((sum: number, l: any) => sum + Number(l.quantity_received || 0), 0) || 0;
@@ -1032,7 +1054,7 @@ export function PurchasingPage() {
 
               {/* Action Buttons */}
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', borderTop: '1px solid #edf1ed', paddingTop: '16px', flexWrap: 'wrap' }}>
-                <button type="button" className="btn btn-secondary" onClick={() => setSelectedPO(null)}>Close</button>
+                <button type="button" className="btn btn-secondary" onClick={closePoDetails}>Close</button>
 
                 {poInvoice && (
                   <button type="button" className="btn btn-secondary"

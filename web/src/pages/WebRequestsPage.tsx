@@ -9,6 +9,8 @@ import { InputField, SelectField } from '../components/FormField';
 import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
 import { confirmAction } from '../utils/swal';
+import { ModalLoading } from '../components/ModalLoading';
+import { useLatest } from '../utils/latest';
 import {
   cancelWebRequest, convertWebRequest, getStorefrontSettings, getWebRequest, listWebRequests, saveStorefrontSettings,
   type StorefrontSettings, type WebOrderStage, type WebRequestDetail, type WebRequestRow,
@@ -43,7 +45,8 @@ export function WebRequestsPage({ embedded = false }: { embedded?: boolean } = {
   const [blocked, setBlocked] = useState<string | null>(null);
   const [detail, setDetail] = useState<WebRequestDetail | null>(null);
   const [detailRow, setDetailRow] = useState<WebRequestRow | null>(null);
-  const closeDetail = () => { setDetail(null); setDetailRow(null); };
+  const detailRequest = useLatest();
+  const closeDetail = () => { detailRequest.cancel(); setDetail(null); setDetailRow(null); };
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
@@ -62,12 +65,18 @@ export function WebRequestsPage({ embedded = false }: { embedded?: boolean } = {
 
   useEffect(() => { load(); }, [load]);
 
+  // The window opens at once with the row; its lines load inside it.
   const open = async (row: WebRequestRow) => {
+    const isCurrent = detailRequest.start();
+    setDetail(null);
+    setDetailRow(row);
     try {
-      setDetail(await getWebRequest(row.id));
-      setDetailRow(row);
+      const full = await getWebRequest(row.id);
+      if (isCurrent()) setDetail(full);
     } catch (err: any) {
+      if (!isCurrent()) return;
       addToast('error', err?.message || 'Could not open the request');
+      setDetailRow(null);
     }
   };
 
@@ -164,8 +173,9 @@ export function WebRequestsPage({ embedded = false }: { embedded?: boolean } = {
         </>
       )}
 
-      {detail && (
-        <Modal isOpen title={`Request ${detail.request_number}`} onClose={closeDetail} width="lg">
+      {detailRow && (
+        <Modal isOpen title={`Request ${detail?.request_number ?? detailRow.request_number}`} onClose={closeDetail} width="lg">
+          {!detail ? <ModalLoading /> : (
           <div style={{ display: 'grid', gap: '16px' }}>
             <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
               <StatusBadge label={stageOf(detailRow?.stage).label} tone={stageOf(detailRow?.stage).tone} />
@@ -218,6 +228,7 @@ export function WebRequestsPage({ embedded = false }: { embedded?: boolean } = {
               )}
             </div>
           </div>
+          )}
         </Modal>
       )}
     </div>

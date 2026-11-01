@@ -8,6 +8,8 @@ import { apiGet, apiPost } from '../api/client';
 import { DataTable, type Column } from '../components/DataTable';
 import { Tabs } from '../components/Tabs';
 import { Modal } from '../components/Modal';
+import { ModalLoading } from '../components/ModalLoading';
+import { useLatest } from '../utils/latest';
 import { InputField, TextareaField } from '../components/FormField';
 import { SearchableSelect } from '../components/SearchableSelect';
 import { StatusBadge } from '../components/StatusBadge';
@@ -126,6 +128,9 @@ export function ManufacturingPage() {
   const [isCreateWoOpen, setIsCreateWoOpen] = useState(false);
   const [isCreateBomOpen, setIsCreateBomOpen] = useState(false);
   const [isDetailsOpen, setIsDetailsOpen] = useState(false);
+  // The details window opens at once and shows this while the work order loads.
+  const [detailsLoading, setDetailsLoading] = useState(false);
+  const detailsRequest = useLatest();
   const [isCompleteOpen, setIsCompleteOpen] = useState(false);
   const [selectedWo, setSelectedWo] = useState<WorkOrder | null>(null);
   const [actionProcessing, setActionProcessing] = useState<string | null>(null);
@@ -400,14 +405,23 @@ export function ManufacturingPage() {
 
   // Open Details Modal
   const handleViewDetails = async (wo: WorkOrder) => {
+    const isCurrent = detailsRequest.start();
+    setDetailsLoading(true);
+    setIsDetailsOpen(true);
     try {
       const full = await apiGet<WorkOrder>(`/manufacturing/work-orders/${wo.id}`);
-      setSelectedWo(full || wo);
-      setIsDetailsOpen(true);
+      if (isCurrent()) setSelectedWo(full || wo);
     } catch {
-      setSelectedWo(wo);
-      setIsDetailsOpen(true);
+      if (isCurrent()) setSelectedWo(wo);
+    } finally {
+      if (isCurrent()) setDetailsLoading(false);
     }
+  };
+
+  const closeDetails = () => {
+    detailsRequest.cancel();
+    setDetailsLoading(false);
+    setIsDetailsOpen(false);
   };
 
   // Create BOM Submit
@@ -1401,8 +1415,9 @@ export function ManufacturingPage() {
       </Modal>
 
       {/* ── WORK ORDER DETAILS MODAL ── */}
-      <Modal isOpen={isDetailsOpen} onClose={() => setIsDetailsOpen(false)} title={`Work Order Details: ${selectedWo?.wo_number}`} width="lg">
-        {selectedWo && (
+      <Modal isOpen={isDetailsOpen} onClose={closeDetails} title={detailsLoading ? 'Work Order Details' : `Work Order Details: ${selectedWo?.wo_number}`} width="lg">
+        {detailsLoading && <ModalLoading />}
+        {!detailsLoading && selectedWo && (
           <div style={{ display: 'grid', gap: '18px' }}>
             {/* Summary card */}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px', background: '#f8fafc', padding: '14px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
@@ -1498,7 +1513,7 @@ export function ManufacturingPage() {
 
             {/* Action buttons */}
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', borderTop: '1px solid #e2e8f0', paddingTop: '14px' }}>
-              <button type="button" className="btn btn-secondary" onClick={() => setIsDetailsOpen(false)}>
+              <button type="button" className="btn btn-secondary" onClick={closeDetails}>
                 Close
               </button>
 

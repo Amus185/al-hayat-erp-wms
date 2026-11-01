@@ -31,6 +31,7 @@ import type { ReactNode } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { apiGet, apiPost } from '../api/client';
 import { AGENT_URL } from '../api/assistant';
+import { ActivityBar } from '../components/ActivityBar';
 
 const navItems = [
   { label: 'Dashboard', path: '/', icon: Home, permission: '' },
@@ -183,6 +184,7 @@ export function AppShell({ children }: AppShellProps) {
 
   return (
     <div className="app-shell">
+      <ActivityBar />
       {/* Mobile Overlay Backdrop */}
       {isMobileOpen && (
         <div

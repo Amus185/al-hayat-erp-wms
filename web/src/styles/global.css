@@ -1948,3 +1948,19 @@ tbody tr:hover { background: var(--primary-lighter); }
 }
 
 
+
+/* ─── Activity bar: shown while the app waits on the server ─── */
+.activity-bar {
+  position: fixed; top: 0; left: 0; right: 0; height: 3px; z-index: 100000;
+  overflow: hidden; pointer-events: none; background: rgba(11, 143, 8, 0.15);
+}
+.activity-bar::after {
+  content: ''; position: absolute; top: 0; bottom: 0; left: -40%; width: 40%;
+  background: #0b8f08; border-radius: 2px;
+  animation: activity-slide 1s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+@keyframes activity-slide { from { left: -40%; } to { left: 100%; } }
+html.api-busy, html.api-busy * { cursor: progress !important; }
+
+/* Every button reacts to the press itself, before anything loads. */
+.btn:active:not(:disabled) { transform: scale(0.97); }

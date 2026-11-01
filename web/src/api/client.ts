@@ -31,8 +31,45 @@ export async function fetchProfile<U>(): Promise<U | null> {
   return body.user;
 }
 
+// ── Request activity ────────────────────────────────────────────────────────
+// The app shows a progress bar while any request is running, so a click that
+// waits on the server always gives visible feedback (see ActivityBar).
+let activeRequests = 0;
+const activityListeners = new Set<(active: number) => void>();
+const emitActivity = () => activityListeners.forEach((fn) => fn(activeRequests));
+
+/** Subscribe to the number of running requests; returns the unsubscribe function. */
+export function onApiActivity(fn: (active: number) => void): () => void {
+  activityListeners.add(fn);
+  fn(activeRequests);
+  return () => { activityListeners.delete(fn); };
+}
+
+// Only requests a person caused (started shortly after a click, tap or key)
+// show the bar; background polling such as notifications does not.
+let lastInteraction = 0;
+if (typeof window !== 'undefined') {
+  const note = () => { lastInteraction = Date.now(); };
+  window.addEventListener('pointerdown', note, true);
+  window.addEventListener('keydown', note, true);
+}
+
+function tracked<T>(work: () => Promise<T>): Promise<T> {
+  if (Date.now() - lastInteraction > 1500) return work();
+  activeRequests += 1;
+  emitActivity();
+  return work().finally(() => {
+    activeRequests -= 1;
+    emitActivity();
+  });
+}
+
 /** fetch with the session cookie; a 401 means the session ended. */
-async function authorizedFetch(url: string, init: RequestInit, retryOnNetworkError = 0): Promise<Response> {
+function authorizedFetch(url: string, init: RequestInit, retryOnNetworkError = 0): Promise<Response> {
+  return tracked(() => authorizedFetchOnce(url, init, retryOnNetworkError));
+}
+
+async function authorizedFetchOnce(url: string, init: RequestInit, retryOnNetworkError = 0): Promise<Response> {
   let lastError: unknown;
   for (let i = 0; i <= retryOnNetworkError; i += 1) {
     try {
@@ -131,36 +168,33 @@ export function invalidateApiCache(path?: string) {
     if (!path || key.includes(path)) getCache.delete(key);
   }
 }
-export async function apiPost<T>(
-  path: string,
-  body?: unknown
-): Promise<T> {
-  const response = await authorizedFetch(`${API_BASE_URL}${path}`, {
-    method: 'POST',
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  invalidateApiCache();
-  return handleResponse<T>(response);
+// The same change sent again while the first is still running (a double
+// click, a second tap while the screen waits) shares the first request instead
+// of being applied twice.
+const inFlightMutations = new Map<string, Promise<unknown>>();
+
+function mutate<T>(method: 'POST' | 'PATCH' | 'PUT' | 'DELETE', path: string, body?: unknown): Promise<T> {
+  const payload = body === undefined ? undefined : JSON.stringify(body);
+  const key = `${method} ${path} ${payload ?? ''}`;
+  const existing = inFlightMutations.get(key);
+  if (existing) return existing as Promise<T>;
+  const request = (async () => {
+    const response = await authorizedFetch(`${API_BASE_URL}${path}`, { method, body: payload });
+    invalidateApiCache();
+    return handleResponse<T>(response);
+  })().finally(() => inFlightMutations.delete(key));
+  inFlightMutations.set(key, request);
+  return request;
 }
 
-export async function apiPatch<T>(
-  path: string,
-  body?: unknown
-): Promise<T> {
-  const response = await authorizedFetch(`${API_BASE_URL}${path}`, {
-    method: 'PATCH',
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  invalidateApiCache();
-  return handleResponse<T>(response);
+export function apiPost<T>(path: string, body?: unknown): Promise<T> {
+  return mutate<T>('POST', path, body);
 }
 
-export async function apiDelete<T = void>(
-  path: string
-): Promise<T> {
-  const response = await authorizedFetch(`${API_BASE_URL}${path}`, {
-    method: 'DELETE',
-  });
-  invalidateApiCache();
-  return handleResponse<T>(response);
+export function apiPatch<T>(path: string, body?: unknown): Promise<T> {
+  return mutate<T>('PATCH', path, body);
+}
+
+export function apiDelete<T = void>(path: string): Promise<T> {
+  return mutate<T>('DELETE', path);
 }

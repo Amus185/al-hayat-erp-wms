@@ -3,18 +3,22 @@ import type { ReactNode } from 'react';
 interface FormFieldProps {
   label: string;
   htmlFor?: string;
+  /** Same as htmlFor (the id of the input inside): clicking the label focuses it. */
+  id?: string;
   error?: string;
   required?: boolean;
   children: ReactNode;
 }
 
-export function FormField({ label, htmlFor, error, required, children }: FormFieldProps) {
+export function FormField({ label, htmlFor, id, error, required, children }: FormFieldProps) {
   const cleanLabel = (label || '').trim().replace(/\s*\*+$/, '');
+  // "Name *" marks a required field: keep showing the star.
+  const isRequired = required ?? /\*\s*$/.test(label || '');
   return (
     <div className={`form-field ${error ? 'form-field--error' : ''}`}>
-      <label className="form-field__label" htmlFor={htmlFor}>
+      <label className="form-field__label" htmlFor={htmlFor ?? id}>
         {cleanLabel}
-        {required && <span className="form-field__required">*</span>}
+        {isRequired && <span className="form-field__required">*</span>}
       </label>
       {children}
       {error && <span className="form-field__error">{error}</span>}

@@ -9,6 +9,7 @@ import { SearchableSelect } from '../components/SearchableSelect';
 import { StatusBadge } from '../components/StatusBadge';
 import { PageSkeleton } from '../components/LoadingSpinner';
 import { useToast } from '../contexts/ToastContext';
+import { useLatest } from '../utils/latest';
 import { useAuth } from '../contexts/AuthContext';
 
 interface UserRecord {
@@ -145,7 +146,9 @@ export function UsersPage() {
   };
 
   // ── Open Edit ────────────────────────────────────────────
+  const rolesRequest = useLatest();
   const openEdit = async (user: UserRecord) => {
+    const isCurrent = rolesRequest.start();
     setEditUser(user);
     setEditForm({
       fullName: user.full_name,
@@ -160,9 +163,16 @@ export function UsersPage() {
     setEditRolesLoading(true);
     try {
       const roles = await apiGet<Role[]>(`/users/${user.id}/roles`);
-      setEditForm(prev => ({ ...prev, roleIds: (roles || []).map(r => r.id) }));
-    } catch {}
-    setEditRolesLoading(false);
+      // Only into the form of the user it was loaded for, never another one opened since.
+      if (isCurrent()) setEditForm(prev => ({ ...prev, roleIds: (roles || []).map(r => r.id) }));
+    } catch {
+      if (isCurrent()) {
+        // Saving without the current roles would replace them with none: do not leave the form open.
+        addToast('error', 'Could not load this user\'s roles. Please try again.');
+        setEditUser(null);
+      }
+    }
+    if (isCurrent()) setEditRolesLoading(false);
   };
 
   // ── Save Edit ────────────────────────────────────────────
@@ -431,7 +441,7 @@ export function UsersPage() {
           </div>
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '20px' }}>
             <button type="button" className="btn btn-secondary" onClick={() => setEditUser(null)} disabled={submitting}>Cancel</button>
-            <button type="submit" className="btn btn-primary" disabled={submitting} style={{ display: 'flex', alignItems: 'center' }}>
+            <button type="submit" className="btn btn-primary" disabled={submitting || editRolesLoading} style={{ display: 'flex', alignItems: 'center' }}>
               {submitting ? (
                 <><Loader2 size={14} className="spin-icon" /> Saving…</>
               ) : (

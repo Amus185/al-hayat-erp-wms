@@ -11,6 +11,8 @@ import { Tabs } from '../components/Tabs';
 import { MetricCard } from '../components/MetricCard';
 import { DataTable, type Column } from '../components/DataTable';
 import { Modal } from '../components/Modal';
+import { ModalLoading } from '../components/ModalLoading';
+import { useLatest } from '../utils/latest';
 import { InputField, SelectField, TextareaField } from '../components/FormField';
 import { StatusBadge } from '../components/StatusBadge';
 import { PageSkeleton } from '../components/LoadingSpinner';
@@ -94,6 +96,7 @@ export function AssetsPage() {
   const [editProperty, setEditProperty] = useState<any | null>(null);
   const [viewProperty, setViewProperty] = useState<any | null>(null);
   const [loadingPropDetails, setLoadingPropDetails] = useState(false);
+  const propRequest = useLatest();
 
   // Modals - Property Expense
   const [showPropExpenseModal, setShowPropExpenseModal] = useState<{ id: string; name: string } | null>(null);
@@ -106,6 +109,7 @@ export function AssetsPage() {
   const [editTenant, setEditTenant] = useState<any | null>(null);
   const [viewTenant, setViewTenant] = useState<any | null>(null);
   const [loadingTenantDetails, setLoadingTenantDetails] = useState(false);
+  const tenantRequest = useLatest();
 
   // Modals - Leases
   const [showLeaseModal, setShowLeaseModal] = useState(false);
@@ -211,16 +215,24 @@ export function AssetsPage() {
     finally { setSaving(false); }
   };
 
+  // Opens at once (the window shows a loading state), or reloads the open one.
   const handleViewProperty = async (id: string) => {
+    const isCurrent = propRequest.start();
     setLoadingPropDetails(true);
     try {
       const data = await apiGet<any>(`/assets/properties/${id}`);
-      setViewProperty(data);
+      if (isCurrent()) setViewProperty(data);
     } catch {
-      addToast('error', 'Could not load property details');
+      if (isCurrent()) addToast('error', 'Could not load property details');
     } finally {
-      setLoadingPropDetails(false);
+      if (isCurrent()) setLoadingPropDetails(false);
     }
+  };
+
+  const closeProperty = () => {
+    propRequest.cancel();
+    setLoadingPropDetails(false);
+    setViewProperty(null);
   };
 
   // Handlers - Expenses
@@ -272,16 +284,24 @@ export function AssetsPage() {
     finally { setSaving(false); }
   };
 
+  // Opens at once (the window shows a loading state), or reloads the open one.
   const handleViewTenant = async (id: string) => {
+    const isCurrent = tenantRequest.start();
     setLoadingTenantDetails(true);
     try {
       const data = await apiGet<any>(`/assets/tenants/${id}`);
-      setViewTenant(data);
+      if (isCurrent()) setViewTenant(data);
     } catch {
-      addToast('error', 'Could not load tenant details');
+      if (isCurrent()) addToast('error', 'Could not load tenant details');
     } finally {
-      setLoadingTenantDetails(false);
+      if (isCurrent()) setLoadingTenantDetails(false);
     }
+  };
+
+  const closeTenant = () => {
+    tenantRequest.cancel();
+    setLoadingTenantDetails(false);
+    setViewTenant(null);
   };
 
   // Handlers - Leases
@@ -871,7 +891,8 @@ export function AssetsPage() {
       </Modal>
 
       {/* 3. View Property Details Modal */}
-      <Modal isOpen={!!viewProperty} onClose={() => setViewProperty(null)} title={`Property Details: ${viewProperty?.name}`} size="lg">
+      <Modal isOpen={!!viewProperty || loadingPropDetails} onClose={closeProperty} title={viewProperty ? `Property Details: ${viewProperty.name}` : 'Property Details'} size="lg">
+        {!viewProperty && <ModalLoading />}
         {viewProperty && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
             {/* Header badges */}
@@ -998,7 +1019,7 @@ export function AssetsPage() {
             </div>
 
             <div className="form-actions" style={{ marginTop: 8 }}>
-              <button className="btn" onClick={() => setViewProperty(null)}>Close</button>
+              <button className="btn" onClick={closeProperty}>Close</button>
             </div>
           </div>
         )}
@@ -1067,7 +1088,8 @@ export function AssetsPage() {
       </Modal>
 
       {/* 7. View Tenant Details Modal */}
-      <Modal isOpen={!!viewTenant} onClose={() => setViewTenant(null)} title={`Tenant Details: ${viewTenant?.name}`} size="lg">
+      <Modal isOpen={!!viewTenant || loadingTenantDetails} onClose={closeTenant} title={viewTenant ? `Tenant Details: ${viewTenant.name}` : 'Tenant Details'} size="lg">
+        {!viewTenant && <ModalLoading />}
         {viewTenant && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, background: '#f8fafc', padding: 14, borderRadius: 8 }}>
@@ -1118,7 +1140,7 @@ export function AssetsPage() {
             </div>
 
             <div className="form-actions">
-              <button className="btn" onClick={() => setViewTenant(null)}>Close</button>
+              <button className="btn" onClick={closeTenant}>Close</button>
             </div>
           </div>
         )}

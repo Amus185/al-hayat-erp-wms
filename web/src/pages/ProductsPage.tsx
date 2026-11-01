@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { PackageSearch, Plus, Trash2, List, Settings, PlusCircle, Loader2, Upload, Download, FileSpreadsheet, CheckCircle, AlertCircle, X, RefreshCw } from 'lucide-react';
-import { apiGet, apiPost, apiPatch, apiDelete, apiDownload } from '../api/client';
+import { apiGet, apiPost, apiPatch, apiDelete } from '../api/client';
 import { getCached, setCached } from '../api/cache';
 import { DataTable, type Column } from '../components/DataTable';
 import { SearchInput } from '../components/SearchInput';

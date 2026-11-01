@@ -16,6 +16,9 @@ import { PageSkeleton } from '../components/LoadingSpinner';
 import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
 import { confirmAction } from '../utils/swal';
+import { createPortal } from 'react-dom';
+import { ModalLoading } from '../components/ModalLoading';
+import { useLatest } from '../utils/latest';
 
 // ─── Theme ──────────────────────────────────────────────────────────
 const G = '#066006';
@@ -87,7 +90,8 @@ function Modal({ open, onClose, title, children, width = 580 }: {
   open: boolean; onClose: () => void; title: string; children: React.ReactNode; width?: number;
 }) {
   if (!open) return null;
-  return (
+  // Drawn into <body> so a hovering/transformed parent card cannot trap or shake it.
+  return createPortal(
     <div style={{
       position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 9999,
       display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px',
@@ -108,7 +112,8 @@ function Modal({ open, onClose, title, children, width = 580 }: {
         </div>
         <div style={{ padding: '24px' }}>{children}</div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -177,7 +182,11 @@ export function AccountingPage() {
   // Modals
   const [showJEModal, setShowJEModal] = useState(false);
   const [showJEDetail, setShowJEDetail] = useState<any>(null);
-  const [ledgerDrill, setLedgerDrill] = useState<{ account: any; rows: any[] } | null>(null);
+  const [jeOpening, setJeOpening] = useState(false); // the entry window is open, its data still loading
+  const jeRequest = useLatest();
+  // rows: null while the account's activity loads (the window is already open)
+  const [ledgerDrill, setLedgerDrill] = useState<{ account: any; rows: any[] | null } | null>(null);
+  const drillRequest = useLatest();
   const [showCoAModal, setShowCoAModal] = useState(false);
   const [showPeriodModal, setShowPeriodModal] = useState(false);
   const [showInvCountModal, setShowInvCountModal] = useState(false);
@@ -497,12 +506,23 @@ export function AccountingPage() {
 
   // ── Open JE Detail ───────────────────────────────────────────────
   async function openJEDetail(id: string) {
+    const isCurrent = jeRequest.start();
+    setShowJEDetail(null);
+    setJeOpening(true);
     try {
       const d = await apiGet<any>(`/accounting/journal-entries/${id}`);
-      setShowJEDetail(d);
+      if (isCurrent()) setShowJEDetail(d);
     } catch (e) {
-      addToast('error', 'Failed to load entry details');
+      if (isCurrent()) addToast('error', 'Failed to load entry details');
+    } finally {
+      if (isCurrent()) setJeOpening(false);
     }
+  }
+
+  function closeJEDetail() {
+    jeRequest.cancel();
+    setJeOpening(false);
+    setShowJEDetail(null);
   }
 
   async function postOpening(r: any) {
@@ -531,12 +551,22 @@ export function AccountingPage() {
   }
 
   async function openLedgerDrill(account: any) {
+    const isCurrent = drillRequest.start();
+    setLedgerDrill({ account, rows: null });
     try {
       const rows = await apiGet<any[]>(withBranch(`/accounting/general-ledger?account_id=${account.account_id || account.id}`));
-      setLedgerDrill({ account, rows: rows || [] });
+      if (isCurrent()) setLedgerDrill({ account, rows: rows || [] });
     } catch (e) {
-      addToast('error', 'Failed to load account activity');
+      if (isCurrent()) {
+        addToast('error', 'Failed to load account activity');
+        setLedgerDrill(null);
+      }
     }
+  }
+
+  function closeLedgerDrill() {
+    drillRequest.cancel();
+    setLedgerDrill(null);
   }
 
   if (loading) return <PageSkeleton />;
@@ -1496,7 +1526,8 @@ export function AccountingPage() {
       </Modal>
 
       {/* JE Detail Modal */}
-      <Modal open={!!showJEDetail} onClose={() => setShowJEDetail(null)} title={showJEDetail ? `Entry: ${showJEDetail.entry_number}` : ''} width={680}>
+      <Modal open={!!showJEDetail || jeOpening} onClose={closeJEDetail} title={showJEDetail ? `Entry: ${showJEDetail.entry_number}` : 'Journal entry'} width={680}>
+        {!showJEDetail && <ModalLoading />}
         {showJEDetail && (
           <div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px', marginBottom: '16px' }}>
@@ -1660,9 +1691,9 @@ export function AccountingPage() {
         </div>
       </Modal>
 
-      <Modal open={!!ledgerDrill} onClose={() => setLedgerDrill(null)} title={`General Ledger — ${ledgerDrill?.account?.code || ''} ${ledgerDrill?.account?.account_name || ''}`} width={900}>
+      <Modal open={!!ledgerDrill} onClose={closeLedgerDrill} title={`General Ledger — ${ledgerDrill?.account?.code || ''} ${ledgerDrill?.account?.account_name || ''}`} width={900}>
         <p style={{ marginTop: 0, color: '#64748b', fontSize: '13px' }}>Posted transaction activity for this account</p>
-        <div style={{ overflowX: 'auto' }}><table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}><thead><tr>{['Date', 'Entry', 'Description', 'Debit', 'Credit', 'Balance'].map((label) => <th key={label} style={{ textAlign: label === 'Description' ? 'left' : 'right', padding: '9px', borderBottom: '1px solid #d7e6df', color: '#475569' }}>{label}</th>)}</tr></thead><tbody>{ledgerDrill?.rows.map((row) => <tr key={row.id}><td style={{ padding: '9px' }}>{row.entry_date}</td><td style={{ padding: '9px' }}>{row.entry_number}</td><td style={{ padding: '9px' }}>{row.description}</td><td style={{ padding: '9px', textAlign: 'right', color: G }}>{Number(row.debit_amount) ? fmt(row.debit_amount) : '—'}</td><td style={{ padding: '9px', textAlign: 'right', color: TEAL }}>{Number(row.credit_amount) ? fmt(row.credit_amount) : '—'}</td><td style={{ padding: '9px', textAlign: 'right', fontWeight: 700 }}>{fmt(row.running_balance)}</td></tr>)}</tbody></table></div>
+        <div style={{ overflowX: 'auto' }}><table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}><thead><tr>{['Date', 'Entry', 'Description', 'Debit', 'Credit', 'Balance'].map((label) => <th key={label} style={{ textAlign: label === 'Description' ? 'left' : 'right', padding: '9px', borderBottom: '1px solid #d7e6df', color: '#475569' }}>{label}</th>)}</tr></thead><tbody>{ledgerDrill?.rows === null && <tr><td colSpan={6}><ModalLoading text="Loading account activity…" /></td></tr>}{ledgerDrill?.rows?.map((row) => <tr key={row.id}><td style={{ padding: '9px' }}>{row.entry_date}</td><td style={{ padding: '9px' }}>{row.entry_number}</td><td style={{ padding: '9px' }}>{row.description}</td><td style={{ padding: '9px', textAlign: 'right', color: G }}>{Number(row.debit_amount) ? fmt(row.debit_amount) : '—'}</td><td style={{ padding: '9px', textAlign: 'right', color: TEAL }}>{Number(row.credit_amount) ? fmt(row.credit_amount) : '—'}</td><td style={{ padding: '9px', textAlign: 'right', fontWeight: 700 }}>{fmt(row.running_balance)}</td></tr>)}</tbody></table></div>
       </Modal>
     </div>
   );

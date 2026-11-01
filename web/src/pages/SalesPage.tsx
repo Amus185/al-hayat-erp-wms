@@ -8,8 +8,6 @@ import {
 import { apiGet, apiPost, apiDelete } from '../api/client';
 import { getCached, setCached } from '../api/cache';
 import { DataTable, type Column } from '../components/DataTable';
-import { KanbanBoard, type KanbanColumnDef } from '../components/KanbanBoard';
-import { ViewSwitcher } from '../components/ViewSwitcher';
 import { Tabs } from '../components/Tabs';
 import { Modal } from '../components/Modal';
 import { CreateSalesOrderModal } from '../components/CreateSalesOrderModal';
@@ -21,6 +19,8 @@ import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
 import type { PaymentMethod, InvoicePayment, PaymentSummary } from '../types';
 import { confirmAction } from '../utils/swal';
+import { useLatest } from '../utils/latest';
+import { ModalLoading } from '../components/ModalLoading';
 import { html, writePrintDocument } from '../utils/html';
 
 // ── Local interface shapes matching API responses ───────────────────
@@ -43,7 +43,10 @@ interface SalesOrder {
   branch_name?: string;
   fulfillment_type?: string;
   invoice_id?: string | null;
+  delivery_status?: string | null;
   invoice_total?: number;
+  /** Sum of the order lines; shown before the order is invoiced. */
+  lines_total?: number;
   invoice_discount?: number;
   net_total?: number;
   amount_paid?: number;
@@ -167,6 +170,9 @@ export function SalesPage() {
   // Sales Order Details Modal
   const [selectedOrder, setSelectedOrder] = useState<any | null>(null);
   const [orderDetailsLoading, setOrderDetailsLoading] = useState(false);
+  // The row being opened: the details window shows at once while its data loads.
+  const [openingOrder, setOpeningOrder] = useState<SalesOrder | null>(null);
+  const orderRequest = useLatest();
 
   // Payment Modal
   const [isPaymentOpen, setIsPaymentOpen] = useState(false);
@@ -230,7 +236,7 @@ export function SalesPage() {
     }
   };
 
-  const [actionProcessing, setActionProcessing] = useState<'complete' | 'invoice_deposit' | 'cancel' | 'pay' | 'delete' | null>(null);
+  const [actionProcessing, setActionProcessing] = useState<'complete' | 'invoice_deposit' | 'cancel' | 'pay' | 'delete' | 'payout' | null>(null);
 
   const handleDeleteOrder = async (id: string) => {
     const confirmed = await confirmAction(
@@ -474,16 +480,27 @@ export function SalesPage() {
   };
 
   const viewOrderDetails = async (so: SalesOrder) => {
-    setOrderDetailsLoading(true);
+    const isCurrent = orderRequest.start();
     setShowHistory(false);
+    setSelectedOrder(null);
+    setOpeningOrder(so);
     try {
       const details = await apiGet<any>(`/sales/orders/${so.id}`);
-      setSelectedOrder(details || so);
-    } catch {
-      setSelectedOrder(so);
+      if (isCurrent()) setSelectedOrder(details || so);
+    } catch (err: any) {
+      if (isCurrent()) {
+        addToast('error', err?.message || 'Could not load the full order details');
+        setSelectedOrder(so);
+      }
     } finally {
-      setOrderDetailsLoading(false);
+      if (isCurrent()) setOpeningOrder(null);
     }
+  };
+
+  const closeOrderDetails = () => {
+    orderRequest.cancel();
+    setOpeningOrder(null);
+    setSelectedOrder(null);
   };
 
   // ── Filtering ────────────────────────────────────────────────────
@@ -560,7 +577,7 @@ export function SalesPage() {
       render: (row) => (
         <div>
           <div style={{ fontWeight: 600 }}>
-            {row.net_total != null ? fmt(row.net_total) : (row.invoice_total != null ? fmt(row.invoice_total) : '—')}
+            {row.net_total != null ? fmt(row.net_total) : (row.invoice_total != null ? fmt(row.invoice_total) : (row.lines_total != null ? fmt(Number(row.lines_total)) : '—'))}
           </div>
           {Number(row.installation_fee || 0) > 0 && (
             <div
@@ -853,11 +870,12 @@ export function SalesPage() {
 
       {/* ── Sales Order Details Modal ── */}
       <Modal
-        isOpen={!!selectedOrder}
-        onClose={() => setSelectedOrder(null)}
-        title={selectedOrder ? `Sales Order: ${selectedOrder.order_number}` : 'Order Details'}
+        isOpen={!!selectedOrder || !!openingOrder}
+        onClose={closeOrderDetails}
+        title={selectedOrder || openingOrder ? `Sales Order: ${(selectedOrder || openingOrder)!.order_number}` : 'Order Details'}
         width="lg"
       >
+        {!selectedOrder && openingOrder && <ModalLoading />}
         {selectedOrder && (
           <div style={{ display: 'grid', gap: '18px' }}>
             {/* Metadata Summary */}
@@ -1061,7 +1079,7 @@ export function SalesPage() {
 
             {/* Action Buttons */}
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', borderTop: '1px solid #edf1ed', paddingTop: '16px', flexWrap: 'wrap' }}>
-              <button type="button" className="btn btn-secondary" onClick={() => setSelectedOrder(null)}>
+              <button type="button" className="btn btn-secondary" onClick={closeOrderDetails}>
                 Close
               </button>
 
