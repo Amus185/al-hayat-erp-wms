@@ -111,3 +111,27 @@ test('customer search: a name with a number is not drowned by phone-digit matche
   const phone = await t.api('GET', `/sales/customers?page=1&q=${encodeURIComponent('0633 000 030')}`);
   assert.deepEqual(phone.body.items.map((c: any) => c.name), ['Namecheck 30']);
 });
+
+test('quick search: finds orders, customers and products by number, name or phone, within permissions', async () => {
+  const pid = await t.createProduct({ price: 70 });
+  await t.q(`UPDATE products SET name = 'Quicksearch Lamp', sku = 'QS-LAMP-1' WHERE id = $1`, [pid]);
+  await t.setStock(pid, 4, { branchId: HQ });
+  await t.q(`INSERT INTO customers (id, name, phone) VALUES ('qs-c', 'Quicksearch Hodan', '0634 555 111')`);
+  const order = (await t.api('POST', '/sales/orders', { branchId: HQ, customerId: 'qs-c', lines: [{ productId: pid, quantity: 1, unitPrice: 70 }] })).body;
+  const num = (await t.q('SELECT order_number FROM sales_orders WHERE id = $1', [order.id]))[0].order_number;
+
+  const byName = await t.api('GET', '/search?q=Quicksearch');
+  assert.equal(byName.status, 200, JSON.stringify(byName.body));
+  const kinds = byName.body.results.map((r: any) => `${r.kind}:${r.title}`);
+  assert.ok(kinds.includes('customer:Quicksearch Hodan'), kinds.join(', '));
+  assert.ok(kinds.includes('product:Quicksearch Lamp'));
+  assert.ok(kinds.includes(`order:${num}`), 'orders are found by customer name');
+  assert.equal(byName.body.results.find((r: any) => r.kind === 'order').url, `/sales?open=${order.id}`);
+  assert.ok((await t.api('GET', `/search?q=${num}`)).body.results.some((r: any) => r.kind === 'order' && r.id === order.id));
+  assert.ok((await t.api('GET', `/search?q=${encodeURIComponent('0634555111')}`)).body.results.some((r: any) => r.title === 'Quicksearch Hodan'), 'phone without spaces');
+  assert.deepEqual((await t.api('GET', '/search?q=Q')).body.results, [], 'needs 2 characters');
+
+  const wh = await t.createUser({ branchId: null, roleId: 'role-warehouse-manager', role: 'warehouse_manager' });
+  const asWh = await t.api('GET', '/search?q=Quicksearch', undefined, wh.token);
+  assert.ok(!asWh.body.results.some((r: any) => r.kind === 'customer' || r.kind === 'order'), 'no sales data without sales access');
+});

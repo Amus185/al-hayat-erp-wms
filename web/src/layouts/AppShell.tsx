@@ -34,6 +34,7 @@ import { AGENT_URL } from '../api/assistant';
 import { ActivityBar } from '../components/ActivityBar';
 import { IdleGuard } from '../components/IdleGuard';
 import { UpdateNotice } from '../components/UpdateNotice';
+import { QuickSearch } from '../components/QuickSearch';
 
 const navItems = [
   { label: 'Dashboard', path: '/', icon: Home, permission: '' },
@@ -285,6 +286,7 @@ export function AppShell({ children }: AppShellProps) {
             </div>
           </div>
           <div className="topbar__actions">
+            <QuickSearch />
             <div className="notification-btn-wrapper" ref={popoverRef}>
               <button
                 type="button"

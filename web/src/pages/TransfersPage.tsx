@@ -9,6 +9,7 @@ import { LoadingSpinner } from '../components/LoadingSpinner';
 import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
 import { confirmAction } from '../utils/swal';
+import { useOpenParam } from '../utils/serverList';
 
 interface TransferLine {
   id: string;
@@ -109,6 +110,11 @@ export function TransfersPage() {
       setModalLoading(false);
     }
   };
+
+  // ?open=<transfer id> (quick search, notifications): load it, then show it.
+  useOpenParam((id) => {
+    apiGet<Transfer>(`/transfers/${id}`).then((t) => { if (t) openDetailModal(t); }).catch(() => addToast('error', 'Could not open that transfer'));
+  });
 
   const getOwnerName = (ownerType: string, whId: string | null, brId: string | null) => {
     if (ownerType === 'WAREHOUSE') {

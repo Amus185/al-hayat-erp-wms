@@ -18,6 +18,7 @@ import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
 import type { PaymentMethod, PurchaseInvoicePayment, PaymentSummary } from '../types';
 import { html, writePrintDocument } from '../utils/html';
+import { useOpenParam } from '../utils/serverList';
 
 // ── Local types ────────────────────────────────────────────────────
 interface Supplier {
@@ -509,6 +510,9 @@ export function PurchasingPage() {
       }
     }
   };
+
+  // ?open=<purchase order id> (quick search): show it.
+  useOpenParam((id) => viewPoDetails({ id, po_number: '' } as PurchaseOrder));
 
   const closePoDetails = () => {
     poRequest.cancel();

@@ -15,7 +15,7 @@ import { LoadingSpinner } from '../components/LoadingSpinner';
 import { ListToolbar } from '../components/ListToolbar';
 import { StatusTabs } from '../components/StatusTabs';
 import { SearchableSelect } from '../components/SearchableSelect';
-import { useServerList } from '../utils/serverList';
+import { useOpenParam, useServerList } from '../utils/serverList';
 import { searchCustomers } from '../utils/lookups';
 import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -478,6 +478,9 @@ export function SalesPage() {
     }
   };
 
+  // ?open=<order id> (quick search, notifications): show that order.
+  useOpenParam((id) => viewOrderDetails({ id, order_number: '' } as SalesOrder));
+
   const closeOrderDetails = () => {
     orderRequest.cancel();
     setOpeningOrder(null);
@@ -871,7 +874,7 @@ export function SalesPage() {
       <Modal
         isOpen={!!selectedOrder || !!openingOrder}
         onClose={closeOrderDetails}
-        title={selectedOrder || openingOrder ? `Sales Order: ${(selectedOrder || openingOrder)!.order_number}` : 'Order Details'}
+        title={(selectedOrder || openingOrder)?.order_number ? `Sales Order: ${(selectedOrder || openingOrder)!.order_number}` : 'Sales Order'}
         width="lg"
       >
         {!selectedOrder && openingOrder && <ModalLoading />}

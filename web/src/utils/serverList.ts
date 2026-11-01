@@ -149,3 +149,20 @@ export function useServerList<T>(endpoint: string, opts: ServerListOptions) {
 }
 
 export type ServerList<T> = ReturnType<typeof useServerList<T>>;
+
+/**
+ * Opens the record named in the address (?open=<id>, from quick search or a
+ * notification) once, then removes the parameter so Back/refresh do not
+ * reopen it.
+ */
+export function useOpenParam(open: (id: string) => void) {
+  const [params, setParams] = useSearchParams();
+  const id = params.get('open');
+  const fn = useRef(open);
+  fn.current = open;
+  useEffect(() => {
+    if (!id) return;
+    fn.current(id);
+    setParams((prev) => { const next = new URLSearchParams(prev); next.delete('open'); return next; }, { replace: true });
+  }, [id, setParams]);
+}

@@ -20,6 +20,7 @@ import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
 import { confirmAction } from '../utils/swal';
 import { html, writePrintDocument } from '../utils/html';
+import { useOpenParam } from '../utils/serverList';
 
 interface DeliveryItem {
   id: string;
@@ -515,6 +516,9 @@ export function DeliveriesPage() {
       }
     }
   };
+  // ?open=<delivery id> (quick search): show it.
+  useOpenParam((id) => handleViewDetails({ id } as Delivery));
+
   const closeDetails = () => {
     detailsRequest.cancel();
     setDetailsLoading(false);

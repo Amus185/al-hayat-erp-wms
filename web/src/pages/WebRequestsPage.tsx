@@ -16,6 +16,7 @@ import {
   cancelWebRequest, convertWebRequest, getStorefrontSettings, getWebRequest, listWebRequests, saveStorefrontSettings,
   type StorefrontSettings, type WebOrderStage, type WebRequestDetail, type WebRequestRow,
 } from '../api/storefront';
+import { useOpenParam } from '../utils/serverList';
 
 const money = (n: number | string) => `$${Number(n).toFixed(2)}`;
 const when = (iso: string) => new Date(iso).toLocaleString();
@@ -84,6 +85,9 @@ export function WebRequestsPage({ embedded = false }: { embedded?: boolean } = {
       setDetailRow(null);
     }
   };
+
+  // ?open=<web order id> (quick search): show it.
+  useOpenParam((id) => open({ id, request_number: '' } as WebRequestRow));
 
   const convert = async () => {
     if (!detail) return;
