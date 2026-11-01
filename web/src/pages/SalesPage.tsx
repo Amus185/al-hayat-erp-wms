@@ -6,15 +6,17 @@ import {
   Truck, Wrench, ShieldCheck, Store,
 } from 'lucide-react';
 import { apiGet, apiPost, apiDelete } from '../api/client';
-import { getCached, setCached } from '../api/cache';
 import { DataTable, type Column } from '../components/DataTable';
-import { Tabs } from '../components/Tabs';
 import { Modal } from '../components/Modal';
 import { CreateSalesOrderModal } from '../components/CreateSalesOrderModal';
 import { InputField, TextareaField } from '../components/FormField';
 import { StatusBadge } from '../components/StatusBadge';
 import { LoadingSpinner } from '../components/LoadingSpinner';
-import { FilterBar } from '../components/FilterBar';
+import { ListToolbar } from '../components/ListToolbar';
+import { StatusTabs } from '../components/StatusTabs';
+import { SearchableSelect } from '../components/SearchableSelect';
+import { useServerList } from '../utils/serverList';
+import { searchCustomers } from '../utils/lookups';
 import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
 import type { PaymentMethod, InvoicePayment, PaymentSummary } from '../types';
@@ -152,16 +154,19 @@ export function SalesPage() {
   const { addToast } = useToast();
   const { hasPermission } = useAuth();
 
-  const [orders, setOrders] = useState<SalesOrder[]>([]);
-  const [customers, setCustomers] = useState<Customer[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState('ALL');
-
-  // FilterBar
-  const [soSearch, setSoSearch] = useState('');
-  const [soFilters, setSoFilters] = useState<Record<string, string>>({
-    customer: '', branch: '', dateFrom: '', dateTo: '', paymentStatus: '',
+  const { isAdmin } = useAuth();
+  // Orders are searched, filtered, sorted and paged on the server: every order
+  // is reachable, and the filters live in the address (Back keeps them).
+  const list = useServerList<SalesOrder>('/sales/orders', {
+    key: 'sales-orders',
+    filters: ['status', 'paymentStatus', 'customerId', 'branchId', 'fulfillment', 'dateFrom', 'dateTo'],
+    defaultSort: 'date',
+    defaultDir: 'desc',
   });
+  const [branches, setBranches] = useState<{ id: string; name: string }[]>([]);
+  useEffect(() => {
+    if (isAdmin) apiGet<{ id: string; name: string }[]>('/branches').then((b) => setBranches(b || [])).catch(() => {});
+  }, [isAdmin]);
 
   // Customer Modal
   const [isCustomerOpen, setIsCustomerOpen] = useState(false);
@@ -195,32 +200,8 @@ export function SalesPage() {
   // Payment History toggle
   const [showHistory, setShowHistory] = useState(false);
 
-  const loadData = async () => {
-    // Show cached data instantly, then refresh silently in background
-    const cachedOrders = getCached<SalesOrder[]>('sales:orders');
-    const cachedCustomers = getCached<Customer[]>('customers:list');
-    if (cachedOrders) { setOrders(cachedOrders); setLoading(false); }
-    if (cachedCustomers) { setCustomers(cachedCustomers); }
-    if (!cachedOrders) setLoading(true);
-    try {
-      const [salesOrders, custs] = await Promise.all([
-        apiGet<SalesOrder[]>('/sales/orders'),
-        apiGet<Customer[]>('/sales/customers'),
-      ]);
-      const ordRows = salesOrders || [];
-      const custRows = custs || [];
-      setCached('sales:orders', ordRows);
-      setCached('customers:list', custRows);
-      setCustomers(custRows);
-      setOrders(ordRows);
-    } catch (err: any) {
-      addToast('error', err?.message || 'Failed to load sales orders data');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => { loadData(); }, []);
+  // After a change, reload the current page of orders (same filters).
+  const loadData = () => list.refresh();
 
   const handleCustomerSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -503,30 +484,11 @@ export function SalesPage() {
     setSelectedOrder(null);
   };
 
-  // ── Filtering ────────────────────────────────────────────────────
-  const filteredOrders = orders.filter((so) => {
-    if (soFilters.status && soFilters.status !== 'ALL' && so.status !== soFilters.status) return false;
-    const q = soSearch.trim().toLowerCase();
-    if (q && !so.order_number.toLowerCase().includes(q) && !String(so.customer_name || '').toLowerCase().includes(q)) return false;
-    if (soFilters.customer && so.customer_id !== soFilters.customer) return false;
-    if (soFilters.dateFrom && so.created_at < soFilters.dateFrom) return false;
-    if (soFilters.dateTo && so.created_at > soFilters.dateTo + 'T23:59:59') return false;
-    if (soFilters.paymentStatus && so.payment_status !== soFilters.paymentStatus) return false;
-    return true;
-  });
-
-  const tabItems = [
-    { key: 'ALL', label: 'All Orders', count: orders.length },
-    { key: 'DRAFT', label: 'Drafts', count: orders.filter((o) => o.status === 'DRAFT').length },
-    { key: 'CONFIRMED', label: 'Confirmed', count: orders.filter((o) => o.status === 'CONFIRMED').length },
-    { key: 'INVOICED', label: 'Invoiced', count: orders.filter((o) => o.status === 'INVOICED').length },
-    { key: 'PAID', label: 'Paid', count: orders.filter((o) => o.status === 'PAID').length },
-    { key: 'DELIVERED', label: 'Delivered', count: orders.filter((o) => o.status === 'DELIVERED' || o.delivery_status === 'DELIVERED').length },
-  ];
-
   const columns: Column<any>[] = [
     {
       key: 'order_number',
+      sortable: true,
+      sortKey: 'number',
       label: 'Order ID',
       render: (row) => (
         <span style={{ fontWeight: 700, color: '#0b8f08', fontFamily: 'monospace' }}>
@@ -536,6 +498,8 @@ export function SalesPage() {
     },
     {
       key: 'customer_name',
+      sortable: true,
+      sortKey: 'customer',
       label: 'Customer & Branch',
       render: (row) => {
         const isPickup = (row.fulfillment_type || 'DELIVERY').toUpperCase() === 'PICKUP';
@@ -568,11 +532,15 @@ export function SalesPage() {
     },
     {
       key: 'created_at',
+      sortable: true,
+      sortKey: 'date',
       label: 'Date',
       render: (row) => new Date(row.created_at).toLocaleDateString(),
     },
     {
       key: 'total',
+      sortable: true,
+      sortKey: 'total',
       label: 'Total Amount',
       render: (row) => (
         <div>
@@ -603,6 +571,8 @@ export function SalesPage() {
     },
     {
       key: 'status',
+      sortable: true,
+      sortKey: 'status',
       label: 'Order Status',
       render: (row) => {
         let tone: 'green' | 'yellow' | 'red' | 'neutral' | 'blue' = 'neutral';
@@ -616,6 +586,8 @@ export function SalesPage() {
     },
     {
       key: 'payment_status',
+      sortable: true,
+      sortKey: 'payment',
       label: 'Payment',
       render: (row) => {
         if (!row.payment_status) return <span style={{ color: '#aaa', fontSize: '12px' }}>—</span>;
@@ -806,47 +778,74 @@ export function SalesPage() {
       </section>
 
       <section className="panel">
-        <FilterBar
-          searchValue={soSearch}
-          onSearchChange={setSoSearch}
-          searchPlaceholder="Search by order ID, customer name, or phone…"
+        <StatusTabs
+          id="sales-status-tabs"
+          value={list.filters.status}
+          counts={list.counts}
+          onChange={(v) => list.setFilter('status', v)}
+          tabs={[
+            { key: 'ALL', label: 'All' },
+            { key: 'DRAFT', label: 'Drafts' },
+            { key: 'CONFIRMED', label: 'Confirmed' },
+            { key: 'INVOICED', label: 'Invoiced' },
+            { key: 'PAID', label: 'Paid' },
+            { key: 'DELIVERED', label: 'Delivered' },
+            { key: 'CANCELLED', label: 'Cancelled' },
+          ]}
+        />
+        <ListToolbar
+          id="sales-toolbar"
+          list={list}
+          searchPlaceholder="Search by order number, customer name or phone…"
+          dateRange
           filters={[
             {
-              key: 'status',
-              label: 'All Statuses',
-              options: [
-                { value: 'DRAFT', label: 'Drafts' },
-                { value: 'CONFIRMED', label: 'Confirmed' },
-                { value: 'INVOICED', label: 'Invoiced' },
-                { value: 'PAID', label: 'Paid' },
-              ],
-            },
-            {
-              key: 'customer',
-              label: 'All Customers',
-              options: customers.map((c) => ({ value: c.id, label: c.name })),
-            },
-            {
               key: 'paymentStatus',
-              label: 'All Payment Statuses',
+              label: 'All payment statuses',
               options: [
                 { value: 'UNPAID', label: 'Unpaid' },
-                { value: 'PARTIALLY_PAID', label: 'Partially Paid' },
+                { value: 'PARTIALLY_PAID', label: 'Partially paid' },
                 { value: 'PAID', label: 'Paid' },
+                { value: 'NOT_INVOICED', label: 'Not invoiced yet' },
               ],
             },
+            {
+              key: 'fulfillment',
+              label: 'Delivery & pickup',
+              options: [{ value: 'DELIVERY', label: 'Delivery' }, { value: 'PICKUP', label: 'Pickup' }],
+            },
+            ...(isAdmin && branches.length > 1
+              ? [{ key: 'branchId', label: 'All branches', options: branches.map((b) => ({ value: b.id, label: b.name })) }]
+              : []),
           ]}
-          filterValues={soFilters}
-          onFilterChange={(key, val) => setSoFilters(prev => ({ ...prev, [key]: val }))}
-        />
+        >
+          <div style={{ width: '240px', maxWidth: '100%' }}>
+            <SearchableSelect
+              id="sales-customer-filter"
+              options={[]}
+              value={list.filters.customerId}
+              onChange={(v) => list.setFilter('customerId', v)}
+              loadOptions={searchCustomers}
+              selectedLabel={list.items[0]?.customer_name || 'Selected customer'}
+              placeholder="All customers"
+            />
+          </div>
+        </ListToolbar>
+        {list.totals && list.total > 0 && (
+          <div className="list-summary">
+            <span>Value: <strong>{fmt(list.totals.value ?? 0)}</strong></span>
+            <span>Outstanding: <strong style={{ color: (list.totals.outstanding ?? 0) > 0 ? '#b45309' : undefined }}>{fmt(list.totals.outstanding ?? 0)}</strong></span>
+          </div>
+        )}
 
         <DataTable
+          id="sales-orders-table"
           columns={columns}
-          data={filteredOrders}
+          data={list.items}
+          server={list}
           keyExtractor={(row) => row.id as string}
-          loading={loading}
           onRowClick={(row) => viewOrderDetails(row as SalesOrder)}
-          emptyMessage="No sales orders match your filters"
+          emptyMessage={list.activeFilters ? 'No sales orders match your filters' : 'No sales orders yet'}
         />
       </section>
 

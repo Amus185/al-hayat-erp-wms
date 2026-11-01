@@ -1964,3 +1964,40 @@ html.api-busy, html.api-busy * { cursor: progress !important; }
 
 /* Every button reacts to the press itself, before anything loads. */
 .btn:active:not(:disabled) { transform: scale(0.97); }
+
+/* ─── List toolbar (search, filters, date range, count, export) ─── */
+.list-toolbar {
+  display: grid; gap: 8px; padding: 12px 16px; margin-bottom: 12px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-md);
+}
+.list-toolbar__row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.list-toolbar__search { flex: 1 1 240px; min-width: 200px; }
+.list-toolbar__select, .date-range__preset, .date-range__date {
+  height: 36px; padding: 0 10px; border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--surface); color: var(--text); font-size: 13px; max-width: 220px;
+}
+.list-toolbar__select:focus, .date-range__preset:focus, .date-range__date:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-lighter); }
+.list-toolbar__select--active, .date-range__preset:not([value=""]) { border-color: var(--primary); }
+.list-toolbar__meta { display: flex; align-items: center; gap: 14px; font-size: 12px; color: var(--text-muted); flex-wrap: wrap; }
+.list-toolbar__clear, .list-toolbar__export {
+  display: inline-flex; align-items: center; gap: 4px; border: none; background: none; padding: 2px 0;
+  font-size: 12px; font-weight: 600; cursor: pointer;
+}
+.list-toolbar__clear { color: var(--danger, #dc2626); }
+.list-toolbar__export { color: var(--primary); margin-left: auto; }
+.list-toolbar__export:disabled { opacity: .5; cursor: not-allowed; }
+.list-toolbar__error { font-size: 13px; color: #b91c1c; background: #fef2f2; border: 1px solid #fecaca; border-radius: 8px; padding: 8px 10px; }
+.date-range { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.date-range__icon { color: var(--text-muted); }
+.date-range__sep { font-size: 12px; color: var(--text-muted); }
+.table-wrap--refreshing { opacity: .6; transition: opacity .15s; }
+.status-tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+.status-tab {
+  display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--surface); color: var(--text); font-size: 13px; font-weight: 600;
+}
+.status-tab--active { background: var(--primary); border-color: var(--primary); color: #fff; }
+.status-tab__count { font-size: 11px; padding: 1px 7px; border-radius: 999px; background: rgba(0,0,0,.07); }
+.status-tab--active .status-tab__count { background: rgba(255,255,255,.25); }
+.list-summary { display: flex; gap: 18px; flex-wrap: wrap; font-size: 13px; color: var(--text-muted); margin: -4px 0 10px; }
+.list-summary strong { color: var(--text); }

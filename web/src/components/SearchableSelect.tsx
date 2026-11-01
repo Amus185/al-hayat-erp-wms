@@ -16,6 +16,13 @@ interface SearchableSelectProps {
   disabled?: boolean;
   id?: string;
   style?: React.CSSProperties;
+  /**
+   * Server search: called (debounced) with what the user types; its results
+   * replace `options`. Use it for lists too big to load (customers, products).
+   */
+  loadOptions?: (search: string) => Promise<SelectOption[]>;
+  /** Label of the current value when it is not among the loaded options. */
+  selectedLabel?: string;
 }
 
 export function SearchableSelect({
@@ -26,12 +33,36 @@ export function SearchableSelect({
   disabled = false,
   id,
   style,
+  loadOptions,
+  selectedLabel,
 }: SearchableSelectProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [search, setSearch] = useState('');
   const containerRef = useRef<HTMLDivElement>(null);
+  const [remote, setRemote] = useState<SelectOption[] | null>(null);
+  const [searching, setSearching] = useState(false);
+  const [picked, setPicked] = useState<SelectOption | null>(null);
 
-  const selectedOption = options.find((o) => o.value === value);
+  // Server search while open: debounced, and only the latest answer is shown.
+  useEffect(() => {
+    if (!loadOptions || !isOpen) return;
+    let stale = false;
+    setSearching(true);
+    const t = setTimeout(() => {
+      loadOptions(search.trim())
+        .then((opts) => { if (!stale) setRemote(opts); })
+        .catch(() => { if (!stale) setRemote([]); })
+        .finally(() => { if (!stale) setSearching(false); });
+    }, search ? 250 : 0);
+    return () => { stale = true; clearTimeout(t); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search, isOpen]);
+
+  const pool = loadOptions ? (remote ?? []) : options;
+  const selectedOption = pool.find((o) => o.value === value)
+    ?? options.find((o) => o.value === value)
+    ?? (picked && picked.value === value ? picked : undefined)
+    ?? (value && selectedLabel ? { value, label: selectedLabel } : undefined);
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -44,7 +75,7 @@ export function SearchableSelect({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  const filteredOptions = options.filter((o) => {
+  const filteredOptions = loadOptions ? pool : options.filter((o) => {
     const term = search.toLowerCase();
     return (
       o.label.toLowerCase().includes(term) ||
@@ -157,7 +188,7 @@ export function SearchableSelect({
               autoFocus
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search..."
+              placeholder={loadOptions ? 'Type to search…' : 'Search...'}
               style={{
                 width: '100%',
                 padding: '6px 10px',
@@ -181,6 +212,7 @@ export function SearchableSelect({
                     key={opt.value}
                     onClick={(e) => {
                       e.stopPropagation();
+                      setPicked(opt);
                       onChange(opt.value);
                       setIsOpen(false);
                       setSearch('');
@@ -218,7 +250,7 @@ export function SearchableSelect({
               })
             ) : (
               <div style={{ padding: '12px', textAlign: 'center', color: '#889388', fontSize: '13px' }}>
-                No options match your search
+                {loadOptions && (searching || remote === null) ? 'Searching…' : 'No options match your search'}
               </div>
             )}
           </div>

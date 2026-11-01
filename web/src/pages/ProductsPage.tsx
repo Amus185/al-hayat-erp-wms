@@ -2,10 +2,11 @@ import { useEffect, useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { PackageSearch, Plus, Trash2, List, Settings, PlusCircle, Loader2, Upload, Download, FileSpreadsheet, CheckCircle, AlertCircle, X, RefreshCw } from 'lucide-react';
 import { apiGet, apiPost, apiPatch, apiDelete } from '../api/client';
-import { getCached, setCached } from '../api/cache';
 import { DataTable, type Column } from '../components/DataTable';
 import { SearchInput } from '../components/SearchInput';
-import { FilterBar } from '../components/FilterBar';
+import { ListToolbar } from '../components/ListToolbar';
+import { useServerList } from '../utils/serverList';
+import { searchProducts } from '../utils/lookups';
 import { Modal } from '../components/Modal';
 import { ConfirmModal } from '../components/ConfirmModal';
 import { FormField, InputField } from '../components/FormField';
@@ -64,21 +65,18 @@ export function ProductsPage() {
   const { addToast } = useToast();
   const { hasPermission } = useAuth();
 
-  const [products, setProducts] = useState<Product[]>([]);
+  // Products are searched, filtered, sorted and paged on the server.
+  const list = useServerList<Product>('/products', {
+    key: 'products',
+    filters: ['categoryId', 'brandId', 'status', 'type', 'stock', 'onShop'],
+    defaultSort: 'name',
+    defaultDir: 'asc',
+  });
+  const products = list.items;
   const [categories, setCategories] = useState<Category[]>([]);
   const [brands, setBrands] = useState<Brand[]>([]);
   const [warehouses, setWarehouses] = useState<{ id: string; name: string }[]>([]);
   const [branches, setBranches] = useState<{ id: string; name: string }[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState('');
-  const [selectedCategory, setSelectedCategory] = useState('');
-  const [selectedBrand, setSelectedBrand] = useState('');
-  const [selectedStatus, setSelectedStatus] = useState('');
-  const [filterValues, setFilterValues] = useState<Record<string, string>>({ category: '', brand: '', status: '' });
-
-  const handleFilterChange = (key: string, value: string) => {
-    setFilterValues(prev => ({ ...prev, [key]: value }));
-  };
 
   // Modals state
   const [submitting, setSubmitting] = useState(false);
@@ -235,25 +233,8 @@ export function ProductsPage() {
     }
   };
 
-  const loadData = async () => {
-    const cached = getCached<Product[]>('products:list');
-    if (cached) {
-      setProducts(cached);
-      setLoading(false);
-    } else {
-      setLoading(true);
-    }
-    try {
-      const prs = await apiGet<Product[]>('/products');
-      const rows = prs || [];
-      setCached('products:list', rows);
-      setProducts(rows);
-    } catch (err: any) {
-      addToast('error', err?.message || 'Failed to fetch products');
-    } finally {
-      setLoading(false);
-    }
-  };
+  // After a change, reload the current page (same filters).
+  const loadData = () => list.refresh();
 
   useEffect(() => {
     loadData();
@@ -608,29 +589,17 @@ export function ProductsPage() {
     }
   };
 
-  const filteredProducts = products.filter((p) => {
-    const q = search.trim().toLowerCase();
-    if (
-      q &&
-      !String(p.name || '').toLowerCase().includes(q) &&
-      !String(p.sku || '').toLowerCase().includes(q) &&
-      !String(p.barcode || '').toLowerCase().includes(q)
-    ) return false;
-    if (filterValues.category && p.category_id !== filterValues.category) return false;
-    if (filterValues.brand && p.brand_id !== filterValues.brand) return false;
-    if (filterValues.status === 'active' && !p.is_active) return false;
-    if (filterValues.status === 'inactive' && p.is_active) return false;
-    return true;
-  });
 
   const columns: Column<Product>[] = [
-    { key: 'sku', label: 'Product ID', sortable: true },
-    { key: 'name', label: 'Name', sortable: true },
-    { key: 'category_name', label: 'Category', render: (row) => row.category_name || 'N/A' },
-    { key: 'brand_name', label: 'Brand', render: (row) => row.brand_name || 'N/A' },
-    { key: 'cost_price', label: 'Cost Price', render: (row) => `$${Number(row.cost_price).toLocaleString()}` },
+    { key: 'sku', label: 'Product ID', sortable: true, sortKey: 'sku' },
+    { key: 'name', label: 'Name', sortable: true, sortKey: 'name' },
+    { key: 'category_name', label: 'Category', sortable: true, sortKey: 'category', render: (row) => row.category_name || 'N/A' },
+    { key: 'brand_name', label: 'Brand', sortable: true, sortKey: 'brand', render: (row) => row.brand_name || 'N/A' },
+    { key: 'cost_price', label: 'Cost Price', sortable: true, sortKey: 'cost', render: (row) => `$${Number(row.cost_price).toLocaleString()}` },
     {
       key: 'selling_price',
+      sortable: true,
+      sortKey: 'price',
       label: 'Selling Price',
       render: (row) => {
         const tierCount = row.price_tiers?.length || 0;
@@ -649,6 +618,17 @@ export function ProductsPage() {
             )}
           </div>
         );
+      },
+    },
+    {
+      key: 'total_stock',
+      label: 'Stock',
+      sortable: true,
+      sortKey: 'stock',
+      render: (row: any) => {
+        const n = Number(row.total_stock ?? 0);
+        const low = Number(row.reorder_level || 0) > 0 && n <= Number(row.reorder_level);
+        return <span style={{ fontWeight: 600, color: n <= 0 ? '#b91c1c' : low ? '#b45309' : undefined }} title="All warehouses and branches">{n.toLocaleString()}</span>;
       },
     },
     {
@@ -831,39 +811,26 @@ export function ProductsPage() {
       </Modal>
 
       <section className="panel">
-        <FilterBar
-          searchValue={search}
-          onSearchChange={setSearch}
-          searchPlaceholder="Search by Product ID, Name…"
+        <ListToolbar
+          id="products-toolbar"
+          list={list}
+          searchPlaceholder="Search by name, product ID, barcode or description…"
           filters={[
-            {
-              key: 'category',
-              label: 'All Categories',
-              options: categories.map((c) => ({ value: c.id, label: c.name })),
-            },
-            {
-              key: 'brand',
-              label: 'All Brands',
-              options: brands.map((b) => ({ value: b.id, label: b.name })),
-            },
-            {
-              key: 'status',
-              label: 'All Statuses',
-              options: [
-                { value: 'active', label: 'Active' },
-                { value: 'inactive', label: 'Inactive' },
-              ],
-            },
+            { key: 'categoryId', label: 'All categories', options: categories.map((c) => ({ value: c.id, label: c.name })) },
+            { key: 'brandId', label: 'All brands', options: brands.map((b) => ({ value: b.id, label: b.name })) },
+            { key: 'status', label: 'Active & inactive', options: [{ value: 'active', label: 'Active' }, { value: 'inactive', label: 'Inactive' }] },
+            { key: 'stock', label: 'Any stock', options: [{ value: 'in', label: 'In stock' }, { value: 'low', label: 'Low (at or below reorder level)' }, { value: 'out', label: 'Out of stock' }] },
+            { key: 'type', label: 'All types', options: [{ value: 'STANDARD', label: 'Standard' }, { value: 'GROUPED', label: 'Bundle (grouped)' }] },
+            { key: 'onShop', label: 'Shop & not on shop', options: [{ value: '1', label: 'On the online shop' }, { value: '0', label: 'Not on the shop' }] },
           ]}
-          filterValues={filterValues}
-          onFilterChange={handleFilterChange}
         />
         <DataTable
+          id="products-table"
           columns={columns}
-          data={filteredProducts}
+          data={products}
+          server={list}
           keyExtractor={(row) => row.id}
-          loading={loading}
-          emptyMessage="No products match the criteria"
+          emptyMessage={list.activeFilters ? 'No products match your filters' : 'No products yet'}
         />
       </section>
 
@@ -1024,20 +991,14 @@ export function ProductsPage() {
                   {newGroupItems.map((item, idx) => (
                     <div key={idx} style={{ display: 'flex', gap: '8px', alignItems: 'center', background: '#fff', padding: '8px', borderRadius: '6px', border: '1px solid #e9d5ff' }}>
                       <div style={{ flex: 1 }}>
-                        <select
+                        <SearchableSelect
+                          id={`new-component-${idx}`}
+                          options={[]}
                           value={item.componentProductId}
-                          onChange={(e) => {
-                            const val = e.target.value;
-                            setNewGroupItems(prev => prev.map((g, i) => i === idx ? { ...g, componentProductId: val } : g));
-                          }}
-                          style={{ width: '100%', padding: '6px 8px', borderRadius: '4px', border: '1px solid #cbd5e1', fontSize: '13px' }}
-                          required
-                        >
-                          <option value="">-- Select Component Product --</option>
-                          {products.filter(p => p.product_type !== 'GROUPED').map(p => (
-                            <option key={p.id} value={p.id}>{p.name} ({p.sku})</option>
-                          ))}
-                        </select>
+                          onChange={(val) => setNewGroupItems(prev => prev.map((g, i) => i === idx ? { ...g, componentProductId: val } : g))}
+                          loadOptions={async (q) => (await searchProducts(q, { type: 'STANDARD' })).map((p) => ({ value: p.id, label: p.name, sublabel: p.sku }))}
+                          placeholder="Search for a component product…"
+                        />
                       </div>
                       <div style={{ width: '100px' }}>
                         <input
@@ -1347,7 +1308,7 @@ export function ProductsPage() {
       <ProductWebPanel
         product={webProduct}
         onClose={() => setWebProduct(null)}
-        onChanged={(id, published) => setProducts((prev) => prev.map((p) => (p.id === id ? { ...p, is_published: published ? 1 : 0 } : p)))}
+        onChanged={() => list.refresh()}
       />
 
       {isEditOpen && editingProduct && (
@@ -1489,20 +1450,17 @@ export function ProductsPage() {
                     {editGroupItems.map((item, idx) => (
                       <div key={idx} style={{ display: 'flex', gap: '8px', alignItems: 'center', background: '#fff', padding: '8px', borderRadius: '6px', border: '1px solid #e9d5ff' }}>
                         <div style={{ flex: 1 }}>
-                          <select
+                          <SearchableSelect
+                            id={`edit-component-${idx}`}
+                            options={[]}
                             value={item.component_product_id}
-                            onChange={(e) => {
-                              const val = e.target.value;
-                              setEditGroupItems(prev => prev.map((g, i) => i === idx ? { ...g, component_product_id: val } : g));
-                            }}
-                            style={{ width: '100%', padding: '6px 8px', borderRadius: '4px', border: '1px solid #cbd5e1', fontSize: '13px' }}
-                            required
-                          >
-                            <option value="">-- Select Component Product --</option>
-                            {products.filter(p => p.id !== editingProduct.id && p.product_type !== 'GROUPED').map(p => (
-                              <option key={p.id} value={p.id}>{p.name} ({p.sku})</option>
-                            ))}
-                          </select>
+                            onChange={(val) => setEditGroupItems(prev => prev.map((g, i) => i === idx ? { ...g, component_product_id: val } : g))}
+                            loadOptions={async (q) => (await searchProducts(q, { type: 'STANDARD' }))
+                              .filter((p) => p.id !== editingProduct.id)
+                              .map((p) => ({ value: p.id, label: p.name, sublabel: p.sku }))}
+                            selectedLabel={(item as any).component_name}
+                            placeholder="Search for a component product…"
+                          />
                         </div>
                         <div style={{ width: '100px' }}>
                           <input

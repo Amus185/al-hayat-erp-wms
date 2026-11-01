@@ -235,3 +235,25 @@ export function apiPatch<T>(path: string, body?: unknown): Promise<T> {
 export function apiDelete<T = void>(path: string): Promise<T> {
   return mutate<T>('DELETE', path);
 }
+
+/**
+ * Downloads a file the API produces (e.g. a CSV export) with the session
+ * cookie, and saves it under the name the server gives.
+ */
+export async function apiDownload(path: string, params?: Record<string, string | number | boolean | undefined>): Promise<void> {
+  const res = await authorizedFetch(`${API_BASE_URL}${path}${buildQueryString(params)}`, { method: 'GET' });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null) as Record<string, unknown> | null;
+    throw new ApiError(res.status, res.statusText, body);
+  }
+  const blob = await res.blob();
+  const name = /filename="([^"]+)"/.exec(res.headers.get('content-disposition') || '')?.[1] || 'export.csv';
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}

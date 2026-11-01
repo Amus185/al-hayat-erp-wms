@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   Users, Phone, Mail, MapPin, Plus, Search, ShoppingBag, DollarSign, X,
   Edit2, Trash2, ChevronDown, ChevronUp, BookOpen, Receipt, CreditCard,
@@ -6,7 +6,11 @@ import {
   Clock, AlertCircle, Calendar, Wrench, ShieldCheck, RefreshCw, Loader2
 } from 'lucide-react';
 import { apiGet, apiPost, apiPatch, apiDelete } from '../api/client';
-import { getCached, setCached } from '../api/cache';
+import { ListToolbar } from '../components/ListToolbar';
+import { Pagination } from '../components/Pagination';
+import { SearchableSelect, type SelectOption } from '../components/SearchableSelect';
+import { useServerList } from '../utils/serverList';
+import { searchCustomers } from '../utils/lookups';
 import { Modal } from '../components/Modal';
 import { Tabs } from '../components/Tabs';
 import { StatusBadge } from '../components/StatusBadge';
@@ -177,8 +181,17 @@ export function CustomersPage() {
   // Active view tab: ALL customers vs DEBTS ledger
   const [activeTab, setActiveTab] = useState<'ALL' | 'DEBTS'>('ALL');
 
-  // Customer List & Debtors State
-  const [customers, setCustomers] = useState<Customer[]>([]);
+  // Customer list: searched, filtered, sorted and paged on the server, so every
+  // customer is reachable however many there are.
+  const list = useServerList<Customer>('/sales/customers', {
+    key: 'customers',
+    filters: ['balance', 'activity', 'dateFrom', 'dateTo'],
+    defaultSort: 'created',
+    defaultDir: 'desc',
+  });
+  const customers = list.items;
+  const refreshList = useRef(list.refresh);
+  refreshList.current = list.refresh;
   const [debtSummary, setDebtSummary] = useState<DebtSummary>({
     total_outstanding_debt: 0,
     total_debt_collected: 0,
@@ -240,23 +253,11 @@ export function CustomersPage() {
   // Load all data
   const loadAllData = useCallback(async () => {
     try {
-      const cachedCusts = getCached<Customer[]>('customers:list');
-      if (cachedCusts) {
-        setCustomers(cachedCusts);
-        setLoading(false);
-      } else {
-        setLoading(true);
-      }
-
-      const [custRes, summaryRes, debtorsRes] = await Promise.all([
-        apiGet<Customer[]>('/sales/customers'),
+      refreshList.current();
+      const [summaryRes, debtorsRes] = await Promise.all([
         apiGet<DebtSummary>('/sales/debts/summary'),
         apiGet<DebtorRow[]>('/sales/debts'),
       ]);
-
-      const custList = Array.isArray(custRes) ? custRes : [];
-      setCached('customers:list', custList);
-      setCustomers(custList);
 
       if (summaryRes) {
         setDebtSummary(summaryRes);
@@ -318,7 +319,7 @@ export function CustomersPage() {
 
   // Open Add Debt Modal
   const openAddDebt = (targetCustId?: string) => {
-    setDebtCustomerId(targetCustId || (customers[0]?.id || ''));
+    setDebtCustomerId(targetCustId || '');
     setDebtForm({
       category: 'ASSEMBLY',
       description: '',
@@ -400,7 +401,7 @@ export function CustomersPage() {
 
   // Open Payment Modal
   const openPaymentModal = (targetCustId?: string, prefillAmount?: number) => {
-    const custId = targetCustId || (customers[0]?.id || '');
+    const custId = targetCustId || '';
     setPaymentCustomerId(custId);
     setPaymentAllocation('ACCOUNT');
 
@@ -410,6 +411,7 @@ export function CustomersPage() {
     const bal = prefillAmount !== undefined
       ? prefillAmount
       : (targetDebtor?.outstanding_balance ?? targetCust?.outstanding_balance ?? 0);
+    if (custId && prefillAmount === undefined && !targetCust && !targetDebtor) prefillFromServer(custId);
 
     setPaymentForm({
       amount: bal > 0 ? String(bal) : '',
@@ -423,6 +425,16 @@ export function CustomersPage() {
     loadBillsForCustomer(custId);
   };
 
+  // A customer picked from the search (maybe not on this page): balance from the server.
+  const prefillFromServer = (custId: string) => {
+    apiGet<{ current_balance: number }>(`/sales/customers/${custId}/balance`)
+      .then((b) => {
+        const bal = Number(b?.current_balance || 0);
+        setPaymentForm(prev => ({ ...prev, amount: bal > 0 ? String(bal) : '' }));
+      })
+      .catch(() => {});
+  };
+
   const handleCustomerChangeInPayment = (newCustId: string) => {
     setPaymentCustomerId(newCustId);
     const targetCust = customers.find(c => c.id === newCustId);
@@ -434,8 +446,11 @@ export function CustomersPage() {
       invoiceId: '',
       manualDebtId: '',
     }));
-    loadBillsForCustomer(newCustId);
+    if (newCustId && !targetCust && !targetDebtor) prefillFromServer(newCustId);
+    if (newCustId) loadBillsForCustomer(newCustId);
   };
+
+  const nameOf = (id: string) => customers.find((c) => c.id === id)?.name ?? debtors.find((d) => d.customer_id === id)?.customer_name;
 
   const handleProcessPayment = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -545,15 +560,8 @@ export function CustomersPage() {
   };
 
   // Filtered lists
-  const filteredCustomers = useMemo(() => {
-    const q = search.toLowerCase().trim();
-    if (!q) return customers;
-    return customers.filter(c =>
-      c.name.toLowerCase().includes(q) ||
-      (c.phone || '').includes(q) ||
-      (c.email || '').toLowerCase().includes(q)
-    );
-  }, [customers, search]);
+  // searched and filtered on the server
+  const filteredCustomers = customers;
 
   const activeDebtors = useMemo(() => {
     return debtors.filter(d => (d.outstanding_balance ?? (d as any).current_balance ?? 0) > 0.01);
@@ -886,8 +894,8 @@ export function CustomersPage() {
             <ShoppingBag size={24} />
           </div>
           <div>
-            <div style={{ fontSize: '22px', fontWeight: 800, color: '#0f172a' }}>{customers.length}</div>
-            <div style={{ fontSize: '12px', fontWeight: 600, color: '#64748b' }}>Total Customers</div>
+            <div style={{ fontSize: '22px', fontWeight: 800, color: '#0f172a' }}>{list.initialLoading ? '…' : list.total.toLocaleString()}</div>
+            <div style={{ fontSize: '12px', fontWeight: 600, color: '#64748b' }}>{list.activeFilters ? 'Customers matching' : 'Total Customers'}</div>
           </div>
         </div>
       </div>
@@ -896,14 +904,14 @@ export function CustomersPage() {
       <div style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '14px 18px', marginBottom: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '14px' }}>
         <Tabs
           tabs={[
-            { key: 'ALL', label: `All Customers (${customers.length})` },
+            { key: 'ALL', label: `All Customers (${list.total.toLocaleString()})` },
             { key: 'DEBTS', label: `Customer Debt Ledger (${activeDebtors.length})` },
           ]}
           activeTab={activeTab}
           onTabChange={(tab) => setActiveTab(tab as 'ALL' | 'DEBTS')}
         />
 
-        <div style={{ position: 'relative', width: '320px', maxWidth: '100%' }}>
+        {activeTab === 'DEBTS' && <div style={{ position: 'relative', width: '320px', maxWidth: '100%' }}>
           <Search size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
           <input
             value={search}
@@ -919,11 +927,11 @@ export function CustomersPage() {
               boxSizing: 'border-box',
             }}
           />
-        </div>
+        </div>}
       </div>
 
       {/* Main Tab Content */}
-      {loading ? (
+      {(activeTab === 'DEBTS' ? loading : list.initialLoading) ? (
         <div style={{ textAlign: 'center', padding: '60px', color: '#94a3b8' }}>
           <Loader2 size={28} className="spin-icon" style={{ margin: '0 auto 10px' }} />
           <p style={{ margin: 0, fontSize: '14px' }}>Loading customer financial records…</p>
@@ -1078,7 +1086,27 @@ export function CustomersPage() {
         )
       ) : (
         /* ── TAB 1: ALL CUSTOMERS LIST ─────────────────────────────── */
-        filteredCustomers.length === 0 ? (
+        <>
+        <ListToolbar
+          id="customers-toolbar"
+          list={list}
+          searchPlaceholder="Search by name, phone, email or address…"
+          dateRange
+          filters={[
+            { key: 'balance', label: 'Any balance', options: [{ value: 'owing', label: 'Owes money' }, { value: 'clear', label: 'Nothing owed' }] },
+            { key: 'activity', label: 'Any activity', options: [{ value: 'buyers', label: 'Has bought' }, { value: 'never', label: 'Never bought' }] },
+          ]}
+        >
+          <select aria-label="Sort customers" className="list-toolbar__select" value={`${list.sort}:${list.dir}`}
+            onChange={(e) => { const [k, d] = e.target.value.split(':'); list.setFilters({ sort: k, dir: d }); }}>
+            <option value="created:desc">Newest first</option>
+            <option value="name:asc">Name A–Z</option>
+            <option value="balance:desc">Biggest balance owed</option>
+            <option value="spent:desc">Biggest spenders</option>
+            <option value="orders:desc">Most orders</option>
+          </select>
+        </ListToolbar>
+        {filteredCustomers.length === 0 ? (
           <div style={{ textAlign: 'center', padding: '60px', color: '#94a3b8', background: '#fff', borderRadius: '12px', border: '1px solid #e2e8f0' }}>
             <Users size={40} style={{ marginBottom: '12px', opacity: 0.3 }} />
             <p style={{ margin: 0, fontWeight: 600 }}>No customers found</p>
@@ -1248,7 +1276,12 @@ export function CustomersPage() {
               );
             })}
           </div>
-        )
+        )}
+        {list.total > 0 && (
+          <Pagination id="customers-pages" page={list.page} pageSize={list.pageSize} total={list.total}
+            onPageChange={list.setPage} onPageSizeChange={list.setPageSize} pageSizeOptions={[25, 50, 100]} />
+        )}
+        </>
       )}
 
       {/* ── MODAL 1: CUSTOMER LEDGER / STATEMENT ────────────────────── */}
@@ -1442,19 +1475,15 @@ export function CustomersPage() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
             <div className="form-field">
               <label className="form-field__label">Target Customer *</label>
-              <select
-                className="form-select"
+              <SearchableSelect
+                id="debt-customer"
+                options={[] as SelectOption[]}
                 value={debtCustomerId}
-                onChange={(e) => setDebtCustomerId(e.target.value)}
-                required
-              >
-                <option value="">Select a customer…</option>
-                {customers.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name} {c.phone ? `(${c.phone})` : ''} — Current Debt: {fmt(c.outstanding_balance)}
-                  </option>
-                ))}
-              </select>
+                onChange={setDebtCustomerId}
+                loadOptions={searchCustomers}
+                selectedLabel={nameOf(debtCustomerId)}
+                placeholder="Search for a customer…"
+              />
             </div>
 
             <div className="form-field">
@@ -1536,23 +1565,15 @@ export function CustomersPage() {
             {/* Customer Picker */}
             <div className="form-field">
               <label className="form-field__label">Customer *</label>
-              <select
-                className="form-select"
+              <SearchableSelect
+                id="payment-customer"
+                options={[] as SelectOption[]}
                 value={paymentCustomerId}
-                onChange={(e) => handleCustomerChangeInPayment(e.target.value)}
-                required
-              >
-                <option value="">Select a customer…</option>
-                {customers.map((c) => {
-                  const dMatch = debtors.find(d => d.customer_id === c.id);
-                  const bal = dMatch?.outstanding_balance ?? c.outstanding_balance ?? 0;
-                  return (
-                    <option key={c.id} value={c.id}>
-                      {c.name} {c.phone ? `(${c.phone})` : ''} — Outstanding: {fmt(bal)}
-                    </option>
-                  );
-                })}
-              </select>
+                onChange={handleCustomerChangeInPayment}
+                loadOptions={searchCustomers}
+                selectedLabel={nameOf(paymentCustomerId)}
+                placeholder="Search for a customer…"
+              />
             </div>
 
             {/* Allocation Method Selector */}

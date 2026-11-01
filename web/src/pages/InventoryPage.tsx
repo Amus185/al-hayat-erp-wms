@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
 import { ClipboardCheck, Plus, History } from 'lucide-react';
 import { apiGet, apiPost } from '../api/client';
-import { getCached, setCached } from '../api/cache';
 import { DataTable, type Column } from '../components/DataTable';
-import { FilterBar } from '../components/FilterBar';
+import { ListToolbar } from '../components/ListToolbar';
+import { useServerList } from '../utils/serverList';
+import { searchProducts } from '../utils/lookups';
 import { Modal } from '../components/Modal';
 import { FormField, InputField } from '../components/FormField';
 import { SearchInput } from '../components/SearchInput';
@@ -61,21 +62,32 @@ export function InventoryPage() {
   const { hasPermission } = useAuth();
 
   const [activeTab, setActiveTab] = useState<'stock' | 'transactions'>('stock');
-  const [stocks, setStocks] = useState<InventoryStock[]>([]);
-  const [transactions, setTransactions] = useState<InventoryTransaction[]>([]);
-  const [loading, setLoading] = useState(true);
+  // Both lists page, search, filter and sort on the server (every record reachable).
+  const stockList = useServerList<InventoryStock>('/inventory/stock', {
+    key: 'inventory-stock',
+    filters: ['location', 'categoryId', 'status', 'state'],
+    defaultSort: 'name',
+    defaultDir: 'asc',
+    enabled: activeTab === 'stock',
+  });
+  const txList = useServerList<InventoryTransaction>('/inventory/transactions', {
+    key: 'inventory-movements',
+    prefix: 'tx',
+    filters: ['type', 'location', 'dateFrom', 'dateTo'],
+    defaultSort: 'date',
+    defaultDir: 'desc',
+    enabled: activeTab === 'transactions',
+  });
+  const [txTypes, setTxTypes] = useState<string[]>([]);
+  const [productResults, setProductResults] = useState<{ id: string; label: string }[]>([]);
+  // where the product picked in Adjust Stock is stocked (for the "on hand" hints)
+  const [productStock, setProductStock] = useState<InventoryStock[]>([]);
 
   // Metadata for adjustment
-  const [productsList, setProductsList] = useState<any[]>([]);
   const [warehouses, setWarehouses] = useState<any[]>([]);
   const [branches, setBranches] = useState<any[]>([]);
   const [locations, setLocations] = useState<any[]>([]);
 
-  // FilterBar state
-  const [stockSearch, setStockSearch] = useState('');
-  const [stockFilters, setStockFilters] = useState<Record<string, string>>({ locType: '', warehouse: '', branch: '' });
-  const [txSearch, setTxSearch] = useState('');
-  const [txFilters, setTxFilters] = useState<Record<string, string>>({ txType: '' });
 
   // Adjustment Modal state
   const [isAdjustOpen, setIsAdjustOpen] = useState(false);
@@ -91,43 +103,22 @@ export function InventoryPage() {
     notes: '',
   });
 
-  const loadStock = async () => {
-    const cached = getCached<InventoryStock[]>('inventory:stock');
-    if (cached) { setStocks(cached); setLoading(false); } else { setLoading(true); }
-    try {
-      const data = await apiGet<InventoryStock[]>('/inventory/stock');
-      const rows = data || [];
-      setCached('inventory:stock', rows);
-      setStocks(rows);
-    } catch (err: any) {
-      addToast('error', err?.message || 'Failed to fetch inventory stock');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const loadTransactions = async () => {
-    const cached = getCached<InventoryTransaction[]>('inventory:transactions');
-    if (cached) { setTransactions(cached); setLoading(false); } else { setLoading(true); }
-    try {
-      const data = await apiGet<InventoryTransaction[]>('/inventory/transactions');
-      const rows = data || [];
-      setCached('inventory:transactions', rows);
-      setTransactions(rows);
-    } catch (err: any) {
-      addToast('error', err?.message || 'Failed to fetch inventory transactions');
-    } finally {
-      setLoading(false);
-    }
-  };
-
+  const loadStock = () => stockList.refresh();
   useEffect(() => {
-    if (activeTab === 'stock') {
-      loadStock();
-    } else {
-      loadTransactions();
-    }
-  }, [activeTab]);
+    if (activeTab === 'transactions' && !txTypes.length) apiGet<string[]>('/inventory/transaction-types').then((t) => setTxTypes(t || [])).catch(() => {});
+  }, [activeTab, txTypes.length]);
+
+  // Adjust Stock: products are searched on the server as the user types.
+  useEffect(() => {
+    if (!isAdjustOpen || adjustForm.productId || !productQuery.trim()) { setProductResults([]); return; }
+    let stale = false;
+    const t = setTimeout(() => {
+      searchProducts(productQuery.trim())
+        .then((rows) => { if (!stale) setProductResults(rows.map((p: any) => ({ id: p.id, label: `${p.name} (${p.sku}${p.barcode ? ' - ' + p.barcode : ''})` }))); })
+        .catch(() => {});
+    }, 250);
+    return () => { stale = true; clearTimeout(t); };
+  }, [productQuery, isAdjustOpen, adjustForm.productId]);
 
   const [categories, setCategories] = useState<any[]>([]);
 
@@ -147,20 +138,9 @@ export function InventoryPage() {
   useEffect(() => {
     async function loadHelperData() {
       try {
-        const prods = await apiGet<any[]>('/products');
         const whs = await apiGet<any[]>('/warehouses');
         const brs = await apiGet<any[]>('/branches');
         
-        // Map products
-        const productsListMapped: any[] = [];
-        prods?.forEach((p) => {
-          productsListMapped.push({
-            id: p.id,
-            label: `${p.name} (${p.sku} - ${p.barcode})`,
-          });
-        });
-
-        setProductsList(productsListMapped);
         setWarehouses(whs || []);
         setBranches(brs || []);
       } catch (err) {
@@ -241,11 +221,11 @@ export function InventoryPage() {
   };
 
   const stockColumns: Column<any>[] = [
-    { key: 'sku', label: 'Product ID', sortable: true },
-    { key: 'name', label: 'Product', sortable: true },
-    { key: 'category_name', label: 'Category', render: (row) => row.category_name || 'N/A' },
+    { key: 'sku', label: 'Product ID', sortable: true, sortKey: 'sku' },
+    { key: 'name', label: 'Product', sortable: true, sortKey: 'name' },
+    { key: 'category_name', label: 'Category', sortable: true, sortKey: 'category', render: (row) => row.category_name || 'N/A' },
     {
-      key: 'location',
+      key: 'location', sortable: true, sortKey: 'location',
       label: 'Location',
       render: (row) => {
         if (row.owner_type === 'WAREHOUSE') {
@@ -256,10 +236,10 @@ export function InventoryPage() {
         }
       },
     },
-    { key: 'quantity_on_hand', label: 'On Hand', sortable: true },
-    { key: 'quantity_reserved', label: 'Reserved', sortable: true },
+    { key: 'quantity_on_hand', label: 'On Hand', sortable: true, sortKey: 'onHand' },
+    { key: 'quantity_reserved', label: 'Reserved', sortable: true, sortKey: 'reserved' },
     {
-      key: 'available',
+      key: 'available', sortable: true, sortKey: 'available',
       label: 'Available',
       render: (row) => Number(row.quantity_on_hand || 0) - Number(row.quantity_reserved || 0),
     },
@@ -287,10 +267,10 @@ export function InventoryPage() {
   ];
 
   const transactionColumns: Column<InventoryTransaction>[] = [
-    { key: 'sku', label: 'Product ID', sortable: true },
-    { key: 'name', label: 'Product', sortable: true },
+    { key: 'sku', label: 'Product ID' },
+    { key: 'name', label: 'Product', sortable: true, sortKey: 'product' },
     {
-      key: 'transaction_type',
+      key: 'transaction_type', sortable: true, sortKey: 'type',
       label: 'Type',
       render: (row) => (
         <span style={{ fontWeight: '700', fontSize: '12px' }}>
@@ -310,12 +290,12 @@ export function InventoryPage() {
       },
     },
     {
-      key: 'user',
+      key: 'user', sortable: true, sortKey: 'user',
       label: 'User',
       render: (row) => row.user_name || 'System',
     },
     {
-      key: 'quantity',
+      key: 'quantity', sortable: true, sortKey: 'quantity',
       label: 'Qty Change',
       render: (row) => {
         const isPositive = ['GOODS_RECEIPT', 'TRANSFER_IN', 'ADJUSTMENT_POSITIVE'].includes(row.transaction_type);
@@ -326,41 +306,11 @@ export function InventoryPage() {
     },
     { key: 'notes', label: 'Notes', render: (row) => row.notes || '—' },
     {
-      key: 'created_at',
+      key: 'created_at', sortable: true, sortKey: 'date',
       label: 'Timestamp',
       render: (row) => new Date(row.created_at).toLocaleString(),
     },
   ];
-
-  const filteredStocks = stocks.filter((s: any) => {
-    const q = stockSearch.trim().toLowerCase();
-    if (q) {
-      const locName = s.owner_type === 'WAREHOUSE' ? (s.warehouse || '') : (s.branch || '');
-      const binStr = `${s.aisle || ''} ${s.rack || ''} ${s.shelf || ''} ${s.bin || ''}`;
-      const matches =
-        String(s.name || '').toLowerCase().includes(q) ||
-        String(s.sku || '').toLowerCase().includes(q) ||
-        String(s.barcode || '').toLowerCase().includes(q) ||
-        String(s.category_name || '').toLowerCase().includes(q) ||
-        locName.toLowerCase().includes(q) ||
-        binStr.toLowerCase().includes(q);
-      if (!matches) return false;
-    }
-    if (stockFilters.locType && s.owner_type !== stockFilters.locType) return false;
-    if (stockFilters.warehouse && s.warehouse_id !== stockFilters.warehouse) return false;
-    if (stockFilters.branch && s.branch_id !== stockFilters.branch) return false;
-    if (stockFilters.category && s.category_id !== stockFilters.category) return false;
-    if (stockFilters.status === 'active' && s.is_active === 0) return false;
-    if (stockFilters.status === 'inactive' && s.is_active !== 0) return false;
-    return true;
-  });
-
-  const filteredTransactions = transactions.filter((t) => {
-    const q = txSearch.trim().toLowerCase();
-    if (q && !String(t.name || '').toLowerCase().includes(q) && !String(t.sku || '').toLowerCase().includes(q) && !String((t as any).barcode || '').toLowerCase().includes(q)) return false;
-    if (txFilters.txType && t.transaction_type !== txFilters.txType) return false;
-    return true;
-  });
 
   const tabItems = [
     { key: 'stock', label: 'Stock Ledger' },
@@ -391,83 +341,67 @@ export function InventoryPage() {
       <section className="panel">
         {activeTab === 'stock' ? (
           <>
-            <FilterBar
-              searchValue={stockSearch}
-              onSearchChange={setStockSearch}
-              searchPlaceholder="Search by name, SKU, barcode, category, location…"
+            <ListToolbar
+              id="stock-toolbar"
+              list={stockList}
+              searchPlaceholder="Search by product name, SKU or barcode…"
               filters={[
                 {
-                  key: 'locType',
-                  label: 'All Location Types',
+                  key: 'location',
+                  label: 'All locations',
                   options: [
-                    { value: 'WAREHOUSE', label: 'Warehouse' },
-                    { value: 'BRANCH', label: 'Branch' },
+                    ...warehouses.map((w: any) => ({ value: `W:${w.id}`, label: `Warehouse: ${w.name}` })),
+                    ...branches.map((b: any) => ({ value: `B:${b.id}`, label: `Branch: ${b.name}` })),
                   ],
                 },
-                {
-                  key: 'warehouse',
-                  label: 'All Warehouses',
-                  options: warehouses.map((w: any) => ({ value: w.id, label: w.name })),
-                },
-                {
-                  key: 'branch',
-                  label: 'All Branches',
-                  options: branches.map((b: any) => ({ value: b.id, label: b.name })),
-                },
-                {
-                  key: 'category',
-                  label: 'All Categories',
-                  options: categories.map((c: any) => ({ value: c.id, label: c.name })),
-                },
-                {
-                  key: 'status',
-                  label: 'All Statuses',
-                  options: [
-                    { value: 'active', label: 'Active' },
-                    { value: 'inactive', label: 'Inactive' },
-                  ],
-                },
+                { key: 'categoryId', label: 'All categories', options: categories.map((c: any) => ({ value: c.id, label: c.name })) },
+                { key: 'state', label: 'Any stock level', options: [{ value: 'low', label: 'Low (at or below reorder level)' }, { value: 'reserved', label: 'Has reserved units' }] },
+                { key: 'status', label: 'Active & inactive', options: [{ value: 'active', label: 'Active products' }, { value: 'inactive', label: 'Inactive products' }] },
               ]}
-              filterValues={stockFilters}
-              onFilterChange={(key, val) => setStockFilters(prev => ({ ...prev, [key]: val }))}
             />
+            {stockList.totals && stockList.total > 0 && (
+              <div className="list-summary">
+                <span>Products: <strong>{stockList.totals.products?.toLocaleString()}</strong></span>
+                <span>Units on hand: <strong>{stockList.totals.units?.toLocaleString()}</strong></span>
+                <span>Reserved: <strong>{stockList.totals.reserved?.toLocaleString()}</strong></span>
+                {stockList.totals.value !== undefined && <span>Value at cost: <strong>${Number(stockList.totals.value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong></span>}
+              </div>
+            )}
             <DataTable
+              id="stock-table"
               columns={stockColumns}
-              data={filteredStocks}
+              data={stockList.items}
+              server={stockList}
               keyExtractor={(row) => row.id}
-              loading={loading}
-              emptyMessage="No stock levels match your filters"
+              emptyMessage={stockList.activeFilters ? 'No stock matches your filters' : 'No stock recorded yet'}
             />
           </>
         ) : (
           <>
-            <FilterBar
-              searchValue={txSearch}
-              onSearchChange={setTxSearch}
-              searchPlaceholder="Search by product name or SKU…"
+            <ListToolbar
+              id="movements-toolbar"
+              list={txList}
+              searchPlaceholder="Search by product, SKU, barcode, reference or note…"
+              dateRange
               filters={[
+                { key: 'type', label: 'All movement types', options: txTypes.map((t) => ({ value: t, label: t.replace(/_/g, ' ').toLowerCase().replace(/^./, (c) => c.toUpperCase()) })) },
                 {
-                  key: 'txType',
-                  label: 'All Transaction Types',
+                  key: 'location',
+                  label: 'All locations',
                   options: [
-                    { value: 'PURCHASE_RECEIPT', label: 'Purchase Receipt' },
-                    { value: 'ADJUSTMENT_POSITIVE', label: 'Adjustment (+)' },
-                    { value: 'ADJUSTMENT_NEGATIVE', label: 'Adjustment (-)' },
-                    { value: 'TRANSFER_OUT', label: 'Transfer Out' },
-                    { value: 'TRANSFER_IN', label: 'Transfer In' },
-                    { value: 'SALE', label: 'Sale' },
+                    ...warehouses.map((w: any) => ({ value: `W:${w.id}`, label: `Warehouse: ${w.name}` })),
+                    ...branches.map((b: any) => ({ value: `B:${b.id}`, label: `Branch: ${b.name}` })),
                   ],
                 },
               ]}
-              filterValues={txFilters}
-              onFilterChange={(key, val) => setTxFilters(prev => ({ ...prev, [key]: val }))}
             />
             <DataTable
+              id="movements-table"
               columns={transactionColumns}
-              data={filteredTransactions}
+              data={txList.items}
+              server={txList}
               keyExtractor={(row) => row.id}
-              loading={loading}
-              emptyMessage="No transaction history matches your filters"
+              emptyMessage={txList.activeFilters ? 'No movements match your filters' : 'No stock movements yet'}
             />
           </>
         )}
@@ -504,13 +438,18 @@ export function InventoryPage() {
                       overflowY: 'auto',
                     }}
                   >
-                    {productsList
-                      .filter((p) => p.label.toLowerCase().includes(productQuery.toLowerCase()))
+                    {productResults
                       .map((p) => (
                         <div
                           key={p.id}
-                          onClick={() => {
-                            const activeStock = stocks.find(s => s.product_id === p.id && s.quantity_on_hand > 0) || stocks.find(s => s.product_id === p.id);
+                          onClick={async () => {
+                            setAdjustForm((prev) => ({ ...prev, productId: p.id }));
+                            setProductQuery(p.label);
+                            // where this product is stocked (any page): preselect that location
+                            const rows = await apiGet<{ items: InventoryStock[] }>('/inventory/stock', { page: 1, pageSize: 25, productId: p.id, sort: 'onHand', dir: 'desc' })
+                              .then((r) => r.items).catch(() => [] as InventoryStock[]);
+                            setProductStock(rows);
+                            const activeStock = rows.find(s => s.quantity_on_hand > 0) || rows[0];
                             if (activeStock) {
                               if (activeStock.owner_type === 'WAREHOUSE') {
                                 setAdjustForm((prev) => ({
@@ -548,7 +487,7 @@ export function InventoryPage() {
                           <strong>{p.label}</strong>
                         </div>
                       ))}
-                    {productsList.filter((p) => p.label.toLowerCase().includes(productQuery.toLowerCase())).length === 0 && (
+                    {productResults.length === 0 && (
                       <div style={{ padding: '12px', color: '#667066', fontSize: '13px', textAlign: 'center' }}>
                         No matching product found
                       </div>
@@ -599,7 +538,7 @@ export function InventoryPage() {
                 <FormField label="Select Warehouse">
                   <SearchableSelect
                     options={warehouses.map((w) => {
-                      const stockItem = stocks.find(s => s.product_id === adjustForm.productId && s.warehouse_id === w.id);
+                      const stockItem = productStock.find(s => s.product_id === adjustForm.productId && s.warehouse_id === w.id);
                       const qtyBadge = stockItem ? ` (${stockItem.quantity_on_hand} on hand)` : '';
                       return { value: w.id, label: `${w.name}${qtyBadge}` };
                     })}
@@ -622,7 +561,7 @@ export function InventoryPage() {
               <FormField label="Select Branch">
                 <SearchableSelect
                   options={branches.map((b) => {
-                    const stockItem = stocks.find(s => s.product_id === adjustForm.productId && s.branch_id === b.id);
+                    const stockItem = productStock.find(s => s.product_id === adjustForm.productId && s.branch_id === b.id);
                     const qtyBadge = stockItem ? ` (${stockItem.quantity_on_hand} on hand)` : '';
                     return { value: b.id, label: `${b.name}${qtyBadge}` };
                   })}

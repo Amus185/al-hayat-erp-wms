@@ -5,6 +5,7 @@ import { authMiddleware, requirePermissions, isAdminUser } from '../middleware/a
 import { resolveBranchScope, resolveWriteBranch, branchSql, inScope, ScopeError, type BranchScope } from '../services/branch-scope';
 import { logAudit, createAuditLogStmt } from '../services/audit';
 import { releaseReservationsStmt, returnWebQuantityStmt } from '../services/storefront';
+import { csvResponse, dateRange, likeTerm, listRequest, pagedResponse, pagedRows, type ListOptions, type ListRequest } from '../services/listing';
 import {
   prepareSaleJournalEntry,
   prepareCustomerPaymentJournalEntry,
@@ -83,7 +84,91 @@ export async function calculateCustomerFinancials(db: any, customerId: string, s
 // ──────────────────────────────────────────────────────────────────────
 // CUSTOMERS
 // ──────────────────────────────────────────────────────────────────────
+// ── Customers list, paged on the server ──────────────────────────────────
+// Per-customer totals are computed once per table (grouped), not per row.
+const CUSTOMER_LIST: ListOptions = {
+  sortable: { name: 'name', created: 'created_at', orders: 'total_orders', spent: 'total_spent', balance: 'outstanding_balance', phone: 'phone' },
+  defaultSort: 'created', defaultDir: 'desc', tieBreaker: 'id',
+};
+
+async function listCustomers(c: any, r: ListRequest) {
+  const scope = await resolveBranchScope(c);
+  const q = (k: string) => (c.req.query(k) || '').trim();
+  const withSql = `
+    WITH so_agg AS (
+      SELECT so.customer_id,
+             COUNT(*) AS total_orders,
+             SUM(CASE WHEN i.id IS NOT NULL THEN (COALESCE(i.total_amount, 0) - COALESCE(i.discount_amount, 0)) + COALESCE(so.installation_fee, 0)
+                      ELSE COALESCE(lt.total, 0) + COALESCE(so.installation_fee, 0) END) AS total_spent,
+             SUM(CASE WHEN i.id IS NOT NULL AND i.status != 'CANCELLED'
+                      THEN GREATEST(0, (COALESCE(i.total_amount, 0) - COALESCE(i.discount_amount, 0) + COALESCE(so.installation_fee, 0)) - COALESCE(pay.paid, 0))
+                      ELSE 0 END) AS unpaid_sales_balance,
+             MAX(so.created_at) AS last_order_at
+      FROM sales_orders so
+      LEFT JOIN invoices i ON i.sales_order_id = so.id
+      LEFT JOIN LATERAL (SELECT SUM(ip.amount) AS paid FROM invoice_payments ip WHERE ip.invoice_id = i.id) pay ON TRUE
+      LEFT JOIN LATERAL (SELECT SUM(sol.line_total) AS total FROM sales_order_lines sol WHERE sol.sales_order_id = so.id) lt ON TRUE
+      WHERE so.status != 'CANCELLED' ${branchSql(scope, 'so.branch_id')}
+      GROUP BY so.customer_id
+    ), debt_agg AS (
+      SELECT cd.customer_id, SUM(cd.remaining_balance) AS unpaid_manual_balance
+      FROM customer_debts cd WHERE cd.status != 'CANCELLED' ${branchSql(scope, 'cd.branch_id')}
+      GROUP BY cd.customer_id
+    ), pay_agg AS (
+      SELECT cp.customer_id, SUM(cp.amount) AS unallocated_payments
+      FROM customer_payments cp WHERE cp.allocation_type = 'ACCOUNT' ${branchSql(scope, 'cp.branch_id')}
+      GROUP BY cp.customer_id
+    ), cust AS (
+      SELECT cu.*,
+             COALESCE(sa.total_orders, 0)::int AS total_orders,
+             COALESCE(sa.total_spent, 0) AS total_spent,
+             COALESCE(sa.unpaid_sales_balance, 0) AS unpaid_sales_balance,
+             COALESCE(da.unpaid_manual_balance, 0) AS unpaid_manual_balance,
+             COALESCE(pa.unallocated_payments, 0) AS unallocated_payments,
+             GREATEST(0, COALESCE(sa.unpaid_sales_balance, 0) + COALESCE(da.unpaid_manual_balance, 0) - COALESCE(pa.unallocated_payments, 0)) AS outstanding_balance,
+             sa.last_order_at
+      FROM customers cu
+      LEFT JOIN so_agg sa ON sa.customer_id = cu.id
+      LEFT JOIN debt_agg da ON da.customer_id = cu.id
+      LEFT JOIN pay_agg pa ON pa.customer_id = cu.id
+    )`;
+  const where: string[] = [];
+  const params: unknown[] = [];
+  const term = q('q') || q('search');
+  if (term) {
+    const t = likeTerm(term);
+    // phone numbers are matched on their digits too ("063 400 8221" finds "0634008221")
+    const digits = term.replace(/\D/g, '');
+    where.push(`(name ILIKE ? OR email ILIKE ? OR address ILIKE ? OR COALESCE(phone, '') ILIKE ?${digits.length >= 3 ? " OR regexp_replace(COALESCE(phone, ''), '\\D', '', 'g') LIKE ?" : ''})`);
+    params.push(t, t, t, t);
+    if (digits.length >= 3) params.push(`%${digits}%`);
+  }
+  if (q('balance') === 'owing') where.push('outstanding_balance > 0.005');
+  if (q('balance') === 'clear') where.push('outstanding_balance <= 0.005');
+  if (q('activity') === 'never') where.push('total_orders = 0');
+  if (q('activity') === 'buyers') where.push('total_orders > 0');
+  dateRange(c, 'created_at', where, params);
+  const base = `FROM cust ${where.length ? 'WHERE ' + where.join(' AND ') : ''}`;
+  const { rows, total } = await pagedRows(c.env.DB, '*', base, params, r, withSql);
+  if (r.csv) {
+    return csvResponse(c, 'customers', [
+      { label: 'Name', value: (x: any) => x.name },
+      { label: 'Phone', value: (x: any) => x.phone },
+      { label: 'Email', value: (x: any) => x.email },
+      { label: 'Address', value: (x: any) => x.address },
+      { label: 'Orders', value: (x: any) => x.total_orders },
+      { label: 'Total spent', value: (x: any) => Number(x.total_spent).toFixed(2) },
+      { label: 'Outstanding balance', value: (x: any) => Number(x.outstanding_balance).toFixed(2) },
+      { label: 'Customer since', value: (x: any) => String(x.created_at instanceof Date ? x.created_at.toISOString() : x.created_at).slice(0, 10) },
+    ], rows);
+  }
+  const sum = await c.env.DB.prepare(`${withSql} SELECT COALESCE(SUM(outstanding_balance), 0) AS owed, COUNT(*) FILTER (WHERE outstanding_balance > 0.005)::int AS owing ${base}`).bind(...params).first() as any;
+  return pagedResponse(c, r, rows, total, { totals: { outstanding: Math.round(Number(sum?.owed || 0) * 100) / 100, customersOwing: Number(sum?.owing || 0) } });
+}
+
 sales.get('/customers', async (c) => {
+  const listReq = listRequest(c, CUSTOMER_LIST);
+  if (listReq.paged) return listCustomers(c, listReq);
   const scope = await resolveBranchScope(c);
   const query = `
     SELECT 
@@ -805,8 +890,172 @@ sales.get('/payments/:receiptNumber/receipt', async (c) => {
 
 // ──────────────────────────────────────────────────────────────────────
 // ORDERS — LIST & GET
+/** Effective status, payment status and balance of an order row (list and export). */
+function enrichOrderRow(row: any) {
+  const installFee = Number(row.installation_fee || 0);
+  const isPickup = (row.fulfillment_type || 'DELIVERY').toUpperCase() === 'PICKUP';
+  const computedDeliveryStatus = isPickup ? (row.status === 'DRAFT' ? null : 'DELIVERED') : row.delivery_status;
+  const effectiveStatus = isPickup
+    ? (row.status === 'DRAFT' ? 'DRAFT' : 'DELIVERED')
+    : (row.delivery_status === 'DELIVERED' ? 'DELIVERED' : row.status);
+
+  if (!row.invoice_id) {
+    return {
+      ...row,
+      status: effectiveStatus,
+      delivery_status: computedDeliveryStatus,
+      fulfillment_type: row.fulfillment_type || 'DELIVERY',
+      installation_fee: installFee,
+      installer_name: row.installer_name || null,
+      installation_status: row.installation_status || 'NONE',
+      payment_status: null,
+      balance: null,
+    };
+  }
+  const merchandiseNet = Math.max(0, Number(row.invoice_total || 0) - Number(row.invoice_discount || 0));
+  const netTotal = merchandiseNet + installFee;
+  const amountPaid = Number(row.amount_paid || 0);
+  const balance = Math.max(0, netTotal - amountPaid);
+  let payment_status = 'UNPAID';
+  if (amountPaid >= netTotal && netTotal > 0) payment_status = 'PAID';
+  else if (amountPaid > 0) payment_status = 'PARTIALLY_PAID';
+  return {
+    ...row,
+    status: effectiveStatus,
+    delivery_status: computedDeliveryStatus,
+    fulfillment_type: row.fulfillment_type || 'DELIVERY',
+    installation_fee: installFee,
+    installer_name: row.installer_name || null,
+    installation_status: row.installation_status || 'NONE',
+    merchandise_total: merchandiseNet,
+    net_total: netTotal,
+    balance,
+    payment_status,
+  };
+}
+
+// ── Sales orders list, paged on the server ───────────────────────────────
+// Status and payment status are computed in SQL (the same rules as
+// enrichOrderRow), so the server can filter, sort and count by them.
+const SALES_LIST: ListOptions = {
+  sortable: {
+    date: 'created_at', number: 'order_number', customer: 'customer_name', branch: 'branch_name',
+    total: 'value_total', balance: 'balance_calc', status: 'effective_status', payment: 'payment_status_calc',
+  },
+  defaultSort: 'date', defaultDir: 'desc', tieBreaker: 'id',
+};
+
+async function listSalesOrders(c: any, r: ListRequest, scopedBranchId: string | null) {
+  const q = (k: string) => (c.req.query(k) || '').trim();
+  const scope: string[] = [];
+  const scopeParams: unknown[] = [];
+  if (scopedBranchId) { scope.push('so.branch_id = ?'); scopeParams.push(scopedBranchId); }
+  else if (q('branchId')) { scope.push('so.branch_id = ?'); scopeParams.push(q('branchId')); }
+  const customer = q('customerId') || q('customer_id');
+  if (customer) { scope.push('so.customer_id = ?'); scopeParams.push(customer); }
+
+  const withSql = `
+    WITH o AS (
+      SELECT so.*, c.name AS customer_name, c.phone AS customer_phone, c.address AS customer_address, c.city AS customer_city,
+             b.name AS branch_name, i.id AS invoice_id,
+             i.total_amount AS invoice_total, i.discount_amount AS invoice_discount, i.status AS invoice_status,
+             COALESCE(pay.paid, 0) AS amount_paid,
+             d.status AS delivery_status, d.id AS delivery_id, d.delivery_number, d.delivered_at, d.total_boxes,
+             COALESCE(lt.total, 0) AS lines_total,
+             CASE
+               WHEN UPPER(COALESCE(so.fulfillment_type, 'DELIVERY')) = 'PICKUP' THEN CASE WHEN so.status = 'DRAFT' THEN 'DRAFT' ELSE 'DELIVERED' END
+               WHEN d.status = 'DELIVERED' THEN 'DELIVERED'
+               ELSE so.status
+             END AS effective_status,
+             CASE WHEN i.id IS NULL THEN NULL
+                  ELSE GREATEST(0, COALESCE(i.total_amount, 0) - COALESCE(i.discount_amount, 0)) + COALESCE(so.installation_fee, 0)
+             END AS net_total_calc
+      FROM sales_orders so
+      LEFT JOIN customers c ON c.id = so.customer_id
+      JOIN branches b ON b.id = so.branch_id
+      LEFT JOIN invoices i ON i.sales_order_id = so.id
+      LEFT JOIN LATERAL (SELECT SUM(ip.amount) AS paid FROM invoice_payments ip WHERE ip.invoice_id = i.id) pay ON TRUE
+      LEFT JOIN LATERAL (SELECT SUM(sol.line_total) AS total FROM sales_order_lines sol WHERE sol.sales_order_id = so.id) lt ON TRUE
+      LEFT JOIN LATERAL (
+        SELECT dd.status, dd.id, dd.delivery_number, dd.delivered_at, dd.total_boxes
+        FROM deliveries dd WHERE dd.sales_order_id = so.id AND dd.status != 'CANCELLED'
+        ORDER BY dd.created_at DESC LIMIT 1
+      ) d ON TRUE
+      ${scope.length ? 'WHERE ' + scope.join(' AND ') : ''}
+    ), p AS (
+      SELECT o.*,
+             CASE WHEN net_total_calc IS NULL THEN NULL
+                  WHEN amount_paid >= net_total_calc AND net_total_calc > 0 THEN 'PAID'
+                  WHEN amount_paid > 0 THEN 'PARTIALLY_PAID'
+                  ELSE 'UNPAID' END AS payment_status_calc,
+             COALESCE(net_total_calc, lines_total) AS value_total,
+             CASE WHEN net_total_calc IS NULL THEN 0 ELSE GREATEST(0, net_total_calc - amount_paid) END AS balance_calc
+      FROM o
+    )`;
+
+  // Filters other than status (the status tabs show counts across them).
+  const where: string[] = [];
+  const params: unknown[] = [];
+  const term = q('q') || q('search');
+  if (term) {
+    where.push('(order_number ILIKE ? OR customer_name ILIKE ? OR customer_phone ILIKE ?)');
+    const t = likeTerm(term);
+    params.push(t, t, t);
+  }
+  if (q('paymentStatus') === 'NOT_INVOICED') where.push('payment_status_calc IS NULL');
+  else if (q('paymentStatus')) { where.push('payment_status_calc = ?'); params.push(q('paymentStatus')); }
+  if (q('fulfillment')) { where.push("UPPER(COALESCE(fulfillment_type, 'DELIVERY')) = ?"); params.push(q('fulfillment').toUpperCase()); }
+  dateRange(c, 'created_at', where, params);
+
+  const statusWhere = [...where];
+  const statusParams = [...params];
+  if (q('status') && q('status') !== 'ALL') { statusWhere.push('effective_status = ?'); statusParams.push(q('status')); }
+  const base = `FROM p ${statusWhere.length ? 'WHERE ' + statusWhere.join(' AND ') : ''}`;
+
+  const { rows, total } = await pagedRows(c.env.DB, '*', base, [...scopeParams, ...statusParams], r, withSql);
+  const items = rows.map(enrichOrderRow);
+
+  if (r.csv) {
+    return csvResponse(c, 'sales-orders', [
+      { label: 'Order', value: (o: any) => o.order_number },
+      { label: 'Date', value: (o: any) => String(o.created_at instanceof Date ? o.created_at.toISOString() : o.created_at).slice(0, 10) },
+      { label: 'Customer', value: (o: any) => o.customer_name },
+      { label: 'Phone', value: (o: any) => o.customer_phone },
+      { label: 'Branch', value: (o: any) => o.branch_name },
+      { label: 'Fulfillment', value: (o: any) => o.fulfillment_type },
+      { label: 'Status', value: (o: any) => o.status },
+      { label: 'Payment', value: (o: any) => o.payment_status ?? 'NOT INVOICED' },
+      { label: 'Total', value: (o: any) => Number(o.net_total ?? o.lines_total ?? 0).toFixed(2) },
+      { label: 'Paid', value: (o: any) => Number(o.amount_paid ?? 0).toFixed(2) },
+      { label: 'Balance', value: (o: any) => Number(o.balance ?? 0).toFixed(2) },
+    ], items);
+  }
+
+  // Counts per status (for the tabs) and money totals, across the same filters.
+  const { results: grouped } = await c.env.DB.prepare(`
+    ${withSql}
+    SELECT effective_status AS status, COUNT(*)::int AS n, COALESCE(SUM(value_total), 0) AS value, COALESCE(SUM(balance_calc), 0) AS balance
+    FROM p ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+    GROUP BY effective_status
+  `).bind(...scopeParams, ...params).all();
+  const counts: Record<string, number> = { ALL: 0 };
+  let value = 0;
+  let outstanding = 0;
+  for (const g of (grouped || []) as any[]) {
+    counts[g.status] = Number(g.n);
+    counts.ALL += Number(g.n);
+    if (!q('status') || q('status') === 'ALL' || q('status') === g.status) {
+      value += Number(g.value);
+      outstanding += Number(g.balance);
+    }
+  }
+  return pagedResponse(c, r, items, total, { counts, totals: { value: Math.round(value * 100) / 100, outstanding: Math.round(outstanding * 100) / 100 } });
+}
+
 // ──────────────────────────────────────────────────────────────────────
 sales.get('/orders', async (c) => {
+  const listReq = listRequest(c, SALES_LIST);
+  if (listReq.paged) return listSalesOrders(c, listReq, await scopedSalesBranch(c));
   const { search, status, paymentStatus, dateFrom, dateTo, customer_id, customerId } = c.req.query();
   const payload = c.get('jwtPayload');
   const scopedBranchId = await scopedSalesBranch(c);
@@ -870,48 +1119,7 @@ sales.get('/orders', async (c) => {
   const { results } = params.length > 0 ? await stmt.bind(...params).all() : await stmt.all();
 
   // Compute payment_status and balance for each row that has an invoice
-  const enriched = (results || []).map((row: any) => {
-    const installFee = Number(row.installation_fee || 0);
-    const isPickup = (row.fulfillment_type || 'DELIVERY').toUpperCase() === 'PICKUP';
-    const computedDeliveryStatus = isPickup ? (row.status === 'DRAFT' ? null : 'DELIVERED') : row.delivery_status;
-    const effectiveStatus = isPickup
-      ? (row.status === 'DRAFT' ? 'DRAFT' : 'DELIVERED')
-      : (row.delivery_status === 'DELIVERED' ? 'DELIVERED' : row.status);
-
-    if (!row.invoice_id) {
-      return {
-        ...row,
-        status: effectiveStatus,
-        delivery_status: computedDeliveryStatus,
-        fulfillment_type: row.fulfillment_type || 'DELIVERY',
-        installation_fee: installFee,
-        installer_name: row.installer_name || null,
-        installation_status: row.installation_status || 'NONE',
-        payment_status: null,
-        balance: null,
-      };
-    }
-    const merchandiseNet = Math.max(0, Number(row.invoice_total || 0) - Number(row.invoice_discount || 0));
-    const netTotal = merchandiseNet + installFee;
-    const amountPaid = Number(row.amount_paid || 0);
-    const balance = Math.max(0, netTotal - amountPaid);
-    let payment_status = 'UNPAID';
-    if (amountPaid >= netTotal && netTotal > 0) payment_status = 'PAID';
-    else if (amountPaid > 0) payment_status = 'PARTIALLY_PAID';
-    return {
-      ...row,
-      status: effectiveStatus,
-      delivery_status: computedDeliveryStatus,
-      fulfillment_type: row.fulfillment_type || 'DELIVERY',
-      installation_fee: installFee,
-      installer_name: row.installer_name || null,
-      installation_status: row.installation_status || 'NONE',
-      merchandise_total: merchandiseNet,
-      net_total: netTotal,
-      balance,
-      payment_status,
-    };
-  });
+  const enriched = (results || []).map(enrichOrderRow);
 
   // Client-side filter by payment status (computed field — cannot be done in SQL easily)
   if (paymentStatus && paymentStatus !== 'ALL') {

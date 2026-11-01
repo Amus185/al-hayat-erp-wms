@@ -3,13 +3,91 @@ import { Env, uuidv4 } from '../db';
 import { authMiddleware, requirePermissions, isAdminUser } from '../middleware/auth';
 import { logAudit, createAuditLogStmt } from '../services/audit';
 import { prepareOpeningStock, type OpeningStockItem } from '../services/accounting-service';
+import { csvResponse, likeTerm, listRequest, pagedResponse, pagedRows, type ListOptions, type ListRequest } from '../services/listing';
 
 const products = new Hono<{ Bindings: Env; Variables: { jwtPayload: any } }>();
 
 products.use('/*', authMiddleware);
 
+// ── Products list, paged on the server ───────────────────────────────────
+const PRODUCT_LIST: ListOptions = {
+  sortable: {
+    sku: 'p.sku', name: 'p.name', category: 'c.name', brand: 'b.name', cost: 'p.cost_price',
+    price: 'p.selling_price', stock: 'stock.on_hand', created: 'p.created_at', status: 'COALESCE(p.is_active, 1)',
+  },
+  defaultSort: 'name', defaultDir: 'asc', tieBreaker: 'p.id',
+};
+
+async function listProducts(c: any, r: ListRequest) {
+  const q = (k: string) => (c.req.query(k) || '').trim();
+  const where: string[] = [];
+  const params: unknown[] = [];
+  const term = q('q') || q('search');
+  if (term) {
+    const t = likeTerm(term);
+    where.push('(p.name ILIKE ? OR p.sku ILIKE ? OR COALESCE(p.barcode, \'\') ILIKE ? OR COALESCE(p.description, \'\') ILIKE ?)');
+    params.push(t, t, t, t);
+  }
+  if (q('categoryId')) { where.push('p.category_id = ?'); params.push(q('categoryId')); }
+  if (q('brandId')) { where.push('p.brand_id = ?'); params.push(q('brandId')); }
+  const status = q('status');
+  if (status === 'active') where.push('COALESCE(p.is_active, 1) = 1');
+  if (status === 'inactive') where.push('COALESCE(p.is_active, 1) = 0');
+  if (q('type')) { where.push("COALESCE(p.product_type, 'STANDARD') = ?"); params.push(q('type')); }
+  if (q('stock') === 'in') where.push('COALESCE(stock.on_hand, 0) > 0');
+  if (q('stock') === 'out') where.push('COALESCE(stock.on_hand, 0) <= 0');
+  if (q('stock') === 'low') where.push('COALESCE(p.reorder_level, 0) > 0 AND COALESCE(stock.on_hand, 0) <= p.reorder_level');
+  if (q('onShop') === '1') where.push('p.is_published = 1');
+  if (q('onShop') === '0') where.push('COALESCE(p.is_published, 0) = 0');
+  const base = `
+    FROM products p
+    LEFT JOIN categories c ON p.category_id = c.id
+    LEFT JOIN brands b ON p.brand_id = b.id
+    LEFT JOIN (SELECT product_id, SUM(quantity_on_hand) AS on_hand FROM inventory_stock GROUP BY product_id) stock ON stock.product_id = p.id
+    ${where.length ? 'WHERE ' + where.join(' AND ') : ''}`;
+  const { rows, total } = await pagedRows(c.env.DB,
+    `p.*, COALESCE(p.is_active, 1) AS is_active, COALESCE(p.product_type, 'STANDARD') AS product_type,
+     c.name AS category_name, b.name AS brand_name, COALESCE(stock.on_hand, 0)::int AS total_stock`,
+    base, params, r);
+  if (r.csv) {
+    return csvResponse(c, 'products', [
+      { label: 'SKU', value: (x: any) => x.sku },
+      { label: 'Name', value: (x: any) => x.name },
+      { label: 'Category', value: (x: any) => x.category_name },
+      { label: 'Brand', value: (x: any) => x.brand_name },
+      { label: 'Type', value: (x: any) => x.product_type },
+      { label: 'Cost price', value: (x: any) => Number(x.cost_price).toFixed(2) },
+      { label: 'Selling price', value: (x: any) => Number(x.selling_price).toFixed(2) },
+      { label: 'Stock (all locations)', value: (x: any) => x.total_stock },
+      { label: 'Active', value: (x: any) => (Number(x.is_active) === 1 ? 'Yes' : 'No') },
+    ], rows);
+  }
+  // Price tiers and bundle items for just this page.
+  const ids = rows.map((p: any) => p.id);
+  let tiers: any[] = [];
+  let groups: any[] = [];
+  if (ids.length) {
+    const ph = ids.map(() => '?').join(', ');
+    [tiers, groups] = await Promise.all([
+      c.env.DB.prepare(`SELECT * FROM product_price_tiers WHERE product_id IN (${ph}) ORDER BY price ASC`).bind(...ids).all().then((x: any) => x.results || []).catch(() => []),
+      c.env.DB.prepare(`
+        SELECT pgi.*, cp.name AS component_name, cp.sku AS component_sku
+        FROM product_group_items pgi JOIN products cp ON cp.id = pgi.component_product_id
+        WHERE pgi.parent_product_id IN (${ph})`).bind(...ids).all().then((x: any) => x.results || []).catch(() => []),
+    ]);
+  }
+  const items = rows.map((p: any) => ({
+    ...p,
+    price_tiers: tiers.filter((t) => t.product_id === p.id),
+    group_items: groups.filter((g) => g.parent_product_id === p.id),
+  }));
+  return pagedResponse(c, r, items, total);
+}
+
 products.get('/', async (c) => {
   const status = c.req.query('status'); // 'active' | 'inactive' | 'all'
+  const listReq = listRequest(c, PRODUCT_LIST);
+  if (listReq.paged) return listProducts(c, listReq);
   let query = `
     SELECT p.*, COALESCE(p.is_active, 1) AS is_active, COALESCE(p.product_type, 'STANDARD') AS product_type,
            c.name as category_name, b.name as brand_name
