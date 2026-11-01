@@ -81,7 +81,26 @@ async function listProducts(c: any, r: ListRequest) {
     price_tiers: tiers.filter((t) => t.product_id === p.id),
     group_items: groups.filter((g) => g.parent_product_id === p.id),
   }));
-  return pagedResponse(c, r, items, total);
+  // ?withStock=1 (sale/transfer forms): stock rows of these products and their
+  // bundle components, so availability is computed from complete data. Branch
+  // staff get their own branch's rows only, as on the stock list.
+  let stockRows: any[] = [];
+  if (q('withStock') === '1' && ids.length) {
+    const all = Array.from(new Set([...ids, ...groups.map((g: any) => g.component_product_id)]));
+    const ph = all.map(() => '?').join(', ');
+    const payload = c.get('jwtPayload');
+    const scoped = isAdminUser(payload) ? null : payload.branch_id;
+    const { results } = await c.env.DB.prepare(`
+      SELECT s.id, s.product_id, s.owner_type, s.warehouse_id, s.branch_id, s.warehouse_location_id,
+             s.quantity_on_hand, s.quantity_reserved, w.name AS warehouse, b.name AS branch
+      FROM inventory_stock s
+      LEFT JOIN warehouses w ON w.id = s.warehouse_id
+      LEFT JOIN branches b ON b.id = s.branch_id
+      WHERE s.product_id IN (${ph}) ${scoped ? "AND s.owner_type = 'BRANCH' AND s.branch_id = ?" : ''}
+    `).bind(...all, ...(scoped ? [scoped] : [])).all();
+    stockRows = (results || []) as any[];
+  }
+  return pagedResponse(c, r, items, total, q('withStock') === '1' ? { stockRows } : {});
 }
 
 products.get('/', async (c) => {

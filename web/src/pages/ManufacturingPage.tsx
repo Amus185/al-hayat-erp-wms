@@ -8,6 +8,7 @@ import { apiGet, apiPost } from '../api/client';
 import { DataTable, type Column } from '../components/DataTable';
 import { Tabs } from '../components/Tabs';
 import { Modal } from '../components/Modal';
+import { useProductCatalog } from '../utils/productCatalog';
 import { ModalLoading } from '../components/ModalLoading';
 import { useLatest } from '../utils/latest';
 import { InputField, TextareaField } from '../components/FormField';
@@ -119,7 +120,9 @@ export function ManufacturingPage() {
   const [stats, setStats] = useState<Stats>({ activeWorkOrders: 0, inProductionUnits: 0, completedThisMonth: 0, totalBoms: 0 });
   const [workOrders, setWorkOrders] = useState<WorkOrder[]>([]);
   const [boms, setBoms] = useState<BOM[]>([]);
-  const [products, setProducts] = useState<any[]>([]);
+  // Products are searched on the server in the pickers (every product reachable).
+  const catalog = useProductCatalog({ status: 'active' });
+  const products = catalog.items;
   const [warehouses, setWarehouses] = useState<any[]>([]);
   const [categories, setCategories] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -207,18 +210,16 @@ export function ManufacturingPage() {
   const loadData = async () => {
     try {
       setLoading(true);
-      const [statsRes, woRes, bomRes, prodRes, whRes, catRes] = await Promise.all([
+      const [statsRes, woRes, bomRes, whRes, catRes] = await Promise.all([
         apiGet<Stats>('/manufacturing/stats'),
         apiGet<WorkOrder[]>('/manufacturing/work-orders'),
         apiGet<BOM[]>('/manufacturing/boms'),
-        apiGet<any[]>('/products?status=active'),
         apiGet<any[]>('/warehouses'),
         apiGet<any[]>('/products/categories').catch(() => []),
       ]);
       setStats(statsRes || { activeWorkOrders: 0, inProductionUnits: 0, completedThisMonth: 0, totalBoms: 0 });
       setWorkOrders(woRes || []);
       setBoms(bomRes || []);
-      setProducts(prodRes || []);
       setWarehouses(whRes || []);
       setCategories(catRes || []);
     } catch (err: any) {
@@ -1010,10 +1011,9 @@ export function ManufacturingPage() {
                 Choose Catalog Product (Re-manufacturing) *
               </label>
               <SearchableSelect
-                options={products.map((p) => ({
-                  value: p.id,
-                  label: `${p.name} (${p.sku}) - Current Stock: ${p.total_stock || 0}`,
-                }))}
+                options={[]}
+                loadOptions={async (q) => (await catalog.search(q)).map((p) => ({ value: p.id, label: p.name, sublabel: `${p.sku} · in stock: ${p.total_stock ?? 0}` }))}
+                selectedLabel={products.find((p) => p.id === woForm.productId)?.name}
                 value={woForm.productId}
                 onChange={(val) => {
                   const matchedBom = boms.find((b) => b.product_id === val);
@@ -1236,7 +1236,9 @@ export function ManufacturingPage() {
                 Finished Product Output *
               </label>
               <SearchableSelect
-                options={products.map((p) => ({ value: p.id, label: `${p.name} (${p.sku})` }))}
+                options={[]}
+                loadOptions={async (q) => (await catalog.search(q)).map((p) => ({ value: p.id, label: p.name, sublabel: p.sku }))}
+                selectedLabel={products.find((p) => p.id === bomForm.productId)?.name}
                 value={bomForm.productId}
                 onChange={(val) => setBomForm((p) => ({ ...p, productId: val }))}
                 placeholder="Select output product..."
@@ -1279,10 +1281,8 @@ export function ManufacturingPage() {
 
             <div style={{ marginBottom: '12px' }}>
               <SearchableSelect
-                options={products.map((p) => ({
-                  value: p.id,
-                  label: `${p.name} (${p.sku}) - Cost: $${Number(p.cost_price || 0).toFixed(2)}`,
-                }))}
+                options={[]}
+                loadOptions={async (q) => (await catalog.search(q)).map((p) => ({ value: p.id, label: p.name, sublabel: `${p.sku} · cost $${Number(p.cost_price || 0).toFixed(2)}` }))}
                 value=""
                 onChange={(val) => { if (val) addBomMaterialLine(val); }}
                 placeholder="Search raw material / component to add..."

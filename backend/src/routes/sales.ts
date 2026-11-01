@@ -137,8 +137,9 @@ async function listCustomers(c: any, r: ListRequest) {
   const term = q('q') || q('search');
   if (term) {
     const t = likeTerm(term);
-    // phone numbers are matched on their digits too ("063 400 8221" finds "0634008221")
-    const digits = term.replace(/\D/g, '');
+    // A typed phone number is matched on its digits ("063 400 8221" finds
+    // "0634008221"); only when the term looks like a phone number, not a name.
+    const digits = /^[\d\s+()-]+$/.test(term) ? term.replace(/\D/g, '') : '';
     where.push(`(name ILIKE ? OR email ILIKE ? OR address ILIKE ? OR COALESCE(phone, '') ILIKE ?${digits.length >= 3 ? " OR regexp_replace(COALESCE(phone, ''), '\\D', '', 'g') LIKE ?" : ''})`);
     params.push(t, t, t, t);
     if (digits.length >= 3) params.push(`%${digits}%`);
@@ -953,6 +954,9 @@ async function listSalesOrders(c: any, r: ListRequest, scopedBranchId: string | 
   else if (q('branchId')) { scope.push('so.branch_id = ?'); scopeParams.push(q('branchId')); }
   const customer = q('customerId') || q('customer_id');
   if (customer) { scope.push('so.customer_id = ?'); scopeParams.push(customer); }
+  if (q('id')) { scope.push('so.id = ?'); scopeParams.push(q('id')); }
+  // exclude=DELIVERED: orders still to deliver (for the delivery picker)
+  const notDelivered = q('open') === 'delivery';
 
   const withSql = `
     WITH o AS (
@@ -1005,6 +1009,7 @@ async function listSalesOrders(c: any, r: ListRequest, scopedBranchId: string | 
   if (q('paymentStatus') === 'NOT_INVOICED') where.push('payment_status_calc IS NULL');
   else if (q('paymentStatus')) { where.push('payment_status_calc = ?'); params.push(q('paymentStatus')); }
   if (q('fulfillment')) { where.push("UPPER(COALESCE(fulfillment_type, 'DELIVERY')) = ?"); params.push(q('fulfillment').toUpperCase()); }
+  if (notDelivered) where.push("effective_status NOT IN ('DELIVERED', 'CANCELLED') AND UPPER(COALESCE(fulfillment_type, 'DELIVERY')) <> 'PICKUP'");
   dateRange(c, 'created_at', where, params);
 
   const statusWhere = [...where];

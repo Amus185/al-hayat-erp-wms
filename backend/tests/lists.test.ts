@@ -103,3 +103,11 @@ test('CSV export: whole filtered list, safe against spreadsheet formulas, limite
   const denied = await t.app.request('/api/v1/sales/customers?format=csv', { headers: { Authorization: `Bearer ${clerk.token}` } });
   assert.equal(denied.status, 403);
 });
+
+test('customer search: a name with a number is not drowned by phone-digit matches', async () => {
+  await t.q(`INSERT INTO customers (id, name, phone) SELECT 'nm-' || g, 'Namecheck ' || g, '0633' || lpad(g::text, 6, '0') FROM generate_series(1, 40) g`);
+  const res = await t.api('GET', '/sales/customers?page=1&q=Namecheck%2030');
+  assert.deepEqual(res.body.items.map((c: any) => c.name), ['Namecheck 30']);
+  const phone = await t.api('GET', `/sales/customers?page=1&q=${encodeURIComponent('0633 000 030')}`);
+  assert.deepEqual(phone.body.items.map((c: any) => c.name), ['Namecheck 30']);
+});

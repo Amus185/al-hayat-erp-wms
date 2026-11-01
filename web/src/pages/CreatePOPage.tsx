@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useMemo, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { PackagePlus, ArrowLeft, Plus, Trash2, Loader2 } from 'lucide-react';
 import { apiGet, apiPost } from '../api/client';
@@ -6,6 +6,7 @@ import { FormField, InputField, TextareaField } from '../components/FormField';
 import { SearchInput } from '../components/SearchInput';
 import { SearchableSelect } from '../components/SearchableSelect';
 import { ProductItemSelect, type SelectableProduct } from '../components/ProductItemSelect';
+import { useProductCatalog } from '../utils/productCatalog';
 import { Modal } from '../components/Modal';
 import { useToast } from '../contexts/ToastContext';
 
@@ -33,7 +34,15 @@ export function CreatePOPage() {
 
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
-  const [productsList, setProductsList] = useState<ProductSearchItem[]>([]);
+  // Products are searched on the server as the user types (every product reachable).
+  const catalog = useProductCatalog();
+  const productsList = useMemo<ProductSearchItem[]>(() => catalog.items.map((p) => ({
+    id: p.id,
+    sku: p.sku,
+    barcode: p.barcode || '',
+    productName: p.name,
+    costPrice: p.cost_price,
+  })), [catalog.items]);
 
   // Form states
   const [supplierId, setSupplierId] = useState('');
@@ -61,23 +70,10 @@ export function CreatePOPage() {
     try {
       const sups = await apiGet<Supplier[]>('/purchasing/suppliers');
       const whs = await apiGet<Warehouse[]>('/warehouses');
-      const products = await apiGet<any[]>('/products');
-      
+
       setSuppliers(sups || []);
       setWarehouses(whs || []);
 
-      // Build product search list
-      const flatList: ProductSearchItem[] = [];
-      products?.forEach((p) => {
-        flatList.push({
-          id: p.id,
-          sku: p.sku,
-          barcode: p.barcode || '',
-          productName: p.name,
-          costPrice: p.cost_price,
-        });
-      });
-      setProductsList(flatList);
     } catch (err) {
       console.error('Failed to load PO creation metadata', err);
     }
@@ -314,6 +310,8 @@ export function CreatePOPage() {
               priceLabel: 'Cost',
             }))}
             onSelect={addLine}
+            onSearch={catalog.search}
+            searching={catalog.searching}
             placeholder="Search / click to select variant to add to PO..."
             priceLabel="Cost"
             existingLines={lines.map((l) => ({ productId: l.productId, quantity: l.quantity }))}

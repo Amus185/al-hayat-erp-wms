@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   ShoppingCart, ArrowLeft, Plus, Trash2, Loader2, Wrench, Info,
@@ -7,6 +7,7 @@ import {
 import { apiGet, apiPost } from '../api/client';
 import { FormField, InputField, TextareaField } from '../components/FormField';
 import { SearchableSelect } from '../components/SearchableSelect';
+import { useProductCatalog } from '../utils/productCatalog';
 import { ProductItemSelect, type SelectableProduct } from '../components/ProductItemSelect';
 import { Modal } from '../components/Modal';
 import { useToast } from '../contexts/ToastContext';
@@ -65,8 +66,22 @@ export function CreateSalesOrderPage() {
 
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [branches, setBranches] = useState<Branch[]>([]);
-  const [products, setProducts] = useState<ProductLine[]>([]);
-  const [inventoryStocks, setInventoryStocks] = useState<StockRecord[]>([]);
+  // Products are searched on the server as the user types (every product
+  // reachable); their stock rows come along for the availability hints.
+  const catalog = useProductCatalog({ withStock: true, status: 'active' });
+  const products = useMemo<ProductLine[]>(() => catalog.items
+    .filter((p) => p.is_active !== 0)
+    .map((p) => ({
+      id: p.id,
+      sku: p.sku,
+      barcode: p.barcode,
+      name: p.name,
+      sellingPrice: Number(p.selling_price) || 0,
+      productType: p.product_type || 'STANDARD',
+      priceTiers: p.price_tiers || [],
+      groupItems: p.group_items || [],
+    })), [catalog.items]);
+  const inventoryStocks = catalog.stockRows as StockRecord[];
 
   // SweetAlert modal for stock limitation
   const [stockAlert, setStockAlert] = useState<{
@@ -132,35 +147,12 @@ export function CreateSalesOrderPage() {
   useEffect(() => {
     async function loadData() {
       try {
-        const [custs, brs, productsList, stockList] = await Promise.all([
-          apiGet<Customer[]>('/sales/customers'),
-          apiGet<Branch[]>('/branches'),
-          apiGet<any[]>('/products?status=active'),
-          apiGet<StockRecord[]>('/inventory/stock').catch(() => []),
-        ]);
-
-        setCustomers(custs || []);
+        const brs = await apiGet<Branch[]>('/branches');
         setBranches(brs || []);
-        setInventoryStocks(stockList || []);
 
         if (brs && brs.length > 0 && !branchId) {
           setBranchId(brs[0].id);
         }
-
-        const flatList: ProductLine[] = [];
-        (productsList || []).filter((p) => p.is_active !== 0).forEach((p) => {
-          flatList.push({
-            id: p.id,
-            sku: p.sku,
-            barcode: p.barcode,
-            name: p.name,
-            sellingPrice: Number(p.selling_price) || 0,
-            productType: p.product_type || 'STANDARD',
-            priceTiers: p.price_tiers || [],
-            groupItems: p.group_items || [],
-          });
-        });
-        setProducts(flatList);
       } catch (err) {
         console.error('Failed to load Sales Order creation metadata', err);
       }
@@ -184,8 +176,7 @@ export function CreateSalesOrderPage() {
       setIsInlineCustomerOpen(false);
       setNewCustomerForm({ name: '', phone: '', email: '', address: '' });
 
-      const updatedCusts = await apiGet<Customer[]>('/sales/customers');
-      setCustomers(updatedCusts || []);
+      setCustomers((prev) => [{ ...created, name: created.name || newCustomerForm.name } as Customer, ...prev.filter((c) => c.id !== created.id)]);
       setCustomerId(created.id);
     } catch (err: any) {
       addToast('error', err?.message || 'Failed to create customer');
@@ -507,13 +498,21 @@ export function CreateSalesOrderPage() {
               <div style={{ display: 'flex', gap: '6px' }}>
                 <div style={{ flex: 1 }}>
                   <SearchableSelect
-                    options={customers.map((c) => ({
-                      value: c.id,
-                      label: `${c.name}${c.outstanding_balance && c.outstanding_balance > 0 ? ` (Debt: $${Number(c.outstanding_balance).toFixed(2)})` : ''}`,
-                    }))}
+                    options={[]}
+                    loadOptions={async (q) => {
+                      // every customer is searchable; found ones are kept for the order summary
+                      const res = await apiGet<{ items: Customer[] }>('/sales/customers', { page: 1, pageSize: 25, q: q || undefined, sort: q ? 'name' : 'created', dir: q ? 'asc' : 'desc' });
+                      setCustomers((prev) => [...prev.filter((c) => !res.items.some((x) => x.id === c.id)), ...res.items]);
+                      return res.items.map((c) => ({
+                        value: c.id,
+                        label: `${c.name}${c.outstanding_balance && c.outstanding_balance > 0 ? ` (Debt: $${Number(c.outstanding_balance).toFixed(2)})` : ''}`,
+                        sublabel: c.phone || undefined,
+                      }));
+                    }}
+                    selectedLabel={customers.find((c) => c.id === customerId)?.name}
                     value={customerId}
                     onChange={setCustomerId}
-                    placeholder="Search or select customer..."
+                    placeholder="Search customer by name or phone..."
                   />
                 </div>
                 <button
@@ -694,6 +693,8 @@ export function CreateSalesOrderPage() {
             })}
             onSelect={addLine}
             onSelectProduct={addLine}
+            onSearch={catalog.search}
+            searching={catalog.searching}
             existingLines={lines.map((l) => ({ productId: l.productId, quantity: l.quantity }))}
             placeholder="Search products by name, SKU, or barcode..."
           />

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useMemo, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Truck, ArrowLeft, Plus, Trash2, Search, Loader2 } from 'lucide-react';
 import { apiGet, apiPost } from '../api/client';
@@ -6,6 +6,8 @@ import { FormField, InputField } from '../components/FormField';
 import { SearchInput } from '../components/SearchInput';
 import { SearchableSelect } from '../components/SearchableSelect';
 import { ProductItemSelect, type SelectableProduct } from '../components/ProductItemSelect';
+import { useProductCatalog } from '../utils/productCatalog';
+import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 
 interface Warehouse {
@@ -31,7 +33,11 @@ export function CreateTransferPage() {
 
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
   const [branches, setBranches] = useState<Branch[]>([]);
-  const [products, setProducts] = useState<ProductLine[]>([]);
+  // Products are searched on the server; their stock comes along so the
+  // picker shows what the source location has.
+  const catalog = useProductCatalog({ withStock: true, status: 'active' });
+  const { isAdmin, branchId: userBranchId } = useAuth();
+  const products = useMemo<ProductLine[]>(() => catalog.items.map((p) => ({ id: p.id, sku: p.sku, barcode: p.barcode, name: p.name })), [catalog.items]);
   
   // Selection state
   const [sourceType, setSourceType] = useState<'WAREHOUSE' | 'BRANCH'>('WAREHOUSE');
@@ -56,21 +62,10 @@ export function CreateTransferPage() {
       try {
         const whs = await apiGet<Warehouse[]>('/warehouses');
         const brs = await apiGet<Branch[]>('/branches');
-        const productsList = await apiGet<any[]>('/products');
-        
+
         setWarehouses(whs || []);
         setBranches(brs || []);
 
-        const flatList: ProductLine[] = [];
-        productsList?.forEach((p) => {
-          flatList.push({
-            id: p.id,
-            sku: p.sku,
-            barcode: p.barcode,
-            name: p.name,
-          });
-        });
-        setProducts(flatList);
       } catch (err) {
         console.error('Failed to load transfer metadata', err);
       }
@@ -302,13 +297,28 @@ export function CreateTransferPage() {
           <h3 style={{ margin: '0 0 14px', color: '#066006' }}>Items to Transfer</h3>
           
           <ProductItemSelect
-            products={products.map((p) => ({
-              id: p.id,
-              name: p.name,
-              sku: p.sku,
-              barcode: p.barcode,
-            }))}
+            products={products.map((p) => {
+              // available at the chosen source (on hand - reserved)
+              // (branch staff only receive their own branch's stock: elsewhere it is unknown)
+              const known = isAdmin || (sourceType === 'BRANCH' && sourceId === userBranchId);
+              const avail = sourceId && known
+                ? catalog.stockRows
+                    .filter((r: any) => r.product_id === p.id && r.owner_type === sourceType && (sourceType === 'WAREHOUSE' ? r.warehouse_id : r.branch_id) === sourceId)
+                    .reduce((n: number, r: any) => n + Number(r.quantity_on_hand || 0) - Number(r.quantity_reserved || 0), 0)
+                : null;
+              return {
+                id: p.id,
+                name: p.name,
+                sku: p.sku,
+                barcode: p.barcode,
+                stock: avail ?? undefined, // nothing shown until a source is chosen
+                stockHint: avail === 0 ? 'None available at the source' : null,
+                stockWarning: avail === 0,
+              };
+            })}
             onSelect={addLine}
+            onSearch={catalog.search}
+            searching={catalog.searching}
             placeholder="Search / click to select product to transfer..."
             existingLines={lines.map((l) => ({ productId: l.productId, quantity: l.quantity }))}
           />

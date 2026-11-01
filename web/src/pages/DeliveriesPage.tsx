@@ -193,23 +193,16 @@ export function DeliveriesPage() {
   useEffect(() => {
     async function loadAux() {
       try {
-        const [ordersRes, custsRes, branchesRes] = await Promise.all([
-          apiGet<any[]>('/sales/orders'),
-          apiGet<any[]>('/sales/customers'),
-          apiGet<any[]>('/branches'),
-        ]);
-        // Only orders requiring delivery should appear for delivery dispatch
-        const deliveryOrders = (ordersRes || []).filter(
-          (o) => (o.fulfillment_type || 'DELIVERY').toUpperCase() !== 'PICKUP'
-        );
-        setSalesOrders(deliveryOrders);
-        setCustomers(custsRes || []);
+        // Orders and customers are searched on the server in the pickers (every one reachable).
+        const branchesRes = await apiGet<any[]>('/branches');
         setBranches(branchesRes || []);
 
         // If URL has ?orderId=..., open create modal pre-filled
         const orderIdParam = searchParams.get('orderId');
         if (orderIdParam) {
-          const rawMatch = (ordersRes || []).find((o) => o.id === orderIdParam);
+          const found = await apiGet<{ items: any[] }>('/sales/orders', { page: 1, id: orderIdParam }).catch(() => ({ items: [] as any[] }));
+          const rawMatch = found.items[0];
+          if (rawMatch) setSalesOrders((prev) => [rawMatch, ...prev.filter((o) => o.id !== rawMatch.id)]);
           if (rawMatch && (rawMatch.fulfillment_type || 'DELIVERY').toUpperCase() === 'PICKUP') {
             addToast('info', `Order ${rawMatch.order_number} is marked as On Hand / Pickup (no delivery truck required).`);
           } else if (rawMatch) {
@@ -1143,15 +1136,14 @@ export function DeliveriesPage() {
                 Sales Order
               </label>
               <SearchableSelect
-                options={[
-                  { value: '', label: '— Select a Sales Order —' },
-                  ...(Array.isArray(salesOrders) ? salesOrders : [])
-                    .filter((s) => s.status !== 'DELIVERED' && s.delivery_status !== 'DELIVERED')
-                    .map((s) => ({
-                      value: s.id,
-                      label: `${s.order_number} (${s.customer_name || 'Walk-in'} - ${s.status})`,
-                    })),
-                ]}
+                options={[]}
+                loadOptions={async (q) => {
+                  // orders still to deliver, searched by number, customer or phone
+                  const res = await apiGet<{ items: any[] }>('/sales/orders', { page: 1, pageSize: 25, q: q || undefined, open: 'delivery' });
+                  setSalesOrders((prev) => [...prev.filter((o) => !res.items.some((x) => x.id === o.id)), ...res.items]);
+                  return res.items.map((s) => ({ value: s.id, label: `${s.order_number} (${s.customer_name || 'Walk-in'} - ${s.status})` }));
+                }}
+                selectedLabel={salesOrders.find((s) => s.id === createForm.salesOrderId)?.order_number}
                 value={createForm.salesOrderId}
                 onChange={handleSelectSalesOrder}
                 placeholder="Search Sales Order..."
@@ -1163,13 +1155,13 @@ export function DeliveriesPage() {
                 Customer
               </label>
               <SearchableSelect
-                options={[
-                  { value: '', label: '— Select Customer —' },
-                  ...(Array.isArray(customers) ? customers : []).map((c) => ({
-                    value: c.id,
-                    label: `${c.name} ${c.phone ? `(${c.phone})` : ''}`,
-                  })),
-                ]}
+                options={[]}
+                loadOptions={async (q) => {
+                  const res = await apiGet<{ items: any[] }>('/sales/customers', { page: 1, pageSize: 25, q: q || undefined, sort: q ? 'name' : 'created', dir: q ? 'asc' : 'desc' });
+                  setCustomers((prev) => [...prev.filter((c) => !res.items.some((x) => x.id === c.id)), ...res.items]);
+                  return res.items.map((c) => ({ value: c.id, label: c.name, sublabel: c.phone || undefined }));
+                }}
+                selectedLabel={customers.find((c) => c.id === createForm.customerId)?.name || createForm.customerName || undefined}
                 value={createForm.customerId}
                 onChange={handleSelectCustomer}
                 placeholder="Search customer..."

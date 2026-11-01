@@ -22,6 +22,10 @@ interface ProductItemSelectProps {
   priceLabel?: string;
   existingLines?: { productId: string; quantity?: number }[];
   id?: string;
+  /** Server search: called (debounced) with what the user types; the parent adds the results to `products`. */
+  onSearch?: (search: string) => void;
+  /** The server search is running. */
+  searching?: boolean;
 }
 
 export function ProductItemSelect({
@@ -32,6 +36,8 @@ export function ProductItemSelect({
   priceLabel = 'Price',
   existingLines = [],
   id = 'product-item-select',
+  onSearch,
+  searching = false,
 }: ProductItemSelectProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [search, setSearch] = useState('');
@@ -63,9 +69,13 @@ export function ProductItemSelect({
     return nameMatch || skuMatch || barcodeMatch || catMatch;
   });
 
-  // Reset highlighted index on filter change
+  // Reset highlighted index on filter change; ask the server (debounced).
   useEffect(() => {
     setHighlightedIndex(0);
+    if (!onSearch) return;
+    const t = setTimeout(() => onSearch(search), search ? 250 : 0);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search]);
 
   // Scroll highlighted item into view
@@ -266,7 +276,7 @@ export function ProductItemSelect({
                 }}
               >
                 <Package size={28} style={{ margin: '0 auto 8px', color: '#cbd5e1' }} />
-                <p style={{ margin: 0, fontWeight: 500 }}>No matching products found</p>
+                <p style={{ margin: 0, fontWeight: 500 }}>{searching ? 'Searching…' : 'No matching products found'}</p>
                 <p style={{ margin: '4px 0 0', fontSize: '12px', color: '#94a3b8' }}>
                   Check SKU, barcode, or name
                 </p>
