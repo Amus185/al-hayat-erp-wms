@@ -664,3 +664,27 @@ test('category pictures: staff photo first, otherwise a product photo; uploads a
   assert.equal((await t.api('GET', '/storefront-admin/categories', undefined, noPerms)).status, 403);
   assert.equal((await t.api('POST', `/storefront-admin/categories/${catId}/image/presign`, { contentType: 'image/png', size: 10 }, noPerms)).status, 403);
 });
+
+test('convert works for staff signed in with the browser cookie (not only a bearer token)', async () => {
+  const email = `web-sales-${Date.now()}@test.local`;
+  const created = await t.api('POST', '/users', { email, password: 'Cookie-pass-123', fullName: 'Web Sales', branchId: HQ, roleIds: ['role-sales-rep'] });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  const origin = 'https://al-hayat-erp.pages.dev';
+  const signIn = await t.app.request('/api/auth/sign-in/email', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', Origin: origin }, body: JSON.stringify({ email, password: 'Cookie-pass-123' }),
+  });
+  assert.equal(signIn.status, 200, await signIn.text());
+  const cookie = signIn.headers.getSetCookie().map((c) => c.split(';')[0]).join('; ');
+
+  const p = await publishedProduct({ price: 400, qty: 4 });
+  const made = await request([{ slug: p.slug, quantity: 2 }], { phone: '0634647459', name: 'Maxamed Saleebaan' });
+  const id = (await t.q('SELECT id FROM storefront_requests WHERE request_number = $1', [made.body.requestNumber]))[0].id;
+  const res = await t.app.request(`/api/v1/storefront-admin/requests/${id}/convert`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: cookie, Origin: origin, 'Sec-Fetch-Site': 'same-origin', 'X-CSRF-Protection': '1' },
+  });
+  const body: any = await res.json();
+  assert.equal(res.status, 201, JSON.stringify(body));
+  const order = (await t.q('SELECT created_by, status FROM sales_orders WHERE id = $1', [body.orderId]))[0];
+  assert.equal(order.created_by, created.body.id, 'the order is created as the signed-in user');
+});

@@ -2,7 +2,7 @@
 // settings, publishing, product photos, and the website order-request inbox.
 import { Hono } from 'hono';
 import { Env, uuidv4 } from '../db';
-import { authMiddleware, requireAdmin, requirePermissions } from '../middleware/auth';
+import { asUser, authMiddleware, requireAdmin, requirePermissions } from '../middleware/auth';
 import { hasAllBranchAccess } from '../services/branch-scope';
 import { logAudit } from '../services/audit';
 import {
@@ -466,18 +466,20 @@ admin.post('/requests/:id/convert', requirePermissions(['manage_sales']), async 
 
     const res = await sales.fetch(new Request('http://internal/orders', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: c.req.header('Authorization') || '' },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         branchId: settings.locationId,
         customerId: customer.id,
         fulfillmentType: 'DELIVERY',
         lines: (lines || []).map((l: any) => ({ productId: l.product_id, quantity: Number(l.quantity), unitPrice: Number(l.unit_price) })),
       }),
-    }), c.env as any);
+    }), asUser(c.env, c.get('jwtPayload')) as any); // as the signed-in user, whether they use a cookie or a bearer token
     const order: any = await res.json().catch(() => ({}));
     if (res.status !== 201 || !order?.id) {
       await revert();
-      return c.json({ message: order?.message || 'The sales order could not be created.' }, (res.status >= 400 && res.status < 600 ? res.status : 400) as any);
+      // Never pass a 401 on: the browser would take it as "signed out", though the caller's session is fine.
+      const status = res.status >= 400 && res.status < 600 && res.status !== 401 ? res.status : 400;
+      return c.json({ message: order?.message || 'The sales order could not be created.' }, status as any);
     }
     await db.prepare(`
       UPDATE storefront_requests SET status = 'CONVERTED', converted_order_id = ?, handled_by = ?, handled_at = CURRENT_TIMESTAMP WHERE id = ?
