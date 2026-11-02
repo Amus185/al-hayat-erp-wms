@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { Env } from '../db';
 import { authMiddleware, requirePermissions, isAdminUser } from '../middleware/auth';
 import { resolveBranchScope, ScopeError } from '../services/branch-scope';
+import { hideUnless, PERM, COST_FIELDS, sortsFor } from '../services/privacy';
 
 // Financial (sales-based) reports use the strict branch scope: branch users
 // see their branch; admins/accountants see all or filter with ?branch_id=.
@@ -14,6 +15,8 @@ async function salesReportBranch(c: any): Promise<string | null> {
 const reports = new Hono<{ Bindings: Env; Variables: { jwtPayload: any } }>();
 
 reports.use('/*', authMiddleware, requirePermissions(['view_reports']));
+// Cost prices, purchase costs and stock value only for people with costs.view (Owner decision D4).
+reports.use('/*', hideUnless(PERM.COSTS, COST_FIELDS));
 
 // Helper to sanitize days param (default 30, max 3650)
 function getDaysParam(c: any): number {

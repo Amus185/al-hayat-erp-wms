@@ -729,7 +729,59 @@ export async function ensurePostgresInit(pool: Pool) {
   await ensureAgentSchema(pool);
   await ensureBetterAuth(pool);
   await ensureWorkforceSchema(pool);
+  await ensureAccessGrants(pool);
   await ensurePerformanceIndexes(pool);
+}
+
+/**
+ * Financial privacy permissions (cost prices / stock value, payroll) and
+ * per-person grants. Additive only. Each new permission's default role grants
+ * are applied once, when the permission is first created, so the Owner's later
+ * changes to roles are never undone by a migration.
+ */
+export const ACCESS_PERMISSIONS = [
+  { id: 'perm-costs-view', code: 'costs.view', description: 'See cost prices, purchase costs, stock value and margins',
+    // Owner decision D4: Owner and accounting staff; anyone else by an explicit grant.
+    roles: ['77777777-7777-7777-7777-777777777777', 'role-accountant'] },
+  { id: 'perm-payroll-view', code: 'payroll.view', description: 'See salaries, salary advances and employment documents',
+    roles: ['77777777-7777-7777-7777-777777777777'] },
+  { id: 'perm-payroll-manage', code: 'payroll.manage', description: 'Change salaries, record advances, upload employment documents',
+    roles: ['77777777-7777-7777-7777-777777777777'] },
+  { id: 'perm-employees-manage', code: 'employees.manage', description: "Add and edit employees' ordinary details (own branch)",
+    roles: ['77777777-7777-7777-7777-777777777777', 'role-branch-user'] },
+];
+
+export async function ensureAccessGrants(pool: Pool) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS user_permissions (
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        permission_id TEXT NOT NULL REFERENCES permissions(id) ON DELETE CASCADE,
+        granted_by TEXT REFERENCES users(id),
+        granted_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (user_id, permission_id)
+      )`);
+    for (const p of ACCESS_PERMISSIONS) {
+      const created = await client.query(
+        'INSERT INTO permissions (id, code, description) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING RETURNING id',
+        [p.id, p.code, p.description]);
+      if (!created.rowCount) continue;
+      for (const roleId of p.roles) {
+        await client.query(`
+          INSERT INTO role_permissions (role_id, permission_id) SELECT $1::text, $2::text
+          WHERE EXISTS (SELECT 1 FROM roles WHERE id = $1)
+            AND NOT EXISTS (SELECT 1 FROM role_permissions WHERE role_id = $1 AND permission_id = $2)`, [roleId, p.id]);
+      }
+    }
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('❌ Access grants migration failed (no data changed):', err);
+  } finally {
+    client.release();
+  }
 }
 
 /**

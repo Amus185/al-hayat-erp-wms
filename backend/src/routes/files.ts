@@ -1,6 +1,8 @@
 import { Hono } from 'hono';
 import { Env, uuidv4 } from '../db';
 import { authMiddleware } from '../middleware/auth';
+import { has, PERM } from '../services/privacy';
+import { hasAllBranchAccess } from '../services/branch-scope';
 
 const files = new Hono<{ Bindings: Env; Variables: { jwtPayload: any } }>();
 
@@ -43,6 +45,22 @@ files.post('/', async (c) => {
 // Public download route
 files.get('/:key', async (c) => {
   const key = c.req.param('key');
+  // Employee files follow the employee record's privacy (Owner decision D3):
+  // employment documents need payroll access, photos need employee access
+  // (and, for branch-limited people, the employee must be in their branch).
+  const emp = await c.env.DB.prepare(
+    'SELECT branch_id, (document_key = ?) AS is_document FROM employees WHERE photo_key = ? OR document_key = ? LIMIT 1',
+  ).bind(key, key, key).first() as any;
+  if (emp) {
+    const p = c.get('jwtPayload');
+    const isDocument = emp.is_document === true || emp.is_document === 't' || emp.is_document === 1;
+    const allowed = isDocument
+      ? has(p, PERM.PAYROLL_VIEW)
+      : has(p, 'manage_users') || has(p, PERM.EMPLOYEES_MANAGE) || has(p, PERM.PAYROLL_VIEW);
+    const inBranch = hasAllBranchAccess(p) || (!!p?.branch_id && emp.branch_id === p.branch_id);
+    if (!allowed || !inBranch) return c.json({ message: 'File not found' }, 404);
+  }
+  if (!c.env.STORAGE) return c.json({ message: 'File storage is not set up on this server' }, 503);
   const object = await c.env.STORAGE.get(key);
 
   if (!object) return c.json({ message: 'File not found' }, 404);

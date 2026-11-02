@@ -262,7 +262,7 @@ tools.post('/get_data', async (c) => {
   }
   if (res.status === 404) return refuse(c, 'Not found. Check the id or look it up again.');
   if (!res.ok || data === null) return refuse(c, `The system could not load this (${data?.message || data?.error || res.status}).`);
-  return c.body(resultForModel(data, !can(p, 'view_reports')), 200, { 'Content-Type': 'application/json' });
+  return c.body(resultForModel(data, !can(p, 'costs.view')), 200, { 'Content-Type': 'application/json' });
 });
 
 agent.route('/tools', tools);

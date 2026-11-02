@@ -116,6 +116,8 @@ const STAGES = [
 export function ManufacturingPage() {
   const { addToast } = useToast();
   const { hasPermission } = useAuth();
+  // Material and production costs only with cost access (Owner decision D4).
+  const canCosts = hasPermission('costs.view');
 
   const [topTab, setTopTab] = useState<'WORK_ORDERS' | 'BOM' | 'MANUAL'>(() => (new URLSearchParams(window.location.search).get('tab') === 'manual' ? 'MANUAL' : 'WORK_ORDERS'));
   // Work orders: searched, filtered, sorted and paged on the server.
@@ -745,14 +747,14 @@ export function ManufacturingPage() {
         <div className="module-header__actions">
           {hasPermission('manage_inventory') && (
             <div style={{ display: 'flex', gap: '8px' }}>
-              <button
+              {canCosts && <button
                 type="button"
                 className="btn btn-secondary"
                 onClick={() => setIsCreateBomOpen(true)}
                 style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
               >
                 <Layers size={15} /> New BOM Recipe
-              </button>
+              </button>}
               <button
                 type="button"
                 className="btn btn-primary"
@@ -894,7 +896,7 @@ export function ManufacturingPage() {
         ) : (
           <DataTable
             data={Array.isArray(boms) ? boms : []}
-            columns={bomColumns}
+            columns={canCosts ? bomColumns : bomColumns.filter((col) => col.key !== 'cost')}
             keyExtractor={(row) => row.id}
             emptyMessage="No Bill of Materials (BOM) recipes defined yet. Click 'New BOM Recipe' to add furniture blueprints."
           />
@@ -1500,7 +1502,7 @@ export function ManufacturingPage() {
                     <th>Material Component</th>
                     <th>Planned Qty</th>
                     <th>Consumed Qty</th>
-                    <th>Unit Cost</th>
+                    {canCosts && <th>Unit Cost</th>}
                     <th>Current Facility Stock</th>
                   </tr>
                 </thead>
@@ -1510,7 +1512,7 @@ export function ManufacturingPage() {
                       <td><strong>{m.material_name}</strong><br /><span style={{ fontSize: '11px', color: '#64748b' }}>{m.material_sku}</span></td>
                       <td><strong>{m.planned_quantity}</strong></td>
                       <td>{m.consumed_quantity}</td>
-                      <td>${Number(m.unit_cost).toFixed(2)}</td>
+                      {canCosts && <td>${Number(m.unit_cost).toFixed(2)}</td>}
                       <td>
                         <span style={{ fontWeight: 600, color: m.current_stock < m.planned_quantity ? '#dc2626' : '#166534' }}>
                           {m.current_stock} available

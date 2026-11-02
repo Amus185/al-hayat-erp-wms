@@ -2,12 +2,15 @@ import { Hono } from 'hono';
 import { Env, uuidv4 } from '../db';
 import { authMiddleware, requirePermissions } from '../middleware/auth';
 import { logAudit, createAuditLogStmt } from '../services/audit';
+import { hideUnless, PERM, COST_FIELDS, sortsFor } from '../services/privacy';
 import { prepareJournalEntryPosting } from '../services/accounting-service';
 import { csvResponse, dateRange, likeTerm, listRequest, pagedResponse, pagedRows, type ListOptions } from '../services/listing';
 
 const manufacturing = new Hono<{ Bindings: Env; Variables: { jwtPayload: any } }>();
 
 manufacturing.use('/*', authMiddleware);
+// Cost prices, purchase costs and stock value only for people with costs.view (Owner decision D4).
+manufacturing.use('/*', hideUnless(PERM.COSTS, COST_FIELDS));
 
 // Standard Manufacturing Stages
 const DEFAULT_STAGES = [
@@ -77,7 +80,7 @@ manufacturing.get('/boms/:id', async (c) => {
   return c.json({ ...bom, items: items || [] });
 });
 
-manufacturing.post('/boms', requirePermissions(['manage_inventory']), async (c) => {
+manufacturing.post('/boms', requirePermissions(['manage_inventory', PERM.COSTS]), async (c) => {
   const body = await c.req.json();
 
   if (!body.name || !body.name.trim()) return c.json({ message: 'BOM recipe name is required.' }, 400);

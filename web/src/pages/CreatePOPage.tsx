@@ -9,6 +9,7 @@ import { ProductItemSelect, type SelectableProduct } from '../components/Product
 import { useProductCatalog } from '../utils/productCatalog';
 import { Modal } from '../components/Modal';
 import { useToast } from '../contexts/ToastContext';
+import { useAuth } from '../contexts/AuthContext';
 
 interface Supplier {
   id: string;
@@ -31,6 +32,8 @@ interface ProductSearchItem {
 export function CreatePOPage() {
   const navigate = useNavigate();
   const { addToast } = useToast();
+  // Purchase orders carry prices: cost access needed (Owner decision D4); the server refuses too.
+  const canCosts = useAuth().hasPermission('costs.view');
 
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
@@ -204,6 +207,16 @@ export function CreatePOPage() {
   const subtotalPO = lines.reduce((acc, curr) => acc + (curr.quantity * curr.unitCost), 0);
   const totalDiscount = lines.reduce((acc, curr) => acc + (curr.discount || 0), 0);
   const grandTotalPO = subtotalPO - totalDiscount;
+
+  if (!canCosts) {
+    return (
+      <div className="panel" style={{ maxWidth: 640, margin: '40px auto', padding: 24, textAlign: 'center' }}>
+        <h2 style={{ marginTop: 0 }}>Cost access needed</h2>
+        <p style={{ color: '#667066' }}>Purchase orders include purchase prices. Ask the Owner to give you “See cost prices and stock value” on your user account.</p>
+        <button type="button" className="btn btn-secondary" onClick={() => navigate('/purchasing')}>Back to purchasing</button>
+      </div>
+    );
+  }
 
   return (
     <div className="module-page">

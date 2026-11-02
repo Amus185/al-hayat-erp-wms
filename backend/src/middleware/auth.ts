@@ -54,14 +54,23 @@ export function csrfRejection(c: Context): string | null {
 }
 
 /** ERP authorization for a user, and whether the given Better Auth session is live and the user not banned. */
+/**
+ * A user's permission codes: from their roles plus any granted to them
+ * personally (user_permissions). Expects the user row aliased as "u".
+ */
+export const PERMISSIONS_OF_USER = `
+  SELECT STRING_AGG(DISTINCT code, ',') FROM (
+    SELECT p.code FROM user_roles ur JOIN role_permissions rp ON rp.role_id = ur.role_id
+      JOIN permissions p ON p.id = rp.permission_id WHERE ur.user_id = u.id
+    UNION
+    SELECT p.code FROM user_permissions up JOIN permissions p ON p.id = up.permission_id WHERE up.user_id = u.id
+  ) granted`;
+
 export async function loadAuthState(db: any, userId: string, sessionId: string) {
   return db.prepare(`
     SELECT u.email, u.full_name, COALESCE(u.password_version, 1) AS password_version, u.is_active, u.branch_id,
            (SELECT STRING_AGG(DISTINCT r.code, ',') FROM user_roles ur JOIN roles r ON r.id = ur.role_id WHERE ur.user_id = u.id) AS roles,
-           (SELECT STRING_AGG(DISTINCT p.code, ',') FROM user_roles ur
-              JOIN role_permissions rp ON rp.role_id = ur.role_id
-              JOIN permissions p ON p.id = rp.permission_id
-            WHERE ur.user_id = u.id) AS permissions,
+           (${PERMISSIONS_OF_USER}) AS permissions,
            EXISTS (SELECT 1 FROM "session" s WHERE s.id = ? AND s."userId" = u.id AND s."expiresAt" > CURRENT_TIMESTAMP
                      AND s."createdAt" > CURRENT_TIMESTAMP - make_interval(secs => ?)) AS session_live,
            COALESCE(b.banned, FALSE) AND (b."banExpires" IS NULL OR b."banExpires" > CURRENT_TIMESTAMP) AS banned

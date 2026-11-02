@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useAuth } from '../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import { AlertTriangle, Boxes, CircleDollarSign, ScanLine, Truck, TrendingDown, PackageSearch } from 'lucide-react';
 import { apiGet } from '../api/client';
@@ -9,6 +10,8 @@ import { PageSkeleton } from '../components/LoadingSpinner';
 import type { SalesFinancialSummary, PurchasingFinancialSummary } from '../types';
 
 export function DashboardPage() {
+  // Stock value only with cost access (Owner decision D4).
+  const canCosts = useAuth().hasPermission('costs.view');
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [metrics, setMetrics] = useState({
@@ -147,12 +150,12 @@ export function DashboardPage() {
     <div className="dashboard">
       {/* Inventory Metric Cards */}
       <section className="metric-grid">
-        <MetricCard
+        {canCosts && <MetricCard
           label="Total inventory value"
           value={fmtCcy(metrics.totalValue)}
           trend="Live cost appraisal"
           icon={<CircleDollarSign size={22} />}
-        />
+        />}
         <MetricCard
           label="Units On Hand"
           value={metrics.availableUnits.toLocaleString()}
@@ -188,6 +191,7 @@ export function DashboardPage() {
             trend={`Balance: ${fmtCcy(salesSummary?.total_unpaid_amount ?? 0)}`}
             icon={<CircleDollarSign size={22} />}
           />
+          {canCosts && <>
           <MetricCard
             label="Supplier Liabilities"
             value={fmtCcy(purchasingSummary?.total_outstanding_balance ?? 0)}
@@ -200,6 +204,7 @@ export function DashboardPage() {
             trend="Supplier advance payments"
             icon={<Truck size={22} />}
           />
+          </>}
         </section>
       )}
 

@@ -2,7 +2,7 @@
 // under /api/auth (src/auth.ts). These are the ERP's own additions.
 import { Hono, type Context } from 'hono';
 import { Env } from '../db';
-import { authMiddleware } from '../middleware/auth';
+import { authMiddleware, PERMISSIONS_OF_USER } from '../middleware/auth';
 import { idleTimeoutMinutes } from '../auth';
 import { poolOf } from '../services/auth-sessions';
 
@@ -13,10 +13,7 @@ async function loadProfile(c: Context, userId: string) {
     SELECT u.id, u.email, u.full_name, u.branch_id,
            (SELECT r.code FROM roles r JOIN user_roles ur ON ur.role_id = r.id WHERE ur.user_id = u.id
              ORDER BY (r.code = 'admin') DESC, (r.code = 'accountant') DESC, r.code LIMIT 1) AS role_code,
-           (SELECT STRING_AGG(DISTINCT p.code, ',') FROM user_roles ur
-              JOIN role_permissions rp ON rp.role_id = ur.role_id
-              JOIN permissions p ON p.id = rp.permission_id
-            WHERE ur.user_id = u.id) AS permissions
+           (${PERMISSIONS_OF_USER}) AS permissions
     FROM users u WHERE u.id = $1 AND u.is_active = 1`, [userId]);
   const u = r.rows[0];
   if (!u) return null;

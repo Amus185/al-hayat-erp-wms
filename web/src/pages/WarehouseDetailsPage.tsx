@@ -81,6 +81,8 @@ export function WarehouseDetailsPage() {
   const navigate = useNavigate();
   const { addToast } = useToast();
   const { hasPermission } = useAuth();
+  // Stock value and cost only with cost access (Owner decision D4).
+  const canCosts = hasPermission('costs.view');
 
   const [warehouse, setWarehouse] = useState<WarehouseInfo | null>(null);
   const [summary, setSummary] = useState<WarehouseSummary | null>(null);
@@ -492,12 +494,12 @@ export function WarehouseDetailsPage() {
           trend="Physical units in depot"
           icon={<Box size={20} />}
         />
-        <MetricCard
+        {canCosts && <MetricCard
           label="Inventory Valuation"
           value={fmt(inventoryValue)}
           trend="Valued at product cost"
           icon={<DollarSign size={20} />}
-        />
+        />}
         <MetricCard
           label="Catalog SKUs Stored"
           value={String(totalProducts)}
@@ -716,7 +718,7 @@ export function WarehouseDetailsPage() {
             </div>
 
             <DataTable
-              columns={invColumns}
+              columns={canCosts ? invColumns : invColumns.filter((col) => col.key !== 'cost_price' && col.key !== 'valuation')}
               data={filteredInventory}
               keyExtractor={(row) => row.id}
               emptyMessage={

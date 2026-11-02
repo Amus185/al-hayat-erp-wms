@@ -150,6 +150,31 @@ Each phase ends with tests, a push, and a deploy the agent verifies on productio
 | D4 | Warehouse Managers see quantities and movements; **cost prices, purchase costs and valuation** only for the Owner and authorized accounting staff; grantable per person. | New `costs.view` permission, checked on the server in products, inventory, warehouses, reports, purchasing (PO prices), transfers, exports and the assistant. Granting it to one Warehouse Manager = a personal permission (see `user_permissions` below). |
 | D5 | Phase 0 is an assessment; then phase by phase, each tested; no destructive changes or risky migrations without approval. | Every phase lists its migrations up front; each migration is additive (new tables/columns, backfills that only fill empty values) and is run first against a copy of production. |
 
+### D3 and D4: implemented (Owner asked to start them with these recommendations)
+
+- **Per-person grants: `user_permissions`** (chosen over one-person roles): `user_id`, `permission_id`,
+  `granted_by`, `granted_at`. Additive; managed from Users → Edit → "Extra access for this person"
+  (administrators only until the Owner role exists); every change is audited (`USER_EXTRA_PERMISSIONS`).
+- **New permissions** and their defaults (applied once, when each permission is first created, so the
+  Owner's later changes are never undone by a migration):
+
+  | Permission | Default roles | Meaning |
+  |---|---|---|
+  | `costs.view` | admin, accountant | cost prices, purchase prices, supplier balances, stock value, margins/profit |
+  | `payroll.view` | admin | salaries, advances, employment documents |
+  | `payroll.manage` | admin | change salaries, record/delete advances, upload documents |
+  | `employees.manage` | admin, branch_user | employees' ordinary details, own branch only |
+
+- **Enforced on the server**: cost/pay fields are removed from every answer of products, inventory,
+  warehouses, reports, manufacturing, purchasing and employees (so also from search, exports and the
+  assistant); hidden values cannot be used for sorting; exports drop those columns; people without
+  `costs.view` cannot set product costs, create/approve purchase orders, create BOMs or pay suppliers
+  (receiving goods still works); employee files follow the record's privacy.
+- **Consequence to know**: Branch Managers no longer see costs or create priced purchase orders by
+  default (D4). The Owner gives "See cost prices and stock value" to those who buy stock.
+- Accounting statements (balance sheet, P&L) still show inventory and cost of goods sold to anyone with
+  report access; that is fixed in Phase 1 when report access is split by role and branch.
+
 ### Consequence of D4 (per-person grants)
 Granting `costs.view` or `payroll.view` to **one** Warehouse Manager without giving it to all of them needs a
 per-person grant. Proposed: **`user_permissions`** (`user_id`, `permission_id`, `granted_by`, `granted_at`),
@@ -193,7 +218,7 @@ Legend: ✅ enforced on the server · ⚠️ partial · ❌ missing. "Location" 
 | Employees (`employees.ts`) | ✅ `manage_users` (admins) | ❌ none | ❌ pay always included | D3 |
 | Owner's assets (`assets.ts`) | ⚠️ `view_reports` / `manage_purchasing` | — | ❌ S2 | Owner-only |
 | Files (`files.ts`) | ❌ any signed-in user | ❌ | ❌ S3 | link files to records |
-| Users, roles (`users.ts`) | ⚠️ `manage_users` on writes; **list and roles readable by any signed-in user** | ❌ | — | only admins grant admin ✅; needs Owner rule (D1) |
+| Users, roles (`users.ts`) | ✅ `manage_users` for every route (corrected: the list is not public) | ❌ | — | only admins grant admin ✅; needs Owner rule (D1) |
 | Branches (`branches.ts`) | ✅ writes admin-only | ⚠️ `isAdminUser` | — | |
 | Audit (`audit.ts`) | ⚠️ own entries for non-admins | ❌ no branch view | — | |
 | Search (`search.ts`) | ✅ per kind | ✅ branch for financial kinds | ⚠️ | |

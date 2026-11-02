@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Users, UserPlus, Shield, Landmark, Warehouse, Pencil, Trash2, KeyRound, Loader2 } from 'lucide-react';
-import { apiGet, apiPost, apiPatch, apiDelete } from '../api/client';
+import { apiGet, apiPost, apiPatch, apiPut, apiDelete } from '../api/client';
 import { DataTable, type Column } from '../components/DataTable';
 import { Modal } from '../components/Modal';
 import { ConfirmModal } from '../components/ConfirmModal';
@@ -21,7 +21,17 @@ interface UserRecord {
   warehouse_id: string | null;
   is_active: boolean;
   created_at: string;
+  /** Permissions given to this person on top of their roles (comma separated). */
+  extra_permissions?: string | null;
 }
+
+/** Plain-language names for the access the Owner can give to one person. */
+const EXTRA_ACCESS: { code: string; label: string; hint: string }[] = [
+  { code: 'costs.view', label: 'See cost prices and stock value', hint: 'Product costs, purchase prices, inventory value, margins. Needed to create priced purchase orders.' },
+  { code: 'employees.manage', label: 'Manage employees (own branch)', hint: 'Add and edit employees’ ordinary details, without pay.' },
+  { code: 'payroll.view', label: 'See salaries and advances', hint: 'Salaries, salary advances and employment documents.' },
+  { code: 'payroll.manage', label: 'Manage salaries and advances', hint: 'Change salaries, record or delete advances, upload employment documents.' },
+];
 
 interface Role {
   id: string;
@@ -41,7 +51,8 @@ const EMPTY_FORM = {
 
 export function UsersPage() {
   const { addToast } = useToast();
-  const { hasPermission } = useAuth();
+  const { hasPermission, isAdmin } = useAuth();
+  const [editExtra, setEditExtra] = useState<string[]>([]);
 
   const [usersList, setUsersList] = useState<UserRecord[]>([]);
   const [rolesList, setRolesList] = useState<Role[]>([]);
@@ -150,6 +161,7 @@ export function UsersPage() {
   const openEdit = async (user: UserRecord) => {
     const isCurrent = rolesRequest.start();
     setEditUser(user);
+    setEditExtra(user.extra_permissions ? user.extra_permissions.split(',') : []);
     setEditForm({
       fullName: user.full_name,
       email: user.email,
@@ -190,6 +202,10 @@ export function UsersPage() {
         isActive: editForm.isActive,
         roleIds: editForm.roleIds,
       });
+      const before = (editUser.extra_permissions || '').split(',').filter(Boolean).sort().join(',');
+      if (isAdmin && before !== [...editExtra].sort().join(',')) {
+        await apiPut(`/users/${editUser.id}/extra-permissions`, { codes: editExtra });
+      }
       addToast('success', 'User updated successfully');
       setEditUser(null);
       loadData();
@@ -439,6 +455,25 @@ export function UsersPage() {
               ? <p style={{ fontSize: '13px', color: '#667066' }}>Loading roles...</p>
               : <RoleChecklist ids={editForm.roleIds} onToggle={(id) => handleRoleToggle(id, editForm.roleIds, setEditForm, 'roleIds')} />}
           </div>
+          {isAdmin && (
+            <div style={{ marginTop: '16px', borderTop: '1px solid #edf1ed', paddingTop: '14px' }} id="extra-access">
+              <h4 style={{ margin: '0 0 4px', color: '#066006', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <Shield size={16} /> Extra access for this person
+              </h4>
+              <p style={{ margin: '0 0 10px', fontSize: '12px', color: '#667066' }}>
+                Given to this person only, on top of their roles. Owners and accountants see costs already; only owners see pay.
+              </p>
+              <div style={{ display: 'grid', gap: '8px' }}>
+                {EXTRA_ACCESS.map((x) => (
+                  <label key={x.code} style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', fontSize: '13px', cursor: 'pointer' }}>
+                    <input type="checkbox" style={{ marginTop: '3px' }} checked={editExtra.includes(x.code)}
+                      onChange={(e) => setEditExtra((prev) => e.target.checked ? [...prev, x.code] : prev.filter((c) => c !== x.code))} />
+                    <span><strong>{x.label}</strong><span style={{ display: 'block', color: '#667066', fontSize: '12px' }}>{x.hint}</span></span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '20px' }}>
             <button type="button" className="btn btn-secondary" onClick={() => setEditUser(null)} disabled={submitting}>Cancel</button>
             <button type="submit" className="btn btn-primary" disabled={submitting || editRolesLoading} style={{ display: 'flex', alignItems: 'center' }}>

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useAuth } from '../contexts/AuthContext';
 import {
   BarChart3,
   AlertTriangle,
@@ -43,6 +44,10 @@ const ALERT_RED = '#dc2626';
 const TEAL_BLUE = '#0284c7';
 
 export function ReportsPage() {
+  // Costs, profit, stock value and supplier spend only with cost access (Owner decision D4).
+  const canCosts = useAuth().hasPermission('costs.view');
+  const hideCostColumns = <T,>(cols: Column<T>[]): Column<T>[] =>
+    canCosts ? cols : cols.filter((col) => !['cost_price', 'tied_up_capital', 'gross_profit', 'margin_pct', 'profit', 'total_spend', 'cost_value'].includes(col.key));
   const { addToast } = useToast();
 
   const [activeTab, setActiveTab] = useState('low-stock');
@@ -561,7 +566,7 @@ export function ReportsPage() {
               </div>
 
               <DataTable
-                columns={lowStockColumns}
+                columns={hideCostColumns(lowStockColumns)}
                 data={filteredLowStock}
                 keyExtractor={(row) => `${row.product_id}-${row.warehouse_id || row.branch_id || 'loc'}`}
                 emptyMessage="No variants are currently below their reorder limits for the selected filters."
@@ -593,12 +598,12 @@ export function ReportsPage() {
                   trend={`Across ${branchPerfData.length} active branches`}
                   icon={<CircleDollarSign size={20} style={{ color: PRIMARY_GREEN }} />}
                 />
-                <MetricCard
+                {canCosts && <MetricCard
                   label="Total Branch Gross Profit"
                   value={formatCurrency(branchPerfData.reduce((acc, b) => acc + (b.gross_profit || 0), 0))}
                   trend="Revenue minus cost of goods sold"
                   icon={<TrendingUp size={20} style={{ color: SECONDARY_GREEN }} />}
-                />
+                />}
                 <MetricCard
                   label="Overall Orders Count"
                   value={branchPerfData.reduce((acc, b) => acc + (b.order_count || 0), 0).toString()}
@@ -621,7 +626,7 @@ export function ReportsPage() {
                       <Tooltip formatter={(val: any) => formatCurrency(Number(val))} />
                       <Legend />
                       <Bar dataKey="total_revenue" name="Total Revenue ($)" fill={PRIMARY_GREEN} radius={[4, 4, 0, 0]} />
-                      <Bar dataKey="gross_profit" name="Gross Profit ($)" fill={SECONDARY_GREEN} radius={[4, 4, 0, 0]} />
+                      {canCosts && <Bar dataKey="gross_profit" name="Gross Profit ($)" fill={SECONDARY_GREEN} radius={[4, 4, 0, 0]} />}
                     </BarChart>
                   </ResponsiveContainer>
                 )}
@@ -629,7 +634,7 @@ export function ReportsPage() {
 
               {/* Data Table */}
               <DataTable
-                columns={branchColumns}
+                columns={hideCostColumns(branchColumns)}
                 data={branchPerfData}
                 keyExtractor={(row) => row.id}
                 emptyMessage="No branch performance recorded in this period."
@@ -649,12 +654,12 @@ export function ReportsPage() {
 
               {/* KPI Cards */}
               <div className="metric-grid" style={{ marginBottom: '24px' }}>
-                <MetricCard
+                {canCosts && <MetricCard
                   label="Total Estimated Cost Value"
                   value={formatCurrency(invValuationData?.summary?.total_cost_value)}
                   trend="Sum of live stock multiplied by cost price"
                   icon={<CircleDollarSign size={22} style={{ color: PRIMARY_GREEN }} />}
-                />
+                />}
                 <MetricCard
                   label="Total Retail Sales Value"
                   value={formatCurrency(invValuationData?.summary?.total_retail_value)}
@@ -681,7 +686,7 @@ export function ReportsPage() {
                       <XAxis dataKey="category_name" stroke="#6b7280" fontSize={12} />
                       <YAxis stroke="#6b7280" fontSize={12} tickFormatter={(v) => `$${v}`} />
                       <Tooltip formatter={(val: any) => formatCurrency(Number(val))} />
-                      <Bar dataKey="cost_value" name="Capital Value ($)" fill={PRIMARY_GREEN} radius={[4, 4, 0, 0]} />
+                      {canCosts && <Bar dataKey="cost_value" name="Capital Value ($)" fill={PRIMARY_GREEN} radius={[4, 4, 0, 0]} />}
                     </BarChart>
                   </ResponsiveContainer>
                 )}
@@ -697,7 +702,7 @@ export function ReportsPage() {
                   These variants carry capital tied up in inventory but have not generated a single sales order line in over 90 days.
                 </p>
                 <DataTable
-                  columns={deadStockColumns}
+                  columns={hideCostColumns(deadStockColumns)}
                   data={invValuationData?.dead_stock || []}
                   keyExtractor={(row) => row.id}
                   emptyMessage="Great news! No dead stock detected (all stocked items have active sales velocity)."
@@ -724,18 +729,18 @@ export function ReportsPage() {
                   trend={`Selected range (${days} days)`}
                   icon={<CircleDollarSign size={20} style={{ color: PRIMARY_GREEN }} />}
                 />
-                <MetricCard
+                {canCosts && <MetricCard
                   label="Total Gross Profit"
                   value={formatCurrency(salesProfitData?.summary?.gross_profit)}
                   trend="Revenue minus cost of goods"
                   icon={<TrendingUp size={20} style={{ color: SECONDARY_GREEN }} />}
-                />
-                <MetricCard
+                />}
+                {canCosts && <MetricCard
                   label="Overall Profit Margin"
                   value={formatPercent(salesProfitData?.summary?.margin_pct)}
                   trend="Gross profit margin %"
                   icon={<CheckCircle2 size={20} style={{ color: SECONDARY_GREEN }} />}
-                />
+                />}
                 <MetricCard
                   label="Average Order Value"
                   value={formatCurrency(salesProfitData?.summary?.avg_order_value)}
@@ -758,7 +763,7 @@ export function ReportsPage() {
                       <Tooltip formatter={(val: any) => formatCurrency(Number(val))} />
                       <Legend />
                       <Line type="monotone" dataKey="revenue" name="Daily Revenue ($)" stroke={PRIMARY_GREEN} strokeWidth={2.5} dot={false} />
-                      <Line type="monotone" dataKey="profit" name="Daily Gross Profit ($)" stroke={SECONDARY_GREEN} strokeWidth={2.5} dot={false} />
+                      {canCosts && <Line type="monotone" dataKey="profit" name="Daily Gross Profit ($)" stroke={SECONDARY_GREEN} strokeWidth={2.5} dot={false} />}
                     </LineChart>
                   </ResponsiveContainer>
                 )}
@@ -769,7 +774,7 @@ export function ReportsPage() {
                 <div>
                   <h4 style={{ margin: '0 0 12px', color: '#111827' }}>Top Products by Gross Margin</h4>
                   <DataTable
-                    columns={topProductsColumns}
+                    columns={hideCostColumns(topProductsColumns)}
                     data={salesProfitData?.top_products || []}
                     keyExtractor={(row) => row.id}
                     emptyMessage="No product sales lines recorded in this date range."
@@ -779,7 +784,7 @@ export function ReportsPage() {
                 <div>
                   <h4 style={{ margin: '0 0 12px', color: '#111827' }}>Top Customers by Total Revenue</h4>
                   <DataTable
-                    columns={topCustomersColumns}
+                    columns={hideCostColumns(topCustomersColumns)}
                     data={salesProfitData?.top_customers || []}
                     keyExtractor={(row) => row.id}
                     emptyMessage="No customer sales orders recorded in this date range."
@@ -850,7 +855,7 @@ export function ReportsPage() {
               {/* Quotation Log Table */}
               <h4 style={{ margin: '0 0 12px', color: '#111827' }}>Quotation Conversion Log</h4>
               <DataTable
-                columns={quoteColumns}
+                columns={hideCostColumns(quoteColumns)}
                 data={quoteConvData?.quotes_list || []}
                 keyExtractor={(row) => row.id}
                 emptyMessage="No quotations logged in this period."
@@ -870,12 +875,12 @@ export function ReportsPage() {
 
               {/* KPI Cards */}
               <div className="metric-grid" style={{ marginBottom: '24px' }}>
-                <MetricCard
+                {canCosts && <MetricCard
                   label="Total PO Spend"
                   value={formatCurrency(supplierPerfData?.summary?.total_spend)}
                   trend={`Across ${supplierPerfData?.summary?.po_count || 0} purchase orders`}
                   icon={<CircleDollarSign size={20} style={{ color: PRIMARY_GREEN }} />}
-                />
+                />}
                 <MetricCard
                   label="Purchase Orders Placed"
                   value={supplierPerfData?.summary?.po_count?.toString() || '0'}
@@ -908,7 +913,7 @@ export function ReportsPage() {
                       <XAxis dataKey="supplier_name" stroke="#6b7280" fontSize={12} />
                       <YAxis stroke="#6b7280" fontSize={12} tickFormatter={(v) => `$${v}`} />
                       <Tooltip formatter={(val: any) => formatCurrency(Number(val))} />
-                      <Bar dataKey="total_spend" name="Total Spend ($)" fill={PRIMARY_GREEN} radius={[4, 4, 0, 0]} />
+                      {canCosts && <Bar dataKey="total_spend" name="Total Spend ($)" fill={PRIMARY_GREEN} radius={[4, 4, 0, 0]} />}
                     </BarChart>
                   </ResponsiveContainer>
                 )}
@@ -917,7 +922,7 @@ export function ReportsPage() {
               {/* Scorecard Table */}
               <h4 style={{ margin: '0 0 12px', color: '#111827' }}>Supplier Reliability Scorecard</h4>
               <DataTable
-                columns={scorecardColumns}
+                columns={hideCostColumns(scorecardColumns)}
                 data={supplierPerfData?.scorecard || []}
                 keyExtractor={(row) => row.id}
                 emptyMessage="No supplier metrics available."
@@ -984,7 +989,7 @@ export function ReportsPage() {
               {/* Invoices Aging Table */}
               <h4 style={{ margin: '0 0 12px', color: '#111827' }}>Invoices Aging & Collection Report</h4>
               <DataTable
-                columns={receivablesColumns}
+                columns={hideCostColumns(receivablesColumns)}
                 data={receivablesData?.invoices || []}
                 keyExtractor={(row) => row.id}
                 emptyMessage="No invoices logged in the system."

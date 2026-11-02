@@ -67,6 +67,8 @@ export function ProductsPage() {
   const navigate = useNavigate();
   const { addToast } = useToast();
   const { hasPermission } = useAuth();
+  // Cost prices only with cost access (Owner decision D4); the server sends none otherwise.
+  const canCosts = hasPermission('costs.view');
 
   // Products are searched, filtered, sorted and paged on the server.
   const list = useServerList<Product>('/products', {
@@ -593,7 +595,7 @@ export function ProductsPage() {
   };
 
 
-  const columns: Column<Product>[] = [
+  const allColumns: Column<Product>[] = [
     { key: 'sku', label: 'Product ID', sortable: true, sortKey: 'sku' },
     { key: 'name', label: 'Name', sortable: true, sortKey: 'name' },
     { key: 'category_name', label: 'Category', sortable: true, sortKey: 'category', render: (row) => row.category_name || 'N/A' },
@@ -750,6 +752,7 @@ export function ProductsPage() {
       ),
     },
   ];
+  const columns = canCosts ? allColumns : allColumns.filter((col) => col.key !== 'cost_price');
 
   // Wide table: people choose their columns. Bulk actions on ticked rows.
   const { columns: shownColumns, chooser } = useColumnChooser('products', columns, ['brand_name']);
@@ -981,7 +984,7 @@ export function ProductsPage() {
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '14px', marginTop: '10px' }}>
-            <InputField
+            {canCosts && <InputField
               label="Cost Price ($)"
               id="costPrice"
               type="number"
@@ -989,7 +992,7 @@ export function ProductsPage() {
               onChange={(val) => setNewProduct((prev) => ({ ...prev, costPrice: val }))}
               onBlur={() => setNewProduct((prev) => ({ ...prev, costPrice: Number(prev.costPrice) || 0 }))}
               required
-            />
+            />}
             <InputField
               label="Base Selling Price ($)"
               id="sellingPrice"
@@ -1443,7 +1446,7 @@ export function ProductsPage() {
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '14px', marginTop: '10px' }}>
-              <InputField
+              {canCosts && <InputField
                 type="number"
                 label="Cost Price ($)"
                 id="editCost"
@@ -1451,7 +1454,7 @@ export function ProductsPage() {
                 onChange={(val) => setEditingProduct({ ...editingProduct, cost_price: val })}
                 onBlur={() => setEditingProduct(p => p ? { ...p, cost_price: Number(p.cost_price) || 0 } : null)}
                 required
-              />
+              />}
               <InputField
                 type="number"
                 label="Base Selling Price ($)"

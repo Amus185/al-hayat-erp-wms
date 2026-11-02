@@ -3,12 +3,15 @@ import { Env, uuidv4 } from '../db';
 import { PgAdapter } from '../pg-client';
 import { authMiddleware, requirePermissions } from '../middleware/auth';
 import { logAudit, createAuditLogStmt } from '../services/audit';
+import { hideUnless, PERM, PURCHASE_FIELDS, sortsFor } from '../services/privacy';
 import { prepareJournalEntryPosting } from '../services/accounting-service';
 import { csvResponse, likeTerm, listRequest, pagedResponse, pagedRows, type ListOptions } from '../services/listing';
 
 const purchasing = new Hono<{ Bindings: Env; Variables: { jwtPayload: any } }>();
 
 purchasing.use('/*', authMiddleware);
+// Cost prices, purchase costs and stock value only for people with costs.view (Owner decision D4).
+purchasing.use('/*', hideUnless(PERM.COSTS, PURCHASE_FIELDS));
 
 // ──────────────────────────────────────────────────────────────────────
 // SHARED HELPER — compute payment summary for a purchase invoice
@@ -165,7 +168,7 @@ purchasing.get('/orders', async (c) => {
     params.push(dateTo);
   }
 
-  const listReq = listRequest(c, PO_LIST);
+  const listReq = listRequest(c, sortsFor(c, PO_LIST, ['total', 'balance', 'value', 'paid']));
   if (listReq.paged) {
     // Paged: the same query, with the computed totals and statuses in SQL so
     // the server can filter, sort and count on them.
@@ -205,9 +208,9 @@ purchasing.get('/orders', async (c) => {
         { label: 'Status', value: (o: any) => o.status },
         { label: 'Ordered', value: (o: any) => o.total_qty_ordered },
         { label: 'Received', value: (o: any) => o.total_qty_received },
-        { label: 'Total', value: (o: any) => Number(o.net_total).toFixed(2) },
-        { label: 'Paid', value: (o: any) => Number(o.amount_paid || 0).toFixed(2) },
-        { label: 'Balance', value: (o: any) => Number(o.balance).toFixed(2) },
+        { label: 'Total', value: (o: any) => Number(o.net_total).toFixed(2), perm: PERM.COSTS },
+        { label: 'Paid', value: (o: any) => Number(o.amount_paid || 0).toFixed(2), perm: PERM.COSTS },
+        { label: 'Balance', value: (o: any) => Number(o.balance).toFixed(2), perm: PERM.COSTS },
         { label: 'Payment', value: (o: any) => o.payment_status },
       ], items);
     }
@@ -383,7 +386,7 @@ purchasing.get('/orders/:id/print-invoice', async (c) => {
 // ──────────────────────────────────────────────────────────────────────
 // CREATE PO — with full input validation
 // ──────────────────────────────────────────────────────────────────────
-purchasing.post('/orders', requirePermissions(['manage_purchasing']), async (c) => {
+purchasing.post('/orders', requirePermissions(['manage_purchasing', PERM.COSTS]), async (c) => {
   const body = await c.req.json();
   const userId = c.get('jwtPayload').sub;
 
@@ -461,7 +464,7 @@ purchasing.post('/orders', requirePermissions(['manage_purchasing']), async (c) 
 // Creates purchase_invoice with status UNPAID (not PAID) so payments
 // can be tracked from this point forward
 // ──────────────────────────────────────────────────────────────────────
-purchasing.post('/orders/:id/approve', requirePermissions(['manage_purchasing']), async (c) => {
+purchasing.post('/orders/:id/approve', requirePermissions(['manage_purchasing', PERM.COSTS]), async (c) => {
   const id = c.req.param('id');
   const userId = c.get('jwtPayload').sub;
 
@@ -691,7 +694,7 @@ purchasing.post('/receipts', requirePermissions(['manage_purchasing']), async (c
 // ──────────────────────────────────────────────────────────────────────
 // RECORD PURCHASE INVOICE PAYMENT (supplier deposit / installment)
 // ──────────────────────────────────────────────────────────────────────
-purchasing.post('/invoices/:id/payments', requirePermissions(['manage_purchasing']), async (c) => {
+purchasing.post('/invoices/:id/payments', requirePermissions(['manage_purchasing', PERM.COSTS]), async (c) => {
   const purchaseInvoiceId = c.req.param('id');
   if (!purchaseInvoiceId) return c.json({ message: 'Purchase invoice id is required.' }, 400);
   const userId = c.get('jwtPayload').sub;

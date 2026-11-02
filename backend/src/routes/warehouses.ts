@@ -2,10 +2,13 @@ import { Hono } from 'hono';
 import { Env, uuidv4 } from '../db';
 import { authMiddleware, requirePermissions } from '../middleware/auth';
 import { logAudit } from '../services/audit';
+import { hideUnless, PERM, COST_FIELDS, sortsFor } from '../services/privacy';
 
 const warehouses = new Hono<{ Bindings: Env }>();
 
 warehouses.use('/*', authMiddleware);
+// Cost prices, purchase costs and stock value only for people with costs.view (Owner decision D4).
+warehouses.use('/*', hideUnless(PERM.COSTS, COST_FIELDS));
 
 warehouses.get('/', async (c) => {
   const { results } = await c.env.DB.prepare(`

@@ -88,11 +88,14 @@ export function canExport(c: Context): boolean {
   return !!p && (p.role === 'admin' || p.permissions?.includes('view_reports') || p.permissions?.includes('*'));
 }
 
-export interface CsvColumn<T> { label: string; value: (row: T) => unknown }
+/** `perm`: only exported for people holding that permission (e.g. costs.view). */
+export interface CsvColumn<T> { label: string; value: (row: T) => unknown; perm?: string }
 
 /** A CSV file (UTF-8 with BOM so Excel shows Somali/Arabic text correctly). */
 export function csvResponse<T>(c: Context, filename: string, columns: CsvColumn<T>[], rows: T[]): Response {
   if (!canExport(c)) return c.json({ message: 'Exporting is limited to administrators and people with report access.' }, 403);
+  const perms: string[] = (c as any).get('jwtPayload')?.permissions ?? [];
+  columns = columns.filter((col) => !col.perm || perms.includes(col.perm) || perms.includes('*'));
   const cell = (v: unknown) => {
     if (v === null || v === undefined) return '';
     let s = v instanceof Date ? v.toISOString() : String(v);

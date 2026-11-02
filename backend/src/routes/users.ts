@@ -4,6 +4,7 @@ import * as bcrypt from 'bcryptjs';
 import { authMiddleware, requirePermissions, invalidateUserCache } from '../middleware/auth';
 import { logAudit, createAuditLogStmt } from '../services/audit';
 import { revokeSessionsStatement, syncIdentityStatements } from '../services/identity';
+import { GRANTABLE } from '../services/privacy';
 
 const ADMIN_ROLE_ID = '77777777-7777-7777-7777-777777777777';
 
@@ -25,8 +26,10 @@ users.use('/*', authMiddleware, requirePermissions(['manage_users']));
 // GET all users
 users.get('/', async (c) => {
   const { results } = await c.env.DB.prepare(`
-    SELECT id, email, full_name, phone, branch_id, warehouse_id, is_active, last_login_at, created_at 
-    FROM users ORDER BY created_at DESC
+    SELECT u.id, u.email, u.full_name, u.phone, u.branch_id, u.warehouse_id, u.is_active, u.last_login_at, u.created_at,
+           (SELECT STRING_AGG(p.code, ',' ORDER BY p.code) FROM user_permissions up JOIN permissions p ON p.id = up.permission_id
+             WHERE up.user_id = u.id) AS extra_permissions
+    FROM users u ORDER BY u.created_at DESC
   `).all();
   return c.json(results);
 });
@@ -87,6 +90,44 @@ users.post('/', async (c) => {
 });
 
 // UPDATE user profile (name, email, phone, assignment, active status)
+/**
+ * Extra permissions for one person, on top of their roles (Owner decisions
+ * D3/D4): e.g. cost prices for one Warehouse Manager, payroll for one
+ * accountant. Only administrators may grant them (the Owner, once that role exists).
+ */
+users.get('/grantable-permissions', async (c) => {
+  const { results } = await c.env.DB.prepare(
+    `SELECT code, description FROM permissions WHERE code IN (${GRANTABLE.map(() => '?').join(', ')}) ORDER BY code`,
+  ).bind(...GRANTABLE).all();
+  return c.json(results || []);
+});
+
+users.put('/:id/extra-permissions', async (c) => {
+  if ((c.get('jwtPayload') as any)?.role !== 'admin') return c.json({ message: 'Only the Owner can give extra access.' }, 403);
+  const id = c.req.param('id');
+  const body = await c.req.json().catch(() => ({}));
+  const wanted: string[] = Array.isArray(body.codes) ? body.codes.map(String) : [];
+  const bad = wanted.filter((code) => !(GRANTABLE as readonly string[]).includes(code));
+  if (bad.length) return c.json({ message: `Cannot grant: ${bad.join(', ')}` }, 400);
+  const db = c.env.DB;
+  const target = await db.prepare('SELECT id FROM users WHERE id = ?').bind(id).first();
+  if (!target) return c.json({ message: 'User not found' }, 404);
+  const { results: before } = await db.prepare(
+    'SELECT p.code FROM user_permissions up JOIN permissions p ON p.id = up.permission_id WHERE up.user_id = ?',
+  ).bind(id).all();
+  const me = (c.get('jwtPayload') as any)?.sub ?? null;
+  await db.batch([
+    db.prepare(`DELETE FROM user_permissions WHERE user_id = ? AND permission_id IN (SELECT id FROM permissions WHERE code IN (${GRANTABLE.map(() => '?').join(', ')}))`)
+      .bind(id, ...GRANTABLE),
+    ...wanted.map((code) => db.prepare(
+      'INSERT INTO user_permissions (user_id, permission_id, granted_by) SELECT ?, id, ? FROM permissions WHERE code = ? ON CONFLICT DO NOTHING',
+    ).bind(id, me, code)),
+    createAuditLogStmt(c, 'USER_EXTRA_PERMISSIONS', 'users', id, { codes: (before || []).map((r: any) => r.code) }, { codes: wanted }),
+  ]);
+  invalidateUserCache(id);
+  return c.json({ codes: wanted });
+});
+
 users.patch('/:id', async (c) => {
   const id = c.req.param('id');
   const body = await c.req.json();

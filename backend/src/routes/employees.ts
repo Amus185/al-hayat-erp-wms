@@ -8,15 +8,42 @@
 // Deleting an entry reverses its journal entry.
 import { Hono } from 'hono';
 import { Env, uuidv4 } from '../db';
-import { authMiddleware, requirePermissions } from '../middleware/auth';
+import { authMiddleware } from '../middleware/auth';
 import { createAuditLogStmt } from '../services/audit';
 import { prepareJournalEntryPosting, prepareJournalReversal } from '../services/accounting-service';
 import { csvResponse, likeTerm, listRequest, pagedResponse, pagedRows, type ListOptions } from '../services/listing';
+import { has, hideUnless, PERM, PAYROLL_FIELDS, sortsFor } from '../services/privacy';
+import { hasAllBranchAccess, ScopeError } from '../services/branch-scope';
 
 const employees = new Hono<{ Bindings: Env; Variables: { jwtPayload: any } }>();
 
 employees.use('/*', authMiddleware);
-employees.use('/*', requirePermissions(['manage_users']));
+// Who may open employee records at all: user administrators, people who
+// manage employees (Branch Managers, within their branch) and payroll staff.
+employees.use('/*', async (c, next) => {
+  const p = c.get('jwtPayload');
+  if (!(has(p, 'manage_users') || has(p, PERM.EMPLOYEES_MANAGE) || has(p, PERM.PAYROLL_VIEW))) {
+    return c.json({ error: 'You do not have access to employee records' }, 403);
+  }
+  await next();
+});
+// Salaries, advances and employment documents only for payroll access (Owner decision D3).
+employees.use('/*', hideUnless(PERM.PAYROLL_VIEW, PAYROLL_FIELDS));
+
+/** Branch the caller is limited to, or null for all branches (administrators, accountants). */
+function ownBranch(c: any): string | null {
+  const p = c.get('jwtPayload');
+  if (hasAllBranchAccess(p)) return null;
+  if (!p?.branch_id) throw new ScopeError(403, 'Your account is not assigned to a branch, so employee records are not available.');
+  return p.branch_id;
+}
+/** 404 unless the employee exists and is in the caller's branch. */
+async function findEmployee(c: any, id: string): Promise<any | null> {
+  const branch = ownBranch(c);
+  const emp = await c.env.DB.prepare(`${EMPLOYEE_SELECT} WHERE e.id = ?`).bind(id).first() as any;
+  if (!emp || (branch && emp.branch_id !== branch)) return null;
+  return emp;
+}
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 const text = (v: unknown, max = 300) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : null);
@@ -42,17 +69,20 @@ const EMPLOYEE_LIST: ListOptions = {
 };
 
 employees.get('/', async (c) => {
-  const listReq = listRequest(c, EMPLOYEE_LIST);
+  const listReq = listRequest(c, sortsFor(c, EMPLOYEE_LIST, ['salary', 'balance'], PERM.PAYROLL_VIEW));
+  const payroll = has(c.get('jwtPayload'), PERM.PAYROLL_VIEW);
   const q = (k: string) => (c.req.query(k) || '').trim();
   const where: string[] = [];
   const params: unknown[] = [];
+  const branch = ownBranch(c);
+  if (branch) { where.push('branch_id = ?'); params.push(branch); }
   if (q('q')) {
     const t = likeTerm(q('q'));
     where.push(`(full_name ILIKE ? OR COALESCE(phone, '') ILIKE ? OR COALESCE(position, '') ILIKE ? OR COALESCE(national_id, '') ILIKE ?)`);
     params.push(t, t, t, t);
   }
   if (q('branchId')) { where.push('branch_id = ?'); params.push(q('branchId')); }
-  if (q('balance') === 'owing') where.push('advance_balance > 0');
+  if (q('balance') === 'owing' && payroll) where.push('advance_balance > 0');
   const statusWhere = [...where];
   const statusParams = [...params];
   if (q('status')) { statusWhere.push('status = ?'); statusParams.push(q('status')); }
@@ -69,9 +99,9 @@ employees.get('/', async (c) => {
       { label: 'Position', value: (r: any) => r.position },
       { label: 'Branch', value: (r: any) => r.branch_name },
       { label: 'Phone', value: (r: any) => r.phone },
-      { label: 'Salary', value: (r: any) => Number(r.salary) },
-      { label: 'Total advances', value: (r: any) => Number(r.total_advances) },
-      { label: 'Advance balance', value: (r: any) => Number(r.advance_balance) },
+      { label: 'Salary', value: (r: any) => Number(r.salary), perm: PERM.PAYROLL_VIEW },
+      { label: 'Total advances', value: (r: any) => Number(r.total_advances), perm: PERM.PAYROLL_VIEW },
+      { label: 'Advance balance', value: (r: any) => Number(r.advance_balance), perm: PERM.PAYROLL_VIEW },
       { label: 'Status', value: (r: any) => r.status },
     ], rows);
   }
@@ -81,12 +111,12 @@ employees.get('/', async (c) => {
   const counts: Record<string, number> = { ALL: 0 };
   for (const g of (grouped || []) as any[]) { counts[g.status] = Number(g.n); counts.ALL += Number(g.n); }
   const sums = await c.env.DB.prepare(`SELECT COALESCE(SUM(salary), 0)::float AS salary, COALESCE(SUM(advance_balance), 0)::float AS balance ${base}`).bind(...statusParams).first() as any;
-  return pagedResponse(c, listReq, rows, total, { counts, totals: { salary: Number(sums?.salary || 0), balance: Number(sums?.balance || 0) } });
+  return pagedResponse(c, listReq, rows, total, { counts, ...(payroll ? { totals: { salary: Number(sums?.salary || 0), balance: Number(sums?.balance || 0) } } : {}) });
 });
 
 employees.get('/:id', async (c) => {
   const id = c.req.param('id');
-  const emp = await c.env.DB.prepare(`${EMPLOYEE_SELECT} WHERE e.id = ?`).bind(id).first();
+  const emp = await findEmployee(c, id);
   if (!emp) return c.json({ error: 'Employee not found' }, 404);
   const { results } = await c.env.DB.prepare(`
     SELECT ea.*, u.full_name AS created_by_name
@@ -96,7 +126,7 @@ employees.get('/:id', async (c) => {
   return c.json({ ...emp, advances: results || [] });
 });
 
-function readEmployee(body: any, partial: boolean) {
+function readEmployee(body: any, partial: boolean, payroll: boolean) {
   const out: Record<string, unknown> = {};
   const fields: [string, number][] = [['full_name', 120], ['phone', 40], ['email', 120], ['position', 80], ['national_id', 60], ['address', 300], ['notes', 1000], ['photo_key', 300], ['document_key', 300], ['document_name', 200]];
   for (const [f, max] of fields) if (!partial || f in body) out[f] = text(body[f], max);
@@ -109,12 +139,17 @@ function readEmployee(body: any, partial: boolean) {
   }
   if (!partial || 'status' in body) out.status = body.status === 'INACTIVE' ? 'INACTIVE' : 'ACTIVE';
   if ('full_name' in out && !out.full_name) throw new Error('Full name is required');
+  // Pay and the employment document are only set by people with payroll.manage (D3).
+  if (!payroll) { delete out.salary; delete out.document_key; delete out.document_name; }
   return out;
 }
 
 employees.post('/', async (c) => {
   let data: Record<string, unknown>;
-  try { data = readEmployee(await c.req.json(), false); } catch (e: any) { return c.json({ error: e.message }, 400); }
+  try { data = readEmployee(await c.req.json(), false, has(c.get('jwtPayload'), PERM.PAYROLL_MANAGE)); } catch (e: any) { return c.json({ error: e.message }, 400); }
+  if (!has(c.get('jwtPayload'), 'manage_users') && !has(c.get('jwtPayload'), PERM.EMPLOYEES_MANAGE)) return c.json({ error: 'You cannot add employees' }, 403);
+  const branch = ownBranch(c);
+  if (branch) data.branch_id = branch; // branch managers add employees to their own branch
   const id = uuidv4();
   const cols = Object.keys(data);
   const db = c.env.DB;
@@ -129,10 +164,17 @@ employees.post('/', async (c) => {
 employees.patch('/:id', async (c) => {
   const id = c.req.param('id');
   let data: Record<string, unknown>;
-  try { data = readEmployee(await c.req.json(), true); } catch (e: any) { return c.json({ error: e.message }, 400); }
+  const p = c.get('jwtPayload');
+  try { data = readEmployee(await c.req.json(), true, has(p, PERM.PAYROLL_MANAGE)); } catch (e: any) { return c.json({ error: e.message }, 400); }
+  // Payroll staff without employee management may only change pay fields.
+  if (!has(p, 'manage_users') && !has(p, PERM.EMPLOYEES_MANAGE)) {
+    for (const k of Object.keys(data)) if (!['salary', 'document_key', 'document_name'].includes(k)) delete data[k];
+  }
+  const branch = ownBranch(c);
+  if (branch && 'branch_id' in data) data.branch_id = branch; // cannot move someone to another branch
   const db = c.env.DB;
+  if (!(await findEmployee(c, id))) return c.json({ error: 'Employee not found' }, 404);
   const old = await db.prepare('SELECT * FROM employees WHERE id = ?').bind(id).first();
-  if (!old) return c.json({ error: 'Employee not found' }, 404);
   const cols = Object.keys(data);
   if (cols.length) {
     await db.batch([
@@ -147,7 +189,8 @@ employees.patch('/:id', async (c) => {
 employees.delete('/:id', async (c) => {
   const id = c.req.param('id');
   const db = c.env.DB;
-  const emp = await db.prepare('SELECT id, full_name FROM employees WHERE id = ?').bind(id).first() as any;
+  if (!has(c.get('jwtPayload'), 'manage_users') && !has(c.get('jwtPayload'), PERM.EMPLOYEES_MANAGE)) return c.json({ error: 'You cannot delete employees' }, 403);
+  const emp = await findEmployee(c, id);
   if (!emp) return c.json({ error: 'Employee not found' }, 404);
   const n = await db.prepare('SELECT COUNT(*)::int AS n FROM employee_advances WHERE employee_id = ?').bind(id).first() as any;
   if (Number(n?.n) > 0) return c.json({ error: 'This employee has advance history. Mark them Inactive instead.' }, 409);
@@ -160,10 +203,11 @@ employees.delete('/:id', async (c) => {
 
 // ── Salary advances and repayments ─────────────────────────────────────
 employees.post('/:id/advances', async (c) => {
+  if (!has(c.get('jwtPayload'), PERM.PAYROLL_MANAGE)) return c.json({ error: 'Recording advances needs payroll access' }, 403);
   const id = c.req.param('id');
   const body = await c.req.json().catch(() => ({}));
   const db = c.env.DB;
-  const emp = await db.prepare(`${EMPLOYEE_SELECT} WHERE e.id = ?`).bind(id).first() as any;
+  const emp = await findEmployee(c, id);
   if (!emp) return c.json({ error: 'Employee not found' }, 404);
 
   const kind = body.kind === 'REPAYMENT' ? 'REPAYMENT' : 'ADVANCE';
@@ -214,8 +258,10 @@ employees.post('/:id/advances', async (c) => {
 });
 
 employees.delete('/:id/advances/:advId', async (c) => {
+  if (!has(c.get('jwtPayload'), PERM.PAYROLL_MANAGE)) return c.json({ error: 'Deleting advances needs payroll access' }, 403);
   const { id, advId } = c.req.param();
   const db = c.env.DB;
+  if (!(await findEmployee(c, id))) return c.json({ error: 'Employee not found' }, 404);
   const row = await db.prepare('SELECT * FROM employee_advances WHERE id = ? AND employee_id = ?').bind(advId, id).first() as any;
   if (!row) return c.json({ error: 'Entry not found' }, 404);
   if (row.kind === 'ADVANCE') {

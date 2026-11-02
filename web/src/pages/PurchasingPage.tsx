@@ -142,6 +142,8 @@ export function PurchasingPage() {
   const navigate = useNavigate();
   const { addToast } = useToast();
   const { hasPermission } = useAuth();
+  // Prices and supplier balances only with cost access (Owner decision D4); quantities and receiving stay.
+  const canCosts = hasPermission('costs.view');
 
   // Purchase orders: searched, filtered, sorted and paged on the server.
   const list = useServerList<PurchaseOrder>('/purchasing/orders', {
@@ -516,7 +518,7 @@ export function PurchasingPage() {
     setIsReceiptOpen(false);
   };
 
-  const columns: Column<any>[] = [
+  const allColumns: Column<any>[] = [
     {
       key: 'po_number',
       sortable: true,
@@ -609,7 +611,7 @@ export function PurchasingPage() {
               <Truck size={14} style={{ marginRight: '4px', inlineSize: 'auto' }} /> Receive
             </button>
           )}
-          {(row.status === 'RECEIVED' || row.status === 'FULLY_RECEIVED') && (
+          {canCosts && (row.status === 'RECEIVED' || row.status === 'FULLY_RECEIVED') && (
             <button
               type="button"
               className="btn btn-secondary btn-sm"
@@ -623,6 +625,7 @@ export function PurchasingPage() {
       ),
     },
   ];
+  const columns = canCosts ? allColumns : allColumns.filter((col) => col.key !== 'total');
 
   // Derive invoice summary from selectedPO (or fallback to PO total)
   const poInvoice = selectedPO?.invoice;
@@ -667,9 +670,9 @@ export function PurchasingPage() {
           <button type="button" className="btn btn-secondary" onClick={() => setIsSupplierOpen(true)}>
             <UserPlus size={16} style={{ marginRight: '6px', inlineSize: 'auto' }} /> Add Supplier
           </button>
-          <button type="button" className="btn btn-primary" onClick={() => navigate('/purchasing/new')}>
+          {canCosts && <button type="button" className="btn btn-primary" onClick={() => navigate('/purchasing/new')}>
             <Plus size={16} style={{ marginRight: '6px', inlineSize: 'auto' }} /> Create PO
-          </button>
+          </button>}
         </div>
       </section>
 
@@ -701,7 +704,7 @@ export function PurchasingPage() {
             { key: 'warehouseId', label: 'All warehouses', options: warehouses.map((w: any) => ({ value: w.id, label: w.name })) },
           ]}
         />
-        {list.totals && list.total > 0 && (
+        {canCosts && list.totals && list.total > 0 && (
           <div className="list-summary">
             <span>Value: <strong>${Number(list.totals.value ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong></span>
             <span>Still to pay: <strong style={{ color: (list.totals.outstanding ?? 0) > 0 ? '#b45309' : undefined }}>${Number(list.totals.outstanding ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong></span>
@@ -773,7 +776,7 @@ export function PurchasingPage() {
                       label={selectedPO.status.replace(/_/g, ' ')}
                       tone={selectedPO.status === 'RECEIVED' || selectedPO.status === 'FULLY_RECEIVED' ? 'green' : selectedPO.status === 'PARTIALLY_RECEIVED' ? 'yellow' : selectedPO.status === 'SUBMITTED' ? 'blue' : 'neutral'}
                     />
-                    {invoiceSummary && (
+                    {canCosts && invoiceSummary && (
                       <StatusBadge
                         label={invoiceSummary.summary.payment_status.replace('_', ' ')}
                         tone={paymentStatusTone(invoiceSummary.summary.payment_status)}
@@ -784,7 +787,7 @@ export function PurchasingPage() {
               </div>
 
               {/* Invoice Payment Summary */}
-              {invoiceSummary && (
+              {canCosts && invoiceSummary && (
                 <div>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -828,9 +831,11 @@ export function PurchasingPage() {
                           <th style={{ padding: '8px 12px', textAlign: 'center' }}>Received</th>
                           <th style={{ padding: '8px 12px', textAlign: 'center' }}>Remaining</th>
                           {isReceivable && <th style={{ padding: '8px 12px', textAlign: 'center', background: '#ecfdf5', color: '#065f46' }}>Receive Now</th>}
+                          {canCosts && <>
                           <th style={{ padding: '8px 12px', textAlign: 'right' }}>Unit Cost</th>
                           <th style={{ padding: '8px 12px', textAlign: 'right' }}>Discount</th>
                           <th style={{ padding: '8px 12px', textAlign: 'right' }}>Line Total</th>
+                          </>}
                         </tr>
                       </thead>
                       <tbody>
@@ -881,6 +886,7 @@ export function PurchasingPage() {
                                   </div>
                                 </td>
                               )}
+                              {canCosts && <>
                               <td style={{ padding: '10px 12px', textAlign: 'right' }}>${Number(line.unit_cost).toLocaleString()}</td>
                               <td style={{ padding: '10px 12px', textAlign: 'right', color: '#b45309' }}>
                                 {Number(line.discount_amount || 0) > 0 ? `-$${Number(line.discount_amount).toFixed(2)}` : '—'}
@@ -888,6 +894,7 @@ export function PurchasingPage() {
                               <td style={{ padding: '10px 12px', textAlign: 'right', fontWeight: 600 }}>
                                 ${Number(lineTotal).toLocaleString(undefined, { minimumFractionDigits: 2 })}
                               </td>
+                              </>}
                             </tr>
                           );
                         })}
@@ -963,7 +970,7 @@ export function PurchasingPage() {
                       </button>
                     </div>
 
-                    {selectedPO.status === 'SUBMITTED' && hasPermission('manage_purchasing') && (
+                    {selectedPO.status === 'SUBMITTED' && hasPermission('manage_purchasing') && canCosts && (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                         <span style={{ fontSize: '12px', color: '#64748b' }}>PO Approval</span>
                         <button

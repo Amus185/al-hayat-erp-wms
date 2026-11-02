@@ -2,12 +2,15 @@ import { Hono } from 'hono';
 import { Env, uuidv4 } from '../db';
 import { authMiddleware, requirePermissions, isAdminUser } from '../middleware/auth';
 import { logAudit, createAuditLogStmt } from '../services/audit';
+import { hideUnless, PERM, COST_FIELDS, sortsFor, canSeeCosts } from '../services/privacy';
 import { prepareOpeningStock, type OpeningStockItem } from '../services/accounting-service';
 import { csvResponse, likeTerm, listRequest, pagedResponse, pagedRows, type ListOptions, type ListRequest } from '../services/listing';
 
 const products = new Hono<{ Bindings: Env; Variables: { jwtPayload: any } }>();
 
 products.use('/*', authMiddleware);
+// Cost prices, purchase costs and stock value only for people with costs.view (Owner decision D4).
+products.use('/*', hideUnless(PERM.COSTS, COST_FIELDS));
 
 // ── Products list, paged on the server ───────────────────────────────────
 const PRODUCT_LIST: ListOptions = {
@@ -56,7 +59,7 @@ async function listProducts(c: any, r: ListRequest) {
       { label: 'Category', value: (x: any) => x.category_name },
       { label: 'Brand', value: (x: any) => x.brand_name },
       { label: 'Type', value: (x: any) => x.product_type },
-      { label: 'Cost price', value: (x: any) => Number(x.cost_price).toFixed(2) },
+      { label: 'Cost price', value: (x: any) => Number(x.cost_price).toFixed(2), perm: PERM.COSTS },
       { label: 'Selling price', value: (x: any) => Number(x.selling_price).toFixed(2) },
       { label: 'Stock (all locations)', value: (x: any) => x.total_stock },
       { label: 'Active', value: (x: any) => (Number(x.is_active) === 1 ? 'Yes' : 'No') },
@@ -105,7 +108,7 @@ async function listProducts(c: any, r: ListRequest) {
 
 products.get('/', async (c) => {
   const status = c.req.query('status'); // 'active' | 'inactive' | 'all'
-  const listReq = listRequest(c, PRODUCT_LIST);
+  const listReq = listRequest(c, sortsFor(c, PRODUCT_LIST, ['cost']));
   if (listReq.paged) return listProducts(c, listReq);
   let query = `
     SELECT p.*, COALESCE(p.is_active, 1) AS is_active, COALESCE(p.product_type, 'STANDARD') AS product_type,
@@ -166,7 +169,8 @@ products.post('/', requirePermissions(['manage_inventory']), async (c) => {
   if (!body.sku || !body.sku.trim()) return c.json({ message: 'SKU is required.' }, 400);
   if (!body.name || !body.name.trim()) return c.json({ message: 'Product name is required.' }, 400);
 
-  const cost = Number(body.costPrice || 0);
+  // Without costs.view the cost is not shown, so it cannot be set either (D4).
+  const cost = canSeeCosts(c) ? Number(body.costPrice || 0) : 0;
   const sell = Number(body.sellingPrice || 0);
   if (cost < 0) return c.json({ message: 'Cost price cannot be negative.' }, 400);
   if (sell < 0) return c.json({ message: 'Selling price cannot be negative.' }, 400);
@@ -497,7 +501,7 @@ products.post('/bulk', requirePermissions(['manage_inventory']), async (c) => {
     }
 
     const productId = uuidv4();
-    const cost = Math.max(0, Number(item.costPrice || 0));
+    const cost = canSeeCosts(c) ? Math.max(0, Number(item.costPrice || 0)) : 0;
     const sell = Math.max(cost, Number(item.sellingPrice || 0));
 
     // ON CONFLICT on both sku and barcode as safety nets
@@ -676,7 +680,7 @@ products.patch('/:id', requirePermissions(['manage_inventory']), async (c) => {
     fields.push('brand_id = ?'); vals.push(brId || null);
   }
 
-  if (body.costPrice !== undefined || body.cost_price !== undefined) {
+  if ((body.costPrice !== undefined || body.cost_price !== undefined) && canSeeCosts(c)) {
     const cost = Number(body.costPrice ?? body.cost_price ?? 0);
     if (cost < 0) return c.json({ message: 'Cost price cannot be negative.' }, 400);
     fields.push('cost_price = ?'); vals.push(cost);

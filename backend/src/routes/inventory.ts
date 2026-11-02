@@ -2,12 +2,15 @@ import { Hono } from 'hono';
 import { Env, uuidv4 } from '../db';
 import { authMiddleware, requirePermissions, isAdminUser } from '../middleware/auth';
 import { createAuditLogStmt } from '../services/audit';
+import { hideUnless, PERM, COST_FIELDS, sortsFor, canSeeCosts } from '../services/privacy';
 import { prepareInventoryAdjustmentJournalEntry } from '../services/accounting-service';
 import { csvResponse, dateRange, likeTerm, listRequest, pagedResponse, pagedRows, type ListOptions, type ListRequest } from '../services/listing';
 
 const inventory = new Hono<{ Bindings: Env; Variables: { jwtPayload: any } }>();
 
 inventory.use('/*', authMiddleware);
+// Cost prices, purchase costs and stock value only for people with costs.view (Owner decision D4).
+inventory.use('/*', hideUnless(PERM.COSTS, COST_FIELDS));
 
 // ── Stock list, paged on the server ──────────────────────────────────────
 const STOCK_LIST: ListOptions = {
@@ -65,15 +68,15 @@ async function listStock(c: any, r: ListRequest, scopedBranchId: string | null) 
       { label: 'On hand', value: (x: any) => x.quantity_on_hand },
       { label: 'Reserved', value: (x: any) => x.quantity_reserved },
       { label: 'Available', value: (x: any) => Number(x.quantity_on_hand) - Number(x.quantity_reserved) },
-      { label: 'Value at cost', value: (x: any) => (Number(x.quantity_on_hand) * Number(x.cost_price || 0)).toFixed(2) },
+      { label: 'Value at cost', value: (x: any) => (Number(x.quantity_on_hand) * Number(x.cost_price || 0)).toFixed(2), perm: PERM.COSTS },
     ], rows);
   }
   const sum = await c.env.DB.prepare(`
     SELECT COALESCE(SUM(s.quantity_on_hand), 0)::int AS units, COALESCE(SUM(s.quantity_reserved), 0)::int AS reserved,
            COUNT(DISTINCT s.product_id)::int AS products, COALESCE(SUM(s.quantity_on_hand * COALESCE(p.cost_price, 0)), 0) AS value
     ${base}`).bind(...params).first() as any;
-  const isAdmin = isAdminUser(c.get('jwtPayload'));
-  // Cost stays with administrators, as before this list was paged.
+  // Cost and stock value only for people with costs.view (Owner decision D4).
+  const isAdmin = canSeeCosts(c);
   if (!isAdmin) for (const row of rows) delete row.cost_price;
   return pagedResponse(c, r, rows, total, {
     totals: { units: Number(sum?.units || 0), reserved: Number(sum?.reserved || 0), products: Number(sum?.products || 0), ...(isAdmin ? { value: Math.round(Number(sum?.value || 0) * 100) / 100 } : {}) },
@@ -84,7 +87,7 @@ inventory.get('/stock', async (c) => {
   const payload = c.get('jwtPayload');
   const scopedBranchId = isAdminUser(payload) ? null : payload.branch_id;
 
-  const listReq = listRequest(c, STOCK_LIST);
+  const listReq = listRequest(c, sortsFor(c, STOCK_LIST, ['value', 'cost']));
   if (listReq.paged) return listStock(c, listReq, scopedBranchId);
 
   let query = `

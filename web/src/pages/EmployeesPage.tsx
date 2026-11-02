@@ -10,6 +10,7 @@ import { ModalLoading } from '../components/ModalLoading';
 import { useServerList, useOpenParam } from '../utils/serverList';
 import { useToast } from '../contexts/ToastContext';
 import { confirmAction } from '../utils/swal';
+import { useAuth } from '../contexts/AuthContext';
 
 interface Employee {
   id: string; full_name: string; phone: string | null; email: string | null; position: string | null;
@@ -36,6 +37,11 @@ function Photo({ emp, small }: { emp: Pick<Employee, 'photo_key' | 'full_name'>;
 
 export function EmployeesPage() {
   const { addToast } = useToast();
+  const { hasPermission, isAdmin } = useAuth();
+  // Pay is shown only with payroll access (Owner decision D3); the server enforces the same.
+  const canPay = hasPermission('payroll.view');
+  const canManagePay = hasPermission('payroll.manage');
+  const canEdit = hasPermission('manage_users') || hasPermission('employees.manage');
   const list = useServerList<Employee>('/employees', { key: 'employees', filters: ['status', 'branchId', 'balance'], defaultSort: 'name', defaultDir: 'asc' });
   const [branches, setBranches] = useState<{ id: string; name: string }[]>([]);
   useEffect(() => { apiGet<any[]>('/branches').then((b) => setBranches(b || [])).catch(() => {}); }, []);
@@ -93,7 +99,8 @@ export function EmployeesPage() {
     if (!form.full_name.trim()) { addToast('error', 'Full name is required'); return; }
     setSaving(true);
     try {
-      const body = { ...form, salary: Number(form.salary) || 0 };
+      const body: Record<string, unknown> = { ...form, salary: Number(form.salary) || 0 };
+      if (!canManagePay) { delete body.salary; delete body.document_key; delete body.document_name; }
       const saved = editId ? await apiPatch<Employee>(`/employees/${editId}`, body) : await apiPost<Employee>('/employees', body);
       addToast('success', `${saved.full_name} saved`);
       setFormOpen(false);
@@ -132,7 +139,7 @@ export function EmployeesPage() {
     try { await apiDelete(`/employees/${e.id}`); addToast('success', `${e.full_name} deleted`); setProfileId(null); list.refresh(); } catch (err: any) { addToast('error', err?.message || 'Could not delete'); }
   };
 
-  const columns: Column<Employee>[] = [
+  const allColumns: Column<Employee>[] = [
     { key: 'full_name', label: 'Name', sortable: true, sortKey: 'name', render: (e) => (
       <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}><Photo emp={e} small /><span><strong>{e.full_name}</strong><span className="mm-sub">{e.phone || ''}</span></span></span>
     ) },
@@ -142,6 +149,7 @@ export function EmployeesPage() {
     { key: 'advance_balance', label: 'Advance balance', sortable: true, sortKey: 'balance', render: (e) => <strong style={{ color: e.advance_balance > 0 ? '#b45309' : undefined }}>{money(e.advance_balance)}</strong> },
     { key: 'status', label: 'Status', render: (e) => <StatusBadge label={e.status} tone={e.status === 'ACTIVE' ? 'green' : 'neutral'} /> },
   ];
+  const columns = canPay ? allColumns : allColumns.filter((col) => col.key !== 'salary' && col.key !== 'advance_balance');
 
   const f = (k: string) => ({ value: form[k] ?? '', onChange: (ev: any) => setForm((p) => ({ ...p, [k]: ev.target.value })) });
 
@@ -151,10 +159,10 @@ export function EmployeesPage() {
         <div>
           <h2 style={{ margin: 0, fontSize: '22px', fontWeight: 700, color: '#111827' }}>Employees</h2>
           <p style={{ margin: '4px 0 0', color: '#6b7280', fontSize: '14px' }}>
-            {list.total.toLocaleString()} employees · salaries {money(list.totals?.salary ?? 0)} · advances owed {money(list.totals?.balance ?? 0)}
+            {list.total.toLocaleString()} employees{canPay && <> · salaries {money(list.totals?.salary ?? 0)} · advances owed {money(list.totals?.balance ?? 0)}</>}
           </p>
         </div>
-        <button type="button" className="btn btn-primary" id="new-employee" onClick={openCreate}><Plus size={16} /> New Employee</button>
+        {canEdit && <button type="button" className="btn btn-primary" id="new-employee" onClick={openCreate}><Plus size={16} /> New Employee</button>}
       </div>
 
       <div className="panel" style={{ padding: '12px' }}>
@@ -163,7 +171,7 @@ export function EmployeesPage() {
         <ListToolbar id="emp-toolbar" list={list} searchPlaceholder="Search name, phone, position or ID…"
           filters={[
             { key: 'branchId', label: 'All branches', options: branches.map((b) => ({ value: b.id, label: b.name })) },
-            { key: 'balance', label: 'Any advance balance', options: [{ value: 'owing', label: 'Owes an advance' }] },
+            ...(canPay ? [{ key: 'balance', label: 'Any advance balance', options: [{ value: 'owing', label: 'Owes an advance' }] }] : []),
           ]} />
         <DataTable id="emp-table" data={list.items} columns={columns} server={list} keyExtractor={(e) => e.id} onRowClick={(e) => openProfile(e.id)}
           emptyMessage={list.activeFilters ? 'No employees match your filters' : "No employees yet. Click 'New Employee' to add one."} />
@@ -179,16 +187,16 @@ export function EmployeesPage() {
                 <div style={{ fontSize: 18, fontWeight: 700 }}>{profile.full_name} <StatusBadge label={profile.status} tone={profile.status === 'ACTIVE' ? 'green' : 'neutral'} /></div>
                 <div className="mm-sub">{[profile.position, profile.branch_name].filter(Boolean).join(' · ') || 'No position set'}</div>
               </div>
-              <button type="button" className="btn btn-secondary btn-sm" onClick={() => openEdit(profile)}><Pencil size={14} /> Edit</button>
-              <button type="button" className="mm-icon" aria-label="Delete employee" onClick={() => deleteEmployee(profile)}><Trash2 size={15} /></button>
+              {(canEdit || canManagePay) && <button type="button" className="btn btn-secondary btn-sm" onClick={() => openEdit(profile)}><Pencil size={14} /> Edit</button>}
+              {canEdit && <button type="button" className="mm-icon" aria-label="Delete employee" onClick={() => deleteEmployee(profile)}><Trash2 size={15} /></button>}
             </div>
 
-            <div className="emp-stats">
+            {canPay && <div className="emp-stats">
               <div className="emp-stat"><span>Normal salary</span><strong>{money(profile.salary)}</strong></div>
               <div className="emp-stat"><span>Total advances</span><strong>{money(profile.total_advances)}</strong></div>
               <div className="emp-stat"><span>Repaid</span><strong>{money(profile.total_repaid)}</strong></div>
               <div className="emp-stat"><span>Remaining balance</span><strong style={{ color: profile.advance_balance > 0 ? '#b45309' : '#066006' }}>{money(profile.advance_balance)}</strong></div>
-            </div>
+            </div>}
 
             <dl className="emp-info">
               <div><dt>Phone</dt><dd>{profile.phone || '—'}</dd></div>
@@ -196,15 +204,15 @@ export function EmployeesPage() {
               <div><dt>Hire date</dt><dd>{day(profile.hire_date)}</dd></div>
               <div><dt>National ID</dt><dd>{profile.national_id || '—'}</dd></div>
               <div><dt>Address</dt><dd>{profile.address || '—'}</dd></div>
-              <div><dt>Employment document</dt><dd>{profile.document_key
+              {canPay && <div><dt>Employment document</dt><dd>{profile.document_key
                 ? <a href={fileUrl(profile.document_key)} target="_blank" rel="noreferrer"><FileText size={13} style={{ verticalAlign: '-2px' }} /> {profile.document_name || 'Open document'}</a>
-                : '—'}</dd></div>
+                : '—'}</dd></div>}
               {profile.notes && <div style={{ gridColumn: '1 / -1' }}><dt>Notes</dt><dd>{profile.notes}</dd></div>}
             </dl>
 
-            <div>
+            {canPay && <div>
               <h4 style={{ margin: '0 0 8px', display: 'flex', alignItems: 'center', gap: 6 }}><Wallet size={16} /> Salary advances</h4>
-              <div className="emp-adv-form">
+              {canManagePay && <div className="emp-adv-form">
                 <label className="form-field"><span className="form-field__label">Type</span>
                   <select className="form-select" value={adv.kind} onChange={(e) => setAdv({ ...adv, kind: e.target.value, method: e.target.value === 'REPAYMENT' ? 'SALARY_DEDUCTION' : 'CASH' })}>
                     <option value="ADVANCE">Give advance</option>
@@ -223,7 +231,7 @@ export function EmployeesPage() {
                 <label className="form-field" style={{ flex: 1, minWidth: 140 }}><span className="form-field__label">Note</span>
                   <input className="form-input" value={adv.notes} onChange={(e) => setAdv({ ...adv, notes: e.target.value })} placeholder="optional" /></label>
                 <button type="button" className="btn btn-primary" id="record-advance" onClick={recordAdvance} disabled={advSaving}>{advSaving ? 'Saving…' : 'Record'}</button>
-              </div>
+              </div>}
               <DataTable id="adv-table" data={profile.advances} keyExtractor={(a) => a.id} pageSize={10}
                 emptyMessage="No advances yet."
                 columns={[
@@ -233,9 +241,9 @@ export function EmployeesPage() {
                   { key: 'method', label: 'Paid by', render: (a) => METHOD[a.method] ?? a.method },
                   { key: 'notes', label: 'Note', render: (a) => a.notes || '' },
                   { key: 'created_by_name', label: 'By', render: (a) => a.created_by_name || '' },
-                  { key: 'x', label: '', render: (a) => <button type="button" className="mm-icon" aria-label="Delete entry" onClick={() => deleteAdvance(a)}><Trash2 size={14} /></button> },
+                  { key: 'x', label: '', render: (a) => canManagePay ? <button type="button" className="mm-icon" aria-label="Delete entry" onClick={() => deleteAdvance(a)}><Trash2 size={14} /></button> : null },
                 ]} />
-            </div>
+            </div>}
           </div>
         )}
       </Modal>
@@ -262,15 +270,16 @@ export function EmployeesPage() {
             <label className="form-field"><span className="form-field__label">Position</span><input className="form-input" {...f('position')} placeholder="e.g. Cashier" /></label>
             <label className="form-field"><span className="form-field__label">Phone</span><input className="form-input" {...f('phone')} /></label>
             <label className="form-field"><span className="form-field__label">Email</span><input className="form-input" type="email" {...f('email')} /></label>
-            <label className="form-field"><span className="form-field__label">Branch</span>
-              <select className="form-select" {...f('branch_id')}><option value="">—</option>{branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}</select></label>
-            <label className="form-field"><span className="form-field__label">Normal salary (monthly)</span><input className="form-input" id="emp-salary" type="number" min="0" step="0.01" {...f('salary')} placeholder="0.00" /></label>
+            {/* Branch Managers add people to their own branch (set by the server). */}
+            {isAdmin && <label className="form-field"><span className="form-field__label">Branch</span>
+              <select className="form-select" {...f('branch_id')}><option value="">—</option>{branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}</select></label>}
+            {canManagePay && <label className="form-field"><span className="form-field__label">Normal salary (monthly)</span><input className="form-input" id="emp-salary" type="number" min="0" step="0.01" {...f('salary')} placeholder="0.00" /></label>}
             <label className="form-field"><span className="form-field__label">Hire date</span><input className="form-input" type="date" {...f('hire_date')} /></label>
             <label className="form-field"><span className="form-field__label">National ID</span><input className="form-input" {...f('national_id')} /></label>
             <label className="form-field" style={{ gridColumn: '1 / -1' }}><span className="form-field__label">Address</span><input className="form-input" {...f('address')} /></label>
             <label className="form-field"><span className="form-field__label">Status</span>
               <select className="form-select" {...f('status')}><option value="ACTIVE">Active</option><option value="INACTIVE">Inactive</option></select></label>
-            <div className="form-field"><span className="form-field__label">Employment document</span>
+            {canManagePay && <div className="form-field"><span className="form-field__label">Employment document</span>
               <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
                 <input ref={docInput} type="file" accept=".pdf,.doc,.docx,image/*" style={{ display: 'none' }} onChange={(e) => upload('document', e.target.files)} aria-label="Choose employment document" />
                 <button type="button" className="btn btn-secondary btn-sm" onClick={() => docInput.current?.click()} disabled={!!uploading}>
@@ -279,7 +288,7 @@ export function EmployeesPage() {
                 {form.document_key && <span className="mm-sub" style={{ display: 'inline' }}>{form.document_name || 'document'}</span>}
                 {form.document_key && <button type="button" className="mm-icon" aria-label="Remove document" onClick={() => setForm((p) => ({ ...p, document_key: '', document_name: '' }))}><Trash2 size={13} /></button>}
               </div>
-            </div>
+            </div>}
             <label className="form-field" style={{ gridColumn: '1 / -1' }}><span className="form-field__label">Notes</span><textarea className="form-textarea" rows={2} {...f('notes')} /></label>
           </div>
         </div>

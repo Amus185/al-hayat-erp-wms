@@ -57,7 +57,7 @@ const navItems = [
   { label: 'Reports', path: '/reports', icon: BarChart3, permission: 'view_reports' },
   { label: 'Accounting', path: '/accounting', icon: BookOpen, permission: 'view_reports', adminOnly: true },
   { label: 'Audit Log', path: '/audit', icon: FileClock, permission: 'view_reports', adminOnly: true },
-  { label: 'Employees', path: '/employees', icon: Contact, permission: 'manage_users' },
+  { label: 'Employees', path: '/employees', icon: Contact, permission: 'manage_users|employees.manage|payroll.view' },
   { label: 'Users', path: '/users', icon: Users, permission: 'manage_users', adminOnly: true },
 ];
 
