@@ -1,7 +1,10 @@
 # Multi-branch, multi-warehouse administration: findings and plan
 
-Status: **plan, awaiting approval.** Nothing in here is implemented yet except
-the read-only inspection script (`backend/scripts/inspect-schema.mjs`).
+Status: **Phase 0 (assessment) in progress.** The code-level assessment is
+done (sections 1, 6, 7, 8). The production data checks are waiting for the
+read-only report from `backend/scripts/inspect-schema.mjs`; sections marked
+**[confirm on production]** are updated when it arrives. Nothing is
+implemented; no database change is made without the Owner's approval.
 
 Model (as recommended): **branches are accounting reporting units, warehouses
 are inventory management units, the Owner sees both consolidated.** One
@@ -137,10 +140,107 @@ Each phase ends with tests, a push, and a deploy the agent verifies on productio
 
 ---
 
-## 5. Decisions needed from the Owner
+## 5. Owner decisions (agreed)
 
-- **D1.** Should today's `admin` account(s) become **Owner**? Is there more than one owner?
-- **D2.** Customers and suppliers: **shared company-wide** (recommended: one customer can buy at any branch; each branch sees balances only for its own sales), or separate per branch?
-- **D3.** Should a Branch Manager see the **salaries and advances** of their branch's employees, or only the Owner?
-- **D4.** Should warehouse managers see **cost prices and inventory value**, or quantities only?
-- **D5.** Start with Phase 0 now (recommended, it closes live security holes), then Phases 1–6 in order?
+| # | Decision | Consequence for the design |
+|---|---|---|
+| D1 | The current **primary admin** becomes the first Owner. One Owner now, several possible later. **Only an Owner can grant Owner.** Other admins are not promoted. | New `owner` role. The primary admin is chosen from the report's administrator list and confirmed by the Owner before the change. `users.ts` guard: granting/removing `owner`, or editing an Owner account, requires the caller to be an Owner. The last Owner cannot be removed or deactivated. |
+| D2 | Customers and suppliers are **shared master records**; each branch sees only its own sales, payments, debts, purchases and balances; the Owner sees everything. | No branch column on `customers`/`suppliers`. Customer and supplier **lists** are visible to people who may sell/buy; **transactions and balances** are always filtered by the viewer's branches (sales orders, invoices, payments, debts, POs, purchase invoices all already resolve to a branch). A customer's total balance across branches is Owner/authorized-only. |
+| D3 | Salaries and advances: **Owner only by default**; Branch Managers manage their employees' ordinary details without pay; the Owner can grant payroll to chosen accountants/HR. | Split `employees.manage` (details, within assigned branches) from `payroll.view` / `payroll.manage` (salary, advances, employment documents). The server removes salary, advance totals and document keys from every answer (list, profile, export, search, assistant) unless the caller holds `payroll.view`. |
+| D4 | Warehouse Managers see quantities and movements; **cost prices, purchase costs and valuation** only for the Owner and authorized accounting staff; grantable per person. | New `costs.view` permission, checked on the server in products, inventory, warehouses, reports, purchasing (PO prices), transfers, exports and the assistant. Granting it to one Warehouse Manager = a personal permission (see `user_permissions` below). |
+| D5 | Phase 0 is an assessment; then phase by phase, each tested; no destructive changes or risky migrations without approval. | Every phase lists its migrations up front; each migration is additive (new tables/columns, backfills that only fill empty values) and is run first against a copy of production. |
+
+### Consequence of D4 (per-person grants)
+Granting `costs.view` or `payroll.view` to **one** Warehouse Manager without giving it to all of them needs a
+per-person grant. Proposed: **`user_permissions`** (`user_id`, `permission_id`, `granted_by`, `granted_at`),
+additive to role permissions. Alternative without a new table: create a one-person role such as
+"Warehouse Manager + costs". The table is cleaner and auditable; the Owner chooses.
+
+---
+
+## 6. Route-by-route access assessment (code)
+
+Legend: ✅ enforced on the server · ⚠️ partial · ❌ missing. "Location" = limited to the caller's branch/warehouse.
+
+| Area (route file) | Permission check | Location limit | Cost / pay privacy | Notes |
+|---|---|---|---|---|
+| Sales, invoices, payments, customers (`sales.ts`) | ✅ `manage_sales` | ✅ branch (14 places) | ⚠️ margin uses cost for anyone with access | customer list is company-wide (fits D2), balances per branch ✅ |
+| Accounting (`accounting.ts`) | ✅ `view_reports` / `manage_purchasing` | ✅ branch, all-branch for admin/accountant | — | accountant = every branch; needs "selected branches" |
+| Expenses (`expenses.ts`) | ✅ | ✅ branch | — | |
+| Reports (`reports.ts`) | ✅ `view_reports` | ⚠️ uses `isAdminUser` (S1) | ❌ stock value at cost shown to anyone with reports (sales reps) | D4 |
+| Purchasing, suppliers (`purchasing.ts`) | ✅ `manage_purchasing` | ❌ none | ❌ prices visible | warehouse manager has `manage_purchasing` today |
+| Inventory (`inventory.ts`) | ⚠️ reads open to all signed-in | ⚠️ via `isAdminUser` (S1) | ⚠️ cost hidden from non-admins, but S1 makes unassigned users "admin" | |
+| Warehouses (`warehouses.ts`) | ❌ reads open to all signed-in | ❌ none | ❌ `inventory_value`, `cost_price` to everyone | D4 |
+| Products (`products.ts`) | ✅ writes | ⚠️ `isAdminUser` | ⚠️ cost for admins only (S1 widens) | |
+| Transfers (`transfers.ts`) | ✅ `manage_transfers` | ⚠️ branch only; warehouses not limited; S1 | — | no partial receipt (see 8) |
+| Deliveries (`deliveries.ts`) | ✅ `manage_sales` | ❌ none | — | branch is derivable from the sales order |
+| Manufacturing (`manufacturing.ts`) | ✅ `manage_inventory` | ❌ none | ⚠️ material costs visible | `mfg_jobs` has no location |
+| Employees (`employees.ts`) | ✅ `manage_users` (admins) | ❌ none | ❌ pay always included | D3 |
+| Owner's assets (`assets.ts`) | ⚠️ `view_reports` / `manage_purchasing` | — | ❌ S2 | Owner-only |
+| Files (`files.ts`) | ❌ any signed-in user | ❌ | ❌ S3 | link files to records |
+| Users, roles (`users.ts`) | ⚠️ `manage_users` on writes; **list and roles readable by any signed-in user** | ❌ | — | only admins grant admin ✅; needs Owner rule (D1) |
+| Branches (`branches.ts`) | ✅ writes admin-only | ⚠️ `isAdminUser` | — | |
+| Audit (`audit.ts`) | ⚠️ own entries for non-admins | ❌ no branch view | — | |
+| Search (`search.ts`) | ✅ per kind | ✅ branch for financial kinds | ⚠️ | |
+| Assistant (`agent.ts`) | ⚠️ tools check permissions; **no Owner gate** (S4) | inherits routes | inherits routes | tools run as the user, so fixing routes fixes the assistant |
+| Storefront admin | ✅ | ⚠️ web branch | — | |
+| Notifications, saved views | per user ✅ | — | — | |
+
+Other findings: `user_roles` and `role_permissions` have **no unique constraint** (duplicate rows exist
+in a fresh database: 3 and 17). Harmless today, but must be cleaned before permissions are edited in a UI.
+
+## 7. Accounting assessment (code)
+
+| Workflow | Posts under | Fits the model? |
+|---|---|---|
+| Sale, invoice, payment, customer debt (`SALE`) | sales order's branch | ✅ |
+| Expense (`EXPENSE`) | expense's branch | ✅ |
+| Purchase, supplier invoice, supplier payment (`PURCHASE`) | the PO's `branch_id`, or company level when the PO is for a warehouse | ✅ branch payables already possible **[confirm on production: share of POs with a branch]** |
+| Branch↔branch / warehouse↔branch transfer (`TRANSFER`) | sender out / receiver in through **1090 Inter-Branch Clearing** at **receipt**; warehouse side = company level | ✅ consolidated nets to zero **[confirm: 1090 total = 0]** |
+| Stock adjustment (`INVENTORY_ADJUSTMENT`) | the stock's branch, else company | ✅ |
+| Manufacturing work orders (`MANUFACTURING`) | company level | ✅ (warehouse-based) |
+| Depreciation (`DEPRECIATION`) | company level | ✅; branch-owned assets could later carry a branch |
+| Salary advances (`PAYROLL`) | the employee's branch | ✅ |
+| Closing, opening, manual | chosen branch or company | ✅ |
+
+No new ledger is needed. Warehouses get **valuation and movement** reports from `inventory_stock`,
+`inventory_transactions` and product cost, not journal entries.
+
+## 8. Gaps that need design (not only access)
+
+1. **Receiving with differences.** Receipt always books the full dispatched quantity. There is nowhere to
+   record that 2 of 10 arrived damaged or missing. Proposal: the receiver enters the quantity per line plus a
+   reason; the accepted quantity goes into stock; the difference becomes a **transit loss** movement
+   (`inventory_transactions` type `TRANSFER_SHORTAGE`) and, at cost, a journal entry **Dr Inventory
+   Shrinkage expense / Cr 1090 or Inventory** on the **sender's** books (the receiver only books what
+   arrived). The transfer gets `receipt_status` FULL/SHORT/OVER so the sender sees it at once.
+2. **Goods in transit.** Stock leaves the sender at dispatch, but the journal moves at receipt. Totals stay
+   right company-wide; per location, in-transit stock should appear as its own line ("in transit to X").
+   Report-only change, no new ledger.
+3. **Damaged items and stock counts.** `inventory_period_counts` exists; damage/count adjustments reuse
+   `inventory_transactions` with their own types so they appear in movement history and discrepancy reports.
+4. **Accountant for selected branches.** Today `accountant` sees every branch. With `user_locations`, an
+   accountant sees exactly the branches assigned (or all, if the Owner assigns all).
+5. **Item Manufacture location.** `mfg_jobs` needs `branch_id` (nullable = company), set from the
+   creator's location; existing rows stay company-level.
+
+## 9. Migration risks and data protection
+
+| Risk | Protection |
+|---|---|
+| Losing or changing existing records | Only additive changes: new tables, new nullable columns, inserts of new roles/permissions. No `DROP`, no `DELETE` of business data, no rewrites of amounts or journal lines. |
+| Duplicate cleanup (`user_roles`, `role_permissions`) removes rows | Deletes only exact duplicate pairs, keeping one; counted before and after; run inside one transaction. |
+| Someone loses access on deploy day | Phase 1 maps every existing role to its new permissions **before** the old checks are replaced; old permission codes keep working; a test signs in as each existing role and compares what they can open before and after. |
+| Someone gains access on deploy day (the S1 bug in reverse) | Users without any location and without an all-locations role get **no** location data (refused, not widened), as `branch-scope.ts` already does for finance. The report lists these users first so they can be assigned before the switch. |
+| Wrong Owner | The Owner role is given to one account named by you from the report, by a one-off command, not automatically. |
+| Migration fails half-way | Each migration runs in a transaction; `db:migrate` stops on the first error (it already counts ❌ as failure). |
+| Rollback | Each phase's code works with or without the new columns until the switch; a database backup/branch (Neon/Layerbase snapshot) is taken by the agent before every migration. |
+| Accounting drift | Tests assert after each phase: every posted entry balances, 1090 nets to zero company-wide, branch totals add up to the consolidated total, transfers create exactly one movement per side. |
+
+## 10. Next steps
+
+1. Agent runs the read-only report on production → I complete the **[confirm on production]** items and
+   list the exact users affected by S1, the Owner candidate, and any data needing cleanup.
+2. You approve: the Owner account, `user_permissions` (yes/no), and **Phase 1a: the four security fixes
+   (S1–S4)**, which change behaviour but no data.
+3. Then Phase 1b (access model migrations), each step with its migration listed for approval.

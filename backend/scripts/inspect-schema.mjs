@@ -4,8 +4,9 @@
 //
 //   DATABASE_URL=postgres://... node backend/scripts/inspect-schema.mjs > schema-report.txt
 //
-// The report holds structure and counts only: no names, emails, amounts or
-// other business data.
+// The report holds structure and counts only, except the list of administrator
+// accounts (email and dates), needed to choose the Owner account. No customer,
+// supplier or employee details and no amounts per person.
 import pg from 'pg';
 import { existsSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
@@ -79,6 +80,71 @@ try {
       WHERE je.status IN ('POSTED', 'REVERSED') GROUP BY je.id HAVING ABS(SUM(l.debit_amount) - SUM(l.credit_amount)) > 0.005) x`)).rows);
   out('Transfers by status and kind', (await client.query(`
     SELECT status, source_owner_type || '→' || destination_owner_type AS route, COUNT(*) AS n FROM transfers GROUP BY 1, 2 ORDER BY 1, 2`)).rows);
+  // ── Phase 0 data checks ──────────────────────────────────────────────
+  const q = async (title, sql) => out(title, (await client.query(sql).catch((e) => ({ rows: [{ error: e.message }] }))).rows);
+  await q('Administrator accounts (to choose the Owner)', `
+    SELECT DISTINCT u.email, u.full_name, u.is_active, u.branch_id IS NOT NULL AS has_branch, u.created_at::date::text AS created,
+           (SELECT MAX(s."createdAt")::date::text FROM session s WHERE s."userId" = u.id) AS last_sign_in,
+           (SELECT COUNT(*) FROM audit_logs a WHERE a.actor_user_id = u.id) AS actions
+    FROM users u JOIN user_roles ur ON ur.user_id = u.id JOIN roles r ON r.id = ur.role_id
+    WHERE r.code = 'admin' ORDER BY 5`);
+  await q('Non-admin active users with NO branch (treated as admin by isAdminUser today)', `
+    SELECT COALESCE(string_agg(DISTINCT r.code, ','), '(no role)') AS roles, u.warehouse_id IS NOT NULL AS has_warehouse, COUNT(DISTINCT u.id) AS users
+    FROM users u LEFT JOIN user_roles ur ON ur.user_id = u.id LEFT JOIN roles r ON r.id = ur.role_id
+    WHERE u.is_active = 1 AND u.branch_id IS NULL
+      AND NOT EXISTS (SELECT 1 FROM user_roles x JOIN roles y ON y.id = x.role_id WHERE x.user_id = u.id AND y.code = 'admin')
+    GROUP BY u.id, u.warehouse_id`);
+  await q('Users pointing at a missing location', `
+    SELECT COUNT(*) FILTER (WHERE branch_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM branches b WHERE b.id = u.branch_id)) AS bad_branch,
+           COUNT(*) FILTER (WHERE warehouse_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM warehouses w WHERE w.id = u.warehouse_id)) AS bad_warehouse
+    FROM users u`);
+  await q('Duplicate user_roles rows', `SELECT COUNT(*) - COUNT(DISTINCT (user_id, role_id)) AS duplicates FROM user_roles`);
+  await q('Users with no role', `SELECT COUNT(*) AS users FROM users u WHERE NOT EXISTS (SELECT 1 FROM user_roles ur WHERE ur.user_id = u.id)`);
+  await q('Customers: total, buying at more than one branch, duplicate phone numbers', `
+    SELECT (SELECT COUNT(*) FROM customers) AS customers,
+           (SELECT COUNT(*) FROM (SELECT customer_id FROM sales_orders WHERE customer_id IS NOT NULL GROUP BY customer_id HAVING COUNT(DISTINCT branch_id) > 1) x) AS multi_branch,
+           (SELECT COUNT(*) FROM (SELECT regexp_replace(phone, '\D', '', 'g') p FROM customers WHERE COALESCE(phone, '') <> '' GROUP BY 1 HAVING COUNT(*) > 1) x) AS duplicate_phones`);
+  await q('Suppliers: total, supplying more than one branch', `
+    SELECT (SELECT COUNT(*) FROM suppliers) AS suppliers,
+           (SELECT COUNT(*) FROM (SELECT supplier_id FROM purchase_orders GROUP BY supplier_id HAVING COUNT(DISTINCT COALESCE(branch_id, 'company')) > 1) x) AS multi_branch`);
+  await q('Purchase orders by destination', `
+    SELECT CASE WHEN branch_id IS NOT NULL THEN 'branch' WHEN warehouse_id IS NOT NULL THEN 'warehouse' ELSE 'none' END AS destination, COUNT(*) AS n
+    FROM purchase_orders GROUP BY 1`);
+  await q('Journal entries by type: with / without branch', `
+    SELECT reference_type, COUNT(*) FILTER (WHERE branch_id IS NOT NULL) AS with_branch, COUNT(*) FILTER (WHERE branch_id IS NULL) AS company_level
+    FROM journal_entries GROUP BY 1 ORDER BY 1`);
+  await q('Inter-Branch Clearing (1090) balance per branch (company total should be 0)', `
+    SELECT COALESCE(l.branch_id, '(company)') AS branch, ROUND(SUM(l.debit_amount - l.credit_amount)::numeric, 2) AS balance
+    FROM journal_entry_lines l JOIN journal_entries je ON je.id = l.journal_entry_id AND je.status IN ('POSTED', 'REVERSED')
+    JOIN chart_of_accounts a ON a.id = l.account_id WHERE a.code = '1090' GROUP BY ROLLUP (1) ORDER BY 1`);
+  await q('Journal lines whose branch differs from their entry', `
+    SELECT COUNT(*) AS lines FROM journal_entry_lines l JOIN journal_entries je ON je.id = l.journal_entry_id
+    WHERE l.branch_id IS DISTINCT FROM je.branch_id`);
+  await q('Stock rows: negative, ownerless, double-owned; products without cost', `
+    SELECT (SELECT COUNT(*) FROM inventory_stock WHERE quantity_on_hand < 0) AS negative,
+           (SELECT COUNT(*) FROM inventory_stock WHERE branch_id IS NULL AND warehouse_id IS NULL) AS ownerless,
+           (SELECT COUNT(*) FROM inventory_stock WHERE branch_id IS NOT NULL AND warehouse_id IS NOT NULL) AS double_owned,
+           (SELECT COUNT(*) FROM products WHERE COALESCE(cost_price, 0) = 0) AS products_without_cost`);
+  await q('Transfers received with a different quantity than dispatched', `
+    SELECT COUNT(DISTINCT tl.transfer_id) AS transfers, COUNT(*) AS lines FROM transfer_lines tl JOIN transfers t ON t.id = tl.transfer_id
+    WHERE t.status = 'COMPLETED' AND COALESCE(tl.quantity_received, tl.quantity_dispatched) IS DISTINCT FROM tl.quantity_dispatched`);
+  await q('Transfer stock movements per transfer (duplicates would show > 2 per line)', `
+    SELECT COUNT(*) AS transfers_with_extra_movements FROM (
+      SELECT it.reference_id FROM inventory_transactions it JOIN transfers t ON t.id = it.reference_id
+      GROUP BY it.reference_id, it.product_id HAVING COUNT(*) > 2) x`);
+  await q('Employees and payroll data', `
+    SELECT (SELECT COUNT(*) FROM employees) AS employees, (SELECT COUNT(*) FROM employees WHERE branch_id IS NULL) AS without_branch,
+           (SELECT COUNT(*) FROM employees WHERE document_key IS NOT NULL) AS with_document, (SELECT COUNT(*) FROM employee_advances) AS advance_entries`);
+  await q('Owner assets (records)', `
+    SELECT (SELECT COUNT(*) FROM properties) AS properties, (SELECT COUNT(*) FROM tenants) AS tenants, (SELECT COUNT(*) FROM livestock) AS livestock`);
+  await q('Uploaded files: total and linked to an employee', `
+    SELECT (SELECT COUNT(*) FROM files) AS files,
+           (SELECT COUNT(*) FROM files f WHERE EXISTS (SELECT 1 FROM employees e WHERE f.object_key IN (e.photo_key, e.document_key))) AS employee_files`);
+  await q('Assistant use by role (last 30 days)', `
+    SELECT COALESCE(r.code, '(no role)') AS role, COUNT(DISTINCT m.conversation_id) AS conversations
+    FROM agent_messages m JOIN agent_conversations ac ON ac.id = m.conversation_id
+    LEFT JOIN user_roles ur ON ur.user_id = ac.user_id LEFT JOIN roles r ON r.id = ur.role_id
+    WHERE m.created_at > now() - interval '30 days' GROUP BY 1 ORDER BY 2 DESC`);
   await client.query('ROLLBACK');
 } finally {
   await client.end();
