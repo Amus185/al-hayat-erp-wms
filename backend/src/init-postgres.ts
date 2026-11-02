@@ -603,7 +603,10 @@ export async function ensurePostgresInit(pool: Pool) {
     // 2e. Role permissions
     for (const row of DEFAULT_AUTH_SEED.role_permissions) {
       await client.query(
-        `INSERT INTO role_permissions (role_id, permission_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`,
+        // No unique constraint on this table yet, so ON CONFLICT never fires:
+        // insert only when the pair is missing (it used to add a copy per run).
+        `INSERT INTO role_permissions (role_id, permission_id) SELECT $1::text, $2::text
+         WHERE NOT EXISTS (SELECT 1 FROM role_permissions WHERE role_id = $1 AND permission_id = $2)`,
         [row.role_id, row.permission_id]
       );
     }
@@ -628,7 +631,8 @@ export async function ensurePostgresInit(pool: Pool) {
     // 2g. User roles
     for (const row of DEFAULT_AUTH_SEED.user_roles) {
       await client.query(
-        `INSERT INTO user_roles (user_id, role_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`,
+        `INSERT INTO user_roles (user_id, role_id) SELECT $1::text, $2::text
+         WHERE NOT EXISTS (SELECT 1 FROM user_roles WHERE user_id = $1 AND role_id = $2)`,
         [row.user_id, row.role_id]
       );
     }

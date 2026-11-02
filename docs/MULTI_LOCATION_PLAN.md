@@ -158,6 +158,21 @@ additive to role permissions. Alternative without a new table: create a one-pers
 
 ---
 
+## 5b. Production report, first run (2026-11-02, script version 9861f03)
+
+The agent ran the first version of the script (before the Phase 0 data checks were added), so the
+Owner candidate, affected users and clearing balances are still to come from a second run.
+What the first run confirms:
+
+| Finding | Detail | Meaning |
+|---|---|---|
+| Schema matches the code | All 86 tables/views and their columns, keys and indexes are as the migrations create them; the journal-line branch trigger is present | the plan's table list holds; no unknown production-only tables |
+| Production is small | 3 users, 2 branches, 2 warehouses, 3 sales orders, 4 transfers, 10 journal entries, 1 employee, 2 products | migrations are low-risk; every record can be checked by hand before and after |
+| Books balance | 0 unbalanced posted entries; 3 company-level entries = 2 opening balances + 1 warehouse→branch transfer (warehouse side is company-level by design) | accounting attribution is already correct |
+| Duplicate role links (bug) | `user_roles` 30 rows for 3 users; `role_permissions` far above the real 17 pairs. Cause: the seed used `ON CONFLICT DO NOTHING` on tables **without a unique constraint**, so every `db:migrate` added another copy. | Harmless for access (same role held many times) but it grows. **Fixed in code** (commit after 5993aef): the seed now inserts only missing pairs, so it stops growing. Removing the existing copies and adding the unique constraints is part of Phase 1a and needs approval. |
+| One delivery without a source warehouse | 1 of 1 deliveries | warehouse-scoped delivery lists must fall back to the sales order's branch |
+| `approx_rows` | Postgres estimates; e.g. `branches` shows 0 but has 2 | counts in sections below are exact |
+
 ## 6. Route-by-route access assessment (code)
 
 Legend: ✅ enforced on the server · ⚠️ partial · ❌ missing. "Location" = limited to the caller's branch/warehouse.
