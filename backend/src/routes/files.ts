@@ -17,10 +17,12 @@ files.post('/', async (c) => {
   const body = await c.req.parseBody();
   const file = body['file'] as File;
 
-  if (!file) return c.json({ message: 'No file provided' }, 400);
+  if (!file || typeof file === 'string') return c.json({ message: 'No file provided' }, 400);
+  if (!c.env.STORAGE) return c.json({ message: 'File storage is not set up on this server' }, 503);
+  if (file.size > 10 * 1024 * 1024) return c.json({ message: 'The file is larger than 10 MB' }, 413);
 
   const id = uuidv4();
-  const ext = file.name.split('.').pop();
+  const ext = (file.name.split('.').pop() || 'bin').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 8) || 'bin';
   const objectKey = `${id}.${ext}`;
 
   // Upload to R2

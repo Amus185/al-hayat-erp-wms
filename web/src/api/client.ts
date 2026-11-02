@@ -232,6 +232,23 @@ export function apiPatch<T>(path: string, body?: unknown): Promise<T> {
   return mutate<T>('PATCH', path, body);
 }
 
+export function apiPut<T>(path: string, body?: unknown): Promise<T> {
+  return mutate<T>('PUT', path, body);
+}
+
+/** Uploads a file (photo, document) to the company's file storage; returns its stored record. */
+export async function apiUpload(file: File): Promise<{ id: string; object_key: string; file_name: string }> {
+  const form = new FormData();
+  form.append('file', file);
+  const response = await fetch(`${API_BASE_URL}/files`, {
+    method: 'POST', body: form, credentials: 'same-origin', headers: { 'X-CSRF-Protection': '1' },
+  });
+  return handleResponse(response);
+}
+
+/** Address of a stored file (served only to signed-in staff). */
+export const fileUrl = (key: string) => `${API_BASE_URL}/files/${encodeURIComponent(key)}`;
+
 export function apiDelete<T = void>(path: string): Promise<T> {
   return mutate<T>('DELETE', path);
 }

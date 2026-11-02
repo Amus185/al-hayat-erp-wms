@@ -2056,3 +2056,37 @@ html.api-busy, html.api-busy * { cursor: progress !important; }
 .bulk-bar__actions .btn, .bulk-bar__actions select { height: 32px; font-size: 13px; }
 .bulk-bar__actions select { border-radius: 8px; border: 1px solid #334155; background: #1e293b; color: #fff; padding: 0 8px; }
 .bulk-bar__clear { display: inline-flex; align-items: center; gap: 4px; border: none; background: none; color: #cbd5e1; cursor: pointer; font-size: 13px; }
+
+/* ── Manual manufacture, employees, incoming transfers ── */
+.mm-items { width: 100%; border-collapse: collapse; }
+.mm-items th { text-align: left; font-size: 12px; color: #64748b; font-weight: 600; padding: 4px 6px; }
+.mm-items td { padding: 3px 6px; vertical-align: middle; }
+.mm-items .form-input { width: 100%; }
+.mm-items__group { font-size: 12px; color: #066006; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 120px; }
+.mm-icon { border: none; background: transparent; color: #94a3b8; cursor: pointer; padding: 6px; border-radius: 6px; display: inline-flex; }
+.mm-icon:hover { background: #fee2e2; color: #b91c1c; }
+.mm-sub { display: block; font-size: 12px; color: #64748b; }
+.mm-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+@media (max-width: 640px) { .mm-grid { grid-template-columns: 1fr; } }
+.mm-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.mm-chip { display: inline-flex; align-items: center; gap: 4px; background: #e8f3e8; color: #066006; border-radius: 999px; padding: 3px 4px 3px 10px; font-size: 13px; font-weight: 600; }
+.mm-chip button { border: none; background: transparent; color: inherit; cursor: pointer; display: inline-flex; padding: 2px; border-radius: 999px; }
+.mm-chip button:hover { background: #cfe6cf; }
+.mm-savegroup { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 10px; background: #f8faf8; border-radius: 8px; font-size: 13px; }
+.mm-group-row { display: grid; grid-template-columns: 1fr auto auto auto; gap: 8px; align-items: center; padding: 8px 10px; border: 1px solid #e5e7eb; border-radius: 8px; }
+.emp-head { display: flex; gap: 16px; align-items: center; }
+.emp-photo { width: 72px; height: 72px; border-radius: 50%; object-fit: cover; background: #e8f3e8; color: #066006; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 24px; flex-shrink: 0; }
+.emp-photo--sm { width: 32px; height: 32px; font-size: 13px; }
+.emp-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+@media (max-width: 640px) { .emp-stats { grid-template-columns: repeat(2, 1fr); } }
+.emp-stat { background: #f8faf8; border-radius: 8px; padding: 10px; }
+.emp-stat span { display: block; font-size: 12px; color: #64748b; }
+.emp-stat strong { font-size: 17px; }
+.emp-info { display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px 16px; font-size: 13px; }
+.emp-info dt { color: #64748b; }
+.emp-info dd { margin: 0 0 6px; }
+.emp-form { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px 14px; }
+@media (max-width: 640px) { .emp-form, .emp-info { grid-template-columns: 1fr; } }
+.emp-adv-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; padding: 10px; background: #f8faf8; border-radius: 8px; }
+.emp-adv-form .form-input, .emp-adv-form .form-select { min-width: 120px; }
+.tr-items { font-size: 12px; color: #475569; max-width: 280px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; }

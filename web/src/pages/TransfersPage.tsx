@@ -54,6 +54,7 @@ interface Transfer {
   approver_name?: string;
   dispatcher_name?: string;
   receiver_name?: string;
+  items_summary?: string | null;
   lines?: TransferLine[];
 }
 
@@ -65,7 +66,7 @@ export function TransfersPage() {
   // Transfers: searched, filtered, sorted and paged on the server.
   const list = useServerList<Transfer>('/transfers', {
     key: 'transfers',
-    filters: ['status', 'from', 'to', 'dateFrom', 'dateTo'],
+    filters: ['status', 'from', 'to', 'dateFrom', 'dateTo', 'direction'],
     defaultSort: 'date',
     defaultDir: 'desc',
   });
@@ -292,6 +293,11 @@ export function TransfersPage() {
       ),
     },
     {
+      key: 'items_summary',
+      label: 'Items',
+      render: (row) => <span className="tr-items" title={row.items_summary ?? ''}>{row.items_summary || '—'}</span>,
+    },
+    {
       key: 'requested_at',
       sortable: true,
       sortKey: 'date',
@@ -384,6 +390,18 @@ export function TransfersPage() {
       </section>
 
       <section className="panel">
+        {list.response?.hasLocation === true && (
+          <StatusTabs
+            id="transfer-direction-tabs"
+            value={list.filters.direction}
+            onChange={(v) => list.setFilter('direction', v)}
+            tabs={[
+              { key: 'ALL', label: 'All transfers' },
+              { key: 'incoming', label: 'Incoming to my location' },
+              { key: 'outgoing', label: 'Sent from my location' },
+            ]}
+          />
+        )}
         <StatusTabs
           id="transfer-status-tabs"
           value={list.filters.status}

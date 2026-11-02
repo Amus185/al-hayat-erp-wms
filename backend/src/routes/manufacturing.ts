@@ -3,7 +3,7 @@ import { Env, uuidv4 } from '../db';
 import { authMiddleware, requirePermissions } from '../middleware/auth';
 import { logAudit, createAuditLogStmt } from '../services/audit';
 import { prepareJournalEntryPosting } from '../services/accounting-service';
-import { csvResponse, dateRange, listRequest, pagedResponse, pagedRows, type ListOptions } from '../services/listing';
+import { csvResponse, dateRange, likeTerm, listRequest, pagedResponse, pagedRows, type ListOptions } from '../services/listing';
 
 const manufacturing = new Hono<{ Bindings: Env; Variables: { jwtPayload: any } }>();
 
@@ -649,6 +649,192 @@ manufacturing.post('/work-orders/:id/complete', requirePermissions(['manage_inve
 
   const updated = await c.env.DB.prepare('SELECT * FROM work_orders WHERE id = ?').bind(id).first();
   return c.json({ success: true, workOrder: updated });
+});
+
+// ──────────────────────────────────────────────────────────────────────
+// MANUAL MANUFACTURE: free-typed items (name + price), reusable item
+// groups ("Fadhi", "Somali Bed"…) and manufacture jobs combining them.
+// ──────────────────────────────────────────────────────────────────────
+type ManualItem = { name: string; price: number; group_name?: string | null };
+
+function readItems(raw: unknown): ManualItem[] {
+  if (!Array.isArray(raw)) throw new Error('Add at least one item');
+  const items: ManualItem[] = [];
+  for (const it of raw as any[]) {
+    const name = typeof it?.name === 'string' ? it.name.trim().slice(0, 200) : '';
+    if (!name) continue; // blank rows are ignored
+    const price = Math.round(Number(it.price ?? 0) * 100) / 100;
+    if (!Number.isFinite(price) || price < 0) throw new Error(`Price of "${name}" must be zero or more`);
+    const group = typeof it.group_name === 'string' && it.group_name.trim() ? it.group_name.trim().slice(0, 120) : null;
+    items.push({ name, price, group_name: group });
+  }
+  if (!items.length) throw new Error('Add at least one item with a name');
+  if (items.length > 500) throw new Error('Too many items');
+  return items;
+}
+
+const groupWithItems = async (db: any, id: string) => {
+  const g = await db.prepare('SELECT * FROM mfg_item_groups WHERE id = ?').bind(id).first();
+  if (!g) return null;
+  const { results } = await db.prepare('SELECT id, name, price::float AS price, sort_order FROM mfg_item_group_items WHERE group_id = ? ORDER BY sort_order, name').bind(id).all();
+  return { ...g, items: results || [] };
+};
+
+manufacturing.get('/item-groups', async (c) => {
+  const q = (c.req.query('q') || '').trim();
+  const { results } = await c.env.DB.prepare(`
+    SELECT g.id, g.name, g.updated_at,
+           COUNT(i.id)::int AS item_count, COALESCE(SUM(i.price), 0)::float AS total,
+           COALESCE(json_agg(json_build_object('name', i.name, 'price', i.price::float) ORDER BY i.sort_order, i.name) FILTER (WHERE i.id IS NOT NULL), '[]') AS items
+    FROM mfg_item_groups g LEFT JOIN mfg_item_group_items i ON i.group_id = g.id
+    ${q ? 'WHERE g.name ILIKE ?' : ''}
+    GROUP BY g.id ORDER BY g.name LIMIT 100
+  `).bind(...(q ? [likeTerm(q)] : [])).all();
+  return c.json(results || []);
+});
+
+manufacturing.get('/item-groups/:id', async (c) => {
+  const g = await groupWithItems(c.env.DB, c.req.param('id'));
+  return g ? c.json(g) : c.json({ error: 'Group not found' }, 404);
+});
+
+async function saveGroup(c: any, id: string | null) {
+  const body = await c.req.json().catch(() => ({}));
+  const name = typeof body.name === 'string' ? body.name.trim().slice(0, 120) : '';
+  if (!name) return c.json({ error: 'Give the group a name' }, 400);
+  let items: ManualItem[];
+  try { items = readItems(body.items); } catch (e: any) { return c.json({ error: e.message }, 400); }
+  const db = c.env.DB;
+  const clash = await db.prepare('SELECT id FROM mfg_item_groups WHERE lower(name) = lower(?) AND id <> ?').bind(name, id ?? '').first();
+  if (clash) return c.json({ error: `A group named "${name}" already exists` }, 409);
+  const gid = id ?? uuidv4();
+  const stmts: any[] = [];
+  if (id) {
+    stmts.push(db.prepare('UPDATE mfg_item_groups SET name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').bind(name, id).mustAffect('Group not found'));
+    stmts.push(db.prepare('DELETE FROM mfg_item_group_items WHERE group_id = ?').bind(id));
+  } else {
+    stmts.push(db.prepare('INSERT INTO mfg_item_groups (id, name, created_by) VALUES (?, ?, ?)').bind(gid, name, c.get('jwtPayload')?.sub ?? null));
+  }
+  items.forEach((it, i) => stmts.push(db.prepare('INSERT INTO mfg_item_group_items (id, group_id, name, price, sort_order) VALUES (?, ?, ?, ?, ?)').bind(uuidv4(), gid, it.name, it.price, i)));
+  stmts.push(createAuditLogStmt(c, id ? 'MFG_GROUP_UPDATE' : 'MFG_GROUP_CREATE', 'mfg_item_groups', gid, null, { name, items: items.length }));
+  await db.batch(stmts);
+  return c.json(await groupWithItems(db, gid), id ? 200 : 201);
+}
+
+manufacturing.post('/item-groups', requirePermissions(['manage_inventory']), (c) => saveGroup(c, null));
+manufacturing.put('/item-groups/:id', requirePermissions(['manage_inventory']), (c) => saveGroup(c, c.req.param('id') as string));
+manufacturing.delete('/item-groups/:id', requirePermissions(['manage_inventory']), async (c) => {
+  const id = c.req.param('id');
+  const db = c.env.DB;
+  await db.batch([
+    db.prepare('DELETE FROM mfg_item_groups WHERE id = ?').bind(id).mustAffect('Group not found'),
+    createAuditLogStmt(c, 'MFG_GROUP_DELETE', 'mfg_item_groups', id, null, null),
+  ]);
+  return c.json({ success: true });
+});
+
+const JOB_LIST: ListOptions = {
+  sortable: { date: 'created_at', number: 'job_number', title: 'title', total: 'total', status: 'status', items: 'item_count' },
+  defaultSort: 'date', defaultDir: 'desc', tieBreaker: 'id',
+};
+const JOB_SELECT = `
+  SELECT j.id, j.job_number, j.title, j.notes, j.status, j.created_by, j.created_at, j.updated_at, j.total::float AS total, u.full_name AS created_by_name,
+         (SELECT COUNT(*)::int FROM mfg_job_items i WHERE i.job_id = j.id) AS item_count,
+         (SELECT string_agg(DISTINCT i.group_name, ', ') FROM mfg_job_items i WHERE i.job_id = j.id) AS groups
+  FROM mfg_jobs j LEFT JOIN users u ON u.id = j.created_by`;
+
+manufacturing.get('/jobs', async (c) => {
+  const listReq = listRequest(c, JOB_LIST);
+  const q = (k: string) => (c.req.query(k) || '').trim();
+  const where: string[] = [];
+  const params: unknown[] = [];
+  if (q('q')) {
+    const t = likeTerm(q('q'));
+    where.push(`(job_number ILIKE ? OR title ILIKE ? OR COALESCE(groups, '') ILIKE ? OR EXISTS (SELECT 1 FROM mfg_job_items i WHERE i.job_id = x.id AND i.name ILIKE ?))`);
+    params.push(t, t, t, t);
+  }
+  dateRange(c, 'created_at', where, params);
+  const statusWhere = [...where];
+  const statusParams = [...params];
+  if (q('status')) { statusWhere.push('status = ?'); statusParams.push(q('status')); }
+  const base = `FROM (${JOB_SELECT}) x ${statusWhere.length ? 'WHERE ' + statusWhere.join(' AND ') : ''}`;
+  const { rows, total } = await pagedRows(c.env.DB, '*', base, statusParams, { ...listReq, paged: true });
+  if (listReq.csv) {
+    return csvResponse(c, 'manufacture-jobs', [
+      { label: 'Number', value: (r: any) => r.job_number },
+      { label: 'Created', value: (r: any) => String(r.created_at instanceof Date ? r.created_at.toISOString() : r.created_at).slice(0, 10) },
+      { label: 'Title', value: (r: any) => r.title },
+      { label: 'Groups', value: (r: any) => r.groups },
+      { label: 'Items', value: (r: any) => r.item_count },
+      { label: 'Total', value: (r: any) => Number(r.total) },
+      { label: 'Status', value: (r: any) => r.status },
+    ], rows);
+  }
+  const { results: grouped } = await c.env.DB.prepare(`SELECT status, COUNT(*)::int AS n FROM (${JOB_SELECT}) x ${where.length ? 'WHERE ' + where.join(' AND ') : ''} GROUP BY status`).bind(...params).all();
+  const counts: Record<string, number> = { ALL: 0 };
+  for (const g of (grouped || []) as any[]) { counts[g.status] = Number(g.n); counts.ALL += Number(g.n); }
+  const sums = await c.env.DB.prepare(`SELECT COALESCE(SUM(total), 0)::float AS value ${base}`).bind(...statusParams).first() as any;
+  return pagedResponse(c, listReq, rows, total, { counts, totals: { value: Number(sums?.value || 0) } });
+});
+
+manufacturing.get('/jobs/:id', async (c) => {
+  const db = c.env.DB;
+  const job = await db.prepare(`${JOB_SELECT} WHERE j.id = ?`).bind(c.req.param('id')).first();
+  if (!job) return c.json({ error: 'Manufacture not found' }, 404);
+  const { results } = await db.prepare('SELECT id, name, price::float AS price, group_name, sort_order FROM mfg_job_items WHERE job_id = ? ORDER BY sort_order').bind(c.req.param('id')).all();
+  return c.json({ ...job, items: results || [] });
+});
+
+async function saveJob(c: any, id: string | null) {
+  const body = await c.req.json().catch(() => ({}));
+  let items: ManualItem[];
+  try { items = readItems(body.items); } catch (e: any) { return c.json({ error: e.message }, 400); }
+  const db = c.env.DB;
+  const groups = Array.from(new Set(items.map((i) => i.group_name).filter(Boolean)));
+  const title = (typeof body.title === 'string' && body.title.trim() ? body.title.trim() : groups.join(' + ') || items[0].name).slice(0, 200);
+  const notes = typeof body.notes === 'string' && body.notes.trim() ? body.notes.trim().slice(0, 1000) : null;
+  const total = Math.round(items.reduce((s, i) => s + i.price, 0) * 100) / 100;
+  const jid = id ?? uuidv4();
+  const stmts: any[] = [];
+  if (id) {
+    const cur = await db.prepare('SELECT status FROM mfg_jobs WHERE id = ?').bind(id).first() as any;
+    if (!cur) return c.json({ error: 'Manufacture not found' }, 404);
+    if (cur.status !== 'OPEN') return c.json({ error: `A ${cur.status.toLowerCase()} manufacture cannot be edited` }, 400);
+    stmts.push(db.prepare(`UPDATE mfg_jobs SET title = ?, notes = ?, total = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'OPEN'`).bind(title, notes, total, id).mustAffect('This manufacture changed; reopen it'));
+    stmts.push(db.prepare('DELETE FROM mfg_job_items WHERE job_id = ?').bind(id));
+  } else {
+    const n = await db.prepare(`SELECT COALESCE(MAX(NULLIF(regexp_replace(job_number, '\\D', '', 'g'), '')::int), 0) + 1 AS n FROM mfg_jobs`).first() as any;
+    const number = `MF-${String(n?.n ?? 1).padStart(5, '0')}`;
+    stmts.push(db.prepare('INSERT INTO mfg_jobs (id, job_number, title, notes, total, created_by) VALUES (?, ?, ?, ?, ?, ?)').bind(jid, number, title, notes, total, c.get('jwtPayload')?.sub ?? null));
+  }
+  items.forEach((it, i) => stmts.push(db.prepare('INSERT INTO mfg_job_items (id, job_id, name, price, group_name, sort_order) VALUES (?, ?, ?, ?, ?, ?)').bind(uuidv4(), jid, it.name, it.price, it.group_name ?? null, i)));
+  stmts.push(createAuditLogStmt(c, id ? 'MFG_JOB_UPDATE' : 'MFG_JOB_CREATE', 'mfg_jobs', jid, null, { title, total, items: items.length }));
+  await db.batch(stmts);
+  const job = await db.prepare(`${JOB_SELECT} WHERE j.id = ?`).bind(jid).first();
+  return c.json(job, id ? 200 : 201);
+}
+
+manufacturing.post('/jobs', requirePermissions(['manage_inventory']), (c) => saveJob(c, null));
+manufacturing.put('/jobs/:id', requirePermissions(['manage_inventory']), (c) => saveJob(c, c.req.param('id') as string));
+manufacturing.post('/jobs/:id/status', requirePermissions(['manage_inventory']), async (c) => {
+  const id = c.req.param('id');
+  const { status } = await c.req.json().catch(() => ({}));
+  if (!['OPEN', 'DONE', 'CANCELLED'].includes(status)) return c.json({ error: 'Status must be OPEN, DONE or CANCELLED' }, 400);
+  const db = c.env.DB;
+  await db.batch([
+    db.prepare('UPDATE mfg_jobs SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').bind(status, id).mustAffect('Manufacture not found'),
+    createAuditLogStmt(c, 'MFG_JOB_STATUS', 'mfg_jobs', id, null, { status }),
+  ]);
+  return c.json(await db.prepare(`${JOB_SELECT} WHERE j.id = ?`).bind(id).first());
+});
+manufacturing.delete('/jobs/:id', requirePermissions(['manage_inventory']), async (c) => {
+  const id = c.req.param('id');
+  const db = c.env.DB;
+  await db.batch([
+    db.prepare('DELETE FROM mfg_jobs WHERE id = ?').bind(id).mustAffect('Manufacture not found'),
+    createAuditLogStmt(c, 'MFG_JOB_DELETE', 'mfg_jobs', id, null, null),
+  ]);
+  return c.json({ success: true });
 });
 
 export default manufacturing;

@@ -11,7 +11,7 @@ export interface JournalLineInput {
 
 export interface PostJournalParams {
   description: string;
-  referenceType: 'PURCHASE' | 'SALE' | 'TRANSFER' | 'EXPENSE' | 'DEPRECIATION' | 'CLOSING' | 'INVENTORY_ADJUSTMENT' | 'MANUAL' | 'MANUFACTURING' | 'OPENING';
+  referenceType: 'PURCHASE' | 'SALE' | 'TRANSFER' | 'EXPENSE' | 'DEPRECIATION' | 'CLOSING' | 'INVENTORY_ADJUSTMENT' | 'MANUAL' | 'MANUFACTURING' | 'OPENING' | 'PAYROLL';
   referenceId?: string | null;
   branchId?: string | null;
   entryDate?: string;

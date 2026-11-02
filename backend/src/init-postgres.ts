@@ -682,6 +682,9 @@ export async function ensurePostgresInit(pool: Pool) {
       // sender's books and into the receiver's through this account; it nets to
       // zero in the consolidated view.
       { id: 'coa-1090', code: '1090', name: 'Inter-Branch Clearing', account_type: 'ASSET', normal_balance: 'DEBIT' },
+      // Salary advances given to employees (owed back to the company) and payroll cost.
+      { id: 'coa-1080', code: '1080', name: 'Employee Advances', account_type: 'ASSET', normal_balance: 'DEBIT' },
+      { id: 'coa-6090', code: '6090', name: 'Salaries & Wages', account_type: 'EXPENSE', normal_balance: 'DEBIT' },
     ];
 
 
@@ -721,7 +724,64 @@ export async function ensurePostgresInit(pool: Pool) {
   await ensureStorefrontSchema(pool);
   await ensureAgentSchema(pool);
   await ensureBetterAuth(pool);
+  await ensureWorkforceSchema(pool);
   await ensurePerformanceIndexes(pool);
+}
+
+/**
+ * Manual manufacturing (free-typed items with a price, reusable item groups)
+ * and employees with salary advances.
+ */
+export async function ensureWorkforceSchema(pool: Pool) {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS mfg_item_groups (
+        id TEXT PRIMARY KEY, name TEXT NOT NULL, created_by TEXT REFERENCES users(id),
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS mfg_item_groups_name_uq ON mfg_item_groups (lower(name));
+      CREATE TABLE IF NOT EXISTS mfg_item_group_items (
+        id TEXT PRIMARY KEY, group_id TEXT NOT NULL REFERENCES mfg_item_groups(id) ON DELETE CASCADE,
+        name TEXT NOT NULL, price NUMERIC(14,2) NOT NULL DEFAULT 0, sort_order INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE INDEX IF NOT EXISTS mfg_item_group_items_group_idx ON mfg_item_group_items (group_id);
+      CREATE TABLE IF NOT EXISTS mfg_jobs (
+        id TEXT PRIMARY KEY, job_number TEXT UNIQUE NOT NULL, title TEXT NOT NULL, notes TEXT,
+        total NUMERIC(14,2) NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'OPEN' CHECK (status IN ('OPEN', 'DONE', 'CANCELLED')),
+        created_by TEXT REFERENCES users(id),
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE TABLE IF NOT EXISTS mfg_job_items (
+        id TEXT PRIMARY KEY, job_id TEXT NOT NULL REFERENCES mfg_jobs(id) ON DELETE CASCADE,
+        name TEXT NOT NULL, price NUMERIC(14,2) NOT NULL DEFAULT 0, group_name TEXT, sort_order INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE INDEX IF NOT EXISTS mfg_job_items_job_idx ON mfg_job_items (job_id);
+
+      CREATE TABLE IF NOT EXISTS employees (
+        id TEXT PRIMARY KEY, full_name TEXT NOT NULL, phone TEXT, email TEXT, position TEXT,
+        branch_id TEXT REFERENCES branches(id), hire_date DATE, national_id TEXT, address TEXT,
+        salary NUMERIC(14,2) NOT NULL DEFAULT 0, photo_key TEXT, document_key TEXT, document_name TEXT,
+        status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE', 'INACTIVE')), notes TEXT,
+        created_by TEXT REFERENCES users(id),
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS employees_branch_idx ON employees (branch_id);
+      CREATE TABLE IF NOT EXISTS employee_advances (
+        id TEXT PRIMARY KEY, employee_id TEXT NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL CHECK (kind IN ('ADVANCE', 'REPAYMENT')), amount NUMERIC(14,2) NOT NULL CHECK (amount > 0),
+        entry_date DATE NOT NULL DEFAULT CURRENT_DATE,
+        method TEXT NOT NULL DEFAULT 'CASH' CHECK (method IN ('CASH', 'BANK', 'SALARY_DEDUCTION')),
+        notes TEXT, journal_entry_id TEXT, created_by TEXT REFERENCES users(id),
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS employee_advances_employee_idx ON employee_advances (employee_id);
+    `);
+  } catch (err) {
+    console.error('❌ Workforce schema migration failed:', err);
+  }
 }
 
 /**

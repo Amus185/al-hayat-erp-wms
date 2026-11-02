@@ -23,6 +23,7 @@ import { UsersPage } from './pages/UsersPage';
 import { AccountingPage } from './pages/AccountingPage';
 import { CustomersPage } from './pages/CustomersPage';
 import { ExpensesPage } from './pages/ExpensesPage';
+import { EmployeesPage } from './pages/EmployeesPage';
 import { AssetsPage } from './pages/AssetsPage';
 import { DeliveriesPage } from './pages/DeliveriesPage';
 import { ManufacturingPage } from './pages/ManufacturingPage';
@@ -136,6 +137,7 @@ export function App() {
 
             {/* Expenses */}
             <Route path="/expenses" element={<ExpensesPage />} />
+            <Route path="/employees" element={<EmployeesPage />} />
 
             {/* Online store: overview, products on the shop, web orders, settings (the server also enforces permission and branch) */}
             <Route element={<ProtectedRoute permission="manage_sales|manage_inventory" />}>

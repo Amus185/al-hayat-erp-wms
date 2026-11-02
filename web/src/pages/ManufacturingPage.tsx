@@ -22,6 +22,7 @@ import { MetricCard } from '../components/MetricCard';
 import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
 import { confirmAction } from '../utils/swal';
+import { ManualManufacturePanel } from '../components/ManualManufacture';
 
 interface BomItem {
   id: string;
@@ -116,7 +117,7 @@ export function ManufacturingPage() {
   const { addToast } = useToast();
   const { hasPermission } = useAuth();
 
-  const [topTab, setTopTab] = useState<'WORK_ORDERS' | 'BOM'>('WORK_ORDERS');
+  const [topTab, setTopTab] = useState<'WORK_ORDERS' | 'BOM' | 'MANUAL'>(() => (new URLSearchParams(window.location.search).get('tab') === 'manual' ? 'MANUAL' : 'WORK_ORDERS'));
   // Work orders: searched, filtered, sorted and paged on the server.
   const woList = useServerList<WorkOrder>('/manufacturing/work-orders', {
     key: 'work-orders',
@@ -830,6 +831,24 @@ export function ManufacturingPage() {
           >
             Bill of Materials / Recipes ({boms.length})
           </button>
+          <button
+            type="button"
+            id="tab-manual-manufacture"
+            onClick={() => setTopTab('MANUAL')}
+            style={{
+              padding: '6px 14px',
+              border: 'none',
+              borderRadius: '6px',
+              fontWeight: 700,
+              fontSize: '13px',
+              cursor: 'pointer',
+              background: topTab === 'MANUAL' ? '#ffffff' : 'transparent',
+              color: topTab === 'MANUAL' ? '#066006' : '#64748b',
+              boxShadow: topTab === 'MANUAL' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+            }}
+          >
+            Item Manufacture
+          </button>
         </div>
 
       </div>
@@ -870,6 +889,8 @@ export function ManufacturingPage() {
               emptyMessage={woList.activeFilters ? 'No work orders match your filters' : "No manufacturing work orders recorded yet. Click 'New Work Order' to start production."}
             />
           </div>
+        ) : topTab === 'MANUAL' ? (
+          <ManualManufacturePanel enabled={topTab === 'MANUAL'} />
         ) : (
           <DataTable
             data={Array.isArray(boms) ? boms : []}

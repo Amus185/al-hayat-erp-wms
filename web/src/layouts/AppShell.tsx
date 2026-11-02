@@ -26,6 +26,7 @@ import {
   Clock,
   Globe,
   Sparkles,
+  Contact,
 } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { useAuth } from '../contexts/AuthContext';
@@ -56,6 +57,7 @@ const navItems = [
   { label: 'Reports', path: '/reports', icon: BarChart3, permission: 'view_reports' },
   { label: 'Accounting', path: '/accounting', icon: BookOpen, permission: 'view_reports', adminOnly: true },
   { label: 'Audit Log', path: '/audit', icon: FileClock, permission: 'view_reports', adminOnly: true },
+  { label: 'Employees', path: '/employees', icon: Contact, permission: 'manage_users' },
   { label: 'Users', path: '/users', icon: Users, permission: 'manage_users', adminOnly: true },
 ];
 
@@ -73,6 +75,7 @@ const pageTitles: Record<string, { section: string; title: string }> = {
   '/deliveries':    { section: 'Logistics',              title: 'Product Deliveries & Fleet' },
   '/customers':     { section: 'Sales',                  title: 'Customers' },
   '/expenses':      { section: 'Finance',                title: 'Expenses' },
+  '/employees':     { section: 'People',                 title: 'Employees & Salary Advances' },
   '/assets':        { section: 'Owner Investments',      title: "Owner's Assets & Investments" },
   '/reports':       { section: 'Analytics',              title: 'Reports' },
   '/accounting':    { section: 'Finance',                title: 'Accounting' },

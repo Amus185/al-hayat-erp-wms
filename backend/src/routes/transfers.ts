@@ -9,6 +9,29 @@ const transfers = new Hono<{ Bindings: Env; Variables: { jwtPayload: any } }>();
 
 transfers.use('/*', authMiddleware);
 
+/**
+ * Tells the people at the receiving branch or warehouse what is on its way:
+ * items, quantities, sender and status.
+ */
+function notifyDestination(db: any, transferId: string, title: string, actorId: string | null) {
+  return db.prepare(`
+    INSERT INTO notifications (id, user_id, title, message, type)
+    SELECT gen_random_uuid()::text, u.id, ?::text || ' ' || t.transfer_number,
+           'From ' || COALESCE(sw.name, sb.name, 'another location') || ': ' ||
+           COALESCE((SELECT string_agg(COALESCE(tl.quantity, tl.quantity_requested)::text || ' × ' || COALESCE(p.name, 'item'), ', ')
+                     FROM transfer_lines tl LEFT JOIN products p ON p.id = tl.product_id WHERE tl.transfer_id = t.id), 'no items') ||
+           '. Status: ' || replace(t.status, '_', ' ') || '. Open Transfers → Incoming.',
+           'TRANSFER'
+    FROM transfers t
+    LEFT JOIN warehouses sw ON sw.id = t.source_warehouse_id
+    LEFT JOIN branches sb ON sb.id = t.source_branch_id
+    JOIN users u ON u.is_active = 1 AND u.id IS DISTINCT FROM ?::text
+      AND ((t.destination_branch_id IS NOT NULL AND u.branch_id = t.destination_branch_id)
+        OR (t.destination_warehouse_id IS NOT NULL AND u.warehouse_id = t.destination_warehouse_id))
+    WHERE t.id = ?
+  `).bind(title, actorId, transferId);
+}
+
 const TRANSFER_LIST: ListOptions = {
   sortable: { date: 'COALESCE(requested_at, created_at)', number: 'transfer_number', status: 'status', from: 'source_name', to: 'destination_name', lines: 'line_count' },
   defaultSort: 'date', defaultDir: 'desc', tieBreaker: 'id',
@@ -27,7 +50,9 @@ transfers.get('/', async (c) => {
       au.full_name AS approver_name,
       du.full_name AS dispatcher_name,
       rcu.full_name AS receiver_name,
-      (SELECT COUNT(*) FROM transfer_lines tl WHERE tl.transfer_id = t.id) AS line_count
+      (SELECT COUNT(*) FROM transfer_lines tl WHERE tl.transfer_id = t.id) AS line_count,
+      (SELECT string_agg(COALESCE(tl.quantity, tl.quantity_requested)::text || ' × ' || COALESCE(p.name, 'item'), ', ' ORDER BY p.name)
+         FROM transfer_lines tl LEFT JOIN products p ON p.id = tl.product_id WHERE tl.transfer_id = t.id) AS items_summary
     FROM transfers t
     LEFT JOIN warehouses sw ON sw.id = t.source_warehouse_id
     LEFT JOIN branches   sb ON sb.id = t.source_branch_id
@@ -64,6 +89,18 @@ transfers.get('/', async (c) => {
     };
     loc('from', 'source');
     loc('to', 'destination');
+    // Incoming / outgoing for the person's own location (their branch or warehouse).
+    const dir = q('direction');
+    const me = await c.env.DB.prepare('SELECT branch_id, warehouse_id FROM users WHERE id = ?').bind(payload.sub).first() as any;
+    const branchId = me?.branch_id ?? payload.branch_id ?? null;
+    const whId = me?.warehouse_id ?? null;
+    if (dir === 'incoming' || dir === 'outgoing') {
+      const side = dir === 'incoming' ? 'destination' : 'source';
+      if (branchId || whId) {
+        where.push(`(${side}_branch_id = ? OR ${side}_warehouse_id = ?)`);
+        extra.push(branchId ?? '', whId ?? '');
+      }
+    }
     if (q('productId')) { where.push('EXISTS (SELECT 1 FROM transfer_lines tl WHERE tl.transfer_id = x.id AND tl.product_id = ?)'); extra.push(q('productId')); }
     dateRange(c, 'COALESCE(requested_at, created_at)', where, extra);
     const statusWhere = [...where];
@@ -79,6 +116,7 @@ transfers.get('/', async (c) => {
         { label: 'To', value: (r: any) => r.destination_name },
         { label: 'Status', value: (r: any) => r.status },
         { label: 'Lines', value: (r: any) => r.line_count },
+        { label: 'Items', value: (r: any) => r.items_summary },
         { label: 'Requested by', value: (r: any) => r.requester_name },
         { label: 'Approved by', value: (r: any) => r.approver_name },
         { label: 'Received by', value: (r: any) => r.receiver_name },
@@ -87,7 +125,7 @@ transfers.get('/', async (c) => {
     const { results: grouped } = await c.env.DB.prepare(`SELECT status, COUNT(*)::int AS n FROM (${query}) x ${where.length ? 'WHERE ' + where.join(' AND ') : ''} GROUP BY status`).bind(...params, ...extra).all();
     const counts: Record<string, number> = { ALL: 0 };
     for (const g of (grouped || []) as any[]) { counts[g.status] = Number(g.n); counts.ALL += Number(g.n); }
-    return pagedResponse(c, listReq, rows, total, { counts });
+    return pagedResponse(c, listReq, rows, total, { counts, hasLocation: Boolean(branchId || whId) });
   }
 
   query += ` ORDER BY t.requested_at DESC LIMIT 200`;
@@ -257,6 +295,7 @@ transfers.post('/', requirePermissions(['manage_transfers']), async (c) => {
   }
 
   stmts.push(createAuditLogStmt(c, 'TRANSFER_CREATE', 'transfers', id, null, { transferNumber, sourceOwnerType: body.sourceOwnerType, destinationOwnerType: body.destinationOwnerType, lines: body.lines }));
+  stmts.push(notifyDestination(c.env.DB, id, 'Incoming transfer', userId));
   await c.env.DB.batch(stmts);
   const { results } = await c.env.DB.prepare('SELECT * FROM transfers WHERE id = ?').bind(id).all();
   return c.json(results[0], 201);
@@ -390,6 +429,7 @@ transfers.post('/:id/dispatch', requirePermissions(['manage_transfers']), async 
   `).bind(userId, userId, id));
 
   stmts.push(createAuditLogStmt(c, 'TRANSFER_DISPATCH', 'transfers', id, { status: transfer.status }, { status: 'DISPATCHED' }));
+  stmts.push(notifyDestination(c.env.DB, id as string, 'On its way:', userId));
 
   await c.env.DB.batch(stmts);
   const result = await c.env.DB.prepare('SELECT * FROM transfers WHERE id = ?').bind(id).first();

@@ -651,7 +651,9 @@ accounting.get('/balance-sheet', requirePermissions(['view_reports']), async (c)
            COALESCE(SUM(CASE WHEN je.id IS NOT NULL THEN jel.debit_amount ELSE 0 END), 0) AS total_debit,
            COALESCE(SUM(CASE WHEN je.id IS NOT NULL THEN jel.credit_amount ELSE 0 END), 0) AS total_credit,
            CASE
-             WHEN coa.normal_balance = 'DEBIT'
+             -- By section, not normal balance: a contra-asset such as Accumulated
+             -- Depreciation (credit-normal) must reduce total assets.
+             WHEN coa.account_type = 'ASSET'
                THEN COALESCE(SUM(CASE WHEN je.id IS NOT NULL THEN jel.debit_amount ELSE 0 END), 0) - COALESCE(SUM(CASE WHEN je.id IS NOT NULL THEN jel.credit_amount ELSE 0 END), 0)
              ELSE
                COALESCE(SUM(CASE WHEN je.id IS NOT NULL THEN jel.credit_amount ELSE 0 END), 0) - COALESCE(SUM(CASE WHEN je.id IS NOT NULL THEN jel.debit_amount ELSE 0 END), 0)
