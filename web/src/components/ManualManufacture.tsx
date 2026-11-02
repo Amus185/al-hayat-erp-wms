@@ -195,10 +195,11 @@ export function ManualManufacturePanel({ enabled }: { enabled: boolean }) {
         <button type="button" className="btn btn-secondary btn-sm" onClick={openGroups}><Layers size={14} /> Saved groups</button>
         {canEdit && <button type="button" className="btn btn-primary btn-sm" id="new-manufacture" onClick={openNew}><Plus size={14} /> New Manufacture</button>}
       </ListToolbar>
+      {list.total > 0 && <div className="list-summary"><span>Manufactures: <strong>{list.total.toLocaleString()}</strong></span><span>Total value: <strong>{money(list.totals?.value ?? 0)}</strong></span></div>}
       <DataTable id="mf-table" data={list.items} columns={columns} server={list} keyExtractor={(j) => j.id}
         onRowClick={canEdit ? (j) => j.status === 'OPEN' && openEdit(j) : undefined}
         emptyMessage={list.activeFilters ? 'No manufactures match your filters' : "Nothing yet. Click 'New Manufacture' to add items and their prices."} />
-      {list.totals && <p className="mm-sub" style={{ textAlign: 'right', marginTop: 6 }}>Total of matching: <strong>{money(list.totals.value)}</strong></p>}
+
 
       <Modal isOpen={open} onClose={() => !saving && setOpen(false)} title={editing ? `Edit ${editing.job_number}` : 'New Manufacture'} width="lg"
         footer={!loadingJob && (

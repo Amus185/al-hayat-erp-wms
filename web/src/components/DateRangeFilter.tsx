@@ -49,7 +49,7 @@ export function DateRangeFilter({ from, to, onChange, id = 'date-range' }: {
       <Calendar size={15} className="date-range__icon" aria-hidden="true" />
       <select
         aria-label="Date range"
-        className="date-range__preset"
+        className={`date-range__preset${from || to ? ' date-range__preset--active' : ''}`}
         value={preset}
         onChange={(e) => {
           const r = datePreset(e.target.value);
