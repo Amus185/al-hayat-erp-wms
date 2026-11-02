@@ -224,3 +224,19 @@ test('saved views: per person, same name replaces, never another person’s', as
   await t.api('DELETE', `/views/${v.body.id}`);
   assert.equal((await t.api('GET', '/views?list=sales-orders')).body.length, 0);
 });
+
+test('a depreciation recorded by mistake can be deleted: its journal entry is reversed, books stay balanced', async () => {
+  const rec = await t.api('POST', '/accounting/depreciation', { asset_name: 'Delivery van', acquisition_date: '2026-01-01', cost: 12000, useful_life_years: 5, period_depreciation: 2400 });
+  assert.equal(rec.status, 201, JSON.stringify(rec.body));
+  const je = (await t.q(`SELECT id, status FROM journal_entries WHERE reference_type = 'DEPRECIATION' AND reference_id = $1`, [rec.body.id]))[0];
+  assert.equal(je.status, 'POSTED');
+  const del = await t.api('DELETE', `/accounting/depreciation/${rec.body.id}`);
+  assert.equal(del.status, 200, JSON.stringify(del.body));
+  assert.equal((await t.q('SELECT COUNT(*)::int AS n FROM depreciation_schedules WHERE id = $1', [rec.body.id]))[0].n, 0);
+  assert.equal((await t.q('SELECT status FROM journal_entries WHERE id = $1', [je.id]))[0].status, 'REVERSED');
+  const net = (await t.q(`SELECT COALESCE(SUM(debit_amount - credit_amount), 0)::float AS n FROM general_ledger WHERE description ILIKE '%Delivery van%' OR journal_entry_id IN (SELECT id FROM journal_entries WHERE reference_id = $1)`, [je.id]))[0].n;
+  assert.equal(net, 0, 'the counter-entry cancels it out');
+  assert.equal((await t.api('DELETE', `/accounting/depreciation/${rec.body.id}`)).status, 404);
+  const rep = await t.createUser({ branchId: HQ, roleId: 'role-sales-rep', role: 'sales_rep' });
+  assert.equal((await t.api('DELETE', `/accounting/depreciation/x`, undefined, rep.token)).status, 403, 'needs purchasing permission, as recording does');
+});

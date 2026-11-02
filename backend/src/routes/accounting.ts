@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { Env } from '../db';
 import { authMiddleware, requirePermissions } from '../middleware/auth';
+import { createAuditLogStmt } from '../services/audit';
 import { prepareJournalReversal, prepareJournalEntryPosting, prepareOpeningStock, fetchOpenFiscalPeriodId, reconcileMissingReceiptJournalEntries, reconcileMissingSalesJournalEntries } from '../services/accounting-service';
 import { resolveBranchScope, branchSql, inScope, assertAllBranchAccess, resolveWriteBranch, ScopeError, type BranchScope } from '../services/branch-scope';
 import { csvResponse, dateRange, likeTerm, listRequest, pagedResponse, pagedRows, type ListOptions } from '../services/listing';
@@ -1077,6 +1078,31 @@ accounting.get('/depreciation', requirePermissions(['view_reports']), async (c) 
     ORDER BY ds.created_at DESC
   `).all();
   return c.json(results || []);
+});
+
+/**
+ * Removes a depreciation recorded by mistake. Its posted journal entry is
+ * reversed (a counter-entry, so the books stay balanced and the history
+ * stays auditable), then the record is deleted - together or not at all.
+ */
+accounting.delete('/depreciation/:id', requirePermissions(['manage_purchasing']), async (c) => {
+  const id = c.req.param('id');
+  const db = c.env.DB;
+  const row = await db.prepare('SELECT id, asset_name FROM depreciation_schedules WHERE id = ?').bind(id).first() as any;
+  if (!row) return c.json({ error: 'Depreciation record not found' }, 404);
+  const userId = (c as any).get('jwtPayload')?.sub || null;
+  const { results } = await db.prepare(
+    "SELECT id, description, status FROM journal_entries WHERE reference_type = 'DEPRECIATION' AND reference_id = ?",
+  ).bind(id).all();
+  const stmts: any[] = [];
+  for (const je of (results || []) as any[]) {
+    if (je.status === 'POSTED') stmts.push(...await prepareJournalReversal(c, je.id, je.description, userId));
+  }
+  const reversed = stmts.length > 0;
+  stmts.push(db.prepare('DELETE FROM depreciation_schedules WHERE id = ?').bind(id).mustAffect('Already deleted'));
+  stmts.push(createAuditLogStmt(c, 'DEPRECIATION_DELETE', 'depreciation_schedules', id, { asset_name: row.asset_name }, { journal_reversed: reversed }));
+  await db.batch(stmts);
+  return c.json({ success: true });
 });
 
 accounting.post('/depreciation', requirePermissions(['manage_purchasing']), async (c) => {

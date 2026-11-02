@@ -3,13 +3,13 @@ import {
   BookOpen, BarChart3, FileText, Scale, TrendingUp, Building2,
   DollarSign, Users, Package, Calendar, RefreshCw, Plus, Send,
   CheckCircle2, AlertCircle, Clock, ChevronDown, X, RotateCcw,
-  Layers, Wallet, Receipt,
+  Layers, Wallet, Receipt, Trash2,
 } from 'lucide-react';
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis,
   CartesianGrid, Tooltip, Legend, PieChart, Pie, Cell,
 } from 'recharts';
-import { apiGet, apiPost, apiPatch, invalidateApiCache } from '../api/client';
+import { apiGet, apiPost, apiPatch, apiDelete, invalidateApiCache } from '../api/client';
 import { DataTable, type Column } from '../components/DataTable';
 import { MetricCard } from '../components/MetricCard';
 import { PageSkeleton } from '../components/LoadingSpinner';
@@ -142,7 +142,7 @@ const selectStyle: React.CSSProperties = { ...inputStyle, appearance: 'none' };
 // ══════════════════════════════════════════════════════════════════
 export function AccountingPage() {
   const { addToast } = useToast();
-  const { user, branchId: myBranchId } = useAuth();
+  const { user, branchId: myBranchId, hasPermission } = useAuth();
   // Admins/accountants: consolidated view by default, filterable per branch.
   // Everyone else is pinned to their branch by the server (this is display only).
   const canChooseBranch = user?.role === 'admin' || user?.role === 'accountant';
@@ -701,7 +701,32 @@ export function AccountingPage() {
     { key: 'method', label: 'Method', render: (r: any) => <Badge label={r.method.replace('_', ' ')} color={TEAL} /> },
     { key: 'period_depreciation', label: 'Period Dep.', render: (r: any) => <span style={{ fontFamily: 'monospace', fontWeight: 700, color: AMBER }}>{fmt(r.period_depreciation)}</span> },
     { key: 'period_name', label: 'Period', render: (r: any) => r.period_name || '—' },
+    {
+      key: 'actions', label: '', render: (r: any) => hasPermission('manage_purchasing') ? (
+        <button type="button" onClick={() => deleteDepreciation(r)} title="Delete this depreciation (its journal entry is reversed)"
+          style={{ border: '1px solid #fecaca', background: '#fff', color: '#dc2626', borderRadius: '6px', padding: '5px 8px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '12px', fontWeight: 600 }}>
+          <Trash2 size={13} /> Delete
+        </button>
+      ) : null,
+    },
   ];
+
+  async function deleteDepreciation(r: any) {
+    const ok = await confirmAction(
+      `Delete depreciation for ${r.asset_name}?`,
+      `Its journal entry (${fmt(r.period_depreciation)}) is reversed with a counter-entry, so the books stay correct, and the record is removed.`,
+      'Delete', 'warning',
+    );
+    if (!ok) return;
+    try {
+      await apiDelete(`/accounting/depreciation/${r.id}`);
+      addToast('success', 'Depreciation deleted and its journal entry reversed');
+      setDepreciation((rows: any[]) => rows.filter((x) => x.id !== r.id));
+      invalidateApiCache('/accounting');
+    } catch (e: any) {
+      addToast('error', e?.message || 'Could not delete the depreciation');
+    }
+  }
 
   // ─── Shared filter bar ─────────────────────────────────────────
   const PeriodBar = () => (
