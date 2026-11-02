@@ -67,7 +67,7 @@ const pageTitles: Record<string, { section: string; title: string }> = {
   '/products':      { section: 'Catalog',                title: 'Products' },
   '/warehouses':    { section: 'Inventory',              title: 'Warehouses' },
   '/inventory':     { section: 'Stock Control',          title: 'Inventory' },
-  '/manufacturing': { section: 'Production',             title: 'Manufacturing & Work Orders' },
+  '/manufacturing': { section: 'Production',             title: 'Manufacturing' },
   '/branches':      { section: 'Organization',           title: 'Branches' },
   '/transfers':     { section: 'Movement',               title: 'Stock Transfers' },
   '/purchasing':    { section: 'Procurement',            title: 'Purchasing' },

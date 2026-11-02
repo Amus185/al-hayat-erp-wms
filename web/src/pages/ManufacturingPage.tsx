@@ -119,7 +119,15 @@ export function ManufacturingPage() {
   // Material and production costs only with cost access (Owner decision D4).
   const canCosts = hasPermission('costs.view');
 
-  const [topTab, setTopTab] = useState<'WORK_ORDERS' | 'BOM' | 'MANUAL'>(() => (new URLSearchParams(window.location.search).get('tab') === 'manual' ? 'MANUAL' : 'WORK_ORDERS'));
+  const [topTab, setTopTab] = useState<'WORK_ORDERS' | 'BOM' | 'MANUAL'>(() => {
+    // Item Manufacture (items + prices, reusable groups) is the main workflow; work orders and
+    // BOM recipes are the separate factory workflow, opened from their own tabs.
+    const tab = new URLSearchParams(window.location.search).get('tab');
+    return tab === 'work-orders' ? 'WORK_ORDERS' : tab === 'bom' ? 'BOM' : 'MANUAL';
+  });
+  // Buttons in the page header drive the Item Manufacture screen.
+  const [manualCmd, setManualCmd] = useState<{ action: 'new' | 'newGroup' | 'groups'; n: number } | null>(null);
+  const runManual = (action: 'new' | 'newGroup' | 'groups') => setManualCmd((prev) => ({ action, n: (prev?.n ?? 0) + 1 }));
   // Work orders: searched, filtered, sorted and paged on the server.
   const woList = useServerList<WorkOrder>('/manufacturing/work-orders', {
     key: 'work-orders',
@@ -741,11 +749,24 @@ export function ManufacturingPage() {
           <Factory size={24} />
         </div>
         <div className="module-header__info">
-          <p>Manufacturing & Production</p>
-          <h2>Furniture Production & Work Orders</h2>
+          <p>Manufacturing</p>
+          <h2>{topTab === 'MANUAL' ? 'Register items, save groups, manufacture' : 'Factory production: work orders & BOM recipes'}</h2>
         </div>
         <div className="module-header__actions">
-          {hasPermission('manage_inventory') && (
+          {topTab === 'MANUAL' && hasPermission('manage_inventory') && (
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+              <button type="button" className="btn btn-secondary" id="mf-groups" onClick={() => runManual('groups')} style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                <Layers size={15} /> Saved Groups
+              </button>
+              <button type="button" className="btn btn-secondary" id="mf-new-group" onClick={() => runManual('newGroup')} style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                <Plus size={15} /> New Group
+              </button>
+              <button type="button" className="btn btn-primary" id="mf-new-manufacture" onClick={() => runManual('new')} style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
+                <Plus size={16} /> New Manufacture
+              </button>
+            </div>
+          )}
+          {topTab !== 'MANUAL' && hasPermission('manage_inventory') && (
             <div style={{ display: 'flex', gap: '8px' }}>
               {canCosts && <button
                 type="button"
@@ -768,8 +789,8 @@ export function ManufacturingPage() {
         </div>
       </section>
 
-      {/* KPI Stats Grid */}
-      <section className="metric-grid">
+      {/* KPI Stats Grid (factory workflow only) */}
+      {topTab !== 'MANUAL' && <section className="metric-grid">
         <MetricCard
           label="Active Production Runs"
           value={String(stats.activeWorkOrders)}
@@ -794,45 +815,11 @@ export function ManufacturingPage() {
           trend="Active furniture blueprints"
           icon={<Layers size={20} />}
         />
-      </section>
+      </section>}
 
-      {/* Top Toggle: Work Orders vs Bill of Materials */}
+      {/* Tabs: Item Manufacture (main) | factory work orders | BOM recipes */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px', marginBottom: '14px' }}>
         <div style={{ display: 'flex', gap: '6px', background: '#edf2ed', padding: '4px', borderRadius: '8px' }}>
-          <button
-            type="button"
-            onClick={() => setTopTab('WORK_ORDERS')}
-            style={{
-              padding: '6px 14px',
-              border: 'none',
-              borderRadius: '6px',
-              fontWeight: 700,
-              fontSize: '13px',
-              cursor: 'pointer',
-              background: topTab === 'WORK_ORDERS' ? '#ffffff' : 'transparent',
-              color: topTab === 'WORK_ORDERS' ? '#066006' : '#64748b',
-              boxShadow: topTab === 'WORK_ORDERS' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
-            }}
-          >
-            Production Work Orders ({woList.counts?.ALL ?? woList.total})
-          </button>
-          <button
-            type="button"
-            onClick={() => setTopTab('BOM')}
-            style={{
-              padding: '6px 14px',
-              border: 'none',
-              borderRadius: '6px',
-              fontWeight: 700,
-              fontSize: '13px',
-              cursor: 'pointer',
-              background: topTab === 'BOM' ? '#ffffff' : 'transparent',
-              color: topTab === 'BOM' ? '#066006' : '#64748b',
-              boxShadow: topTab === 'BOM' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
-            }}
-          >
-            Bill of Materials / Recipes ({boms.length})
-          </button>
           <button
             type="button"
             id="tab-manual-manufacture"
@@ -850,6 +837,40 @@ export function ManufacturingPage() {
             }}
           >
             Item Manufacture
+          </button>
+          <button
+            type="button"
+            onClick={() => setTopTab('WORK_ORDERS')}
+            style={{
+              padding: '6px 14px',
+              border: 'none',
+              borderRadius: '6px',
+              fontWeight: 700,
+              fontSize: '13px',
+              cursor: 'pointer',
+              background: topTab === 'WORK_ORDERS' ? '#ffffff' : 'transparent',
+              color: topTab === 'WORK_ORDERS' ? '#066006' : '#64748b',
+              boxShadow: topTab === 'WORK_ORDERS' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+            }}
+          >
+            Factory Work Orders ({woList.counts?.ALL ?? woList.total})
+          </button>
+          <button
+            type="button"
+            onClick={() => setTopTab('BOM')}
+            style={{
+              padding: '6px 14px',
+              border: 'none',
+              borderRadius: '6px',
+              fontWeight: 700,
+              fontSize: '13px',
+              cursor: 'pointer',
+              background: topTab === 'BOM' ? '#ffffff' : 'transparent',
+              color: topTab === 'BOM' ? '#066006' : '#64748b',
+              boxShadow: topTab === 'BOM' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+            }}
+          >
+            Factory BOM Recipes ({boms.length})
           </button>
         </div>
 
@@ -892,7 +913,7 @@ export function ManufacturingPage() {
             />
           </div>
         ) : topTab === 'MANUAL' ? (
-          <ManualManufacturePanel enabled={topTab === 'MANUAL'} />
+          <ManualManufacturePanel enabled={topTab === 'MANUAL'} command={manualCmd} />
         ) : (
           <DataTable
             data={Array.isArray(boms) ? boms : []}

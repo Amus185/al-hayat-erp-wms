@@ -2069,3 +2069,7 @@ html.api-busy, html.api-busy * { cursor: progress !important; }
 .emp-adv-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; padding: 10px; background: #f8faf8; border-radius: 8px; }
 .emp-adv-form .form-input, .emp-adv-form .form-select { min-width: 120px; }
 .tr-items { font-size: 12px; color: #475569; max-width: 280px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; }
+.mm-step { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-card); }
+.mm-step__title { margin: 0; font-size: 14px; color: #066006; }
+.mm-step__title span { font-weight: 400; color: var(--text-muted); font-size: 12px; }
+.mm-picked { display: flex; flex-wrap: wrap; gap: 6px; }
