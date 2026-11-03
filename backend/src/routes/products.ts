@@ -3,6 +3,7 @@ import { Env, uuidv4 } from '../db';
 import { authMiddleware, requirePermissions, isAdminUser } from '../middleware/auth';
 import { logAudit, createAuditLogStmt } from '../services/audit';
 import { hideUnless, PERM, COST_FIELDS, sortsFor, canSeeCosts } from '../services/privacy';
+import { resolveLoc, locBranch, productVisibleSql, ScopeError, type Loc } from '../services/branch-scope';
 import { prepareOpeningStock, type OpeningStockItem } from '../services/accounting-service';
 import { csvResponse, likeTerm, listRequest, pagedResponse, pagedRows, type ListOptions, type ListRequest } from '../services/listing';
 
@@ -21,10 +22,31 @@ const PRODUCT_LIST: ListOptions = {
   defaultSort: 'name', defaultDir: 'asc', tieBreaker: 'p.id',
 };
 
+/** `WHERE` for the stock subquery: only the caller's own location's stock. */
+function stockFilter(loc: Loc): string {
+  if (loc.kind === 'BRANCH') return `WHERE owner_type = 'BRANCH' AND branch_id = '${loc.branchId}'`;
+  if (loc.kind === 'WAREHOUSE') return `WHERE owner_type = 'WAREHOUSE' AND warehouse_id = '${loc.warehouseId}'`;
+  return '';
+}
+
+/**
+ * A product, only if the caller's branch deals in it (a shared catalog entry:
+ * its identity is central, its visibility per branch). Company level and
+ * warehouse staff see the whole catalog.
+ */
+async function productAllowed(c: any, id: string): Promise<boolean> {
+  const branch = locBranch(await resolveLoc(c));
+  if (!branch) return true;
+  const ok = await c.env.DB.prepare(`SELECT 1 AS x FROM products p WHERE p.id = ? AND ${productVisibleSql(branch)}`).bind(id).first();
+  return !!ok;
+}
+
 async function listProducts(c: any, r: ListRequest) {
   const q = (k: string) => (c.req.query(k) || '').trim();
   const where: string[] = [];
   const params: unknown[] = [];
+  const loc = await resolveLoc(c);
+  if (loc.kind === 'BRANCH') where.push(productVisibleSql(loc.branchId));
   const term = q('q') || q('search');
   if (term) {
     const t = likeTerm(term);
@@ -46,7 +68,7 @@ async function listProducts(c: any, r: ListRequest) {
     FROM products p
     LEFT JOIN categories c ON p.category_id = c.id
     LEFT JOIN brands b ON p.brand_id = b.id
-    LEFT JOIN (SELECT product_id, SUM(quantity_on_hand) AS on_hand FROM inventory_stock GROUP BY product_id) stock ON stock.product_id = p.id
+    LEFT JOIN (SELECT product_id, SUM(quantity_on_hand) AS on_hand FROM inventory_stock ${stockFilter(loc)} GROUP BY product_id) stock ON stock.product_id = p.id
     ${where.length ? 'WHERE ' + where.join(' AND ') : ''}`;
   const { rows, total } = await pagedRows(c.env.DB,
     `p.*, COALESCE(p.is_active, 1) AS is_active, COALESCE(p.product_type, 'STANDARD') AS product_type,
@@ -61,7 +83,7 @@ async function listProducts(c: any, r: ListRequest) {
       { label: 'Type', value: (x: any) => x.product_type },
       { label: 'Cost price', value: (x: any) => Number(x.cost_price).toFixed(2), perm: PERM.COSTS },
       { label: 'Selling price', value: (x: any) => Number(x.selling_price).toFixed(2) },
-      { label: 'Stock (all locations)', value: (x: any) => x.total_stock },
+      { label: loc.kind === 'ALL' ? 'Stock (all locations)' : 'Stock (your location)', value: (x: any) => x.total_stock },
       { label: 'Active', value: (x: any) => (Number(x.is_active) === 1 ? 'Yes' : 'No') },
     ], rows);
   }
@@ -91,16 +113,16 @@ async function listProducts(c: any, r: ListRequest) {
   if (q('withStock') === '1' && ids.length) {
     const all = Array.from(new Set([...ids, ...groups.map((g: any) => g.component_product_id)]));
     const ph = all.map(() => '?').join(', ');
-    const payload = c.get('jwtPayload');
-    const scoped = isAdminUser(payload) ? null : payload.branch_id;
+    const own = loc.kind === 'BRANCH' ? ` AND s.owner_type = 'BRANCH' AND s.branch_id = '${loc.branchId}'`
+      : loc.kind === 'WAREHOUSE' ? ` AND s.owner_type = 'WAREHOUSE' AND s.warehouse_id = '${loc.warehouseId}'` : '';
     const { results } = await c.env.DB.prepare(`
       SELECT s.id, s.product_id, s.owner_type, s.warehouse_id, s.branch_id, s.warehouse_location_id,
              s.quantity_on_hand, s.quantity_reserved, w.name AS warehouse, b.name AS branch
       FROM inventory_stock s
       LEFT JOIN warehouses w ON w.id = s.warehouse_id
       LEFT JOIN branches b ON b.id = s.branch_id
-      WHERE s.product_id IN (${ph}) ${scoped ? "AND s.owner_type = 'BRANCH' AND s.branch_id = ?" : ''}
-    `).bind(...all, ...(scoped ? [scoped] : [])).all();
+      WHERE s.product_id IN (${ph}) ${own}
+    `).bind(...all).all();
     stockRows = (results || []) as any[];
   }
   return pagedResponse(c, r, items, total, q('withStock') === '1' ? { stockRows } : {});
@@ -119,6 +141,8 @@ products.get('/', async (c) => {
     WHERE 1=1
   `;
   const params: any[] = [];
+  const legacyBranch = locBranch(await resolveLoc(c));
+  if (legacyBranch) query += ` AND ${productVisibleSql(legacyBranch)}`;
   if (status === 'active') {
     query += ` AND COALESCE(p.is_active, 1) = 1`;
   } else if (status === 'inactive') {
@@ -294,6 +318,8 @@ products.post('/', requirePermissions(['manage_inventory']), async (c) => {
     productId, body.sku.trim(), body.name.trim(), body.description || null, body.categoryId || null, 
     body.brandId || null, cost, sell, body.reorderLevel || 5, productType, body.barcode || null
   ));
+  // A product a branch registers belongs to that branch's catalog (shared master, per-branch visibility).
+  if (payload?.branch_id) stmts.push(c.env.DB.prepare('INSERT INTO product_branches (product_id, branch_id) VALUES (?, ?) ON CONFLICT DO NOTHING').bind(productId, payload.branch_id));
 
   // 2. Insert initial inventory_stock entry (only for STANDARD products; grouped products draw stock from components)
   if (productType === 'STANDARD' && openingLines.length > 0) {
@@ -512,6 +538,7 @@ products.post('/bulk', requirePermissions(['manage_inventory']), async (c) => {
       productId, sku, barcode, name, item.description || null,
       categoryId, brandId, cost, sell, Number(item.reorderLevel || 5)
     ));
+    if (c.get('jwtPayload')?.branch_id) stmts.push(c.env.DB.prepare('INSERT INTO product_branches (product_id, branch_id) VALUES (?, ?) ON CONFLICT DO NOTHING').bind(productId, c.get('jwtPayload').branch_id));
 
     // Handle initial stock allocation
     const initStock = Math.max(0, Number(item.initialStock || 0));
@@ -607,6 +634,7 @@ products.delete('/categories/:id', requirePermissions(['manage_inventory']), asy
 
 products.get('/:id', async (c) => {
   const id = c.req.param('id');
+  if (!(await productAllowed(c, id as string))) return c.json({ message: 'Product not found' }, 404);
   const product = await c.env.DB.prepare(`
     SELECT p.*, COALESCE(p.is_active, 1) AS is_active, COALESCE(p.product_type, 'STANDARD') AS product_type,
            c.name as category_name, b.name as brand_name
@@ -636,6 +664,7 @@ products.get('/:id', async (c) => {
 
 products.patch('/:id', requirePermissions(['manage_inventory']), async (c) => {
   const id = c.req.param('id');
+  if (!(await productAllowed(c, id as string))) return c.json({ message: 'Product not found' }, 404);
   const body = await c.req.json();
 
   const existing = await c.env.DB.prepare('SELECT * FROM products WHERE id = ?').bind(id).first() as any;
@@ -780,7 +809,8 @@ products.post('/bulk-update', requirePermissions(['manage_inventory']), async (c
   const ids = Array.isArray(body.ids) ? Array.from(new Set(body.ids.filter((x: unknown) => typeof x === 'string' && x.length <= 100))) as string[] : [];
   if (!ids.length || ids.length > 500) return c.json({ message: 'Choose between 1 and 500 products.' }, 400);
   const ph = ids.map(() => '?').join(', ');
-  const { results } = await c.env.DB.prepare(`SELECT id, is_active, category_id FROM products WHERE id IN (${ph})`).bind(...ids).all();
+  const bulkBranch = locBranch(await resolveLoc(c));
+  const { results } = await c.env.DB.prepare(`SELECT id, is_active, category_id FROM products p WHERE p.id IN (${ph}) ${bulkBranch ? `AND ${productVisibleSql(bulkBranch)}` : ''}`).bind(...ids).all();
   const found = (results || []) as any[];
   if (!found.length) return c.json({ message: 'None of these products exist.' }, 404);
   const db = c.env.DB;
@@ -811,6 +841,7 @@ products.post('/bulk-update', requirePermissions(['manage_inventory']), async (c
 
 products.patch('/:id/status', requirePermissions(['manage_inventory']), async (c) => {
   const id = c.req.param('id');
+  if (!(await productAllowed(c, id as string))) return c.json({ message: 'Product not found' }, 404);
   const body = await c.req.json();
   const isActive = body.is_active !== undefined ? (body.is_active ? 1 : 0) : (body.isActive ? 1 : 0);
 
@@ -825,6 +856,7 @@ products.patch('/:id/status', requirePermissions(['manage_inventory']), async (c
 
 products.delete('/:id', requirePermissions(['manage_inventory']), async (c) => {
   const id = c.req.param('id');
+  if (!(await productAllowed(c, id as string))) return c.json({ message: 'Product not found' }, 404);
 
   // Check for active (Confirmed or Paid) sales orders
   const activeSale = await c.env.DB.prepare(`

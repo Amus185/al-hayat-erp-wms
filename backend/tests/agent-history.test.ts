@@ -37,7 +37,7 @@ test('a conversation keeps its messages in order and moves to the top when used'
 test('privacy: another user cannot list, open, write to, rename or delete my conversation', async () => {
   const mine = await newChat('xisaabaadka');
   await say(mine, 'user', 'xaashida dheelitirka');
-  const other = await t.createUser({ branchId: HQ, roleId: 'role-branch-user', role: 'branch_user' });
+  const other = await t.createUser({ branchId: HQ, roleId: 'role-branch-user', role: 'branch_user', grants: ['assistant.use'] });
   assert.ok(!(await t.api('GET', '/agent/conversations', undefined, other.token)).body.some((c: any) => c.id === mine));
   assert.equal((await t.api('GET', `/agent/conversations/${mine}`, undefined, other.token)).status, 404);
   assert.equal((await say(mine, 'user', 'hack', {}, other.token)).status, 404);
@@ -73,7 +73,7 @@ test('reopened chats show suggested changes in their current state, never offeri
   assert.match(msg.proposals[0].summary, /Ku dar 1 xabbo/);
 
   // another user's proposal id stored in my chat is never shown
-  const other = await t.createUser({ branchId: HQ, roleId: 'role-branch-user', role: 'branch_user' });
+  const other = await t.createUser({ branchId: HQ, roleId: 'role-branch-user', role: 'branch_user', grants: ['assistant.use'] });
   const theirChat = await newChat('theirs', other.token);
   await say(theirChat, 'assistant', 'x', { proposalIds: [open] }, other.token);
   assert.deepEqual((await t.api('GET', `/agent/conversations/${theirChat}`, undefined, other.token)).body.messages[0].proposals, []);

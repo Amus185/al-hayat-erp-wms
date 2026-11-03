@@ -6,7 +6,7 @@
 import { Hono } from 'hono';
 import { Env } from '../db';
 import { authMiddleware } from '../middleware/auth';
-import { resolveBranchScope, branchSql } from '../services/branch-scope';
+import { resolveBranchScope, branchSql, customerVisibleSql, productVisibleSql } from '../services/branch-scope';
 import { likeTerm } from '../services/listing';
 
 const search = new Hono<{ Bindings: Env; Variables: { jwtPayload: any } }>();
@@ -57,19 +57,21 @@ search.get('/', async (c) => {
     jobs.push(db.prepare(`
       SELECT d.id, d.delivery_number, d.status, d.customer_name
       FROM deliveries d LEFT JOIN sales_orders so ON so.id = d.sales_order_id
-      WHERE (d.delivery_number ILIKE ? OR d.customer_name ILIKE ?) ${branchSql(scope, 'so.branch_id')}
+      WHERE (d.delivery_number ILIKE ? OR d.customer_name ILIKE ?) ${branchSql(scope, 'COALESCE(d.branch_id, so.branch_id)')}
       ORDER BY d.created_at DESC LIMIT ${PER_KIND}
     `).bind(t, t).all().then(({ results }: any) => (results || []).map((r: any) => ({
       kind: 'delivery', id: r.id, title: r.delivery_number, subtitle: `Delivery · ${r.customer_name || ''} · ${r.status}`, url: `/deliveries?open=${encodeURIComponent(r.id)}`,
     }))));
     jobs.push(db.prepare(`
-      SELECT id, name, phone FROM customers
-      WHERE name ILIKE ? OR email ILIKE ? OR COALESCE(phone, '') ILIKE ?${digits.length >= 3 ? " OR regexp_replace(COALESCE(phone, ''), '\\D', '', 'g') LIKE ?" : ''}
-      ORDER BY name LIMIT ${PER_KIND}
+      SELECT cu.id, cu.name, cu.phone FROM customers cu
+      WHERE (cu.name ILIKE ? OR cu.email ILIKE ? OR COALESCE(cu.phone, '') ILIKE ?${digits.length >= 3 ? " OR regexp_replace(COALESCE(cu.phone, ''), '\\D', '', 'g') LIKE ?" : ''})
+        ${scope.kind === 'BRANCH' ? `AND ${customerVisibleSql(scope.branchId)}` : ''}
+      ORDER BY cu.name LIMIT ${PER_KIND}
     `).bind(t, t, t, ...(digits.length >= 3 ? [`%${digits}%`] : [])).all().then(({ results }: any) => (results || []).map((r: any) => ({
       kind: 'customer', id: r.id, title: r.name, subtitle: `Customer${r.phone ? ' · ' + r.phone : ''}`, url: `/customers?q=${encodeURIComponent(r.phone || r.name)}`,
     }))));
-    jobs.push(db.prepare(`
+    // Online orders are company-level: only the company view (not a branch) searches them.
+    if (scope.kind === 'ALL') jobs.push(db.prepare(`
       SELECT id, request_number, customer_name, status, total_amount FROM storefront_requests
       WHERE request_number ILIKE ? OR customer_name ILIKE ? OR phone ILIKE ?
       ORDER BY created_at DESC LIMIT ${PER_KIND}
@@ -77,12 +79,15 @@ search.get('/', async (c) => {
       kind: 'web_order', id: r.id, title: r.request_number, subtitle: `Online order · ${r.customer_name} · ${money(r.total_amount)} · ${r.status}`, url: `/online-store?tab=orders&open=${encodeURIComponent(r.id)}`,
     }))).catch(() => []));
   }
-  if (can('manage_inventory') || can('manage_sales')) {
+  if (scope && (can('manage_inventory') || can('manage_sales'))) {
+    // A branch finds the products it deals in, with its own stock; the company view sees all.
+    const stockOf = scope.kind === 'BRANCH' ? `WHERE owner_type = 'BRANCH' AND branch_id = '${scope.branchId}'` : '';
     jobs.push(db.prepare(`
       SELECT p.id, p.name, p.sku, p.selling_price, COALESCE(st.on_hand, 0) AS on_hand
       FROM products p
-      LEFT JOIN (SELECT product_id, SUM(quantity_on_hand) AS on_hand FROM inventory_stock GROUP BY product_id) st ON st.product_id = p.id
-      WHERE p.name ILIKE ? OR p.sku ILIKE ? OR COALESCE(p.barcode, '') ILIKE ?
+      LEFT JOIN (SELECT product_id, SUM(quantity_on_hand) AS on_hand FROM inventory_stock ${stockOf} GROUP BY product_id) st ON st.product_id = p.id
+      WHERE (p.name ILIKE ? OR p.sku ILIKE ? OR COALESCE(p.barcode, '') ILIKE ?)
+        ${scope.kind === 'BRANCH' ? `AND ${productVisibleSql(scope.branchId)}` : ''}
       ORDER BY (p.sku ILIKE ?) DESC, p.name LIMIT ${PER_KIND}
     `).bind(t, t, t, term).all().then(({ results }: any) => (results || []).map((r: any) => ({
       kind: 'product', id: r.id, title: r.name, subtitle: `${r.sku} · ${money(r.selling_price)} · ${Number(r.on_hand)} in stock`, url: `/products?q=${encodeURIComponent(r.sku)}`,

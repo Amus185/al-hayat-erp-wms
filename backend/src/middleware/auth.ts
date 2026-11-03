@@ -13,6 +13,8 @@ export type JwtPayload = {
   // authMiddleware); nothing the client sends is trusted for authorization.
   permissions: string[];
   branch_id: string | null;
+  /** Set for warehouse staff (users.warehouse_id). */
+  warehouse_id?: string | null;
   role: string;           // 'admin' when the user holds the admin role, else their first role
   roles?: string[];
   pwd_ver: number;        // password_version, carried in agent tokens
@@ -68,7 +70,7 @@ export const PERMISSIONS_OF_USER = `
 
 export async function loadAuthState(db: any, userId: string, sessionId: string) {
   return db.prepare(`
-    SELECT u.email, u.full_name, COALESCE(u.password_version, 1) AS password_version, u.is_active, u.branch_id,
+    SELECT u.email, u.full_name, COALESCE(u.password_version, 1) AS password_version, u.is_active, u.branch_id, u.warehouse_id,
            (SELECT STRING_AGG(DISTINCT r.code, ',') FROM user_roles ur JOIN roles r ON r.id = ur.role_id WHERE ur.user_id = u.id) AS roles,
            (${PERMISSIONS_OF_USER}) AS permissions,
            EXISTS (SELECT 1 FROM "session" s WHERE s.id = ? AND s."userId" = u.id AND s."expiresAt" > CURRENT_TIMESTAMP
@@ -78,6 +80,17 @@ export async function loadAuthState(db: any, userId: string, sessionId: string) 
     LEFT JOIN "user" b ON b.id = u.id
     WHERE u.id = ?
   `).bind(sessionId, SESSION_MAX_TTL_S, userId).first();
+}
+
+/**
+ * The role a person acts in. Company-wide power ('admin') needs an admin role
+ * AND no branch assignment: someone assigned to a branch is that branch's
+ * manager whatever roles they hold, so a branch is never widened by a role
+ * label. (Their role's permissions still apply.)
+ */
+export function effectiveRole(roles: string[], branchId: string | null | undefined): string {
+  if (roles.includes('admin') && !branchId) return 'admin';
+  return roles.find((r) => r !== 'admin') || (roles.includes('admin') ? 'branch_user' : 'branch_user');
 }
 
 /** The authorization payload routes read with c.get('jwtPayload'). */
@@ -90,9 +103,10 @@ export function payloadFrom(user: any, userId: string, sessionId: string): JwtPa
     name: user.full_name,
     pwd_ver: Number(user.password_version),
     branch_id: (user.branch_id as string | null) ?? null,
+    warehouse_id: (user.warehouse_id as string | null) ?? null,
     permissions: user.permissions ? String(user.permissions).split(',') : [],
     roles,
-    role: roles.includes('admin') ? 'admin' : (roles[0] || 'branch_user'),
+    role: effectiveRole(roles, user.branch_id),
   };
 }
 
@@ -211,5 +225,7 @@ export const requireAdmin = async (
  * isAdminUser — helper to check if request is from an admin.
  */
 export function isAdminUser(payload: JwtPayload): boolean {
-  return payload.role === 'admin' || payload.branch_id === null;
+  // Company-level only: an administrator or accountant with no branch. (A missing
+  // branch alone used to count, which made unassigned staff administrators.)
+  return !payload.branch_id && (payload.role === 'admin' || (payload.roles ?? []).some((r) => r === 'admin' || r === 'accountant'));
 }

@@ -123,7 +123,7 @@ test('the existing quick tools still answer Somali questions (iibka toddobaadkan
 });
 
 test('permissions hold: a warehouse manager asking about profit gets a refusal, not figures', async () => {
-  const user = await t.createUser({ branchId: HQ, roleId: 'role-warehouse-manager', role: 'warehouse_manager' });
+  const user = await t.createUser({ branchId: HQ, roleId: 'role-warehouse-manager', role: 'warehouse_manager', grants: ['assistant.use'] });
   const { AI, seenResults } = scriptedModel([{ name: 'get_data', args: () => ({ source: 'income_statement' }) }]);
   await runAgent(env(AI), await agentTokenFor(user.token), [{ role: 'user', content: "faa'iidada bishan?" }], { fetchImpl: viaApp });
   assert.match(seenResults[0], /permission/i);

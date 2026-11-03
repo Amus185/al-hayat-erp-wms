@@ -22,7 +22,7 @@ test('D4: a Warehouse Manager sees quantities but no cost prices or stock value,
   const pid = await t.createProduct({ price: 100 });
   await t.q('UPDATE products SET cost_price = 60 WHERE id = $1', [pid]);
   await t.setStock(pid, 5, { warehouseId: WH_MAIN });
-  const wm = await t.createUser({ branchId: null, roleId: 'role-warehouse-manager', role: 'warehouse_manager' });
+  const wm = await t.createUser({ branchId: null, roleId: 'role-warehouse-manager', role: 'warehouse_manager', warehouseId: WH_MAIN });
 
   const products = await t.api('GET', '/products?page=1', undefined, wm.token);
   assert.equal(products.status, 200);
@@ -61,11 +61,11 @@ test('D4: a Warehouse Manager sees quantities but no cost prices or stock value,
 test('D4: the Owner can grant cost access to one Warehouse Manager; only the Owner can grant', async () => {
   const pid = await t.createProduct({ price: 50 });
   await t.q('UPDATE products SET cost_price = 20 WHERE id = $1', [pid]);
-  const wm = await t.createUser({ branchId: null, roleId: 'role-warehouse-manager', role: 'warehouse_manager' });
-  const other = await t.createUser({ branchId: null, roleId: 'role-warehouse-manager', role: 'warehouse_manager' });
+  const wm = await t.createUser({ branchId: null, roleId: 'role-warehouse-manager', role: 'warehouse_manager', warehouseId: WH_MAIN });
+  const other = await t.createUser({ branchId: null, roleId: 'role-warehouse-manager', role: 'warehouse_manager', warehouseId: WH_MAIN });
 
   const grantable = await t.api('GET', '/users/grantable-permissions');
-  assert.deepEqual(grantable.body.map((p: any) => p.code).sort(), ['costs.view', 'employees.manage', 'payroll.manage', 'payroll.view']);
+  assert.deepEqual(grantable.body.map((p: any) => p.code).sort(), ['accounting.view', 'assistant.use', 'costs.view', 'employees.manage', 'payroll.manage', 'payroll.view']);
 
   const granted = await t.api('PUT', `/users/${wm.id}/extra-permissions`, { codes: ['costs.view'] });
   assert.equal(granted.status, 200, JSON.stringify(granted.body));

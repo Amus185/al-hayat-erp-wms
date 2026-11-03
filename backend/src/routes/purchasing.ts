@@ -4,6 +4,7 @@ import { PgAdapter } from '../pg-client';
 import { authMiddleware, requirePermissions } from '../middleware/auth';
 import { logAudit, createAuditLogStmt } from '../services/audit';
 import { hideUnless, PERM, PURCHASE_FIELDS, sortsFor } from '../services/privacy';
+import { resolveLoc, locSql, locBranch } from '../services/branch-scope';
 import { prepareJournalEntryPosting } from '../services/accounting-service';
 import { csvResponse, likeTerm, listRequest, pagedResponse, pagedRows, type ListOptions } from '../services/listing';
 
@@ -12,6 +13,15 @@ const purchasing = new Hono<{ Bindings: Env; Variables: { jwtPayload: any } }>()
 purchasing.use('/*', authMiddleware);
 // Cost prices, purchase costs and stock value only for people with costs.view (Owner decision D4).
 purchasing.use('/*', hideUnless(PERM.COSTS, PURCHASE_FIELDS));
+
+// A purchase order belongs to a branch (or is for a warehouse). Suppliers are shared
+// master records; each location sees only its own orders, invoices and balances.
+const PO_SCOPE = { branch: 'po.branch_id', warehouse: 'po.warehouse_id' };
+async function poScope(c: any): Promise<string> { return locSql(await resolveLoc(c), PO_SCOPE); }
+/** A purchase order, only if within the caller's location. */
+async function poOr404(c: any, id: string): Promise<any | null> {
+  return c.env.DB.prepare(`SELECT po.* FROM purchase_orders po WHERE po.id = ? ${await poScope(c)}`).bind(id).first();
+}
 
 // ──────────────────────────────────────────────────────────────────────
 // SHARED HELPER — compute payment summary for a purchase invoice
@@ -147,7 +157,7 @@ purchasing.get('/orders', async (c) => {
     FROM purchase_orders po
     JOIN suppliers s ON s.id = po.supplier_id
     LEFT JOIN purchase_invoices pi ON pi.purchase_order_id = po.id
-    WHERE 1=1
+    WHERE 1=1 ${await poScope(c)}
   `;
   const params: any[] = [];
 
@@ -244,7 +254,7 @@ purchasing.get('/orders/:id', async (c) => {
       COALESCE(NULLIF(po.total_amount, 0), (SELECT COALESCE(SUM(line_total), 0) FROM purchase_order_lines WHERE purchase_order_id = po.id), 0) AS total_amount
     FROM purchase_orders po
     JOIN suppliers s ON s.id = po.supplier_id
-    WHERE po.id = ?
+    WHERE po.id = ? ${await poScope(c)}
   `).bind(id).first();
 
   if (!po) return c.json({ message: 'PO not found' }, 404);
@@ -338,7 +348,7 @@ purchasing.get('/orders/:id/print-invoice', async (c) => {
     FROM purchase_orders po
     JOIN suppliers s ON s.id = po.supplier_id
     LEFT JOIN warehouses w ON w.id = po.warehouse_id
-    WHERE po.id = ?
+    WHERE po.id = ? ${await poScope(c)}
   `).bind(id).first();
 
   if (!po) return c.json({ message: 'PO not found' }, 404);
@@ -431,11 +441,21 @@ purchasing.post('/orders', requirePermissions(['manage_purchasing', PERM.COSTS])
   }
   const totalAmount = grossAmount - totalDiscount;
 
+  // The order belongs to the buyer's branch; company level may name a branch (or none = company-level).
+  const loc = await resolveLoc(c);
+  let poBranch: string | null = locBranch(loc);
+  if (loc.kind === 'ALL' && body.branchId) {
+    const b = await c.env.DB.prepare('SELECT id FROM branches WHERE id = ?').bind(body.branchId).first();
+    if (!b) return c.json({ message: 'Branch does not exist.' }, 400);
+    poBranch = body.branchId;
+  }
+  const poWarehouse = loc.kind === 'WAREHOUSE' ? loc.warehouseId : (body.warehouseId || null);
+
   const stmts = [];
   stmts.push(c.env.DB.prepare(`
-    INSERT INTO purchase_orders (id, po_number, supplier_id, warehouse_id, status, total_amount, notes, expected_date, created_by)
-    VALUES (?, ?, ?, ?, 'SUBMITTED', ?, ?, ?, ?)
-  `).bind(id, poNumber, body.supplierId, body.warehouseId || null, totalAmount, body.notes || null, body.expectedDate || null, userId));
+    INSERT INTO purchase_orders (id, po_number, supplier_id, warehouse_id, branch_id, status, total_amount, notes, expected_date, created_by)
+    VALUES (?, ?, ?, ?, ?, 'SUBMITTED', ?, ?, ?, ?)
+  `).bind(id, poNumber, body.supplierId, poWarehouse, poBranch, totalAmount, body.notes || null, body.expectedDate || null, userId));
 
   for (const line of body.lines) {
     const discountAmount = Number(line.discountAmount || 0);
@@ -472,7 +492,7 @@ purchasing.post('/orders/:id/approve', requirePermissions(['manage_purchasing', 
     SELECT po.*, s.name AS supplier_name
     FROM purchase_orders po
     JOIN suppliers s ON s.id = po.supplier_id
-    WHERE po.id = ?
+    WHERE po.id = ? ${await poScope(c)}
   `).bind(id).first() as any;
 
   if (!po) return c.json({ message: 'Purchase order not found.' }, 404);
@@ -502,7 +522,7 @@ purchasing.post('/receipts', requirePermissions(['manage_purchasing']), async (c
 
   // Validate PO exists and is in receivable state
   if (!body.purchaseOrderId) return c.json({ message: 'Purchase order ID is required.' }, 400);
-  const po = await c.env.DB.prepare('SELECT * FROM purchase_orders WHERE id = ?').bind(body.purchaseOrderId).first() as any;
+  const po = await poOr404(c, body.purchaseOrderId);
   if (!po) return c.json({ message: 'Purchase order not found.' }, 404);
   if (po.status !== 'SUBMITTED' && po.status !== 'APPROVED' && po.status !== 'PARTIALLY_RECEIVED') {
     return c.json({ message: `Cannot receive goods: PO is '${po.status}'. Must be SUBMITTED, APPROVED, or PARTIALLY_RECEIVED.` }, 400);
@@ -718,8 +738,9 @@ purchasing.post('/invoices/:id/payments', requirePermissions(['manage_purchasing
     'SELECT * FROM purchase_invoices WHERE id = ? OR purchase_order_id = ?'
   ).bind(purchaseInvoiceId, purchaseInvoiceId).first() as any;
 
+  if (invoice && !(await poOr404(c, invoice.purchase_order_id))) invoice = null;
   if (!invoice) {
-    const po = await c.env.DB.prepare('SELECT * FROM purchase_orders WHERE id = ?').bind(purchaseInvoiceId).first() as any;
+    const po = await poOr404(c, purchaseInvoiceId);
     if (po) {
       const invId = `pi-${po.id}`;
       const invNum = `PI-${po.po_number || Date.now()}`;
@@ -813,7 +834,8 @@ purchasing.get('/invoices/:id/payments', async (c) => {
   const purchaseInvoiceId = c.req.param('id');
 
   const invoice = await c.env.DB.prepare(
-    'SELECT id, total_amount, discount_amount FROM purchase_invoices WHERE id = ?'
+    `SELECT pi.id, pi.total_amount, pi.discount_amount FROM purchase_invoices pi
+     JOIN purchase_orders po ON po.id = pi.purchase_order_id WHERE pi.id = ? ${await poScope(c)}`
   ).bind(purchaseInvoiceId).first();
   if (!invoice) return c.json({ message: 'Purchase invoice not found.' }, 404);
 
@@ -854,6 +876,7 @@ purchasing.get('/summary', async (c) => {
            po.status AS po_status
     FROM purchase_invoices pi
     JOIN purchase_orders po ON po.id = pi.purchase_order_id
+    WHERE 1=1 ${await poScope(c)}
   `).all();
 
   let totalOutstandingBalance = 0;

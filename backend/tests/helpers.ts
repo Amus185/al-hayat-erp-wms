@@ -121,11 +121,15 @@ export async function setupTestApp() {
   }
 
   /** A real user row with a real role, so the server derives scope from the database. */
-  async function createUser(opts: { branchId: string | null; roleId: string; role: string }) {
+  async function createUser(opts: { branchId: string | null; roleId: string; role: string; warehouseId?: string | null; grants?: string[] }) {
     const id = randomUUID();
-    await q(`INSERT INTO users (id, email, password_hash, full_name, branch_id) VALUES ($1, $2, 'x', $3, $4)`,
-      [id, `${id}@test.local`, `User ${opts.role}`, opts.branchId]);
+    await q(`INSERT INTO users (id, email, password_hash, full_name, branch_id, warehouse_id) VALUES ($1, $2, 'x', $3, $4, $5)`,
+      [id, `${id}@test.local`, `User ${opts.role}`, opts.branchId, opts.warehouseId ?? null]);
     await q('INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2)', [id, opts.roleId]);
+    // Extra permissions given to this person only (what the Owner does in Users > Edit).
+    for (const code of opts.grants ?? []) {
+      await q('INSERT INTO user_permissions (user_id, permission_id) SELECT $1, id FROM permissions WHERE code = $2', [id, code]);
+    }
     const token = await tokenFor({ sub: id, branch_id: opts.branchId, role: opts.role, permissions: ALL_PERMISSIONS });
     return { id, token };
   }

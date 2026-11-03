@@ -81,7 +81,8 @@ employees.get('/', async (c) => {
     where.push(`(full_name ILIKE ? OR COALESCE(phone, '') ILIKE ? OR COALESCE(position, '') ILIKE ? OR COALESCE(national_id, '') ILIKE ?)`);
     params.push(t, t, t, t);
   }
-  if (q('branchId')) { where.push('branch_id = ?'); params.push(q('branchId')); }
+  const viewBranch = q('branchId') || q('branch_id');
+  if (viewBranch && viewBranch !== 'ALL') { where.push('branch_id = ?'); params.push(viewBranch); }
   if (q('balance') === 'owing' && payroll) where.push('advance_balance > 0');
   const statusWhere = [...where];
   const statusParams = [...params];

@@ -819,191 +819,79 @@ export function DeliveriesPage() {
     `);
   };
 
+  // The list shows what matters at a glance; everything else is one click away in the details panel.
   const columns: Column<Delivery>[] = [
     {
       key: 'delivery_number',
       label: 'Delivery #',
+      sortable: true,
+      sortKey: 'number',
       render: (row) => (
         <div>
-          <span style={{ fontWeight: 700, color: '#0b8f08', fontFamily: 'monospace' }}>
-            {row.delivery_number}
-          </span>
-          {row.order_number && (
-            <div style={{ fontSize: '11px', color: '#64748b' }}>
-              SO: #{row.order_number}
-            </div>
-          )}
+          <span style={{ fontWeight: 700, color: '#0b8f08', fontFamily: 'monospace' }}>{row.delivery_number}</span>
+          {row.order_number && <div className="del-sub">SO #{row.order_number}</div>}
         </div>
       ),
     },
     {
       key: 'customer_name',
-      label: 'Customer & Destination',
+      label: 'Customer',
+      sortable: true,
+      sortKey: 'customer',
       render: (row) => (
-        <div>
-          <div style={{ fontWeight: 600, color: '#0f172a' }}>{row.customer_name}</div>
-          <div style={{ fontSize: '12px', color: '#475569', display: 'flex', alignItems: 'center', gap: '4px' }}>
-            <Phone size={11} /> {row.customer_phone}
-          </div>
-          <div style={{ fontSize: '11px', color: '#64748b', display: 'flex', alignItems: 'center', gap: '4px' }}>
-            <MapPin size={11} /> {row.delivery_address}, {row.city}
-          </div>
+        <div className="del-cell">
+          <div className="del-main" title={row.customer_name}>{row.customer_name}</div>
+          <div className="del-sub">{row.customer_phone}</div>
         </div>
       ),
     },
     {
-      key: 'driver_name',
-      label: 'Fleet & Driver',
+      key: 'destination',
+      label: 'Destination',
       render: (row) => (
-        <div>
-          <div style={{ fontWeight: 500, color: row.driver_name ? '#1e293b' : '#94a3b8' }}>
-            {row.driver_name || 'Unassigned'}
-          </div>
-          {row.vehicle_plate && (
-            <span style={{ fontSize: '11px', background: '#f1f5f9', padding: '1px 6px', borderRadius: '4px', border: '1px solid #e2e8f0', color: '#475569' }}>
-              {row.vehicle_plate}
-            </span>
-          )}
+        <div className="del-cell" title={`${row.delivery_address}, ${row.city}`}>
+          <div className="del-main">{row.city}</div>
+          <div className="del-sub">{row.delivery_address}</div>
         </div>
       ),
-    },
-    {
-      key: 'scheduled_date',
-      label: 'Scheduled Date',
-      render: (row) => (
-        <div>
-          <div style={{ fontSize: '13px', fontWeight: 500 }}>
-            {row.scheduled_date ? new Date(row.scheduled_date).toLocaleDateString() : 'Immediate'}
-          </div>
-          {row.dispatched_at && (
-            <div style={{ fontSize: '11px', color: '#0284c7' }}>
-              Dispatched: {new Date(row.dispatched_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-            </div>
-          )}
-        </div>
-      ),
-    },
-    {
-      key: 'installation',
-      label: 'Installation',
-      render: (row) => (
-        <div>
-          {row.installation_required ? (
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '11px', background: '#fef3c7', color: '#92400e', padding: '2px 8px', borderRadius: '12px', fontWeight: 600 }}>
-              <Wrench size={11} /> ${Number(row.installation_fee).toFixed(0)} Install
-            </span>
-          ) : (
-            <span style={{ fontSize: '12px', color: '#94a3b8' }}>None</span>
-          )}
-        </div>
-      ),
-    },
-    {
-      key: 'boxes',
-      label: 'Box Logistics',
-      render: (row) => {
-        const total = row.total_boxes ?? 1;
-        const delivered = row.delivered_boxes ?? 0;
-        const remaining = row.remaining_boxes ?? Math.max(0, total - delivered);
-        const pct = Math.min(100, Math.round((delivered / total) * 100));
-
-        return (
-          <div style={{ minWidth: '115px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', fontWeight: 600, color: '#334155', marginBottom: '3px' }}>
-              <span>{delivered} / {total} Boxes</span>
-              <span style={{ color: remaining === 0 ? '#16a34a' : '#b45309' }}>
-                {remaining === 0 ? 'Full' : `${remaining} left`}
-              </span>
-            </div>
-            <div style={{ width: '100%', height: '6px', background: '#e2e8f0', borderRadius: '3px', overflow: 'hidden' }}>
-              <div style={{
-                width: `${pct}%`,
-                height: '100%',
-                background: remaining === 0 ? '#16a34a' : '#0284c7',
-                borderRadius: '3px',
-                transition: 'width 0.3s ease',
-              }} />
-            </div>
-          </div>
-        );
-      },
     },
     {
       key: 'status',
       label: 'Status',
+      sortable: true,
       render: (row) => {
         let tone: 'green' | 'yellow' | 'red' | 'blue' | 'neutral' = 'neutral';
-        if (row.status === 'SCHEDULED') tone = 'yellow';
-        if (row.status === 'PARTIALLY_DELIVERED') tone = 'yellow';
+        if (row.status === 'SCHEDULED' || row.status === 'PARTIALLY_DELIVERED') tone = 'yellow';
         if (row.status === 'DISPATCHED') tone = 'blue';
         if (row.status === 'DELIVERED') tone = 'green';
         if (row.status === 'FAILED') tone = 'red';
         const label = row.status === 'PARTIALLY_DELIVERED'
-          ? `Partially Delivered (${row.delivered_boxes || 0}/${row.total_boxes || 1})`
+          ? `Partly (${row.delivered_boxes || 0}/${row.total_boxes || 1})`
           : row.status.replace('_', ' ');
         return <StatusBadge label={label} tone={tone} />;
       },
     },
     {
+      key: 'scheduled_date',
+      label: 'Scheduled',
+      sortable: true,
+      sortKey: 'scheduled',
+      render: (row) => <span style={{ whiteSpace: 'nowrap' }}>{row.scheduled_date ? new Date(row.scheduled_date).toLocaleDateString() : 'Immediate'}</span>,
+    },
+    {
+      key: 'driver_name',
+      label: 'Driver',
+      sortable: true,
+      sortKey: 'driver',
+      render: (row) => <span className="del-main" style={{ color: row.driver_name ? undefined : '#94a3b8' }}>{row.driver_name || 'Unassigned'}</span>,
+    },
+    {
       key: 'actions',
-      label: 'Actions',
+      label: '',
       render: (row) => (
-        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-          <button
-            type="button"
-            className="btn btn-secondary btn-sm"
-            onClick={() => handleViewDetails(row)}
-            title="View Details & Box Tracking"
-          >
-            <Eye size={13} style={{ marginRight: '3px' }} /> View
-          </button>
-
-          {row.status !== 'CANCELLED' && (row.remaining_boxes ?? 1) > 0 && hasPermission('manage_sales') && (
-            <button
-              type="button"
-              className="btn btn-sm"
-              onClick={() => handleOpenRunModal(row)}
-              style={{ background: '#f59e0b', color: '#fff', border: 'none', display: 'inline-flex', alignItems: 'center', gap: '3px', fontSize: '11px', padding: '4px 7px', borderRadius: '6px', fontWeight: 600 }}
-              title="Record Split Delivery Run (Dispatch Boxes)"
-            >
-              <Package size={12} /> Dispatch Boxes
-            </button>
-          )}
-
-          {['PENDING', 'SCHEDULED'].includes(row.status) && hasPermission('manage_sales') && (
-            <button
-              type="button"
-              className="btn btn-sm"
-              onClick={() => handleQuickDispatch(row)}
-              style={{ background: '#0284c7', color: '#fff', border: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '12px', padding: '4px 8px', borderRadius: '6px' }}
-              title="Quick Dispatch to Driver"
-            >
-              <Send size={12} /> Dispatch
-            </button>
-          )}
-
-          {row.status === 'DISPATCHED' && hasPermission('manage_sales') && (
-            <button
-              type="button"
-              className="btn btn-sm"
-              onClick={() => handleQuickComplete(row)}
-              style={{ background: '#16a34a', color: '#fff', border: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '12px', padding: '4px 8px', borderRadius: '6px' }}
-              title="Quick Confirm Delivered"
-            >
-              <CheckCheck size={12} /> Delivered
-            </button>
-          )}
-
-          <button
-            type="button"
-            className="btn btn-secondary btn-sm"
-            onClick={() => handlePrintSlip(row)}
-            title="Print Delivery Waybill"
-            style={{ padding: '4px 8px' }}
-          >
-            <Printer size={13} />
-          </button>
-        </div>
+        <button type="button" className="btn btn-secondary btn-sm" onClick={(e) => { e.stopPropagation(); handleViewDetails(row); }} title="Open delivery details">
+          <Eye size={13} style={{ marginRight: '3px' }} /> Open
+        </button>
       ),
     },
   ];
@@ -1111,6 +999,7 @@ export function DeliveriesPage() {
           columns={shown_columns}
           server={list}
           keyExtractor={(row) => row.id}
+          onRowClick={(row) => handleViewDetails(row)}
           emptyMessage={list.activeFilters ? 'No deliveries match your filters' : 'No deliveries yet'}
         />
       </div>
@@ -1546,6 +1435,17 @@ export function DeliveriesPage() {
                   {selectedDelivery.scheduled_date ? new Date(selectedDelivery.scheduled_date).toLocaleDateString() : 'Immediate'}
                 </div>
               </div>
+            </div>
+
+            {/* Order, dispatch and notes */}
+            <div className="del-facts">
+              <div><span>Sales order</span><strong>{selectedDelivery.order_number ? `#${selectedDelivery.order_number}` : '—'}</strong></div>
+              <div><span>Branch</span><strong>{selectedDelivery.branch_name || '—'}</strong></div>
+              <div><span>Created</span><strong>{selectedDelivery.created_at ? new Date(selectedDelivery.created_at).toLocaleString() : '—'}</strong></div>
+              <div><span>Dispatched</span><strong>{selectedDelivery.dispatched_at ? new Date(selectedDelivery.dispatched_at).toLocaleString() : 'Not yet'}</strong></div>
+              <div><span>Delivered</span><strong>{selectedDelivery.delivered_at ? new Date(selectedDelivery.delivered_at).toLocaleString() : 'Not yet'}</strong></div>
+              <div><span>Received by</span><strong>{selectedDelivery.recipient_signature_name || '—'}</strong></div>
+              {selectedDelivery.notes && <div style={{ gridColumn: '1 / -1' }}><span>Notes</span><strong style={{ fontWeight: 500 }}>{selectedDelivery.notes}</strong></div>}
             </div>
 
             {/* Customer & Location */}

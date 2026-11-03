@@ -88,6 +88,26 @@ try {
            (SELECT COUNT(*) FROM audit_logs a WHERE a.actor_user_id = u.id) AS actions
     FROM users u JOIN user_roles ur ON ur.user_id = u.id JOIN roles r ON r.id = ur.role_id
     WHERE r.code = 'admin' ORDER BY 5`);
+  await q('Who is company-level and who is pinned to a branch (what the new rule will do)', `
+    SELECT u.email, u.full_name,
+           COALESCE(string_agg(DISTINCT r.code, ','), '(no role)') AS roles,
+           COALESCE(b.name, '(no branch)') AS branch, COALESCE(w.name, '(no warehouse)') AS warehouse,
+           CASE WHEN u.branch_id IS NOT NULL THEN 'PINNED to the branch'
+                WHEN bool_or(r.code IN ('admin', 'accountant')) THEN 'COMPANY-LEVEL (Owner view)'
+                WHEN u.warehouse_id IS NOT NULL THEN 'PINNED to the warehouse'
+                ELSE 'NO LOCATION: will be refused until assigned' END AS after_the_change
+    FROM users u LEFT JOIN user_roles ur ON ur.user_id = u.id LEFT JOIN roles r ON r.id = ur.role_id
+    LEFT JOIN branches b ON b.id = u.branch_id LEFT JOIN warehouses w ON w.id = u.warehouse_id
+    WHERE u.is_active = 1 GROUP BY u.id, b.name, w.name ORDER BY u.created_at`);
+  await q('Branch-assigned users who also hold the admin role (they will no longer be company-level)', `
+    SELECT u.email, b.name AS branch FROM users u JOIN branches b ON b.id = u.branch_id
+    WHERE EXISTS (SELECT 1 FROM user_roles ur JOIN roles r ON r.id = ur.role_id WHERE ur.user_id = u.id AND r.code = 'admin')`);
+  await q('Customers and products no branch deals with yet (visible to the Owner only until a branch sells, stocks or registers them)', `
+    SELECT (SELECT COUNT(*) FROM customers c WHERE NOT EXISTS (SELECT 1 FROM sales_orders so WHERE so.customer_id = c.id)
+              AND NOT EXISTS (SELECT 1 FROM customer_debts d WHERE d.customer_id = c.id)
+              AND NOT EXISTS (SELECT 1 FROM customer_payments p WHERE p.customer_id = c.id)) AS customers_without_branch_activity,
+           (SELECT COUNT(*) FROM products p WHERE NOT EXISTS (SELECT 1 FROM inventory_stock s WHERE s.product_id = p.id AND s.owner_type = 'BRANCH')) AS products_no_branch_holds`);
+  await q('Deliveries without a sales order (belong to no branch: Owner only)', `SELECT COUNT(*) AS deliveries FROM deliveries WHERE sales_order_id IS NULL`);
   await q('Non-admin active users with NO branch (treated as admin by isAdminUser today)', `
     SELECT COALESCE(string_agg(DISTINCT r.code, ','), '(no role)') AS roles, u.warehouse_id IS NOT NULL AS has_warehouse, COUNT(DISTINCT u.id) AS users
     FROM users u LEFT JOIN user_roles ur ON ur.user_id = u.id LEFT JOIN roles r ON r.id = ur.role_id

@@ -730,6 +730,7 @@ export async function ensurePostgresInit(pool: Pool) {
   await ensureBetterAuth(pool);
   await ensureWorkforceSchema(pool);
   await ensureAccessGrants(pool);
+  await ensureBranchIsolation(pool);
   await ensurePerformanceIndexes(pool);
 }
 
@@ -739,6 +740,51 @@ export async function ensurePostgresInit(pool: Pool) {
  * are applied once, when the permission is first created, so the Owner's later
  * changes to roles are never undone by a migration.
  */
+/**
+ * Branch isolation (Owner request): which branch owns deliveries and
+ * manufacture records, which branches deal with a shared
+ * customer or product, and per-branch item groups. Additive only; existing rows
+ * keep working: a NULL branch is company-level (visible to the Owner).
+ */
+export async function ensureBranchIsolation(pool: Pool) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(`
+      ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS branch_id TEXT REFERENCES branches(id);
+      CREATE INDEX IF NOT EXISTS idx_deliveries_branch_id ON deliveries (branch_id);
+      ALTER TABLE mfg_jobs ADD COLUMN IF NOT EXISTS branch_id TEXT REFERENCES branches(id);
+      CREATE INDEX IF NOT EXISTS idx_mfg_jobs_branch_id ON mfg_jobs (branch_id);
+      ALTER TABLE mfg_item_groups ADD COLUMN IF NOT EXISTS branch_id TEXT REFERENCES branches(id);
+      DROP INDEX IF EXISTS mfg_item_groups_name_uq;
+      CREATE UNIQUE INDEX IF NOT EXISTS mfg_item_groups_branch_name_uq ON mfg_item_groups (COALESCE(branch_id, ''), lower(name));
+      CREATE TABLE IF NOT EXISTS customer_branches (
+        customer_id TEXT NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+        branch_id TEXT NOT NULL REFERENCES branches(id) ON DELETE CASCADE,
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (customer_id, branch_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_customer_branches_branch ON customer_branches (branch_id);
+      CREATE TABLE IF NOT EXISTS product_branches (
+        product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+        branch_id TEXT NOT NULL REFERENCES branches(id) ON DELETE CASCADE,
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (product_id, branch_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_product_branches_branch ON product_branches (branch_id);
+      -- Existing deliveries belong to the branch of their sales order.
+      UPDATE deliveries d SET branch_id = so.branch_id
+        FROM sales_orders so WHERE so.id = d.sales_order_id AND d.branch_id IS NULL AND so.branch_id IS NOT NULL;
+    `);
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('❌ Branch isolation migration failed (no data changed):', err);
+  } finally {
+    client.release();
+  }
+}
+
 export const ACCESS_PERMISSIONS = [
   { id: 'perm-costs-view', code: 'costs.view', description: 'See cost prices, purchase costs, stock value and margins',
     // Owner decision D4: Owner and accounting staff; anyone else by an explicit grant.
@@ -749,6 +795,12 @@ export const ACCESS_PERMISSIONS = [
     roles: ['77777777-7777-7777-7777-777777777777'] },
   { id: 'perm-employees-manage', code: 'employees.manage', description: "Add and edit employees' ordinary details (own branch)",
     roles: ['77777777-7777-7777-7777-777777777777', 'role-branch-user'] },
+  // Financial statements, ledger, journal, cash and bank, depreciation (the Accounting module).
+  { id: 'perm-accounting-view', code: 'accounting.view', description: 'Open the Accounting module: statements, ledger, journal, cash and bank',
+    roles: ['77777777-7777-7777-7777-777777777777', 'role-accountant'] },
+  // The AI Assistant: the Owner's by default; it only ever sees what its user may see.
+  { id: 'perm-assistant-use', code: 'assistant.use', description: 'Use the AI Assistant',
+    roles: ['77777777-7777-7777-7777-777777777777'] },
 ];
 
 export async function ensureAccessGrants(pool: Pool) {

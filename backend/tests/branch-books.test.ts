@@ -56,7 +56,7 @@ test('opening stock split across locations (the product form) is capital, not an
   const stock = await t.q('SELECT branch_id, quantity_on_hand FROM inventory_stock WHERE product_id = $1 ORDER BY branch_id', [res.body.id]);
   assert.deepEqual(stock.map((s: any) => [s.branch_id, Number(s.quantity_on_hand)]).sort(), [[A, 10], [B, 2]].sort());
 
-  const user = await t.createUser({ branchId: A, roleId: 'role-branch-user', role: 'branch_user' });
+  const user = await t.createUser({ branchId: A, roleId: 'role-branch-user', role: 'branch_user', grants: ['accounting.view'] });
   const other = await t.api('POST', '/products', {
     sku: `FORM-${randomUUID().slice(0, 8)}`, name: 'Chair', costPrice: 5, sellingPrice: 9,
     initialStock: [{ ownerType: 'BRANCH', branchId: B, quantity: 1 }],
@@ -106,7 +106,7 @@ test('branch summary shows every branch side by side; totals equal the consolida
   assert.equal(a.cash, await balance('1010', A));
   assert.equal(sum.body.branches.find((b: any) => b.branch_id === null).expenses, 70);
 
-  const user = await t.createUser({ branchId: A, roleId: 'role-branch-user', role: 'branch_user' });
+  const user = await t.createUser({ branchId: A, roleId: 'role-branch-user', role: 'branch_user', grants: ['accounting.view'] });
   const mine = await t.api('GET', '/accounting/branch-summary', undefined, user.token);
   assert.deepEqual(mine.body.branches.map((b: any) => b.branch_id), [A]);
 });
@@ -138,7 +138,7 @@ test('opening balances: stock with no recorded value is found per branch, posted
 });
 
 test('opening balances are restricted to administrators and accountants', async () => {
-  const user = await t.createUser({ branchId: A, roleId: 'role-branch-user', role: 'branch_user' });
+  const user = await t.createUser({ branchId: A, roleId: 'role-branch-user', role: 'branch_user', grants: ['accounting.view'] });
   assert.equal((await t.api('GET', '/accounting/opening-balances', undefined, user.token)).status, 403);
   assert.equal((await t.api('POST', '/accounting/opening-balances', { branch_id: A, opening_cash: 5 }, user.token)).status, 403);
 });

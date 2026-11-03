@@ -165,6 +165,24 @@ async function handleResponse<T>(response: Response): Promise<T> {
   return body as T;
 }
 
+// The Owner's branch switcher: when a single branch is chosen, list requests for the
+// branch-aware modules carry it (the server decides whether the caller may). A branch
+// manager never has one: the server pins them to their own branch regardless.
+const VIEW_BRANCH_KEY = 'ah_view_branch';
+const BRANCH_AWARE = ['/sales', '/deliveries', '/purchasing', '/expenses', '/inventory', '/products', '/manufacturing', '/transfers', '/reports', '/accounting', '/search', '/employees'];
+export function getViewBranch(): string {
+  try { return localStorage.getItem(VIEW_BRANCH_KEY) || ''; } catch { return ''; }
+}
+export function setViewBranch(id: string) {
+  try { if (id) localStorage.setItem(VIEW_BRANCH_KEY, id); else localStorage.removeItem(VIEW_BRANCH_KEY); } catch { /* storage unavailable */ }
+}
+function withViewBranch(path: string, params?: Record<string, string | number | boolean | undefined>) {
+  const branch = getViewBranch();
+  if (!branch || !BRANCH_AWARE.some((p) => path === p || path.startsWith(`${p}/`))) return params;
+  if (params && (params.branch_id !== undefined || params.branchId !== undefined)) return params;
+  return { ...(params ?? {}), branch_id: branch };
+}
+
 function buildQueryString(params?: Record<string, string | number | boolean | undefined>): string {
   if (!params) return '';
   const search = new URLSearchParams();
@@ -181,7 +199,7 @@ export async function apiGet<T>(
   path: string,
   params?: Record<string, string | number | boolean | undefined>
 ): Promise<T> {
-  const qs = buildQueryString(params);
+  const qs = buildQueryString(withViewBranch(path, params));
   const url = `${API_BASE_URL}${path}${qs}`;
   const cacheable = CACHEABLE_PATHS.some((candidate) => path === candidate);
   const cached = getCache.get(url);
@@ -258,7 +276,7 @@ export function apiDelete<T = void>(path: string): Promise<T> {
  * cookie, and saves it under the name the server gives.
  */
 export async function apiDownload(path: string, params?: Record<string, string | number | boolean | undefined>): Promise<void> {
-  const res = await authorizedFetch(`${API_BASE_URL}${path}${buildQueryString(params)}`, { method: 'GET' });
+  const res = await authorizedFetch(`${API_BASE_URL}${path}${buildQueryString(withViewBranch(path, params))}`, { method: 'GET' });
   if (!res.ok) {
     const body = await res.json().catch(() => null) as Record<string, unknown> | null;
     throw new ApiError(res.status, res.statusText, body);

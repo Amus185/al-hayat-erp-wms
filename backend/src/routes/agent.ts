@@ -40,11 +40,24 @@ const notConfigured = (c: Context) => c.json({ message: 'Kaaliyaha weli laguma d
 
 // ── tokens ───────────────────────────────────────────────────────────────────
 
+/** The AI Assistant, its history and its confirmed actions are for people holding assistant.use (the Owner by default). */
+const requireAssistant = async (c: any, next: () => Promise<void>) => {
+  if (!c.get('jwtPayload')?.permissions?.includes('assistant.use')) {
+    return c.json({ message: 'Kaaliyaha waa u diyaar Mulkiilaha. La xiriir Mulkiilaha si aad u hesho.' }, 403);
+  }
+  await next();
+};
+
 /** One agent token per assistant message, counted against the user's hourly limit. */
 agent.post('/session', authMiddleware, async (c) => {
+  const p = c.get('jwtPayload');
+  // Owner-only by default, enforced here and not only by hiding the menu. Whoever the Owner
+  // grants it to still only ever gets what their own permissions allow (tools run as them).
+  if (!p.permissions.includes('assistant.use')) {
+    return c.json({ message: 'Kaaliyaha waa u diyaar Mulkiilaha. La xiriir Mulkiilaha si aad u hesho.' }, 403);
+  }
   const secret = getAgentSecret();
   if (!secret) return notConfigured(c);
-  const p = c.get('jwtPayload');
   const db = c.env.DB;
   await db.prepare(`DELETE FROM agent_usage WHERE created_at < CURRENT_TIMESTAMP - INTERVAL '1 day'`).run();
   const used = await db.prepare(`SELECT COUNT(*)::int AS n FROM agent_usage WHERE user_id = ? AND created_at > CURRENT_TIMESTAMP - INTERVAL '1 hour'`)
@@ -76,7 +89,9 @@ async function agentAuth(c: Context<{ Bindings: Env; Variables: Vars }>, next: (
   if (!user || Number(user.is_active) !== 1 || user.banned || !user.session_live || Number(user.password_version) !== Number(claims.pwd_ver)) {
     return c.json({ message: 'Session ended. Please sign in again.' }, 401);
   }
-  c.set('jwtPayload', payloadFrom(user, claims.sub, claims.sid));
+  const payload = payloadFrom(user, claims.sub, claims.sid);
+  if (!payload.permissions.includes('assistant.use')) return c.json({ message: 'Assistant access was withdrawn.' }, 403);
+  c.set('jwtPayload', payload);
   await next();
 }
 
@@ -325,7 +340,7 @@ agent.post('/proposals', agentAuth, async (c) => {
 
 // ── the user confirms (or cancels) in the staff app ─────────────────────────
 
-agent.post('/actions/:id/execute', authMiddleware, async (c) => {
+agent.post('/actions/:id/execute', authMiddleware, requireAssistant, async (c) => {
   const p = c.get('jwtPayload');
   const id = c.req.param('id');
   const db = c.env.DB;
@@ -369,7 +384,7 @@ agent.post('/actions/:id/execute', authMiddleware, async (c) => {
   return c.json({ success: true, summary: row.summary });
 });
 
-agent.post('/actions/:id/cancel', authMiddleware, async (c) => {
+agent.post('/actions/:id/cancel', authMiddleware, requireAssistant, async (c) => {
   const done = await c.env.DB.prepare(`
     UPDATE agent_actions SET status = 'CANCELLED', handled_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ? AND status = 'PENDING'
   `).bind(c.req.param('id'), c.get('jwtPayload').sub).run();
@@ -393,7 +408,7 @@ async function ownConversation(c: Context<{ Bindings: Env; Variables: Vars }>, i
 const notFound = (c: Context) => c.json({ message: 'Wada-hadalkan lama helin.' }, 404);
 const titleFrom = (v: unknown) => (typeof v === 'string' ? v.replace(/\s+/g, ' ').trim().slice(0, 80) : '') || 'Wada-hadal';
 
-agent.get('/conversations', authMiddleware, async (c) => {
+agent.get('/conversations', authMiddleware, requireAssistant, async (c) => {
   const { results } = await c.env.DB.prepare(`
     SELECT c.id, c.title, c.created_at, c.updated_at, (SELECT COUNT(*) FROM agent_messages m WHERE m.conversation_id = c.id)::int AS message_count
     FROM agent_conversations c WHERE c.user_id = ? ORDER BY c.updated_at DESC LIMIT ?
@@ -403,7 +418,7 @@ agent.get('/conversations', authMiddleware, async (c) => {
   })));
 });
 
-agent.post('/conversations', authMiddleware, async (c) => {
+agent.post('/conversations', authMiddleware, requireAssistant, async (c) => {
   const body = await c.req.json().catch(() => ({}));
   const id = uuidv4();
   await c.env.DB.prepare('INSERT INTO agent_conversations (id, user_id, title) VALUES (?, ?, ?)')
@@ -416,7 +431,7 @@ agent.post('/conversations', authMiddleware, async (c) => {
  * current state from agent_actions (done, cancelled, expired or still open),
  * so a reopened chat never offers to confirm something already handled.
  */
-agent.get('/conversations/:id', authMiddleware, async (c) => {
+agent.get('/conversations/:id', authMiddleware, requireAssistant, async (c) => {
   const conv = await ownConversation(c, c.req.param('id') ?? '');
   if (!conv) return notFound(c);
   const p = c.get('jwtPayload');
@@ -453,7 +468,7 @@ agent.get('/conversations/:id', authMiddleware, async (c) => {
   });
 });
 
-agent.post('/conversations/:id/messages', authMiddleware, async (c) => {
+agent.post('/conversations/:id/messages', authMiddleware, requireAssistant, async (c) => {
   const conv = await ownConversation(c, c.req.param('id') ?? '');
   if (!conv) return notFound(c);
   const body = await c.req.json().catch(() => ({}));
@@ -475,7 +490,7 @@ agent.post('/conversations/:id/messages', authMiddleware, async (c) => {
   return c.json({ id }, 201);
 });
 
-agent.patch('/conversations/:id', authMiddleware, async (c) => {
+agent.patch('/conversations/:id', authMiddleware, requireAssistant, async (c) => {
   const conv = await ownConversation(c, c.req.param('id') ?? '');
   if (!conv) return notFound(c);
   const body = await c.req.json().catch(() => ({}));
@@ -484,7 +499,7 @@ agent.patch('/conversations/:id', authMiddleware, async (c) => {
   return c.json({ id: conv.id, title });
 });
 
-agent.delete('/conversations/:id', authMiddleware, async (c) => {
+agent.delete('/conversations/:id', authMiddleware, requireAssistant, async (c) => {
   const conv = await ownConversation(c, c.req.param('id') ?? '');
   if (!conv) return notFound(c);
   await c.env.DB.prepare('DELETE FROM agent_conversations WHERE id = ?').bind(conv.id).run();

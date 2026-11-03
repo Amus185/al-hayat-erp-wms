@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { Env, uuidv4 } from '../db';
-import { authMiddleware, requirePermissions, isAdminUser } from '../middleware/auth';
+import { authMiddleware, requirePermissions } from '../middleware/auth';
+import { resolveLoc, productVisibleSql, type Loc } from '../services/branch-scope';
 import { createAuditLogStmt } from '../services/audit';
 import { hideUnless, PERM, COST_FIELDS, sortsFor, canSeeCosts } from '../services/privacy';
 import { prepareInventoryAdjustmentJournalEntry } from '../services/accounting-service';
@@ -22,11 +23,12 @@ const STOCK_LIST: ListOptions = {
   defaultSort: 'name', defaultDir: 'asc', tieBreaker: 's.id',
 };
 
-async function listStock(c: any, r: ListRequest, scopedBranchId: string | null) {
+async function listStock(c: any, r: ListRequest, own: Loc) {
   const q = (k: string) => (c.req.query(k) || '').trim();
   const where: string[] = ['(s.quantity_on_hand > 0 OR s.quantity_reserved > 0)'];
   const params: unknown[] = [];
-  if (scopedBranchId) { where.push("s.branch_id = ? AND s.owner_type = 'BRANCH'"); params.push(scopedBranchId); }
+  if (own.kind === 'BRANCH') { where.push("s.branch_id = ? AND s.owner_type = 'BRANCH'"); params.push(own.branchId); }
+  if (own.kind === 'WAREHOUSE') { where.push("s.warehouse_id = ? AND s.owner_type = 'WAREHOUSE'"); params.push(own.warehouseId); }
   // location=W:<warehouse id> or B:<branch id>
   const loc = q('location');
   if (loc.startsWith('W:')) { where.push("s.owner_type = 'WAREHOUSE' AND s.warehouse_id = ?"); params.push(loc.slice(2)); }
@@ -84,11 +86,10 @@ async function listStock(c: any, r: ListRequest, scopedBranchId: string | null) 
 }
 
 inventory.get('/stock', async (c) => {
-  const payload = c.get('jwtPayload');
-  const scopedBranchId = isAdminUser(payload) ? null : payload.branch_id;
+  const own = await resolveLoc(c);
 
   const listReq = listRequest(c, sortsFor(c, STOCK_LIST, ['value', 'cost']));
-  if (listReq.paged) return listStock(c, listReq, scopedBranchId);
+  if (listReq.paged) return listStock(c, listReq, own);
 
   let query = `
     SELECT s.id, p.name, p.sku, p.barcode, p.category_id, COALESCE(c.name, 'Uncategorized') AS category_name,
@@ -106,10 +107,13 @@ inventory.get('/stock', async (c) => {
   `;
   const params: any[] = [];
 
-  // Branch isolation — branch users only see their own branch's stock
-  if (scopedBranchId) {
+  // Location isolation: a branch sees its own stock, a warehouse its own.
+  if (own.kind === 'BRANCH') {
     query += ` AND s.branch_id = ? AND s.owner_type = 'BRANCH'`;
-    params.push(scopedBranchId);
+    params.push(own.branchId);
+  } else if (own.kind === 'WAREHOUSE') {
+    query += ` AND s.warehouse_id = ? AND s.owner_type = 'WAREHOUSE'`;
+    params.push(own.warehouseId);
   }
 
   query += ` ORDER BY p.name LIMIT 500`;
@@ -130,11 +134,12 @@ const MOVEMENT_LIST: ListOptions = {
   defaultSort: 'date', defaultDir: 'desc', tieBreaker: 't.id',
 };
 
-async function listMovements(c: any, r: ListRequest, scopedBranchId: string | null) {
+async function listMovements(c: any, r: ListRequest, own: Loc) {
   const q = (k: string) => (c.req.query(k) || '').trim();
   const where: string[] = [];
   const params: unknown[] = [];
-  if (scopedBranchId) { where.push('(t.source_branch_id = ? OR t.destination_branch_id = ?)'); params.push(scopedBranchId, scopedBranchId); }
+  if (own.kind === 'BRANCH') { where.push('(t.source_branch_id = ? OR t.destination_branch_id = ?)'); params.push(own.branchId, own.branchId); }
+  if (own.kind === 'WAREHOUSE') { where.push('(t.source_warehouse_id = ? OR t.destination_warehouse_id = ?)'); params.push(own.warehouseId, own.warehouseId); }
   const term = q('q') || q('search');
   if (term) {
     const t = likeTerm(term);
@@ -181,11 +186,10 @@ async function listMovements(c: any, r: ListRequest, scopedBranchId: string | nu
 }
 
 inventory.get('/transactions', async (c) => {
-  const payload = c.get('jwtPayload');
-  const scopedBranchId = isAdminUser(payload) ? null : payload.branch_id;
+  const own = await resolveLoc(c);
 
   const listReq = listRequest(c, MOVEMENT_LIST);
-  if (listReq.paged) return listMovements(c, listReq, scopedBranchId);
+  if (listReq.paged) return listMovements(c, listReq, own);
 
   let query = `
     SELECT t.*, p.name, p.sku, p.barcode,
@@ -205,10 +209,13 @@ inventory.get('/transactions', async (c) => {
   `;
   const params: any[] = [];
 
-  // Branch isolation — filter to transactions involving this branch
-  if (scopedBranchId) {
+  // Location isolation: movements involving this branch or warehouse.
+  if (own.kind === 'BRANCH') {
     query += ` AND (t.source_branch_id = ? OR t.destination_branch_id = ?)`;
-    params.push(scopedBranchId, scopedBranchId);
+    params.push(own.branchId, own.branchId);
+  } else if (own.kind === 'WAREHOUSE') {
+    query += ` AND (t.source_warehouse_id = ? OR t.destination_warehouse_id = ?)`;
+    params.push(own.warehouseId, own.warehouseId);
   }
 
   query += ` ORDER BY t.created_at DESC LIMIT 200`;
@@ -222,10 +229,14 @@ inventory.post('/adjust', requirePermissions(['manage_inventory']), async (c) =>
   const payload = c.get('jwtPayload');
   const userId = payload.sub;
 
-  // Branch isolation — branch users can only adjust their own branch's stock
-  if (!isAdminUser(payload)) {
-    body.branchId = payload.branch_id;
-    body.warehouseId = undefined; // branch users can't adjust warehouse stock
+  // Location isolation: a branch adjusts its own stock, a warehouse its own; the company view chooses.
+  const adjLoc = await resolveLoc(c);
+  if (adjLoc.kind === 'BRANCH') {
+    body.branchId = adjLoc.branchId;
+    body.warehouseId = undefined;
+  } else if (adjLoc.kind === 'WAREHOUSE') {
+    body.warehouseId = adjLoc.warehouseId;
+    body.branchId = undefined;
   }
 
   // Input validation
@@ -237,7 +248,7 @@ inventory.post('/adjust', requirePermissions(['manage_inventory']), async (c) =>
     return c.json({ message: 'Direction must be INCREASE or DECREASE.' }, 400);
   }
 
-  const product = await c.env.DB.prepare('SELECT id, name FROM products WHERE id = ?').bind(body.productId).first();
+  const product = await c.env.DB.prepare(`SELECT p.id, p.name FROM products p WHERE p.id = ? ${adjLoc.kind === 'BRANCH' ? `AND ${productVisibleSql(adjLoc.branchId)}` : ''}`).bind(body.productId).first();
   if (!product) return c.json({ message: 'Product does not exist.' }, 400);
 
   const ownerType = body.warehouseId ? 'WAREHOUSE' : 'BRANCH';

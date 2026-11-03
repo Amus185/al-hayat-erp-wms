@@ -60,7 +60,7 @@ interface InventoryTransaction {
 
 export function InventoryPage() {
   const { addToast } = useToast();
-  const { hasPermission } = useAuth();
+  const { hasPermission, branchId: myBranch } = useAuth();
 
   const [activeTab, setActiveTab] = useState<'stock' | 'transactions'>('stock');
   // Both lists page, search, filter and sort on the server (every record reachable).
@@ -320,6 +320,16 @@ export function InventoryPage() {
 
   const { columns: shown_stockColumns, chooser: chooser_stockColumns } = useColumnChooser('inventory-stock', stockColumns, []);
 
+  // A branch only ever sees its own stock, so there is no location (or "all locations") to choose.
+  const locationFilter = myBranch ? [] : [{
+    key: 'location',
+    label: 'All locations',
+    options: [
+      ...warehouses.map((w: any) => ({ value: `W:${w.id}`, label: `Warehouse: ${w.name}` })),
+      ...branches.map((b: any) => ({ value: `B:${b.id}`, label: `Branch: ${b.name}` })),
+    ],
+  }];
+
   return (
     <div className="module-page">
       <section className="module-header">
@@ -350,14 +360,7 @@ export function InventoryPage() {
               list={stockList}
               searchPlaceholder="Search by product name, SKU or barcode…"
               filters={[
-                {
-                  key: 'location',
-                  label: 'All locations',
-                  options: [
-                    ...warehouses.map((w: any) => ({ value: `W:${w.id}`, label: `Warehouse: ${w.name}` })),
-                    ...branches.map((b: any) => ({ value: `B:${b.id}`, label: `Branch: ${b.name}` })),
-                  ],
-                },
+                ...locationFilter,
                 { key: 'categoryId', label: 'All categories', options: categories.map((c: any) => ({ value: c.id, label: c.name })) },
                 { key: 'state', label: 'Any stock level', options: [{ value: 'low', label: 'Low (at or below reorder level)' }, { value: 'reserved', label: 'Has reserved units' }] },
                 { key: 'status', label: 'Active & inactive', options: [{ value: 'active', label: 'Active products' }, { value: 'inactive', label: 'Inactive products' }] },
@@ -389,14 +392,7 @@ export function InventoryPage() {
               dateRange
               filters={[
                 { key: 'type', label: 'All movement types', options: txTypes.map((t) => ({ value: t, label: t.replace(/_/g, ' ').toLowerCase().replace(/^./, (c) => c.toUpperCase()) })) },
-                {
-                  key: 'location',
-                  label: 'All locations',
-                  options: [
-                    ...warehouses.map((w: any) => ({ value: `W:${w.id}`, label: `Warehouse: ${w.name}` })),
-                    ...branches.map((b: any) => ({ value: `B:${b.id}`, label: `Branch: ${b.name}` })),
-                  ],
-                },
+                ...locationFilter,
               ]}
             />
             <DataTable

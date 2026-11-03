@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { Env, uuidv4 } from '../db';
-import { authMiddleware, requirePermissions, isAdminUser } from '../middleware/auth';
+import { authMiddleware, requirePermissions } from '../middleware/auth';
+import { resolveLoc, type Loc } from '../services/branch-scope';
 import { logAudit, createAuditLogStmt } from '../services/audit';
 import { calculateLinesCogs, prepareJournalEntryPosting } from '../services/accounting-service';
 import { csvResponse, dateRange, likeTerm, listRequest, pagedResponse, pagedRows, type ListOptions } from '../services/listing';
@@ -32,6 +33,31 @@ function notifyDestination(db: any, transferId: string, title: string, actorId: 
   `).bind(title, actorId, transferId);
 }
 
+/**
+ * Whether a transfer involves a location, and on which side. The company view is
+ * every side; a branch or warehouse only its own: it can see transfers to or from
+ * it, the sender approves, dispatches and cancels, the receiver confirms receipt.
+ */
+function sidesOf(loc: Loc, t: any): { involved: boolean; isSource: boolean; isDest: boolean } {
+  if (loc.kind === 'ALL') return { involved: true, isSource: true, isDest: true };
+  const dstBranch = t.destination_branch_id || t.dest_branch_id;
+  const dstWh = t.destination_warehouse_id || t.dest_warehouse_id;
+  const isSource = loc.kind === 'BRANCH' ? t.source_branch_id === loc.branchId : t.source_warehouse_id === loc.warehouseId;
+  const isDest = loc.kind === 'BRANCH' ? dstBranch === loc.branchId : dstWh === loc.warehouseId;
+  return { involved: isSource || isDest, isSource, isDest };
+}
+
+/** null when allowed; else the refusal (404 when not involved, 403 when on the wrong side). */
+async function transferGuard(c: any, id: string, need: 'source' | 'dest' | 'either'): Promise<Response | null> {
+  const t = await c.env.DB.prepare('SELECT * FROM transfers WHERE id = ?').bind(id).first() as any;
+  if (!t) return c.json({ message: 'Transfer not found.' }, 404);
+  const side = sidesOf(await resolveLoc(c), t);
+  if (!side.involved) return c.json({ message: 'Transfer not found.' }, 404);
+  if (need === 'source' && !side.isSource) return c.json({ message: 'Only the sending location can do this.' }, 403);
+  if (need === 'dest' && !side.isDest) return c.json({ message: 'Only the receiving location can confirm receipt.' }, 403);
+  return null;
+}
+
 const TRANSFER_LIST: ListOptions = {
   sortable: { date: 'COALESCE(requested_at, created_at)', number: 'transfer_number', status: 'status', from: 'source_name', to: 'destination_name', lines: 'line_count' },
   defaultSort: 'date', defaultDir: 'desc', tieBreaker: 'id',
@@ -39,7 +65,7 @@ const TRANSFER_LIST: ListOptions = {
 
 transfers.get('/', async (c) => {
   const payload = c.get('jwtPayload');
-  const scopedBranchId = isAdminUser(payload) ? null : payload.branch_id;
+  const own = await resolveLoc(c);
 
   let query = `
     SELECT
@@ -66,10 +92,13 @@ transfers.get('/', async (c) => {
   `;
   const params: any[] = [];
 
-  // Branch isolation — branch users see transfers involving their branch
-  if (scopedBranchId) {
+  // Location isolation: transfers to or from this branch or warehouse.
+  if (own.kind === 'BRANCH') {
     query += ` AND (t.source_branch_id = ? OR t.destination_branch_id = ?)`;
-    params.push(scopedBranchId, scopedBranchId);
+    params.push(own.branchId, own.branchId);
+  } else if (own.kind === 'WAREHOUSE') {
+    query += ` AND (t.source_warehouse_id = ? OR t.destination_warehouse_id = ?)`;
+    params.push(own.warehouseId, own.warehouseId);
   }
 
   const listReq = listRequest(c, TRANSFER_LIST);
@@ -136,8 +165,7 @@ transfers.get('/', async (c) => {
 
 transfers.get('/:id', async (c) => {
   const id = c.req.param('id');
-  const payload = c.get('jwtPayload');
-  const scopedBranchId = isAdminUser(payload) ? null : payload.branch_id;
+  const readLoc = await resolveLoc(c);
 
   const { results: transfersList } = await c.env.DB.prepare(`
     SELECT
@@ -163,9 +191,7 @@ transfers.get('/:id', async (c) => {
   if (!transfersList.length) return c.json({ message: 'Transfer not found' }, 404);
   const transfer = transfersList[0] as any;
   
-  if (scopedBranchId && transfer.source_branch_id !== scopedBranchId && transfer.destination_branch_id !== scopedBranchId) {
-    return c.json({ message: 'Access denied: transfer does not involve your branch.' }, 403);
-  }
+  if (!sidesOf(readLoc, transfer).involved) return c.json({ message: 'Transfer not found' }, 404);
 
   const { results: lines } = await c.env.DB.prepare(`
     SELECT tl.*, p.name as product_name, p.sku as product_sku, p.barcode as product_barcode
@@ -185,11 +211,16 @@ transfers.post('/', requirePermissions(['manage_transfers']), async (c) => {
   const payload = c.get('jwtPayload');
   const userId = payload.sub;
 
-  // Branch isolation — branch users can only request transfers FROM their own branch
-  if (!isAdminUser(payload)) {
+  // Location isolation: a branch requests transfers FROM its own branch, a warehouse from its own warehouse.
+  const createLoc = await resolveLoc(c);
+  if (createLoc.kind === 'BRANCH') {
     body.sourceOwnerType = 'BRANCH';
-    body.sourceBranchId = payload.branch_id;
+    body.sourceBranchId = createLoc.branchId;
     body.sourceWarehouseId = undefined;
+  } else if (createLoc.kind === 'WAREHOUSE') {
+    body.sourceOwnerType = 'WAREHOUSE';
+    body.sourceWarehouseId = createLoc.warehouseId;
+    body.sourceBranchId = undefined;
   }
 
   // ── Validate owner types ──
@@ -306,6 +337,8 @@ transfers.post('/', requirePermissions(['manage_transfers']), async (c) => {
 // ──────────────────────────────────────────────────────────────────────
 transfers.post('/:id/approve', requirePermissions(['manage_transfers']), async (c) => {
   const id = c.req.param('id');
+  const denied = await transferGuard(c, id as string, 'source');
+  if (denied) return denied;
   const userId = c.get('jwtPayload').sub;
 
   const cas = await c.env.DB.prepare(
@@ -329,6 +362,8 @@ transfers.post('/:id/approve', requirePermissions(['manage_transfers']), async (
 // ──────────────────────────────────────────────────────────────────────
 transfers.post('/:id/dispatch', requirePermissions(['manage_transfers']), async (c) => {
   const id = c.req.param('id');
+  const denied = await transferGuard(c, id as string, 'source');
+  if (denied) return denied;
   const userId = c.get('jwtPayload').sub;
 
   const transfer = await c.env.DB.prepare('SELECT * FROM transfers WHERE id = ?').bind(id).first() as any;
@@ -442,6 +477,8 @@ transfers.post('/:id/dispatch', requirePermissions(['manage_transfers']), async 
 // ──────────────────────────────────────────────────────────────────────
 transfers.post('/:id/receive', requirePermissions(['manage_transfers']), async (c) => {
   const id = c.req.param('id');
+  const denied = await transferGuard(c, id as string, 'dest');
+  if (denied) return denied;
   const userId = c.get('jwtPayload').sub;
 
   const transfer = await c.env.DB.prepare('SELECT * FROM transfers WHERE id = ?').bind(id).first() as any;
@@ -569,6 +606,8 @@ transfers.post('/:id/receive', requirePermissions(['manage_transfers']), async (
 // ──────────────────────────────────────────────────────────────────────
 transfers.post('/:id/reject', requirePermissions(['manage_transfers']), async (c) => {
   const id = c.req.param('id');
+  const denied = await transferGuard(c, id as string, 'source');
+  if (denied) return denied;
   const body = await c.req.json().catch(() => ({}));
   const userId = c.get('jwtPayload').sub;
 
@@ -592,6 +631,8 @@ transfers.post('/:id/reject', requirePermissions(['manage_transfers']), async (c
 // ──────────────────────────────────────────────────────────────────────
 transfers.post('/:id/cancel', requirePermissions(['manage_transfers']), async (c) => {
   const id = c.req.param('id');
+  const denied = await transferGuard(c, id as string, 'source');
+  if (denied) return denied;
   const userId = c.get('jwtPayload').sub;
 
   const cas = await c.env.DB.prepare(

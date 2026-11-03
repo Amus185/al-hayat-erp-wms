@@ -12,7 +12,7 @@ async function loadProfile(c: Context, userId: string) {
   const r = await poolOf(c).query(`
     SELECT u.id, u.email, u.full_name, u.branch_id,
            (SELECT r.code FROM roles r JOIN user_roles ur ON ur.role_id = r.id WHERE ur.user_id = u.id
-             ORDER BY (r.code = 'admin') DESC, (r.code = 'accountant') DESC, r.code LIMIT 1) AS role_code,
+             ORDER BY (r.code = 'admin' AND u.branch_id IS NULL) DESC, (r.code = 'accountant') DESC, (r.code <> 'admin') DESC, r.code LIMIT 1) AS role_code,
            (${PERMISSIONS_OF_USER}) AS permissions
     FROM users u WHERE u.id = $1 AND u.is_active = 1`, [userId]);
   const u = r.rows[0];
@@ -23,7 +23,8 @@ async function loadProfile(c: Context, userId: string) {
     fullName: u.full_name as string,
     permissions: u.permissions ? String(u.permissions).split(',') : [],
     branchId: (u.branch_id as string | null) ?? null,
-    role: (u.role_code as string) || 'branch_user',
+    // Company-wide admin power needs no branch assignment (see effectiveRole).
+    role: u.role_code === 'admin' && u.branch_id ? 'branch_user' : ((u.role_code as string) || 'branch_user'),
   };
 }
 

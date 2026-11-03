@@ -45,7 +45,9 @@ const TEAL_BLUE = '#0284c7';
 
 export function ReportsPage() {
   // Costs, profit, stock value and supplier spend only with cost access (Owner decision D4).
-  const canCosts = useAuth().hasPermission('costs.view');
+  const { hasPermission, branchId: myBranch } = useAuth();
+  const canCosts = hasPermission('costs.view');
+  const canFinance = hasPermission('accounting.view');
   const hideCostColumns = <T,>(cols: Column<T>[]): Column<T>[] =>
     canCosts ? cols : cols.filter((col) => !['cost_price', 'tied_up_capital', 'gross_profit', 'margin_pct', 'profit', 'total_spend', 'cost_value'].includes(col.key));
   const { addToast } = useToast();
@@ -129,11 +131,13 @@ export function ReportsPage() {
     fetchReportData();
   }, [activeTab, days, selectedWarehouse, selectedCategory]);
 
+  // Operational reports for everyone with report access; valuation needs cost access, comparing
+  // branches is company-level, and the Finance reports need accounting access.
   const reportMenus = [
-    { label: 'Inventory', items: [{ key: 'low-stock', label: 'Stock Risk' }, { key: 'inv-valuation', label: 'Inventory Valuation' }] },
-    { label: 'Sales', items: [{ key: 'branch-perf', label: 'Branch Performance' }, { key: 'sales-profit', label: 'Sales & Profit' }, { key: 'quote-conversion', label: 'Quote Conversion' }] },
+    { label: 'Inventory', items: [{ key: 'low-stock', label: 'Stock Risk' }, ...(canCosts ? [{ key: 'inv-valuation', label: 'Inventory Valuation' }] : [])] },
+    { label: 'Sales', items: [...(myBranch ? [] : [{ key: 'branch-perf', label: 'Branch Performance' }]), { key: 'sales-profit', label: canCosts ? 'Sales & Profit' : 'Sales Activity' }, { key: 'quote-conversion', label: 'Quote Conversion' }] },
     { label: 'Purchasing', items: [{ key: 'supplier-perf', label: 'Supplier Scorecards' }] },
-    { label: 'Finance', items: [{ key: 'receivables', label: 'Receivables & Cash Flow' }] },
+    ...(canFinance ? [{ label: 'Finance', items: [{ key: 'receivables', label: 'Receivables & Cash Flow' }] }] : []),
   ];
 
   // Utility Formatter

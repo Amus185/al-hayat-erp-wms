@@ -2073,3 +2073,19 @@ html.api-busy, html.api-busy * { cursor: progress !important; }
 .mm-step__title { margin: 0; font-size: 14px; color: #066006; }
 .mm-step__title span { font-weight: 400; color: var(--text-muted); font-size: 12px; }
 .mm-picked { display: flex; flex-wrap: wrap; gap: 6px; }
+
+/* Deliveries: compact list, details in the panel */
+.del-cell { min-width: 0; max-width: 220px; }
+.del-main { font-weight: 600; color: #0f172a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; max-width: 220px; }
+.del-sub { font-size: 12px; color: #64748b; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px; }
+.del-facts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px 14px; padding: 12px 14px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; }
+.del-facts span { display: block; font-size: 11px; color: #64748b; text-transform: uppercase; font-weight: 700; letter-spacing: .03em; }
+.del-facts strong { font-size: 13px; color: #0f172a; }
+@media (max-width: 640px) { .del-facts { grid-template-columns: 1fr 1fr; } }
+#deliveries-table tbody tr { cursor: pointer; }
+
+/* Owner's branch switcher */
+.branch-switcher { display: inline-flex; align-items: center; gap: 6px; height: 38px; padding: 0 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); color: var(--text-muted); max-width: 230px; }
+.branch-switcher select { border: none; background: transparent; font-size: 13px; font-weight: 600; color: var(--text); max-width: 190px; outline: none; cursor: pointer; text-overflow: ellipsis; }
+.branch-switcher--active { border-color: var(--primary); background: var(--primary-light); color: var(--primary); }
+@media (max-width: 900px) { .branch-switcher { max-width: 44px; padding: 0 8px; } .branch-switcher select { width: 0; max-width: 0; padding: 0; } .branch-switcher:focus-within select { width: 150px; max-width: 150px; } }

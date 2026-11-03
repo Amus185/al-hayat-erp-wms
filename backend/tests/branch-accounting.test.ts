@@ -31,8 +31,8 @@ async function branchActivity(branch: string, price: number, expense: number, de
 
 before(async () => {
   t = await setupTestApp();
-  userA = await t.createUser({ branchId: A, roleId: 'role-branch-user', role: 'branch_user' });
-  userB = await t.createUser({ branchId: B, roleId: 'role-branch-user', role: 'branch_user' });
+  userA = await t.createUser({ branchId: A, roleId: 'role-branch-user', role: 'branch_user', grants: ['accounting.view'] });
+  userB = await t.createUser({ branchId: B, roleId: 'role-branch-user', role: 'branch_user', grants: ['accounting.view'] });
   accountant = await t.createUser({ branchId: null, roleId: 'role-accountant', role: 'accountant' });
   noBranch = await t.createUser({ branchId: null, roleId: 'role-sales-rep', role: 'sales_rep' });
   customerId = await t.createCustomer();
@@ -238,7 +238,7 @@ test('A. a user with neither a branch nor an all-branch role is denied; an accou
 });
 
 test('F. changing a user\'s branch takes effect on the next request without a new login', async () => {
-  const u = await t.createUser({ branchId: A, roleId: 'role-branch-user', role: 'branch_user' });
+  const u = await t.createUser({ branchId: A, roleId: 'role-branch-user', role: 'branch_user', grants: ['accounting.view'] });
   assert.equal(net(await tb(u.token), '4010'), net(await tb(userA.token), '4010'));
   const res = await t.api('PATCH', `/users/${u.id}`, { fullName: 'Moved', email: `${u.id}@test.local`, branchId: B, isActive: true });
   assert.equal(res.status, 200, JSON.stringify(res.body));

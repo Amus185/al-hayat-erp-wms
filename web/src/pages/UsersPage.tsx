@@ -31,6 +31,8 @@ const EXTRA_ACCESS: { code: string; label: string; hint: string }[] = [
   { code: 'employees.manage', label: 'Manage employees (own branch)', hint: 'Add and edit employees’ ordinary details, without pay.' },
   { code: 'payroll.view', label: 'See salaries and advances', hint: 'Salaries, salary advances and employment documents.' },
   { code: 'payroll.manage', label: 'Manage salaries and advances', hint: 'Change salaries, record or delete advances, upload employment documents.' },
+  { code: 'accounting.view', label: 'Open Accounting', hint: 'Statements, ledger, journal, cash and bank. A branch manager still sees only their own branch.' },
+  { code: 'assistant.use', label: 'Use the AI Assistant', hint: 'It can only ever show what this person is allowed to see.' },
 ];
 
 interface Role {

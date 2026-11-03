@@ -44,6 +44,12 @@ branches.get('/', async (c) => {
     return c.json(results || []);
   }
 
+  // Warehouse staff (no branch): branch names only, to choose a transfer destination; no figures.
+  if (!payload.branch_id) {
+    const { results } = await c.env.DB.prepare('SELECT id, code, name, city, is_active FROM branches ORDER BY name ASC').all();
+    return c.json(results || []);
+  }
+
   // Branch user — only their own branch
   const branch = await c.env.DB.prepare(`
     SELECT b.*,

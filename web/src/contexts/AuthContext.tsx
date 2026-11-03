@@ -1,6 +1,6 @@
 import { createContext, useContext, useCallback, useEffect, useState, type ReactNode } from 'react';
 import type { AuthUser, LoginRequest } from '../types';
-import { fetchProfile, invalidateApiCache, onSessionExpired } from '../api/client';
+import { fetchProfile, invalidateApiCache, onSessionExpired, setViewBranch } from '../api/client';
 import { authClient } from '../lib/auth-client';
 
 interface AuthContextType {
@@ -54,6 +54,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logout = useCallback(() => {
     authClient.signOut().finally(() => {
+      setViewBranch('');
       invalidateApiCache();
       setUser(null);
       window.location.href = '/login';
@@ -67,6 +68,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     },
     [user]
   );
+
+  // A branch choice made by the Owner on this browser must never follow another person's sign-in.
+  useEffect(() => {
+    if (user && (user.branchId || !(user.role === 'admin' || user.role === 'accountant'))) setViewBranch('');
+  }, [user]);
 
   const isAdmin = user?.role === 'admin';
   const isBranchUser = user?.role === 'branch_user';

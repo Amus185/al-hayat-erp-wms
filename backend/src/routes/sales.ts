@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { Env, uuidv4 } from '../db';
 import { PgAdapter } from '../pg-client';
 import { authMiddleware, requirePermissions, isAdminUser } from '../middleware/auth';
-import { resolveBranchScope, resolveWriteBranch, branchSql, inScope, ScopeError, type BranchScope } from '../services/branch-scope';
+import { resolveBranchScope, resolveLoc, locBranch, resolveWriteBranch, branchSql, inScope, ScopeError, customerVisibleSql, type BranchScope } from '../services/branch-scope';
 import { logAudit, createAuditLogStmt } from '../services/audit';
 import { releaseReservationsStmt, returnWebQuantityStmt } from '../services/storefront';
 import { csvResponse, dateRange, likeTerm, listRequest, pagedResponse, pagedRows, type ListOptions, type ListRequest } from '../services/listing';
@@ -91,6 +91,20 @@ const CUSTOMER_LIST: ListOptions = {
   defaultSort: 'created', defaultDir: 'desc', tieBreaker: 'id',
 };
 
+/**
+ * A customer, only if the caller's branch deals with them (a shared master
+ * record: its identity is central, its visibility is per branch). Company-level
+ * users see every customer.
+ */
+async function customerOr404(c: any, id: string): Promise<any | null> {
+  const scope = await resolveBranchScope(c);
+  if (scope.kind === 'BRANCH') {
+    const ok = await c.env.DB.prepare(`SELECT 1 AS x FROM customers cu WHERE cu.id = ? AND ${customerVisibleSql(scope.branchId)}`).bind(id).first();
+    if (!ok) return null;
+  }
+  return c.env.DB.prepare('SELECT * FROM customers WHERE id = ?').bind(id).first();
+}
+
 async function listCustomers(c: any, r: ListRequest) {
   const scope = await resolveBranchScope(c);
   const q = (k: string) => (c.req.query(k) || '').trim();
@@ -134,6 +148,7 @@ async function listCustomers(c: any, r: ListRequest) {
     )`;
   const where: string[] = [];
   const params: unknown[] = [];
+  if (scope.kind === 'BRANCH') where.push(customerVisibleSql(scope.branchId, 'id'));
   const term = q('q') || q('search');
   if (term) {
     const t = likeTerm(term);
@@ -211,6 +226,7 @@ sales.get('/customers', async (c) => {
         WHERE cp.customer_id = c.id AND cp.allocation_type = 'ACCOUNT' ${branchSql(scope, 'cp.branch_id')}
       ), 0) AS unallocated_payments
     FROM customers c
+    ${scope.kind === 'BRANCH' ? `WHERE ${customerVisibleSql(scope.branchId, 'c.id')}` : ''}
     ORDER BY c.created_at DESC
     LIMIT 200
   `;
@@ -227,11 +243,26 @@ sales.post('/customers', requirePermissions(['manage_sales']), async (c) => {
   if (!body.name || !body.name.trim()) {
     return c.json({ message: 'Customer name is required.' }, 400);
   }
+  const scope = await resolveBranchScope(c);
+  const branchId = scope.kind === 'BRANCH' ? scope.branchId : null;
+  const digits = String(body.phone || '').replace(/\D/g, '');
+  // One customer record for the whole company: the same phone number is the same person.
+  if (digits.length >= 6) {
+    const known = await c.env.DB.prepare(
+      "SELECT * FROM customers WHERE regexp_replace(COALESCE(phone, ''), '\\D', '', 'g') = ? ORDER BY created_at LIMIT 1",
+    ).bind(digits).first() as any;
+    if (known) {
+      if (branchId) await c.env.DB.prepare('INSERT INTO customer_branches (customer_id, branch_id) VALUES (?, ?) ON CONFLICT DO NOTHING').bind(known.id, branchId).run();
+      return c.json({ ...known, already_registered: true }, 200);
+    }
+  }
   const id = uuidv4();
-  await c.env.DB.prepare(`
+  const stmts: any[] = [c.env.DB.prepare(`
     INSERT INTO customers (id, name, phone, email, address)
     VALUES (?, ?, ?, ?, ?)
-  `).bind(id, body.name.trim(), body.phone || null, body.email || null, body.address || null).run();
+  `).bind(id, body.name.trim(), body.phone || null, body.email || null, body.address || null)];
+  if (branchId) stmts.push(c.env.DB.prepare('INSERT INTO customer_branches (customer_id, branch_id) VALUES (?, ?)').bind(id, branchId));
+  await c.env.DB.batch(stmts);
   const { results } = await c.env.DB.prepare('SELECT * FROM customers WHERE id = ?').bind(id).all();
   return c.json(results[0], 201);
 });
@@ -239,7 +270,7 @@ sales.post('/customers', requirePermissions(['manage_sales']), async (c) => {
 sales.patch('/customers/:id', requirePermissions(['manage_sales']), async (c) => {
   const { id } = c.req.param();
   const body = await c.req.json<{ name?: string; phone?: string; email?: string; address?: string }>();
-  const existing = await c.env.DB.prepare('SELECT * FROM customers WHERE id = ?').bind(id).first();
+  const existing = await customerOr404(c, id as string);
   if (!existing) return c.json({ message: 'Customer not found.' }, 404);
 
   const fields: string[] = [];
@@ -258,7 +289,7 @@ sales.patch('/customers/:id', requirePermissions(['manage_sales']), async (c) =>
 
 sales.delete('/customers/:id', requirePermissions(['manage_sales']), async (c) => {
   const { id } = c.req.param();
-  const existing = await c.env.DB.prepare('SELECT * FROM customers WHERE id = ?').bind(id).first();
+  const existing = await customerOr404(c, id as string);
   if (!existing) return c.json({ message: 'Customer not found.' }, 404);
   // Debts and payments cascade-delete with the customer while their journal
   // entries remain, so any financial history blocks deletion.
@@ -441,6 +472,7 @@ sales.get('/debts', async (c) => {
 sales.get('/customers/:id/debts', async (c) => {
   const scope = await resolveBranchScope(c);
   const customerId = c.req.param('id');
+  if (!(await customerOr404(c, customerId))) return c.json({ message: 'Customer not found.' }, 404);
   const { results } = await c.env.DB.prepare(`
     SELECT cd.*, u.full_name AS created_by_name
     FROM customer_debts cd
@@ -456,7 +488,7 @@ sales.post('/customers/:id/debts', requirePermissions(['manage_sales']), async (
   const body = await c.req.json();
   const userId = c.get('jwtPayload').sub;
 
-  const customer = await c.env.DB.prepare('SELECT id, name FROM customers WHERE id = ?').bind(customerId).first();
+  const customer = await customerOr404(c, customerId as string);
   if (!customer) return c.json({ message: 'Customer not found.' }, 404);
 
   // Branch users always charge in their own branch; admins choose (or company-level).
@@ -526,7 +558,7 @@ sales.post('/customers/:id/debts', requirePermissions(['manage_sales']), async (
 sales.get('/customers/:id/balance', async (c) => {
   const scope = await resolveBranchScope(c);
   const customerId = c.req.param('id');
-  const customer = await c.env.DB.prepare('SELECT * FROM customers WHERE id = ?').bind(customerId).first() as any;
+  const customer = await customerOr404(c, customerId as string);
   if (!customer) return c.json({ message: 'Customer not found.' }, 404);
 
   const fin = await calculateCustomerFinancials(c.env.DB, customerId, scope);
@@ -540,7 +572,7 @@ sales.get('/customers/:id/balance', async (c) => {
 sales.get('/customers/:id/ledger', async (c) => {
   const scope = await resolveBranchScope(c);
   const customerId = c.req.param('id');
-  const customer = await c.env.DB.prepare('SELECT * FROM customers WHERE id = ?').bind(customerId).first() as any;
+  const customer = await customerOr404(c, customerId as string);
   if (!customer) return c.json({ message: 'Customer not found.' }, 404);
 
   // 1. Invoices
@@ -709,7 +741,7 @@ sales.post('/payments', requirePermissions(['manage_sales']), async (c) => {
     return c.json({ message: 'Invalid allocation type.' }, 400);
   }
 
-  const customer = await c.env.DB.prepare('SELECT * FROM customers WHERE id = ?').bind(customerId).first() as any;
+  const customer = await customerOr404(c, customerId as string);
   if (!customer) return c.json({ message: 'Customer not found.' }, 404);
 
   // Branch scope: a payment settles a document of the caller's branch and is
@@ -1222,8 +1254,9 @@ sales.get('/orders/:id', async (c) => {
 // branch-scoped users see their branch only; admins/accountants see all;
 // users with neither a branch nor an all-branch role are refused (403).
 async function scopedSalesBranch(c: any): Promise<string | null> {
-  const scope = await resolveBranchScope(c, 'ALL');
-  return scope.kind === 'BRANCH' ? scope.branchId : null;
+  const loc = await resolveLoc(c);
+  if (loc.kind === 'WAREHOUSE') throw new ScopeError(403, 'Sales are recorded by branches.');
+  return locBranch(loc);
 }
 
 async function assertOrderInScope(c: any, orderId: string | undefined) {
@@ -1375,7 +1408,9 @@ sales.post('/orders', requirePermissions(['manage_sales']), async (c) => {
 
   // Validate customer (optional but if provided must exist)
   if (body.customerId) {
-    const customer = await c.env.DB.prepare('SELECT id FROM customers WHERE id = ?').bind(body.customerId).first();
+    const customer = writeScope.kind === 'BRANCH'
+      ? await c.env.DB.prepare(`SELECT cu.id FROM customers cu WHERE cu.id = ? AND ${customerVisibleSql(writeScope.branchId)}`).bind(body.customerId).first()
+      : await c.env.DB.prepare('SELECT id FROM customers WHERE id = ?').bind(body.customerId).first();
     if (!customer) return c.json({ message: 'Customer does not exist.' }, 400);
   }
 

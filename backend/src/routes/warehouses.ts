@@ -3,6 +3,7 @@ import { Env, uuidv4 } from '../db';
 import { authMiddleware, requirePermissions } from '../middleware/auth';
 import { logAudit } from '../services/audit';
 import { hideUnless, PERM, COST_FIELDS, sortsFor } from '../services/privacy';
+import { resolveLoc } from '../services/branch-scope';
 
 const warehouses = new Hono<{ Bindings: Env }>();
 
@@ -10,7 +11,14 @@ warehouses.use('/*', authMiddleware);
 // Cost prices, purchase costs and stock value only for people with costs.view (Owner decision D4).
 warehouses.use('/*', hideUnless(PERM.COSTS, COST_FIELDS));
 
+/** A warehouse's stock and activity: the company view, or that warehouse's own staff. Branches see names only. */
+async function warehouseOpen(c: any, id: string): Promise<boolean> {
+  const loc = await resolveLoc(c);
+  return loc.kind === 'ALL' || (loc.kind === 'WAREHOUSE' && loc.warehouseId === id);
+}
+
 warehouses.get('/', async (c) => {
+  const loc = await resolveLoc(c);
   const { results } = await c.env.DB.prepare(`
     SELECT w.*,
       (SELECT COUNT(*) FROM warehouse_locations wl WHERE wl.warehouse_id = w.id) AS location_count,
@@ -20,10 +28,23 @@ warehouses.get('/', async (c) => {
     FROM warehouses w
     ORDER BY w.name ASC
   `).all();
-  return c.json(results);
+  // Names (needed to choose a transfer destination) are shared; stock figures only for those who run the warehouse.
+  const rows = ((results || []) as any[]).map((w) => {
+    if (loc.kind === 'ALL' || (loc.kind === 'WAREHOUSE' && loc.warehouseId === w.id)) return w;
+    const { location_count, total_units, total_skus, inventory_value, ...identity } = w;
+    return identity;
+  });
+  return c.json(rows);
 });
 
+/** Creating, renaming and deleting warehouses is company-level. */
+async function companyOnly(c: any): Promise<Response | null> {
+  return (await resolveLoc(c)).kind === 'ALL' ? null : c.json({ message: 'Only company administrators manage warehouses.' }, 403);
+}
+
 warehouses.post('/', requirePermissions(['manage_inventory']), async (c) => {
+  const refused = await companyOnly(c);
+  if (refused) return refused;
   const body = await c.req.json();
 
   if (!body.code || !body.code.trim()) return c.json({ message: 'Warehouse code is required.' }, 400);
@@ -45,11 +66,13 @@ warehouses.post('/', requirePermissions(['manage_inventory']), async (c) => {
 
 warehouses.get('/:id/locations', async (c) => {
   const id = c.req.param('id');
+  if (!(await warehouseOpen(c, id as string))) return c.json({ message: 'Warehouse not found' }, 404);
   const { results } = await c.env.DB.prepare('SELECT * FROM warehouse_locations WHERE warehouse_id = ? ORDER BY aisle, rack, shelf, bin').bind(id).all();
   return c.json(results);
 });
 
 warehouses.post('/:id/locations', requirePermissions(['manage_inventory']), async (c) => {
+  if (!(await warehouseOpen(c, c.req.param('id') as string))) return c.json({ message: 'Warehouse not found' }, 404);
   const warehouseId = c.req.param('id');
   const body = await c.req.json();
 
@@ -79,6 +102,7 @@ warehouses.post('/:id/locations', requirePermissions(['manage_inventory']), asyn
 
 warehouses.get('/:id/inventory', async (c) => {
   const id = c.req.param('id');
+  if (!(await warehouseOpen(c, id as string))) return c.json({ message: 'Warehouse not found' }, 404);
   const { results } = await c.env.DB.prepare(`
     SELECT i.*, p.name, p.sku, p.barcode, COALESCE(p.cost_price, 0) AS cost_price, COALESCE(p.selling_price, 0) AS selling_price
     FROM inventory_stock i
@@ -91,6 +115,7 @@ warehouses.get('/:id/inventory', async (c) => {
 
 warehouses.get('/:id/summary', async (c) => {
   const id = c.req.param('id');
+  if (!(await warehouseOpen(c, id as string))) return c.json({ message: 'Warehouse not found' }, 404);
 
   const stockSummary = await c.env.DB.prepare(`
     SELECT 
@@ -137,6 +162,8 @@ warehouses.get('/:id', async (c) => {
 });
 
 warehouses.patch('/:id', requirePermissions(['manage_inventory']), async (c) => {
+  const refused = await companyOnly(c);
+  if (refused) return refused;
   const id = c.req.param('id');
   const body = await c.req.json<{ code?: string; name?: string; city?: string; address?: string; phone?: string; is_active?: number }>();
   
@@ -165,6 +192,8 @@ warehouses.patch('/:id', requirePermissions(['manage_inventory']), async (c) => 
 });
 
 warehouses.delete('/:id', requirePermissions(['manage_inventory']), async (c) => {
+  const refused = await companyOnly(c);
+  if (refused) return refused;
   const id = c.req.param('id');
   const existing = await c.env.DB.prepare('SELECT * FROM warehouses WHERE id = ?').bind(id).first();
   if (!existing) return c.json({ message: 'Warehouse not found.' }, 404);

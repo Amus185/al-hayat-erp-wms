@@ -16,7 +16,7 @@ export const PERM = {
 } as const;
 
 /** Permissions the Owner may give to one particular person (on top of their roles). */
-export const GRANTABLE = [PERM.COSTS, PERM.PAYROLL_VIEW, PERM.PAYROLL_MANAGE, PERM.EMPLOYEES_MANAGE] as const;
+export const GRANTABLE = [PERM.COSTS, PERM.PAYROLL_VIEW, PERM.PAYROLL_MANAGE, PERM.EMPLOYEES_MANAGE, 'accounting.view', 'assistant.use'] as const;
 
 export function has(payload: { permissions?: string[] } | undefined | null, code: string): boolean {
   return !!payload?.permissions && (payload.permissions.includes(code) || payload.permissions.includes('*'));

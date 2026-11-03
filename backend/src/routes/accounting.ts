@@ -22,6 +22,16 @@ async function loadScopedEntry(c: any, id: string, scope: BranchScope) {
 const accounting = new Hono<{ Bindings: Env }>();
 
 accounting.use('/*', authMiddleware);
+// The whole Accounting module (statements, ledger, journal, cash and bank, depreciation) needs
+// accounting.view: Owner and accountants by default, anyone else only when the Owner grants it.
+// A branch-assigned user with it still sees only their own branch (resolveBranchScope).
+accounting.use('/*', async (c, next) => {
+  const p = c.get('jwtPayload') as any;
+  if (!(p?.permissions?.includes('accounting.view') || p?.permissions?.includes('*'))) {
+    return c.json({ message: 'Accounting is limited to the Owner and accountants.' }, 403);
+  }
+  await next();
+});
 
 // ══════════════════════════════════════════════════════════
 // HELPER UTILITIES

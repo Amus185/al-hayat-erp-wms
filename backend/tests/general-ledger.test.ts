@@ -42,7 +42,7 @@ test('running balances are per branch scope: each branch ledger ends at that bra
   assert.equal(await tbCash(A), 850);
 
   // a branch user's ledger is their branch's numbers only
-  const user = await t.createUser({ branchId: B, roleId: 'role-branch-user', role: 'branch_user' });
+  const user = await t.createUser({ branchId: B, roleId: 'role-branch-user', role: 'branch_user', grants: ['accounting.view'] });
   const mine = await t.api('GET', `/accounting/general-ledger?account_id=${cash}`, undefined, user.token);
   assert.equal(mine.status, 200, JSON.stringify(mine.body));
   assert.equal(lastBalance(mine.body, cash), 400);

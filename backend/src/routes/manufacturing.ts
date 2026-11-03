@@ -4,6 +4,7 @@ import { authMiddleware, requirePermissions } from '../middleware/auth';
 import { logAudit, createAuditLogStmt } from '../services/audit';
 import { hideUnless, PERM, COST_FIELDS, sortsFor } from '../services/privacy';
 import { prepareJournalEntryPosting } from '../services/accounting-service';
+import { resolveLoc, locSql, locBranch, ScopeError } from '../services/branch-scope';
 import { csvResponse, dateRange, likeTerm, listRequest, pagedResponse, pagedRows, type ListOptions } from '../services/listing';
 
 const manufacturing = new Hono<{ Bindings: Env; Variables: { jwtPayload: any } }>();
@@ -23,14 +24,23 @@ const DEFAULT_STAGES = [
 // ──────────────────────────────────────────────────────────────────────
 // KPI STATS
 // ──────────────────────────────────────────────────────────────────────
+// Factory work orders run in warehouses (they consume and add warehouse stock): the company
+// view and the warehouse's own staff see them; a branch does not (it has Item Manufacture).
+const WO_SCOPE = { warehouse: 'wo.warehouse_id' };
+async function woScope(c: any): Promise<string> { return locSql(await resolveLoc(c), WO_SCOPE); }
+async function woOr404(c: any, id: string): Promise<any | null> {
+  return c.env.DB.prepare(`SELECT wo.* FROM work_orders wo WHERE wo.id = ? ${await woScope(c)}`).bind(id).first();
+}
+
 manufacturing.get('/stats', async (c) => {
   const db = c.env.DB;
+  const sc = await woScope(c);
 
-  const activeWorkOrders = await db.prepare("SELECT COUNT(*) AS count FROM work_orders WHERE status = 'IN_PROGRESS'").first();
-  const inProductionUnits = await db.prepare("SELECT COALESCE(SUM(target_quantity - completed_quantity), 0) AS units FROM work_orders WHERE status = 'IN_PROGRESS'").first();
+  const activeWorkOrders = await db.prepare(`SELECT COUNT(*) AS count FROM work_orders wo WHERE wo.status = 'IN_PROGRESS' ${sc}`).first();
+  const inProductionUnits = await db.prepare(`SELECT COALESCE(SUM(wo.target_quantity - wo.completed_quantity), 0) AS units FROM work_orders wo WHERE wo.status = 'IN_PROGRESS' ${sc}`).first();
   const completedThisMonth = await db.prepare(`
-    SELECT COALESCE(SUM(completed_quantity), 0) AS units FROM work_orders
-    WHERE status = 'COMPLETED' AND date_trunc('month', completed_at) = date_trunc('month', CURRENT_DATE)
+    SELECT COALESCE(SUM(wo.completed_quantity), 0) AS units FROM work_orders wo
+    WHERE wo.status = 'COMPLETED' AND date_trunc('month', wo.completed_at) = date_trunc('month', CURRENT_DATE) ${sc}
   `).first();
   const totalBoms = await db.prepare('SELECT COUNT(*) AS count FROM bill_of_materials WHERE is_active = 1').first();
 
@@ -188,7 +198,7 @@ manufacturing.get('/work-orders', async (c) => {
     JOIN warehouses w ON w.id = wo.warehouse_id
     LEFT JOIN bill_of_materials bom ON bom.id = wo.bom_id
     LEFT JOIN users u ON u.id = wo.created_by
-    WHERE 1=1
+    WHERE 1=1 ${await woScope(c)}
   `;
   const params: any[] = [];
 
@@ -254,7 +264,7 @@ manufacturing.get('/work-orders/:id', async (c) => {
     JOIN warehouses w ON w.id = wo.warehouse_id
     LEFT JOIN bill_of_materials bom ON bom.id = wo.bom_id
     LEFT JOIN users u ON u.id = wo.created_by
-    WHERE wo.id = ?
+    WHERE wo.id = ? ${await woScope(c)}
   `).bind(id).first();
 
   if (!wo) return c.json({ message: 'Work order not found' }, 404);
@@ -331,6 +341,10 @@ manufacturing.post('/work-orders', requirePermissions(['manage_inventory']), asy
     bomId = (defaultBom?.id as string) || null;
   }
 
+  const woLoc = await resolveLoc(c);
+  if (woLoc.kind === 'BRANCH') return c.json({ message: 'Factory work orders are run by warehouses. Use Item Manufacture for your branch.' }, 403);
+  if (woLoc.kind === 'WAREHOUSE' && body.warehouseId !== woLoc.warehouseId) return c.json({ message: 'You can only issue work orders for your own warehouse.' }, 403);
+
   const stmts: any[] = [];
   stmts.push(c.env.DB.prepare(`
     INSERT INTO work_orders (
@@ -400,7 +414,7 @@ manufacturing.post('/work-orders/:id/start', requirePermissions(['manage_invento
   const id = c.req.param('id');
   const userId = c.get('jwtPayload').sub;
 
-  const wo = await c.env.DB.prepare('SELECT * FROM work_orders WHERE id = ?').bind(id).first() as any;
+  const wo = await woOr404(c, id as string);
   if (!wo) return c.json({ message: 'Work order not found' }, 404);
   if (wo.status === 'IN_PROGRESS') return c.json({ message: 'Work order is already in progress' }, 400);
   if (wo.status === 'COMPLETED') return c.json({ message: 'Work order is already completed' }, 400);
@@ -507,7 +521,7 @@ manufacturing.post('/work-orders/:id/advance-stage', requirePermissions(['manage
   const id = c.req.param('id');
   const body = await c.req.json().catch(() => ({}));
 
-  const wo = await c.env.DB.prepare('SELECT * FROM work_orders WHERE id = ?').bind(id).first() as any;
+  const wo = await woOr404(c, id as string);
   if (!wo) return c.json({ message: 'Work order not found' }, 404);
 
   const { results: stages } = await c.env.DB.prepare(`
@@ -556,7 +570,7 @@ manufacturing.post('/work-orders/:id/complete', requirePermissions(['manage_inve
   const body = await c.req.json().catch(() => ({}));
   const userId = c.get('jwtPayload').sub;
 
-  const wo = await c.env.DB.prepare('SELECT * FROM work_orders WHERE id = ?').bind(id).first() as any;
+  const wo = await woOr404(c, id as string);
   if (!wo) return c.json({ message: 'Work order not found' }, 404);
   if (wo.status === 'COMPLETED') return c.json({ message: 'Work order is already completed' }, 400);
   if (wo.status !== 'IN_PROGRESS') return c.json({ message: 'Start the work order (consume materials) before completing it.' }, 400);
@@ -683,21 +697,33 @@ const groupWithItems = async (db: any, id: string) => {
   return { ...g, items: results || [] };
 };
 
+/** Item groups a person may use: their branch's own plus the company-wide ones; the company view sees all. */
+async function groupScope(c: any): Promise<string> {
+  const loc = await resolveLoc(c);
+  const branch = locBranch(loc);
+  if (loc.kind === 'ALL') return '';
+  if (!branch) return ' AND FALSE';
+  return ` AND (g.branch_id IS NULL OR g.branch_id = '${branch}')`;
+}
+
 manufacturing.get('/item-groups', async (c) => {
   const q = (c.req.query('q') || '').trim();
+  const gs = await groupScope(c);
   const { results } = await c.env.DB.prepare(`
-    SELECT g.id, g.name, g.updated_at,
+    SELECT g.id, g.name, g.updated_at, g.branch_id,
            COUNT(i.id)::int AS item_count, COALESCE(SUM(i.price), 0)::float AS total,
            COALESCE(json_agg(json_build_object('name', i.name, 'price', i.price::float) ORDER BY i.sort_order, i.name) FILTER (WHERE i.id IS NOT NULL), '[]') AS items
     FROM mfg_item_groups g LEFT JOIN mfg_item_group_items i ON i.group_id = g.id
-    ${q ? 'WHERE g.name ILIKE ?' : ''}
+    WHERE 1=1 ${gs} ${q ? 'AND g.name ILIKE ?' : ''}
     GROUP BY g.id ORDER BY g.name LIMIT 100
   `).bind(...(q ? [likeTerm(q)] : [])).all();
   return c.json(results || []);
 });
 
 manufacturing.get('/item-groups/:id', async (c) => {
-  const g = await groupWithItems(c.env.DB, c.req.param('id'));
+  const gid = c.req.param('id');
+  const visible = await c.env.DB.prepare(`SELECT g.id FROM mfg_item_groups g WHERE g.id = ? ${await groupScope(c)}`).bind(gid).first();
+  const g = visible ? await groupWithItems(c.env.DB, gid) : null;
   return g ? c.json(g) : c.json({ error: 'Group not found' }, 404);
 });
 
@@ -708,7 +734,15 @@ async function saveGroup(c: any, id: string | null) {
   let items: ManualItem[];
   try { items = readItems(body.items); } catch (e: any) { return c.json({ error: e.message }, 400); }
   const db = c.env.DB;
-  const clash = await db.prepare('SELECT id FROM mfg_item_groups WHERE lower(name) = lower(?) AND id <> ?').bind(name, id ?? '').first();
+  const loc = await resolveLoc(c);
+  const ownBranch = locBranch(loc);
+  if (id) {
+    // Changing a group needs it to be the caller's own (branch users cannot change company-wide ones).
+    const mine = await db.prepare(`SELECT g.id FROM mfg_item_groups g WHERE g.id = ? ${loc.kind === 'ALL' ? '' : ownBranch ? ` AND g.branch_id = '${ownBranch}'` : ' AND FALSE'}`).bind(id).first();
+    if (!mine) return c.json({ error: 'Group not found' }, 404);
+  }
+  const groupBranch = id ? (await db.prepare('SELECT branch_id FROM mfg_item_groups WHERE id = ?').bind(id).first() as any)?.branch_id ?? null : ownBranch;
+  const clash = await db.prepare("SELECT id FROM mfg_item_groups WHERE lower(name) = lower(?) AND id <> ? AND COALESCE(branch_id, '') = COALESCE(?, '')").bind(name, id ?? '', groupBranch).first();
   if (clash) return c.json({ error: `A group named "${name}" already exists` }, 409);
   const gid = id ?? uuidv4();
   const stmts: any[] = [];
@@ -716,7 +750,7 @@ async function saveGroup(c: any, id: string | null) {
     stmts.push(db.prepare('UPDATE mfg_item_groups SET name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').bind(name, id).mustAffect('Group not found'));
     stmts.push(db.prepare('DELETE FROM mfg_item_group_items WHERE group_id = ?').bind(id));
   } else {
-    stmts.push(db.prepare('INSERT INTO mfg_item_groups (id, name, created_by) VALUES (?, ?, ?)').bind(gid, name, c.get('jwtPayload')?.sub ?? null));
+    stmts.push(db.prepare('INSERT INTO mfg_item_groups (id, name, created_by, branch_id) VALUES (?, ?, ?, ?)').bind(gid, name, c.get('jwtPayload')?.sub ?? null, groupBranch));
   }
   items.forEach((it, i) => stmts.push(db.prepare('INSERT INTO mfg_item_group_items (id, group_id, name, price, sort_order) VALUES (?, ?, ?, ?, ?)').bind(uuidv4(), gid, it.name, it.price, i)));
   stmts.push(createAuditLogStmt(c, id ? 'MFG_GROUP_UPDATE' : 'MFG_GROUP_CREATE', 'mfg_item_groups', gid, null, { name, items: items.length }));
@@ -729,6 +763,10 @@ manufacturing.put('/item-groups/:id', requirePermissions(['manage_inventory']), 
 manufacturing.delete('/item-groups/:id', requirePermissions(['manage_inventory']), async (c) => {
   const id = c.req.param('id');
   const db = c.env.DB;
+  const delLoc = await resolveLoc(c);
+  const delBranch = locBranch(delLoc);
+  const own = await db.prepare(`SELECT g.id FROM mfg_item_groups g WHERE g.id = ? ${delLoc.kind === 'ALL' ? '' : delBranch ? ` AND g.branch_id = '${delBranch}'` : ' AND FALSE'}`).bind(id).first();
+  if (!own) return c.json({ error: 'Group not found' }, 404);
   await db.batch([
     db.prepare('DELETE FROM mfg_item_groups WHERE id = ?').bind(id).mustAffect('Group not found'),
     createAuditLogStmt(c, 'MFG_GROUP_DELETE', 'mfg_item_groups', id, null, null),
@@ -741,7 +779,7 @@ const JOB_LIST: ListOptions = {
   defaultSort: 'date', defaultDir: 'desc', tieBreaker: 'id',
 };
 const JOB_SELECT = `
-  SELECT j.id, j.job_number, j.title, j.notes, j.status, j.created_by, j.created_at, j.updated_at, j.total::float AS total, u.full_name AS created_by_name,
+  SELECT j.id, j.job_number, j.title, j.notes, j.status, j.created_by, j.branch_id, j.created_at, j.updated_at, j.total::float AS total, u.full_name AS created_by_name,
          (SELECT COUNT(*)::int FROM mfg_job_items i WHERE i.job_id = j.id) AS item_count,
          (SELECT string_agg(DISTINCT i.group_name, ', ') FROM mfg_job_items i WHERE i.job_id = j.id) AS groups
   FROM mfg_jobs j LEFT JOIN users u ON u.id = j.created_by`;
@@ -751,6 +789,10 @@ manufacturing.get('/jobs', async (c) => {
   const q = (k: string) => (c.req.query(k) || '').trim();
   const where: string[] = [];
   const params: unknown[] = [];
+  // A branch sees its own manufactures only; the company view sees all (or one branch it picks).
+  const jobLoc = await resolveLoc(c);
+  if (jobLoc.kind === 'BRANCH') where.push(`branch_id = '${jobLoc.branchId}'`);
+  else if (jobLoc.kind === 'WAREHOUSE') where.push('FALSE');
   if (q('q')) {
     const t = likeTerm(q('q'));
     where.push(`(job_number ILIKE ? OR title ILIKE ? OR COALESCE(groups, '') ILIKE ? OR EXISTS (SELECT 1 FROM mfg_job_items i WHERE i.job_id = x.id AND i.name ILIKE ?))`);
@@ -782,7 +824,7 @@ manufacturing.get('/jobs', async (c) => {
 
 manufacturing.get('/jobs/:id', async (c) => {
   const db = c.env.DB;
-  const job = await db.prepare(`${JOB_SELECT} WHERE j.id = ?`).bind(c.req.param('id')).first();
+  const job = await db.prepare(`${JOB_SELECT} WHERE j.id = ? ${locSql(await resolveLoc(c), { branch: 'j.branch_id' })}`).bind(c.req.param('id')).first();
   if (!job) return c.json({ error: 'Manufacture not found' }, 404);
   const { results } = await db.prepare('SELECT id, name, price::float AS price, group_name, sort_order FROM mfg_job_items WHERE job_id = ? ORDER BY sort_order').bind(c.req.param('id')).all();
   return c.json({ ...job, items: results || [] });
@@ -800,7 +842,7 @@ async function saveJob(c: any, id: string | null) {
   const jid = id ?? uuidv4();
   const stmts: any[] = [];
   if (id) {
-    const cur = await db.prepare('SELECT status FROM mfg_jobs WHERE id = ?').bind(id).first() as any;
+    const cur = await db.prepare(`SELECT j.status FROM mfg_jobs j WHERE j.id = ? ${locSql(await resolveLoc(c), { branch: 'j.branch_id' })}`).bind(id).first() as any;
     if (!cur) return c.json({ error: 'Manufacture not found' }, 404);
     if (cur.status !== 'OPEN') return c.json({ error: `A ${cur.status.toLowerCase()} manufacture cannot be edited` }, 400);
     stmts.push(db.prepare(`UPDATE mfg_jobs SET title = ?, notes = ?, total = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'OPEN'`).bind(title, notes, total, id).mustAffect('This manufacture changed; reopen it'));
@@ -808,7 +850,8 @@ async function saveJob(c: any, id: string | null) {
   } else {
     const n = await db.prepare(`SELECT COALESCE(MAX(NULLIF(regexp_replace(job_number, '\\D', '', 'g'), '')::int), 0) + 1 AS n FROM mfg_jobs`).first() as any;
     const number = `MF-${String(n?.n ?? 1).padStart(5, '0')}`;
-    stmts.push(db.prepare('INSERT INTO mfg_jobs (id, job_number, title, notes, total, created_by) VALUES (?, ?, ?, ?, ?, ?)').bind(jid, number, title, notes, total, c.get('jwtPayload')?.sub ?? null));
+    const jobBranch = locBranch(await resolveLoc(c));
+    stmts.push(db.prepare('INSERT INTO mfg_jobs (id, job_number, title, notes, total, created_by, branch_id) VALUES (?, ?, ?, ?, ?, ?, ?)').bind(jid, number, title, notes, total, c.get('jwtPayload')?.sub ?? null, jobBranch));
   }
   items.forEach((it, i) => stmts.push(db.prepare('INSERT INTO mfg_job_items (id, job_id, name, price, group_name, sort_order) VALUES (?, ?, ?, ?, ?, ?)').bind(uuidv4(), jid, it.name, it.price, it.group_name ?? null, i)));
   stmts.push(createAuditLogStmt(c, id ? 'MFG_JOB_UPDATE' : 'MFG_JOB_CREATE', 'mfg_jobs', jid, null, { title, total, items: items.length }));
@@ -824,6 +867,7 @@ manufacturing.post('/jobs/:id/status', requirePermissions(['manage_inventory']),
   const { status } = await c.req.json().catch(() => ({}));
   if (!['OPEN', 'DONE', 'CANCELLED'].includes(status)) return c.json({ error: 'Status must be OPEN, DONE or CANCELLED' }, 400);
   const db = c.env.DB;
+  if (!(await db.prepare(`SELECT j.id FROM mfg_jobs j WHERE j.id = ? ${locSql(await resolveLoc(c), { branch: 'j.branch_id' })}`).bind(id).first())) return c.json({ error: 'Manufacture not found' }, 404);
   await db.batch([
     db.prepare('UPDATE mfg_jobs SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').bind(status, id).mustAffect('Manufacture not found'),
     createAuditLogStmt(c, 'MFG_JOB_STATUS', 'mfg_jobs', id, null, { status }),
@@ -833,6 +877,7 @@ manufacturing.post('/jobs/:id/status', requirePermissions(['manage_inventory']),
 manufacturing.delete('/jobs/:id', requirePermissions(['manage_inventory']), async (c) => {
   const id = c.req.param('id');
   const db = c.env.DB;
+  if (!(await db.prepare(`SELECT j.id FROM mfg_jobs j WHERE j.id = ? ${locSql(await resolveLoc(c), { branch: 'j.branch_id' })}`).bind(id).first())) return c.json({ error: 'Manufacture not found' }, 404);
   await db.batch([
     db.prepare('DELETE FROM mfg_jobs WHERE id = ?').bind(id).mustAffect('Manufacture not found'),
     createAuditLogStmt(c, 'MFG_JOB_DELETE', 'mfg_jobs', id, null, null),

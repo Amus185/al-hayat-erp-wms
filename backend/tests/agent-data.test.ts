@@ -76,7 +76,7 @@ test('accounting: figures come from the accounting routes, filtered as asked', a
 });
 
 test('permissions: a user without view_reports cannot read accounting, and is told so', async () => {
-  const user = await t.createUser({ branchId: HQ, roleId: 'role-warehouse-manager', role: 'warehouse_manager' });
+  const user = await t.createUser({ branchId: HQ, roleId: 'role-warehouse-manager', role: 'warehouse_manager', grants: ['assistant.use'] });
   const token = await agentToken(user.token);
   for (const source of ['income_statement', 'balance_sheet', 'expenses_summary', 'inventory_valuation', 'assets_dashboard']) {
     const res = await getData(token, source);
@@ -86,11 +86,11 @@ test('permissions: a user without view_reports cannot read accounting, and is to
 });
 
 test('branch scope: a branch user sees only their branch, exactly as on screen; other branches are refused', async () => {
-  const accountant = await t.createUser({ branchId: CL, roleId: 'role-accountant', role: 'accountant' });
+  const accountant = await t.createUser({ branchId: null, roleId: 'role-accountant', role: 'accountant', grants: ['assistant.use'] });
   const branchOnly = randomUUID().slice(0, 6);
   await t.q(`INSERT INTO roles (id, code, name) VALUES ($1, $1, 'Reports')`, [`role-rep-${branchOnly}`]);
   await t.q(`INSERT INTO role_permissions (role_id, permission_id) VALUES ($1, '66666666-6666-6666-6666-666666666666'), ($1, '55555555-5555-5555-5555-555555555555')`, [`role-rep-${branchOnly}`]);
-  const user = await t.createUser({ branchId: HQ, roleId: `role-rep-${branchOnly}`, role: `role-rep-${branchOnly}` });
+  const user = await t.createUser({ branchId: HQ, roleId: `role-rep-${branchOnly}`, role: `role-rep-${branchOnly}`, grants: ['assistant.use', 'accounting.view'] });
   const token = await agentToken(user.token);
 
   const viaAgent = await getData(token, 'income_statement');
@@ -125,7 +125,7 @@ test('inputs: unknown sources, unsafe ids and unknown filters are refused or dro
 test('costs: per-item cost is hidden from users who cannot see cost reports, shown to those who can', async () => {
   const pid = await t.createProduct({ cost: 123.45, price: 300 });
   await t.setStock(pid, 3, { branchId: HQ });
-  const user = await t.createUser({ branchId: HQ, roleId: 'role-warehouse-manager', role: 'warehouse_manager' });
+  const user = await t.createUser({ branchId: HQ, roleId: 'role-warehouse-manager', role: 'warehouse_manager', grants: ['assistant.use'] });
   const branchView = await getData(await agentToken(user.token), 'products');
   assert.equal(branchView.status, 200);
   assert.ok(!branchView.text.includes('123.45'), 'cost price reached a user without view_reports');
@@ -146,6 +146,7 @@ test('Confirm works when the user is signed in with the browser cookie', async (
   const email = `cookie-${randomUUID().slice(0, 8)}@test.local`;
   const created = await t.api('POST', '/users', { email, password: 'Cookie-pass-123', fullName: 'Cookie User', branchId: HQ, roleIds: ['role-branch-user'] });
   assert.equal(created.status, 201, JSON.stringify(created.body));
+  await t.q(`INSERT INTO user_permissions (user_id, permission_id) SELECT $1, id FROM permissions WHERE code = 'assistant.use'`, [created.body.id]);
   const origin = 'https://al-hayat-erp.pages.dev';
   const signIn = await raw('POST', '/api/auth/sign-in/email', null, { email, password: 'Cookie-pass-123' }, { Origin: origin });
   assert.equal(signIn.status, 200, signIn.text);
@@ -165,7 +166,7 @@ test('Confirm works when the user is signed in with the browser cookie', async (
 });
 
 test('the hourly message limit is a setting (AGENT_MESSAGES_PER_HOUR)', async () => {
-  const user = await t.createUser({ branchId: HQ, roleId: 'role-branch-user', role: 'branch_user' });
+  const user = await t.createUser({ branchId: HQ, roleId: 'role-branch-user', role: 'branch_user', grants: ['assistant.use', 'accounting.view'] });
   const saved = process.env.AGENT_MESSAGES_PER_HOUR;
   try {
     process.env.AGENT_MESSAGES_PER_HOUR = '2';

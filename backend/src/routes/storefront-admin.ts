@@ -586,6 +586,8 @@ admin.post('/requests/:id/convert', requirePermissions(['manage_sales']), async 
         .bind(customerId, req.customer_name, req.phone, req.email || null, [req.address, req.city].filter(Boolean).join(', ') || null).run();
       customer = { id: customerId };
     }
+    // One shared customer record; the web branch now deals with them too.
+    await db.prepare('INSERT INTO customer_branches (customer_id, branch_id) VALUES (?, ?) ON CONFLICT DO NOTHING').bind(customer.id, settings.locationId).run();
 
     const res = await sales.fetch(new Request('http://internal/orders', {
       method: 'POST',

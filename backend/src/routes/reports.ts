@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { Env } from '../db';
 import { authMiddleware, requirePermissions, isAdminUser } from '../middleware/auth';
-import { resolveBranchScope, ScopeError } from '../services/branch-scope';
+import { resolveBranchScope, resolveLoc, locSql, ScopeError } from '../services/branch-scope';
 import { hideUnless, PERM, COST_FIELDS, sortsFor } from '../services/privacy';
 
 // Financial (sales-based) reports use the strict branch scope: branch users
@@ -452,6 +452,8 @@ reports.get('/quote-conversion', async (c) => {
 reports.get('/supplier-performance', async (c) => {
   const days = getDaysParam(c);
   const daysModifier = `-${days} days`;
+  // Suppliers are shared; the orders, spend and delivery record are the caller's own location's.
+  const ps = locSql(await resolveLoc(c), { branch: 'po.branch_id', warehouse: 'po.warehouse_id' });
 
   const summaryRes = await c.env.DB.prepare(`
     SELECT 
@@ -463,7 +465,7 @@ reports.get('/supplier-performance', async (c) => {
     FROM purchase_orders po
     LEFT JOIN purchase_order_lines pol ON pol.purchase_order_id = po.id
     LEFT JOIN goods_receipts gr ON gr.purchase_order_id = po.id
-    WHERE po.created_at >= DATE('now', ?)
+    WHERE po.created_at >= DATE('now', ?) ${ps}
   `).bind(daysModifier).first();
 
   const { results: supplierSpend } = await c.env.DB.prepare(`
@@ -474,7 +476,7 @@ reports.get('/supplier-performance', async (c) => {
     FROM suppliers s
     JOIN purchase_orders po ON po.supplier_id = s.id
     LEFT JOIN purchase_order_lines pol ON pol.purchase_order_id = po.id
-    WHERE po.created_at >= DATE('now', ?)
+    WHERE po.created_at >= DATE('now', ?) ${ps}
     GROUP BY s.id, s.name
     ORDER BY total_spend DESC
   `).bind(daysModifier).all();
@@ -491,7 +493,7 @@ reports.get('/supplier-performance', async (c) => {
       SUM(CASE WHEN gr.id IS NOT NULL THEN 1 ELSE 0 END) AS received_pos,
       SUM(CASE WHEN gr.id IS NOT NULL AND po.expected_date IS NOT NULL AND DATE(gr.received_at) <= DATE(po.expected_date) THEN 1 ELSE 0 END) AS on_time_pos
     FROM suppliers s
-    LEFT JOIN purchase_orders po ON po.supplier_id = s.id AND po.created_at >= DATE('now', ?)
+    LEFT JOIN purchase_orders po ON po.supplier_id = s.id AND po.created_at >= DATE('now', ?) ${ps}
     LEFT JOIN purchase_order_lines pol ON pol.purchase_order_id = po.id
     LEFT JOIN goods_receipts gr ON gr.purchase_order_id = po.id
     GROUP BY s.id, s.name, s.contact_name, s.contact_person, s.phone, s.email
@@ -524,7 +526,8 @@ reports.get('/supplier-performance', async (c) => {
 });
 
 // 7. Receivables / Cash Flow Aging
-reports.get('/receivables', async (c) => {
+// Receivables & cash flow is a Finance report: it needs accounting access (Owner and accountants by default).
+reports.get('/receivables', requirePermissions(['accounting.view']), async (c) => {
   const payload = c.get('jwtPayload');
   const scopedBranchId = await salesReportBranch(c);
 

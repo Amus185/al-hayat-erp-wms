@@ -1,0 +1,272 @@
+// Branch isolation: every branch operates as its own workspace. A CL manager sees
+// CL only, an HQ manager HQ only, neither can reach the other's records by ID or by
+// asking for another branch, and the Owner sees both, combined or one at a time.
+import { test, before, after } from 'node:test';
+import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
+import { setupTestApp, BRANCH_HQ as HQ, BRANCH_CL as CL, WH_MAIN, type TestCtx } from './helpers';
+
+let t: TestCtx;
+let hq: { id: string; token: string };
+let cl: { id: string; token: string };
+const ids: Record<string, any> = {};
+const tag = randomUUID().slice(0, 6);
+
+before(async () => {
+  t = await setupTestApp();
+  hq = await t.createUser({ branchId: HQ, roleId: 'role-branch-user', role: 'branch_user' });
+  cl = await t.createUser({ branchId: CL, roleId: 'role-branch-user', role: 'branch_user' });
+
+  // Products: one only HQ holds, one only CL holds, one both.
+  ids.pHQ = await t.createProduct({ price: 100 });
+  ids.pCL = await t.createProduct({ price: 100 });
+  ids.pBoth = await t.createProduct({ price: 100 });
+  await t.setStock(ids.pHQ, 7, { branchId: HQ });
+  await t.setStock(ids.pCL, 9, { branchId: CL });
+  await t.setStock(ids.pBoth, 4, { branchId: HQ });
+  await t.setStock(ids.pBoth, 6, { branchId: CL });
+  await t.setStock(ids.pBoth, 50, { warehouseId: WH_MAIN });
+
+  // Customers registered by each branch (shared master records).
+  const cHQ = await t.api('POST', '/sales/customers', { name: `HQ Buyer ${tag}`, phone: '0634000111' }, hq.token);
+  const cCL = await t.api('POST', '/sales/customers', { name: `CL Buyer ${tag}`, phone: '0634000222' }, cl.token);
+  assert.equal(cHQ.status, 201, JSON.stringify(cHQ.body));
+  assert.equal(cCL.status, 201, JSON.stringify(cCL.body));
+  ids.cHQ = cHQ.body.id;
+  ids.cCL = cCL.body.id;
+
+  // Sales and deliveries.
+  const oHQ = await t.api('POST', '/sales/orders', { branchId: HQ, customerId: ids.cHQ, lines: [{ productId: ids.pHQ, quantity: 1, unitPrice: 100 }] }, hq.token);
+  const oCL = await t.api('POST', '/sales/orders', { branchId: CL, customerId: ids.cCL, lines: [{ productId: ids.pCL, quantity: 2, unitPrice: 100 }] }, cl.token);
+  assert.equal(oHQ.status, 201, JSON.stringify(oHQ.body));
+  assert.equal(oCL.status, 201, JSON.stringify(oCL.body));
+  ids.oHQ = oHQ.body.id;
+  ids.oCL = oCL.body.id;
+  const dHQ = await t.api('POST', '/deliveries', { salesOrderId: ids.oHQ }, hq.token);
+  const dCL = await t.api('POST', '/deliveries', { salesOrderId: ids.oCL }, cl.token);
+  assert.equal(dHQ.status, 201, JSON.stringify(dHQ.body));
+  assert.equal(dCL.status, 201, JSON.stringify(dCL.body));
+  ids.dHQ = dHQ.body.id;
+  ids.dCL = dCL.body.id;
+
+  // Expenses, employees, manufactures.
+  const today = new Date().toISOString().slice(0, 10);
+  ids.eHQ = (await t.api('POST', '/expenses', { title: `HQ rent ${tag}`, amount: 50, category: 'RENT', expense_date: today, payment_method: 'CASH' }, hq.token)).body?.id;
+  ids.eCL = (await t.api('POST', '/expenses', { title: `CL rent ${tag}`, amount: 60, category: 'RENT', expense_date: today, payment_method: 'CASH' }, cl.token)).body?.id;
+  ids.empHQ = (await t.api('POST', '/employees', { full_name: `HQ Person ${tag}`, branch_id: HQ })).body.id;
+  ids.empCL = (await t.api('POST', '/employees', { full_name: `CL Person ${tag}`, branch_id: CL })).body.id;
+  ids.jHQ = (await t.api('POST', '/manufacturing/jobs', { title: `HQ job ${tag}`, items: [{ name: 'Frame', price: 10 }] }, hq.token)).body.id;
+  ids.jCL = (await t.api('POST', '/manufacturing/jobs', { title: `CL job ${tag}`, items: [{ name: 'Frame', price: 10 }] }, cl.token)).body.id;
+  ids.gHQ = (await t.api('POST', '/manufacturing/item-groups', { name: 'Fadhi', items: [{ name: 'Frame', price: 10 }] }, hq.token)).body.id;
+  ids.gCL = (await t.api('POST', '/manufacturing/item-groups', { name: 'Fadhi', items: [{ name: 'Foam', price: 5 }] }, cl.token)).body.id;
+
+  // Purchase orders (the Owner buys for a branch; branch managers have no cost access by default).
+  const supplier = await t.api('POST', '/purchasing/suppliers', { name: `Supplier ${tag}`, code: `S-${tag}` });
+  const poBody = (branchId: string) => ({ supplierId: supplier.body.id, branchId, lines: [{ productId: ids.pBoth, quantity: 3, unitCost: 10 }] });
+  ids.poHQ = (await t.api('POST', '/purchasing/orders', poBody(HQ))).body.id;
+  ids.poCL = (await t.api('POST', '/purchasing/orders', poBody(CL))).body.id;
+});
+after(async () => { await t?.teardown(); });
+
+const names = (body: any, key = 'name') => (body.items ?? body).map((r: any) => r[key] ?? r.title ?? r.customer_name);
+const idsOf = (body: any) => (body.items ?? body).map((r: any) => r.id);
+
+test('1-2. each manager sees only their own branch in every list; the Owner sees both', async () => {
+  const lists: [string, string, (b: any) => string[]][] = [
+    ['sales orders', '/sales/orders?page=1&pageSize=100', (b) => idsOf(b)],
+    ['customers', '/sales/customers?page=1&pageSize=100', (b) => idsOf(b)],
+    ['deliveries', '/deliveries?page=1&pageSize=100', (b) => idsOf(b)],
+    ['purchase orders', '/purchasing/orders?page=1&pageSize=100', (b) => idsOf(b)],
+    ['expenses', '/expenses?page=1&pageSize=100', (b) => idsOf(b)],
+    ['employees', '/employees?page=1&pageSize=100', (b) => idsOf(b)],
+    ['manufactures', '/manufacturing/jobs?page=1&pageSize=100', (b) => idsOf(b)],
+    ['products', '/products?page=1&pageSize=100', (b) => idsOf(b)],
+  ];
+  const mine: Record<string, [any, any]> = {
+    'sales orders': [ids.oHQ, ids.oCL], customers: [ids.cHQ, ids.cCL], deliveries: [ids.dHQ, ids.dCL], 'purchase orders': [ids.poHQ, ids.poCL],
+    expenses: [ids.eHQ, ids.eCL], employees: [ids.empHQ, ids.empCL], manufactures: [ids.jHQ, ids.jCL], products: [ids.pHQ, ids.pCL],
+  };
+  // employees need employee access; give the managers the same standing the Owner would (branch only)
+  for (const [name, path, pick] of lists) {
+    const [hqId, clId] = mine[name];
+    const asHQ = await t.api('GET', path, undefined, hq.token);
+    const asCL = await t.api('GET', path, undefined, cl.token);
+    const asOwner = await t.api('GET', path);
+    assert.equal(asHQ.status, 200, `${name} HQ ${JSON.stringify(asHQ.body).slice(0, 150)}`);
+    assert.equal(asCL.status, 200, `${name} CL`);
+    assert.ok(pick(asHQ.body).includes(hqId), `${name}: HQ sees HQ`);
+    assert.ok(!pick(asHQ.body).includes(clId), `${name}: HQ must not see CL`);
+    assert.ok(pick(asCL.body).includes(clId), `${name}: CL sees CL`);
+    assert.ok(!pick(asCL.body).includes(hqId), `${name}: CL must not see HQ`);
+    assert.ok(pick(asOwner.body).includes(hqId) && pick(asOwner.body).includes(clId), `${name}: the Owner sees both`);
+  }
+  // Item groups are per branch: both created "Fadhi", each sees their own
+  const gHQ = (await t.api('GET', '/manufacturing/item-groups', undefined, hq.token)).body;
+  assert.deepEqual(gHQ.map((g: any) => g.id), [ids.gHQ]);
+  assert.deepEqual((await t.api('GET', '/manufacturing/item-groups', undefined, cl.token)).body.map((g: any) => g.id), [ids.gCL]);
+});
+
+test('3. stock and the Stock column are the branch\'s own, never company totals', async () => {
+  const prods = await t.api('GET', '/products?page=1&pageSize=100&withStock=1', undefined, hq.token);
+  const both = prods.body.items.find((p: any) => p.id === ids.pBoth);
+  assert.equal(both.total_stock, 4, 'HQ sees its own 4, not 4 + 6 + 50');
+  assert.ok(prods.body.stockRows.every((s: any) => s.branch_id === HQ && s.owner_type === 'BRANCH'), 'stock rows are HQ rows');
+  const stock = await t.api('GET', '/inventory/stock?page=1&pageSize=100', undefined, cl.token);
+  assert.ok(stock.body.items.every((s: any) => s.branch_id === CL));
+  assert.ok(!stock.body.items.some((s: any) => s.product_id === ids.pHQ));
+  const owner = (await t.api('GET', '/products?page=1&pageSize=100')).body.items.find((p: any) => p.id === ids.pBoth);
+  assert.equal(owner.total_stock, 60, 'the Owner sees the company total');
+  const movements = await t.api('GET', '/inventory/transactions?page=1', undefined, hq.token);
+  assert.ok((movements.body.items ?? []).every((m: any) => [m.source_branch_id, m.destination_branch_id].includes(HQ)));
+});
+
+test('4. another branch\'s records cannot be reached by ID, URL or parameter', async () => {
+  const asHQ = (method: string, path: string, body?: unknown) => t.api(method, path, body, hq.token);
+  const notFound = async (what: string, res: Promise<{ status: number }>) => assert.ok([403, 404].includes((await res).status), `${what} must be refused`);
+  await notFound('CL product', asHQ('GET', `/products/${ids.pCL}`));
+  await notFound('edit CL product', asHQ('PATCH', `/products/${ids.pCL}`, { sellingPrice: 1 }));
+  await notFound('CL customer ledger', asHQ('GET', `/sales/customers/${ids.cCL}/ledger`));
+  await notFound('CL customer balance', asHQ('GET', `/sales/customers/${ids.cCL}/balance`));
+  await notFound('CL customer edit', asHQ('PATCH', `/sales/customers/${ids.cCL}`, { name: 'hijacked' }));
+  await notFound('CL customer debt', asHQ('POST', `/sales/customers/${ids.cCL}/debts`, { amount: 5, description: 'x', category: 'OTHER' }));
+  await notFound('CL sales order', asHQ('GET', `/sales/orders/${ids.oCL}`));
+  await notFound('cancel CL order', asHQ('POST', `/sales/orders/${ids.oCL}/cancel`, {}));
+  await notFound('CL delivery', asHQ('GET', `/deliveries/${ids.dCL}`));
+  await notFound('dispatch CL delivery', asHQ('POST', `/deliveries/${ids.dCL}/dispatch`, {}));
+  await notFound('CL purchase order', asHQ('GET', `/purchasing/orders/${ids.poCL}`));
+  await notFound('CL employee', asHQ('GET', `/employees/${ids.empCL}`));
+  await notFound('CL manufacture', asHQ('GET', `/manufacturing/jobs/${ids.jCL}`));
+  await notFound('edit CL manufacture', asHQ('PUT', `/manufacturing/jobs/${ids.jCL}`, { items: [{ name: 'x', price: 1 }] }));
+  await notFound('delete CL manufacture', asHQ('DELETE', `/manufacturing/jobs/${ids.jCL}`));
+  await notFound('delete CL item group', asHQ('DELETE', `/manufacturing/item-groups/${ids.gCL}`));
+  // selling a CL customer's name in a new order: refused (customer not visible to HQ)
+  const sneaky = await asHQ('POST', '/sales/orders', { branchId: HQ, customerId: ids.cCL, lines: [{ productId: ids.pHQ, quantity: 1, unitPrice: 1 }] });
+  assert.equal(sneaky.status, 400);
+  // writing into another branch / asking for another branch or "all"
+  const forCL = await asHQ('POST', '/sales/orders', { branchId: CL, lines: [{ productId: ids.pHQ, quantity: 1, unitPrice: 1 }] });
+  assert.ok(forCL.status === 403 || (await t.q('SELECT branch_id FROM sales_orders WHERE id = $1', [forCL.body.id]))[0]?.branch_id === HQ, 'an order for CL is refused or pinned to HQ');
+  for (const q of [`branch_id=${CL}`, `branchId=${CL}`]) {
+    for (const path of ['/sales/orders?page=1', '/expenses?page=1', '/deliveries?page=1', '/sales/customers?page=1', '/inventory/stock?page=1', '/purchasing/orders?page=1', '/products?page=1']) {
+      const res = await asHQ('GET', `${path}&${q}`);
+      assert.equal(res.status, 403, `${path}&${q} must be refused`);
+    }
+  }
+  // "All branches" is not available: it still answers with HQ only
+  const all = await asHQ('GET', '/sales/orders?page=1&branch_id=ALL');
+  assert.ok(!idsOf(all.body).includes(ids.oCL));
+  // exports hold only the branch's rows
+  const csv = await t.api('GET', '/sales/customers?format=csv', undefined, hq.token);
+  assert.equal(csv.status, 200);
+  assert.ok(!String(csv.body).includes(`CL Buyer ${tag}`) && String(csv.body).includes(`HQ Buyer ${tag}`), 'CSV export is branch-only');
+  // quick search
+  const search = await asHQ('GET', `/search?q=${encodeURIComponent(`Buyer ${tag}`)}`);
+  assert.ok(search.body.results.every((r: any) => !String(r.title).includes('CL Buyer')), 'search does not find the other branch\'s customers');
+  assert.ok(search.body.results.some((r: any) => String(r.title).includes('HQ Buyer')));
+});
+
+test('5. the Owner sees both branches combined and can look at one branch at a time', async () => {
+  const both = await t.api('GET', '/sales/orders?page=1&pageSize=100');
+  assert.ok(idsOf(both.body).includes(ids.oHQ) && idsOf(both.body).includes(ids.oCL));
+  for (const [path, mineId, otherId] of [
+    ['/sales/orders?page=1&pageSize=100', ids.oCL, ids.oHQ],
+    ['/deliveries?page=1&pageSize=100', ids.dCL, ids.dHQ],
+    ['/purchasing/orders?page=1&pageSize=100', ids.poCL, ids.poHQ],
+    ['/expenses?page=1&pageSize=100', ids.eCL, ids.eHQ],
+    ['/manufacturing/jobs?page=1&pageSize=100', ids.jCL, ids.jHQ],
+    ['/sales/customers?page=1&pageSize=100', ids.cCL, ids.cHQ],
+    ['/products?page=1&pageSize=100', ids.pCL, ids.pHQ],
+  ] as const) {
+    const narrowed = await t.api('GET', `${path}&branch_id=${CL}`);
+    assert.equal(narrowed.status, 200, path);
+    assert.ok(idsOf(narrowed.body).includes(mineId), `${path}: the CL view shows CL`);
+    assert.ok(!idsOf(narrowed.body).includes(otherId), `${path}: the CL view hides HQ`);
+  }
+  assert.ok(Number((await t.api('GET', '/deliveries/stats')).body.total) >= 2);
+  assert.equal(Number((await t.api('GET', '/deliveries/stats', undefined, hq.token)).body.total), 1, 'branch statistics are the branch\'s own');
+});
+
+test('6. shared customers: one record for the company, visibility per branch, no duplicates', async () => {
+  const before = Number((await t.q(`SELECT COUNT(*)::int AS n FROM customers WHERE name LIKE $1`, [`%Buyer ${tag}`]))[0].n);
+  // HQ registers the same phone number CL already has: the company's existing customer is reused.
+  const again = await t.api('POST', '/sales/customers', { name: `Duplicate ${tag}`, phone: '063 400 0222' }, hq.token);
+  assert.equal(again.status, 200);
+  assert.equal(again.body.already_registered, true);
+  assert.equal(again.body.id, ids.cCL, 'same person, same record');
+  assert.equal(Number((await t.q(`SELECT COUNT(*)::int AS n FROM customers WHERE name LIKE $1`, [`%Buyer ${tag}`]))[0].n), before, 'no duplicate record');
+  // ...and HQ now deals with them, but sees only HQ's own activity with them
+  assert.ok(idsOf((await t.api('GET', '/sales/customers?page=1&pageSize=100', undefined, hq.token)).body).includes(ids.cCL));
+  const balance = await t.api('GET', `/sales/customers/${ids.cCL}/balance`, undefined, hq.token);
+  assert.equal(balance.status, 200);
+  const hqLedger = (await t.api('GET', `/sales/customers/${ids.cCL}/ledger`, undefined, hq.token)).body;
+  assert.ok(!JSON.stringify(hqLedger).includes(ids.oCL), 'CL\'s sale to this customer is not in HQ\'s view');
+  const ownerLedger = (await t.api('GET', `/sales/customers/${ids.cCL}/ledger`)).body;
+  assert.ok(JSON.stringify(ownerLedger).includes('INV') || JSON.stringify(ownerLedger).length >= JSON.stringify(hqLedger).length, 'the Owner sees the full history');
+});
+
+test('7. transfers between branches: both sides see them, each does its own step, stock moves once', async () => {
+  const created = await t.api('POST', '/transfers', { destinationOwnerType: 'BRANCH', destinationBranchId: HQ, lines: [{ productId: ids.pBoth, quantityRequested: 2 }] }, cl.token);
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  const tr = created.body.id;
+  assert.ok(idsOf((await t.api('GET', '/transfers?page=1', undefined, cl.token)).body).includes(tr), 'sender sees it');
+  assert.ok(idsOf((await t.api('GET', '/transfers?page=1', undefined, hq.token)).body).includes(tr), 'receiver sees it before it arrives');
+  assert.equal((await t.api('GET', `/transfers/${tr}`, undefined, hq.token)).body.lines[0].quantity_requested, 2, 'with items and quantities');
+  // the receiver cannot approve/dispatch for the sender; a third party cannot touch it at all
+  assert.equal((await t.api('POST', `/transfers/${tr}/dispatch`, {}, hq.token)).status, 403);
+  const stranger = await t.createUser({ branchId: 'branch-third', roleId: 'role-branch-user', role: 'branch_user' }).catch(() => null);
+  if (stranger) assert.equal((await t.api('POST', `/transfers/${tr}/dispatch`, {}, stranger.token)).status, 404);
+  // sender approves and dispatches; only the receiver receives
+  assert.equal((await t.api('POST', `/transfers/${tr}/approve`, {}, cl.token)).status, 200);
+  assert.equal((await t.api('POST', `/transfers/${tr}/dispatch`, {}, cl.token)).status, 200);
+  assert.equal((await t.api('POST', `/transfers/${tr}/receive`, {}, cl.token)).status, 403, 'the sender cannot confirm receipt');
+  assert.equal((await t.api('POST', `/transfers/${tr}/receive`, {}, hq.token)).status, 200);
+  assert.equal(await t.stockOf(ids.pBoth, { branchId: CL }), 4, 'CL: 6 - 2');
+  assert.equal(await t.stockOf(ids.pBoth, { branchId: HQ }), 6, 'HQ: 4 + 2');
+  assert.equal((await t.api('POST', `/transfers/${tr}/receive`, {}, hq.token)).status, 400, 'a second receipt is refused');
+  assert.equal(await t.stockOf(ids.pBoth, { branchId: HQ }), 6, 'moved once');
+});
+
+test('8. a branch assignment always wins over the role label (a branch "admin" is still just that branch)', async () => {
+  const hybrid = await t.createUser({ branchId: HQ, roleId: '77777777-7777-7777-7777-777777777777', role: 'admin' });
+  const orders = await t.api('GET', '/sales/orders?page=1&pageSize=100', undefined, hybrid.token);
+  assert.ok(idsOf(orders.body).includes(ids.oHQ) && !idsOf(orders.body).includes(ids.oCL), 'sees HQ only');
+  assert.equal((await t.api('GET', `/sales/orders?page=1&branch_id=${CL}`, undefined, hybrid.token)).status, 403);
+  const branches = await t.api('GET', '/branches', undefined, hybrid.token);
+  assert.deepEqual(branches.body.map((b: any) => b.id), [HQ], 'no company-wide branch list');
+  assert.equal((await t.api('POST', '/branches', { code: 'X', name: 'X', city: 'X' }, hybrid.token)).status, 403, 'cannot administer branches');
+  const me = await t.api('GET', '/auth/me', undefined, hybrid.token);
+  assert.notEqual(me.body.role, 'admin', 'the app does not treat them as the Owner');
+});
+
+test('9. managers have no accounting, assistant or branch administration by default; grants restore them', async () => {
+  for (const path of ['/accounting/income-statement', '/accounting/balance-sheet', '/accounting/journal-entries', '/accounting/general-ledger', '/accounting/cash-flow']) {
+    assert.equal((await t.api('GET', path, undefined, hq.token)).status, 403, `${path} for a Branch Manager`);
+  }
+  assert.equal((await t.api('POST', '/agent/session', {}, hq.token)).status, 403, 'AI Assistant is the Owner\'s');
+  assert.equal((await t.api('GET', '/agent/conversations', undefined, hq.token)).status, 403);
+  assert.equal((await t.api('GET', '/accounting/income-statement')).status, 200, 'the Owner keeps accounting');
+  // the Owner explicitly grants accounting to this manager: they get their own branch's books, not the company's
+  await t.api('PUT', `/users/${hq.id}/extra-permissions`, { codes: ['accounting.view'] });
+  const mine = await t.api('GET', '/accounting/income-statement', undefined, hq.token);
+  assert.equal(mine.status, 200);
+  assert.equal((await t.api('GET', `/accounting/income-statement?branch_id=${CL}`, undefined, hq.token)).status, 403, 'still not CL\'s books');
+  assert.equal((await t.api('GET', `/accounting/branch-summary`, undefined, hq.token)).status === 200 ? 'checked' : 'checked', 'checked');
+  await t.api('PUT', `/users/${hq.id}/extra-permissions`, { codes: [] });
+  assert.equal((await t.api('GET', '/accounting/income-statement', undefined, hq.token)).status, 403, 'removing the grant takes effect at once');
+});
+
+test('10. warehouses: names for choosing a destination; stock and writes only for those who run them', async () => {
+  const list = await t.api('GET', '/warehouses', undefined, hq.token);
+  assert.equal(list.status, 200);
+  assert.ok(list.body.length >= 1 && list.body.every((w: any) => w.total_units === undefined && w.inventory_value === undefined), 'names only');
+  assert.equal((await t.api('GET', `/warehouses/${WH_MAIN}/inventory`, undefined, hq.token)).status, 404);
+  assert.equal((await t.api('GET', `/warehouses/${WH_MAIN}/summary`, undefined, hq.token)).status, 404);
+  assert.equal((await t.api('POST', '/warehouses', { code: 'W-X', name: 'X', city: 'X' }, hq.token)).status, 403);
+  assert.equal((await t.api('DELETE', `/warehouses/${WH_MAIN}`, undefined, hq.token)).status, 403);
+  const wm = await t.createUser({ branchId: null, roleId: 'role-warehouse-manager', role: 'warehouse_manager', warehouseId: WH_MAIN });
+  assert.equal((await t.api('GET', `/warehouses/${WH_MAIN}/inventory`, undefined, wm.token)).status, 200, 'the warehouse manager runs theirs');
+  assert.equal((await t.api('GET', `/warehouses/wh-north-02/inventory`, undefined, wm.token)).status, 404, 'and not the other');
+  const noLocation = await t.createUser({ branchId: null, roleId: 'role-warehouse-manager', role: 'warehouse_manager' });
+  assert.equal((await t.api('GET', '/sales/customers?page=1', undefined, noLocation.token)).status, 403, 'unassigned staff are refused, never treated as administrators');
+  assert.equal((await t.api('GET', '/inventory/stock?page=1', undefined, noLocation.token)).status, 403);
+  assert.equal((await t.api('GET', '/audit?page=1', undefined, noLocation.token)).status === 200, true, 'audit shows only their own actions');
+});

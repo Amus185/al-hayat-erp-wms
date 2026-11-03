@@ -57,7 +57,7 @@ test('tokens: switched off without a strong, separate secret', async () => {
 });
 
 test('tokens: signing out cuts the assistant off at once', async () => {
-  const user = await t.createUser({ branchId: HQ, roleId: 'role-branch-user', role: 'branch_user' });
+  const user = await t.createUser({ branchId: HQ, roleId: 'role-branch-user', role: 'branch_user', grants: ['assistant.use', 'accounting.view'] });
   const token = await agentToken(user.token);
   assert.equal((await tool(token, 'search_products', { query: '' })).status, 200);
   await t.q('DELETE FROM "session" WHERE "userId" = $1', [user.id]);
@@ -65,7 +65,7 @@ test('tokens: signing out cuts the assistant off at once', async () => {
 });
 
 test('rate limit: each message uses one token; 60 per user per hour', async () => {
-  const user = await t.createUser({ branchId: HQ, roleId: 'role-branch-user', role: 'branch_user' });
+  const user = await t.createUser({ branchId: HQ, roleId: 'role-branch-user', role: 'branch_user', grants: ['assistant.use', 'accounting.view'] });
   await t.q(`INSERT INTO agent_usage (id, user_id) SELECT gen_random_uuid()::text, $1 FROM generate_series(1, 60)`, [user.id]);
   assert.equal((await raw('POST', '/agent/session', user.token)).status, 429);
   await t.q(`UPDATE agent_usage SET created_at = CURRENT_TIMESTAMP - INTERVAL '2 hours' WHERE user_id = $1`, [user.id]);
@@ -84,7 +84,7 @@ test('tools: product search never exposes cost; stock is limited to the user\'s 
   assert.ok(!/123\.45|cost/i.test(found.text), 'cost price reached the assistant');
   assert.equal(found.body.products[0].unitsOnHand, 47);
 
-  const hqUser = await t.createUser({ branchId: HQ, roleId: 'role-branch-user', role: 'branch_user' });
+  const hqUser = await t.createUser({ branchId: HQ, roleId: 'role-branch-user', role: 'branch_user', grants: ['assistant.use', 'accounting.view'] });
   const scoped = await agentToken(hqUser.token);
   const stock = await tool(scoped, 'get_stock', { product: name });
   assert.equal(stock.status, 200, stock.text);
@@ -93,7 +93,7 @@ test('tools: product search never exposes cost; stock is limited to the user\'s 
 });
 
 test('tools: reports and orders follow the user\'s permissions', async () => {
-  const noReports = await t.createUser({ branchId: HQ, roleId: 'role-branch-user', role: 'branch_user' });
+  const noReports = await t.createUser({ branchId: HQ, roleId: 'role-branch-user', role: 'branch_user', grants: ['assistant.use', 'accounting.view'] });
   const perms = (await t.q(`SELECT p.code FROM role_permissions rp JOIN permissions p ON p.id = rp.permission_id WHERE rp.role_id = 'role-branch-user'`)).map((r: any) => r.code);
   const token = await agentToken(noReports.token);
   const summary = await tool(token, 'get_sales_summary', { period: 'week' });
@@ -127,7 +127,7 @@ test('changes: a proposal changes nothing; only the same user can confirm it, on
 
   // the Worker's token cannot confirm; another user cannot confirm
   assert.equal((await raw('POST', `/agent/actions/${id}/execute`, token)).status, 401);
-  const other = await t.createUser({ branchId: HQ, roleId: 'role-branch-user', role: 'branch_user' });
+  const other = await t.createUser({ branchId: HQ, roleId: 'role-branch-user', role: 'branch_user', grants: ['assistant.use', 'accounting.view'] });
   assert.equal((await raw('POST', `/agent/actions/${id}/execute`, other.token)).status, 409);
 
   const done = await t.api('POST', `/agent/actions/${id}/execute`);
@@ -156,7 +156,7 @@ test('changes: price changes, refusals, cancel and expiry', async () => {
   assert.match((await raw('POST', '/agent/proposals', token, { action: 'set_price', args: { product: name, price: -1 } })).body.error, /positive/);
 
   // a user without stock permission cannot even get a proposal
-  const accountant = await t.createUser({ branchId: null, roleId: 'role-accountant', role: 'accountant' });
+  const accountant = await t.createUser({ branchId: null, roleId: 'role-accountant', role: 'accountant', grants: ['assistant.use', 'accounting.view'] });
   const perms = (await t.q(`SELECT p.code FROM role_permissions rp JOIN permissions p ON p.id = rp.permission_id WHERE rp.role_id = 'role-accountant'`)).map((r: any) => r.code);
   if (!perms.includes('manage_inventory')) {
     const denied = await raw('POST', '/agent/proposals', await agentToken(accountant.token), { action: 'set_price', args: { product: name, price: 1 } });

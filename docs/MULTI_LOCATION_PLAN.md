@@ -284,3 +284,44 @@ No new ledger is needed. Warehouses get **valuation and movement** reports from 
 2. You approve: the Owner account, `user_permissions` (yes/no), and **Phase 1a: the four security fixes
    (S1–S4)**, which change behaviour but no data.
 3. Then Phase 1b (access model migrations), each step with its migration listed for approval.
+
+
+---
+
+## 11. Implemented: branch isolation (Owner request, Phase 1 core)
+
+**Cause found.** Branch limits existed only for sales, expenses and accounting. Deliveries, purchasing,
+manufacturing, warehouses, the Products and Customers lists, and the transfer actions (approve, dispatch,
+receive, cancel) had none, and a person's reach depended on their role label (any admin was company-wide, and a
+missing branch counted as "administrator"). So two branch managers could see each other's records.
+
+**Rule now (one resolver, `resolveLoc`, used by every module).**
+- Company-level = an admin or accountant with **no branch**. Only they can see all branches, and they may narrow
+  to one with `?branch_id=` (the Owner's branch switcher in the top bar).
+- Assigned to a branch = that branch only, always, whatever roles they hold. Asking for another branch is
+  refused (403). A branch-assigned "admin" is just that branch's manager.
+- Assigned to a warehouse only = that warehouse. Neither = refused (never "unrestricted").
+
+**Shared master records keep one identity.** Customers: one record per person (same phone number reuses it);
+`customer_branches` links a branch to customers it registers or deals with, plus anyone with sales, debts,
+payments or quotes there; balances, ledger and history are per branch. Products: `product_branches` plus stock,
+sales, transfers and purchases decide which products a branch deals in; the Stock column is the branch's own.
+
+**Migration (additive).** `deliveries.branch_id` (filled from the sales order), `mfg_jobs.branch_id`,
+`mfg_item_groups.branch_id` (groups can still be company-wide; the unique name rule is now per branch),
+`customer_branches`, `product_branches`, permissions `accounting.view` and `assistant.use`.
+
+**Modules scoped:** sales, customers, products, inventory, deliveries, purchasing (orders, receipts, invoices,
+supplier reports), manufacturing (Item Manufacture per branch; factory work orders are warehouse-level),
+transfers (visible to both sides; sender approves/dispatches/cancels, receiver confirms), expenses, employees,
+warehouses (names for choosing a destination; stock and writes only for the company view or that warehouse),
+search, exports, files, reports.
+
+**Navigation and finance.** Branch managers no longer get Branches, Assistant or Accounting; the Finance reports,
+inventory valuation and branch comparison are hidden for them; Accounting needs `accounting.view` and the
+assistant needs `assistant.use` (both enforced on the server). The Owner can give either to one person.
+
+**Known limits.** Goods received on a purchase order still land in a warehouse (receiving is company-level);
+the Online Store menu is still visible to branch managers (its server rules are unchanged); manufacture numbers
+(MF-00001...) are one company-wide sequence; customers and products that no branch deals with yet are visible to the
+Owner only until a branch sells, stocks or registers them.

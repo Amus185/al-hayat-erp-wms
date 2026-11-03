@@ -36,6 +36,7 @@ import { ActivityBar } from '../components/ActivityBar';
 import { IdleGuard } from '../components/IdleGuard';
 import { UpdateNotice } from '../components/UpdateNotice';
 import { QuickSearch } from '../components/QuickSearch';
+import { BranchSwitcher } from '../components/BranchSwitcher';
 
 const navItems = [
   { label: 'Dashboard', path: '/', icon: Home, permission: '' },
@@ -50,12 +51,12 @@ const navItems = [
   { label: 'Deliveries', path: '/deliveries', icon: Truck, permission: 'manage_sales' },
   { label: 'Customers', path: '/customers', icon: UserCheck, permission: 'manage_sales' },
   { label: 'Online Store', path: '/online-store', icon: Globe, permission: 'manage_sales|manage_inventory' },
-  // Shown once the assistant Worker is deployed (VITE_AGENT_URL); every user, the server checks permissions per question.
-  ...(AGENT_URL ? [{ label: 'Assistant', path: '/assistant', icon: Sparkles, permission: '' }] : []),
+  // Shown once the assistant Worker is deployed (VITE_AGENT_URL), and only to people holding assistant.use (the Owner by default); the server refuses everyone else.
+  ...(AGENT_URL ? [{ label: 'Assistant', path: '/assistant', icon: Sparkles, permission: 'assistant.use' }] : []),
   { label: 'Expenses', path: '/expenses', icon: Receipt, permission: 'manage_purchasing' },
   { label: 'Owner\'s Assets', path: '/assets', icon: Landmark, permission: '', adminOnly: true },
   { label: 'Reports', path: '/reports', icon: BarChart3, permission: 'view_reports' },
-  { label: 'Accounting', path: '/accounting', icon: BookOpen, permission: 'view_reports', adminOnly: true },
+  { label: 'Accounting', path: '/accounting', icon: BookOpen, permission: 'accounting.view' },
   { label: 'Audit Log', path: '/audit', icon: FileClock, permission: 'view_reports', adminOnly: true },
   { label: 'Employees', path: '/employees', icon: Contact, permission: 'manage_users|employees.manage|payroll.view' },
   { label: 'Users', path: '/users', icon: Users, permission: 'manage_users', adminOnly: true },
@@ -289,6 +290,7 @@ export function AppShell({ children }: AppShellProps) {
             </div>
           </div>
           <div className="topbar__actions">
+            <BranchSwitcher />
             <QuickSearch />
             <div className="notification-btn-wrapper" ref={popoverRef}>
               <button
