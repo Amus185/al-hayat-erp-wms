@@ -26,6 +26,8 @@ interface TransferLine {
 }
 
 interface Transfer {
+  is_source?: boolean;
+  is_dest?: boolean;
   id: string;
   transfer_number: string;
   status: string;
@@ -79,6 +81,7 @@ export function TransfersPage() {
   const [actionLoading, setActionLoading] = useState(false);
   const [rejectReason, setRejectReason] = useState('');
   const [isRejecting, setIsRejecting] = useState(false);
+  const [acceptQty, setAcceptQty] = useState<Record<string, string>>({});
 
   const loadData = async () => {
     try {
@@ -102,6 +105,7 @@ export function TransfersPage() {
     setSelectedTransfer(t);
     setIsRejecting(false);
     setRejectReason('');
+    setAcceptQty({});
     setModalLoading(true);
     try {
       const full = await apiGet<Transfer>(`/transfers/${t.id}`);
@@ -231,11 +235,31 @@ export function TransfersPage() {
     }
   };
 
+  const handleAccept = async (t: Transfer) => {
+    const lines = (t.lines || []).map((l) => ({
+      productId: l.product_id,
+      quantity: Number(acceptQty[l.product_id] ?? (l.quantity_requested ?? l.quantity ?? 0)),
+    }));
+    if (lines.some((l) => !Number.isInteger(l.quantity) || l.quantity < 0)) { addToast('error', 'Enter whole numbers for the quantities you accept.'); return; }
+    if (!lines.some((l) => l.quantity > 0)) { addToast('error', 'Enter a quantity to accept, or decline the transfer.'); return; }
+    try {
+      setActionLoading(true);
+      await apiPost(`/transfers/${t.id}/accept`, { lines });
+      addToast('success', 'Transfer accepted: the stock has moved to you');
+      loadData();
+      await refreshSelectedTransfer(t.id);
+    } catch (err: any) {
+      addToast('error', err?.message || 'Could not accept the transfer');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
   const handleReject = async (id: string) => {
     try {
       setActionLoading(true);
       await apiPost(`/transfers/${id}/reject`, { reason: rejectReason });
-      addToast('success', 'Transfer rejected');
+      addToast('success', 'Transfer declined: no stock was moved');
       loadData();
       if (selectedTransfer?.id === id) {
         await refreshSelectedTransfer(id);
@@ -492,7 +516,7 @@ export function TransfersPage() {
                       <th style={{ padding: '8px 12px', fontWeight: 600 }}>Product</th>
                       <th style={{ padding: '8px 12px', fontWeight: 600 }}>SKU / Barcode</th>
                       <th style={{ padding: '8px 12px', fontWeight: 600, textAlign: 'right' }}>Requested</th>
-                      <th style={{ padding: '8px 12px', fontWeight: 600, textAlign: 'right' }}>Dispatched</th>
+                      <th style={{ padding: '8px 12px', fontWeight: 600, textAlign: 'right' }}>Accepted / sent</th>
                       <th style={{ padding: '8px 12px', fontWeight: 600, textAlign: 'right' }}>Received</th>
                     </tr>
                   </thead>
@@ -503,7 +527,14 @@ export function TransfersPage() {
                           <td style={{ padding: '8px 12px', fontWeight: 600 }}>{l.product_name || 'Product'}</td>
                           <td style={{ padding: '8px 12px', color: '#64748b' }}>{l.product_sku || '—'} {l.product_barcode ? `(${l.product_barcode})` : ''}</td>
                           <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 700 }}>{l.quantity_requested ?? l.quantity ?? 0}</td>
-                          <td style={{ padding: '8px 12px', textAlign: 'right', color: '#0369a1' }}>{l.quantity_dispatched ?? '—'}</td>
+                          <td style={{ padding: '8px 12px', textAlign: 'right', color: '#0369a1' }}>
+                            {selectedTransfer.status === 'PENDING_APPROVAL' && selectedTransfer.is_dest && hasPermission('manage_transfers') ? (
+                              <input type="number" min={0} max={l.quantity_requested ?? l.quantity ?? 0} className="form-input" style={{ width: 80, textAlign: 'right' }}
+                                aria-label={`Accept quantity for ${l.product_name || 'product'}`}
+                                value={acceptQty[l.product_id] ?? String(l.quantity_requested ?? l.quantity ?? 0)}
+                                onChange={(e) => setAcceptQty((p) => ({ ...p, [l.product_id]: e.target.value }))} />
+                            ) : (l.quantity_dispatched ?? '—')}
+                          </td>
                           <td style={{ padding: '8px 12px', textAlign: 'right', color: '#15803d' }}>{l.quantity_received ?? '—'}</td>
                         </tr>
                       ))
@@ -566,7 +597,7 @@ export function TransfersPage() {
             {/* Rejection input box */}
             {isRejecting && (
               <div style={{ display: 'grid', gap: '8px', background: '#fff1f2', padding: '12px', borderRadius: '8px', border: '1px solid #fecdd3' }}>
-                <label style={{ fontSize: '12px', fontWeight: 700, color: '#9f1239' }}>Reason for Rejection:</label>
+                <label style={{ fontSize: '12px', fontWeight: 700, color: '#9f1239' }}>Reason for declining:</label>
                 <input
                   type="text"
                   className="form-input"
@@ -577,7 +608,7 @@ export function TransfersPage() {
                 <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
                   <button type="button" className="btn btn-secondary btn-sm" onClick={() => setIsRejecting(false)}>Cancel</button>
                   <button type="button" className="btn btn-danger btn-sm" onClick={() => handleReject(selectedTransfer.id)} disabled={actionLoading}>
-                    {actionLoading ? 'Rejecting...' : 'Confirm Rejection'}
+                    {actionLoading ? 'Declining...' : 'Confirm decline'}
                   </button>
                 </div>
               </div>
@@ -617,44 +648,23 @@ export function TransfersPage() {
                   Close
                 </button>
 
-                {/* Status PENDING_APPROVAL Actions */}
+                {/* Waiting for the receiver: accept (all or part) or decline; the sender can withdraw */}
                 {selectedTransfer.status === 'PENDING_APPROVAL' && hasPermission('manage_transfers') && !isRejecting && (
                   <>
-                    <button
-                      type="button"
-                      className="btn btn-danger btn-sm"
-                      onClick={() => setIsRejecting(true)}
-                      disabled={actionLoading}
-                    >
-                      Reject
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-secondary btn-sm"
-                      onClick={() => handleCancel(selectedTransfer.id)}
-                      disabled={actionLoading}
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-secondary"
-                      onClick={() => handleApprove(selectedTransfer.id, true)}
-                      disabled={actionLoading}
-                      title="Approve transfer"
-                    >
-                      Approve
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-primary"
-                      onClick={() => handleApproveAndDispatch(selectedTransfer.id, true)}
-                      disabled={actionLoading}
-                      style={{ background: '#0b8f08', borderColor: '#0b8f08' }}
-                      title="Approve and immediately dispatch goods"
-                    >
-                      {actionLoading ? 'Processing...' : 'Approve & Dispatch'}
-                    </button>
+                    {selectedTransfer.is_source && (
+                      <button type="button" className="btn btn-secondary btn-sm" onClick={() => handleCancel(selectedTransfer.id)} disabled={actionLoading}>
+                        Withdraw request
+                      </button>
+                    )}
+                    {selectedTransfer.is_dest && (
+                      <>
+                        <button type="button" className="btn btn-danger btn-sm" onClick={() => setIsRejecting(true)} disabled={actionLoading}>Decline</button>
+                        <button type="button" id="accept-transfer" className="btn btn-primary" onClick={() => handleAccept(selectedTransfer)} disabled={actionLoading}
+                          title="Stock moves now, for the quantities shown">
+                          {actionLoading ? 'Moving stock…' : 'Accept'}
+                        </button>
+                      </>
+                    )}
                   </>
                 )}
 

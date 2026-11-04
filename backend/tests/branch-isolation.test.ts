@@ -229,6 +229,32 @@ test('7. transfers between branches: both sides see them, each does its own step
   assert.equal(await t.stockOf(ids.pBoth, { branchId: HQ }), 6, 'moved once');
 });
 
+test('7b. one-step transfer: receiver accepts part, stock moves together; decline moves nothing', async () => {
+  const dests = await t.api('GET', '/transfers/destinations', undefined, cl.token);
+  assert.equal(dests.status, 200);
+  assert.ok(dests.body.some((b: any) => b.id === HQ) && !dests.body.some((b: any) => b.id === CL), 'other branches only');
+  const mk = async (qty: number) => (await t.api('POST', '/transfers', { destinationOwnerType: 'BRANCH', destinationBranchId: HQ, lines: [{ productId: ids.pBoth, quantityRequested: qty }] }, cl.token)).body.id;
+  const clBefore = await t.stockOf(ids.pBoth, { branchId: CL });
+  const hqBefore = await t.stockOf(ids.pBoth, { branchId: HQ });
+  const a = await mk(3);
+  assert.equal((await t.api('POST', `/transfers/${a}/accept`, {}, cl.token)).status, 403, 'the sender cannot accept');
+  assert.equal(await t.stockOf(ids.pBoth, { branchId: CL }), clBefore, 'nothing moved yet');
+  assert.equal((await t.api('POST', `/transfers/${a}/accept`, { lines: [{ productId: ids.pBoth, quantity: 9 }] }, hq.token)).status, 400, 'more than sent');
+  const ok = await t.api('POST', `/transfers/${a}/accept`, { lines: [{ productId: ids.pBoth, quantity: 2 }] }, hq.token);
+  assert.equal(ok.status, 200, JSON.stringify(ok.body));
+  assert.equal(ok.body.status, 'COMPLETED');
+  assert.equal(await t.stockOf(ids.pBoth, { branchId: CL }), clBefore - 2, 'only the accepted quantity left the sender');
+  assert.equal(await t.stockOf(ids.pBoth, { branchId: HQ }), hqBefore + 2);
+  assert.equal((await t.api('POST', `/transfers/${a}/accept`, {}, hq.token)).status, 400, 'no second accept');
+  assert.equal(await t.stockOf(ids.pBoth, { branchId: HQ }), hqBefore + 2, 'moved once');
+  const d = await mk(1);
+  assert.equal((await t.api('POST', `/transfers/${d}/reject`, { reason: 'Not needed' }, cl.token)).status, 403, 'only the receiver declines');
+  assert.equal((await t.api('POST', `/transfers/${d}/reject`, { reason: 'Not needed' }, hq.token)).status, 200);
+  assert.equal(await t.stockOf(ids.pBoth, { branchId: CL }), clBefore - 2, 'a declined transfer moves nothing');
+  const c2 = await mk(1);
+  assert.equal((await t.api('POST', `/transfers/${c2}/cancel`, {}, cl.token)).status, 200, 'sender withdraws a pending request');
+});
+
 test('8. a branch assignment always wins over the role label (a branch "admin" is still just that branch)', async () => {
   const hybrid = await t.createUser({ branchId: HQ, roleId: '77777777-7777-7777-7777-777777777777', role: 'admin' });
   const orders = await t.api('GET', '/sales/orders?page=1&pageSize=100', undefined, hybrid.token);

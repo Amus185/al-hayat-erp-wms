@@ -61,7 +61,8 @@ export function CreateTransferPage() {
     async function loadMetadata() {
       try {
         const whs = await apiGet<Warehouse[]>('/warehouses');
-        const brs = await apiGet<Branch[]>('/branches');
+        // A branch user cannot list every branch: the server gives the other branches to send to.
+        const brs = await apiGet<Branch[]>('/transfers/destinations').catch(() => apiGet<Branch[]>('/branches'));
 
         setWarehouses(whs || []);
         setBranches(brs || []);
@@ -175,7 +176,7 @@ export function CreateTransferPage() {
         addToast('error', `Transfer ${created.transfer_number || created.transferNumber || ''} was created but not dispatched: ${err?.message || 'unknown error'}. It is in the list as Pending approval; fix the problem and dispatch it from there instead of creating it again.`);
       }
     } else {
-      addToast('success', 'Transfer order created successfully');
+      addToast('success', 'Sent. The receiving location will accept or decline it; stock moves when they accept.');
     }
     navigate('/transfers');
   };
@@ -373,24 +374,13 @@ export function CreateTransferPage() {
           </button>
           <button
             type="button"
-            className="btn btn-secondary"
+            id="send-transfer"
+            className="btn btn-primary"
             onClick={(e) => handleSubmit(e, false)}
             disabled={lines.length === 0 || submitting}
+            title="The receiving location accepts it (all or part) and the stock moves in one step"
           >
-            Submit Transfer Request
-          </button>
-          <button
-            type="button"
-            className="btn btn-primary"
-            onClick={(e) => handleSubmit(e, true)}
-            disabled={lines.length === 0 || submitting}
-            style={{ display: 'flex', alignItems: 'center', gap: '6px', background: '#0b8f08', borderColor: '#0b8f08' }}
-          >
-            {submitting ? (
-              <><Loader2 size={14} className="spin-icon" /> Processing…</>
-            ) : (
-              <>Create & Dispatch</>
-            )}
+            {submitting ? <><Loader2 size={14} className="spin-icon" /> Sending…</> : <>Send to receiver</>}
           </button>
         </div>
       </form>

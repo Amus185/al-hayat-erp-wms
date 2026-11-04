@@ -163,6 +163,16 @@ transfers.get('/', async (c) => {
   return c.json(results);
 });
 
+/** Other branches a branch can send stock to (a branch user may not list all branches). */
+transfers.get('/destinations', async (c) => {
+  const loc = await resolveLoc(c);
+  const own = loc.kind === 'BRANCH' ? loc.branchId : null;
+  const { results } = await c.env.DB.prepare(
+    'SELECT id, code, name FROM branches WHERE is_active = 1 AND id IS DISTINCT FROM ? ORDER BY name',
+  ).bind(own).all();
+  return c.json(results || []);
+});
+
 transfers.get('/:id', async (c) => {
   const id = c.req.param('id');
   const readLoc = await resolveLoc(c);
@@ -193,6 +203,7 @@ transfers.get('/:id', async (c) => {
   
   if (!sidesOf(readLoc, transfer).involved) return c.json({ message: 'Transfer not found' }, 404);
 
+  const side = sidesOf(readLoc, transfer);
   const { results: lines } = await c.env.DB.prepare(`
     SELECT tl.*, p.name as product_name, p.sku as product_sku, p.barcode as product_barcode
     FROM transfer_lines tl
@@ -200,7 +211,7 @@ transfers.get('/:id', async (c) => {
     WHERE tl.transfer_id = ?
   `).bind(id).all();
   
-  return c.json({ ...transfer, lines });
+  return c.json({ ...transfer, lines, is_source: side.isSource, is_dest: side.isDest });
 });
 
 // ──────────────────────────────────────────────────────────────────────
@@ -602,11 +613,125 @@ transfers.post('/:id/receive', requirePermissions(['manage_transfers']), async (
 });
 
 // ──────────────────────────────────────────────────────────────────────
-// POST /:id/reject  — PENDING_APPROVAL → REJECTED
+// POST /:id/accept — the receiving side accepts (all or part) in ONE step:
+// stock leaves the sender and arrives at the receiver together, in one
+// transaction. Body: { lines?: [{ productId, quantity }] } (omitted = everything).
+// ──────────────────────────────────────────────────────────────────────
+transfers.post('/:id/accept', requirePermissions(['manage_transfers']), async (c) => {
+  const id = c.req.param('id') as string;
+  const denied = await transferGuard(c, id, 'dest');
+  if (denied) return denied;
+  const userId = c.get('jwtPayload').sub;
+  const body = await c.req.json().catch(() => ({})) as any;
+
+  const transfer = await c.env.DB.prepare('SELECT * FROM transfers WHERE id = ?').bind(id).first() as any;
+  if (!transfer) return c.json({ message: 'Transfer not found.' }, 404);
+  if (transfer.status !== 'PENDING_APPROVAL') {
+    return c.json({ message: `This transfer can no longer be accepted: it is ${String(transfer.status).replace(/_/g, ' ').toLowerCase()}.` }, 400);
+  }
+  const { results: lines } = await c.env.DB.prepare('SELECT * FROM transfer_lines WHERE transfer_id = ?').bind(id).all();
+  if (!lines || lines.length === 0) return c.json({ message: 'Transfer has no line items.' }, 400);
+
+  // Quantity accepted per line: what the receiver typed, never more than was requested.
+  const wanted = new Map<string, number>();
+  if (Array.isArray(body.lines)) for (const l of body.lines) wanted.set(String(l.productId ?? l.product_id), Number(l.quantity));
+  const accepted: Array<{ line: any; qty: number }> = [];
+  for (const line of lines as any[]) {
+    const requested = Number(line.quantity_requested ?? line.quantity ?? 0);
+    const qty = wanted.size ? Number(wanted.get(line.product_id) ?? 0) : requested;
+    if (!Number.isInteger(qty) || qty < 0) return c.json({ message: 'Accepted quantities must be whole numbers, 0 or more.' }, 400);
+    if (qty > requested) return c.json({ message: `You can accept at most ${requested} of a line (that is what was sent).` }, 400);
+    accepted.push({ line, qty });
+  }
+  if (!accepted.some((a) => a.qty > 0)) return c.json({ message: 'Enter a quantity to accept, or decline the transfer instead.' }, 400);
+
+  const shortages: string[] = [];
+  for (const { line, qty } of accepted) {
+    if (qty <= 0) continue;
+    const src = await c.env.DB.prepare(`
+      SELECT s.quantity_on_hand, p.name FROM inventory_stock s JOIN products p ON p.id = s.product_id
+      WHERE s.product_id = ? AND s.owner_type = ? AND s.warehouse_id IS NOT DISTINCT FROM ? AND s.branch_id IS NOT DISTINCT FROM ?
+    `).bind(line.product_id, transfer.source_owner_type, transfer.source_warehouse_id || null, transfer.source_branch_id || null).first() as any;
+    const have = Number(src?.quantity_on_hand || 0);
+    if (have < qty) shortages.push(`${src?.name || 'An item'}: the sender only has ${have}`);
+  }
+  if (shortages.length) return c.json({ message: `The sender does not have enough stock. ${shortages.join('; ')}.`, details: shortages }, 400);
+
+  const dOwner = transfer.destination_owner_type || transfer.dest_owner_type;
+  const dWh = transfer.destination_warehouse_id || transfer.dest_warehouse_id || null;
+  const dBr = transfer.destination_branch_id || transfer.dest_branch_id || null;
+  const stmts: any[] = [
+    c.env.DB.prepare("UPDATE transfers SET status = 'COMPLETED' WHERE id = ? AND status = 'PENDING_APPROVAL'")
+      .bind(id).mustAffect('This transfer was just accepted, declined or cancelled. Please refresh.'),
+  ];
+  for (const { line, qty } of accepted) {
+    stmts.push(c.env.DB.prepare('UPDATE transfer_lines SET quantity_dispatched = ?, quantity_received = ? WHERE id = ?').bind(qty, qty, line.id));
+    if (qty <= 0) continue;
+    stmts.push(c.env.DB.prepare(`
+      UPDATE inventory_stock SET quantity_on_hand = quantity_on_hand - ?, updated_at = CURRENT_TIMESTAMP
+      WHERE product_id = ? AND owner_type = ? AND warehouse_id IS NOT DISTINCT FROM ? AND branch_id IS NOT DISTINCT FROM ? AND quantity_on_hand >= ?
+    `).bind(qty, line.product_id, transfer.source_owner_type, transfer.source_warehouse_id || null, transfer.source_branch_id || null, qty)
+      .mustAffect('The sender\'s stock changed while accepting. Please refresh and try again.'));
+    const dst = await c.env.DB.prepare(`
+      SELECT id FROM inventory_stock WHERE product_id = ? AND owner_type = ? AND warehouse_id IS NOT DISTINCT FROM ? AND branch_id IS NOT DISTINCT FROM ?
+    `).bind(line.product_id, dOwner, dWh, dBr).first() as any;
+    stmts.push(dst
+      ? c.env.DB.prepare('UPDATE inventory_stock SET quantity_on_hand = quantity_on_hand + ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').bind(qty, dst.id)
+      : c.env.DB.prepare('INSERT INTO inventory_stock (id, product_id, owner_type, warehouse_id, branch_id, quantity_on_hand) VALUES (?, ?, ?, ?, ?, ?)')
+          .bind(uuidv4(), line.product_id, dOwner, dWh, dBr, qty));
+    for (const [type, q] of [['TRANSFER_OUT', -qty], ['TRANSFER_IN', qty]] as const) {
+      stmts.push(c.env.DB.prepare(`
+        INSERT INTO inventory_transactions
+        (id, product_id, transaction_type, quantity,
+         source_owner_type, source_warehouse_id, source_branch_id,
+         destination_owner_type, destination_warehouse_id, destination_branch_id,
+         dest_owner_type, dest_warehouse_id, dest_branch_id, reference_type, reference_id, created_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'TRANSFER', ?, ?)
+      `).bind(uuidv4(), line.product_id, type, q,
+        transfer.source_owner_type, transfer.source_warehouse_id || null, transfer.source_branch_id || null,
+        dOwner, dWh, dBr, dOwner, dWh, dBr, id, userId));
+    }
+  }
+  const partial = accepted.some((a) => a.qty < Number(a.line.quantity_requested ?? a.line.quantity ?? 0));
+  stmts.push(c.env.DB.prepare(`
+    UPDATE transfers SET status = 'COMPLETED', approved_by = COALESCE(approved_by, ?), approved_at = COALESCE(approved_at, CURRENT_TIMESTAMP),
+      dispatched_by = ?, dispatched_at = CURRENT_TIMESTAMP, received_by = ?, received_at = CURRENT_TIMESTAMP WHERE id = ?
+  `).bind(userId, userId, userId, id));
+  stmts.push(createAuditLogStmt(c, 'TRANSFER_ACCEPT', 'transfers', id, { status: 'PENDING_APPROVAL' },
+    { status: 'COMPLETED', partial, lines: accepted.map((a) => ({ productId: a.line.product_id, quantity: a.qty })) }));
+
+  // Inter-branch books (same entries as a normal receipt, on the accepted quantities).
+  const fromBranch = transfer.source_owner_type === 'BRANCH' ? (transfer.source_branch_id || null) : null;
+  const toBranch = dOwner === 'BRANCH' ? dBr : null;
+  if (fromBranch !== toBranch) {
+    const value = await calculateLinesCogs(c.env.DB, accepted.filter((a) => a.qty > 0).map((a) => ({ product_id: a.line.product_id, quantity: a.qty })));
+    if (value > 0) {
+      const sides: Array<[string | null, string, string, string]> = [
+        [fromBranch, `${id}:out`, '1090', '1030'],
+        [toBranch, `${id}:in`, '1030', '1090'],
+      ];
+      for (const [branchId, ref, debit, credit] of sides) {
+        stmts.push(...(await prepareJournalEntryPosting(c, {
+          description: `Inter-branch stock transfer ${transfer.transfer_number}`,
+          referenceType: 'TRANSFER', referenceId: ref, branchId, userId,
+          lines: [
+            { accountCode: debit, debitAmount: value, creditAmount: 0 },
+            { accountCode: credit, debitAmount: 0, creditAmount: value },
+          ],
+        })).statements);
+      }
+    }
+  }
+  await c.env.DB.batch(stmts);
+  return c.json(await c.env.DB.prepare('SELECT * FROM transfers WHERE id = ?').bind(id).first());
+});
+
+// ──────────────────────────────────────────────────────────────────────
+// POST /:id/reject  — the receiving side declines: nothing moves
 // ──────────────────────────────────────────────────────────────────────
 transfers.post('/:id/reject', requirePermissions(['manage_transfers']), async (c) => {
   const id = c.req.param('id');
-  const denied = await transferGuard(c, id as string, 'source');
+  const denied = await transferGuard(c, id as string, 'dest');
   if (denied) return denied;
   const body = await c.req.json().catch(() => ({}));
   const userId = c.get('jwtPayload').sub;
@@ -621,6 +746,14 @@ transfers.post('/:id/reject', requirePermissions(['manage_transfers']), async (c
     return c.json({ message: 'Cannot reject: transfer is not pending approval.' }, 400);
   }
 
+  await c.env.DB.prepare(`
+    INSERT INTO notifications (id, user_id, title, message, type)
+    SELECT gen_random_uuid()::text, u.id, 'Transfer declined ' || t.transfer_number,
+           'The receiving location declined it' || CASE WHEN ?::text <> '' THEN ': ' || ?::text ELSE '.' END || ' No stock was moved.', 'TRANSFER'
+    FROM transfers t JOIN users u ON u.is_active = 1 AND u.id IS DISTINCT FROM ?::text
+      AND ((t.source_branch_id IS NOT NULL AND u.branch_id = t.source_branch_id) OR (t.source_warehouse_id IS NOT NULL AND u.warehouse_id = t.source_warehouse_id))
+    WHERE t.id = ?
+  `).bind(body.reason || '', body.reason || '', userId, id).run().catch(() => {});
   await logAudit(c, 'TRANSFER_REJECT', 'transfers', id, { status: 'PENDING_APPROVAL' }, { status: 'REJECTED', reason: body.reason });
   const result = await c.env.DB.prepare('SELECT * FROM transfers WHERE id = ?').bind(id).first();
   return c.json(result);
