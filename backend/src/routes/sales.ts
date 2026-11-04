@@ -1187,7 +1187,7 @@ sales.get('/orders/:id', async (c) => {
   const order = orders[0] as any;
 
   if (scopedBranchId && order.branch_id !== scopedBranchId) {
-    return c.json({ message: 'Access denied: order belongs to another branch.' }, 403);
+    return c.json({ message: "That order belongs to another branch, so you can't change it." }, 403);
   }
 
   const { results: lines } = await c.env.DB.prepare(`
@@ -1263,7 +1263,7 @@ async function assertOrderInScope(c: any, orderId: string | undefined) {
   const branchId = await scopedSalesBranch(c);
   if (!branchId) return;
   const order = await c.env.DB.prepare('SELECT branch_id FROM sales_orders WHERE id = ?').bind(orderId).first();
-  if (order && order.branch_id !== branchId) throw new ScopeError(403, 'Access denied: order belongs to another branch.');
+  if (order && order.branch_id !== branchId) throw new ScopeError(403, "That order belongs to another branch, so you can't change it.");
 }
 
 async function assertInvoiceInScope(c: any, invoiceId: string | undefined) {
@@ -1399,7 +1399,13 @@ sales.post('/orders', requirePermissions(['manage_sales']), async (c) => {
 
   // Branch isolation — branch users can only create orders for their own branch
   const writeScope = await resolveBranchScope(c, 'ALL');
-  if (writeScope.kind === 'BRANCH') body.branchId = writeScope.branchId;
+  if (writeScope.kind === 'BRANCH') {
+    // The branch comes from who is signed in. A different one is refused, not silently replaced.
+    if (body.branchId && body.branchId !== writeScope.branchId) {
+      return c.json({ message: 'This sale can only be recorded under the branch you work from. Please reload the page and try again.' }, 403);
+    }
+    body.branchId = writeScope.branchId;
+  }
 
   // Validate branch
   if (!body.branchId) return c.json({ message: 'Branch is required.' }, 400);
@@ -2518,7 +2524,7 @@ sales.post('/orders/:id/cancel', requirePermissions(['manage_sales']), async (c)
 
   return c.json({
     success: true,
-    message: 'Sales order cancelled, inventory restored to warehouse, and debt records reversed.',
+    message: 'Sales order cancelled. The stock was put back in the branch and the accounting was reversed.',
   });
 });
 
@@ -2536,14 +2542,14 @@ sales.delete('/orders/:id', requirePermissions(['manage_sales']), async (c) => {
   if (!order) return c.json({ message: 'Sales order not found' }, 404);
 
   if (scopedBranchId && (order as any).branch_id !== scopedBranchId) {
-    return c.json({ message: 'Access denied: order belongs to another branch.' }, 403);
+    return c.json({ message: "That order belongs to another branch, so you can't change it." }, 403);
   }
 
   // Invoiced orders carry posted revenue, stock issues and payments: deleting
   // them would silently erase financial history. They must be cancelled.
   const invoice = await c.env.DB.prepare('SELECT id FROM invoices WHERE sales_order_id = ?').bind(id).first();
   if (invoice) {
-    return c.json({ message: 'This order has an invoice and cannot be deleted. Cancel the order instead to reverse stock and accounting.' }, 400);
+    return c.json({ message: "This order already has an invoice, so it can't be deleted. Use Cancel instead: it puts the stock back, reverses the accounting and keeps a record of why." }, 400);
   }
 
   const stmts = [];

@@ -200,7 +200,7 @@ export const requirePermissions = (requiredPermissions: string[]) => {
 
     const hasAll = requiredPermissions.every(p => payload.permissions.includes(p));
     if (!hasAll) {
-      return c.json({ message: 'Forbidden' }, 403);
+      return c.json({ message: "You don't have permission to do this. If you need it, ask the Owner or your manager." }, 403);
     }
 
     await next();

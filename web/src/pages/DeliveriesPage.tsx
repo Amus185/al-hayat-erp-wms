@@ -49,6 +49,7 @@ interface Delivery {
   driver_name: string | null;
   driver_phone: string | null;
   vehicle_plate: string | null;
+  vehicle_id?: string | null;
   status: 'PENDING' | 'SCHEDULED' | 'DISPATCHED' | 'PARTIALLY_DELIVERED' | 'DELIVERED' | 'FAILED' | 'CANCELLED';
   scheduled_date: string | null;
   dispatched_at: string | null;
@@ -120,6 +121,8 @@ export function DeliveriesPage() {
   const [salesOrders, setSalesOrders] = useState<any[]>([]);
   const [customers, setCustomers] = useState<any[]>([]);
   const [branches, setBranches] = useState<any[]>([]);
+  // Company vehicles (registered under Employees > Company Vehicles) offered on deliveries.
+  const [vehicles, setVehicles] = useState<{ id: string; plate_number: string; make: string | null; model: string | null; driver_name: string | null; driver_phone: string | null }[]>([]);
   const [selectedOrderLines, setSelectedOrderLines] = useState<any[]>([]);
   const [showAddressOverride, setShowAddressOverride] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
@@ -134,7 +137,7 @@ export function DeliveriesPage() {
     branchName: string;
     driverName: string;
     driverPhone: string;
-    vehiclePlate: string;
+    vehicleId: string;
     scheduledDate: string;
     installationRequired: boolean;
     installerName: string;
@@ -151,7 +154,7 @@ export function DeliveriesPage() {
     branchName: '',
     driverName: '',
     driverPhone: '',
-    vehiclePlate: '',
+    vehicleId: '',
     scheduledDate: new Date().toISOString().split('T')[0],
     installationRequired: false,
     installerName: '',
@@ -162,7 +165,7 @@ export function DeliveriesPage() {
   const [submitting, setSubmitting] = useState(false);
 
   // Dispatch / Complete form states
-  const [dispatchForm, setDispatchForm] = useState({ driverName: '', vehiclePlate: '' });
+  const [dispatchForm, setDispatchForm] = useState({ driverName: '', vehicleId: '' });
   const [completeForm, setCompleteForm] = useState({ recipientName: '', notes: '' });
 
   // Split Delivery Runs state
@@ -204,6 +207,7 @@ export function DeliveriesPage() {
         // Orders and customers are searched on the server in the pickers (every one reachable).
         const branchesRes = await apiGet<any[]>('/branches');
         setBranches(branchesRes || []);
+        apiGet<any[]>('/vehicles', { status: 'ACTIVE' }).then((v) => setVehicles(v || [])).catch(() => setVehicles([]));
 
         // If URL has ?orderId=..., open create modal pre-filled
         const orderIdParam = searchParams.get('orderId');
@@ -244,7 +248,7 @@ export function DeliveriesPage() {
       branchName: order.branch_name || '',
       driverName: '',
       driverPhone: '',
-      vehiclePlate: '',
+      vehicleId: '',
       scheduledDate: new Date().toISOString().split('T')[0],
       installationRequired: Number(order.installation_fee || 0) > 0,
       installerName: order.installer_name || '',
@@ -351,7 +355,7 @@ export function DeliveriesPage() {
       branchName: defaultBranch?.name || '',
       driverName: '',
       driverPhone: '',
-      vehiclePlate: '',
+      vehicleId: '',
       scheduledDate: new Date().toISOString().split('T')[0],
       installationRequired: false,
       installerName: '',
@@ -384,7 +388,7 @@ export function DeliveriesPage() {
         city: createForm.city || 'Hargeisa',
         driverName: createForm.driverName?.trim() || undefined,
         driverPhone: createForm.driverPhone?.trim() || undefined,
-        vehiclePlate: createForm.vehiclePlate?.trim() || undefined,
+        vehicleId: createForm.vehicleId || undefined,
         scheduledDate: createForm.scheduledDate || undefined,
         installationRequired: createForm.installationRequired,
         installerName: createForm.installerName?.trim() || undefined,
@@ -396,7 +400,7 @@ export function DeliveriesPage() {
       if (dispatchImmediately && created?.id) {
         await apiPost(`/deliveries/${created.id}/dispatch`, {
           driverName: createForm.driverName || 'Assigned Driver',
-          vehiclePlate: createForm.vehiclePlate || undefined,
+          vehicleId: createForm.vehicleId || undefined,
         });
         addToast('success', 'Delivery scheduled and dispatched immediately!');
       } else {
@@ -443,7 +447,7 @@ export function DeliveriesPage() {
 
       await apiPost(`/deliveries/${d.id}/dispatch`, {
         driverName: d.driver_name,
-        vehiclePlate: d.vehicle_plate,
+        ...(d.vehicle_id ? { vehicleId: d.vehicle_id } : { vehiclePlate: d.vehicle_plate }), // older deliveries only have the typed plate
       });
       addToast('success', `Delivery #${d.delivery_number} marked as DISPATCHED!`);
       if (isDetailsOpen && selectedDelivery?.id === d.id) {
@@ -607,7 +611,7 @@ export function DeliveriesPage() {
     setSelectedDelivery(d);
     setDispatchForm({
       driverName: d.driver_name || '',
-      vehiclePlate: d.vehicle_plate || '',
+      vehicleId: d.vehicle_id || '',
     });
     setIsDispatchOpen(true);
   };
@@ -627,7 +631,7 @@ export function DeliveriesPage() {
                 status: 'DISPATCHED',
                 dispatched_at: new Date().toISOString(),
                 driver_name: dispatchForm.driverName || item.driver_name,
-                vehicle_plate: dispatchForm.vehiclePlate || item.vehicle_plate,
+                vehicle_plate: vehicles.find((v) => v.id === dispatchForm.vehicleId)?.plate_number || item.vehicle_plate,
               }
             : item
         )
@@ -647,7 +651,7 @@ export function DeliveriesPage() {
           status: 'DISPATCHED',
           dispatched_at: new Date().toISOString(),
           driver_name: dispatchForm.driverName || prev.driver_name,
-          vehicle_plate: dispatchForm.vehiclePlate || prev.vehicle_plate,
+          vehicle_plate: vehicles.find((v) => v.id === dispatchForm.vehicleId)?.plate_number || prev.vehicle_plate,
         } : null);
       }
       loadData(true);
@@ -1166,13 +1170,22 @@ export function DeliveriesPage() {
               />
             </div>
             <div style={{ minWidth: 0 }}>
-              <InputField
-                label="Vehicle Plate"
-                id="delPlate"
-                value={createForm.vehiclePlate}
-                onChange={(val) => setCreateForm((p) => ({ ...p, vehiclePlate: val }))}
-                placeholder="e.g. 48293-SL"
-              />
+              <div className="form-field">
+                <label className="form-field__label" htmlFor="delVehicle">Vehicle</label>
+                <select
+                  id="delVehicle"
+                  className="form-select"
+                  value={createForm.vehicleId}
+                  onChange={(e) => {
+                    const v = vehicles.find((x) => x.id === e.target.value);
+                    // The vehicle's usual driver is suggested; typing a different driver is fine.
+                    setCreateForm((p) => ({ ...p, vehicleId: e.target.value, driverName: p.driverName || v?.driver_name || '', driverPhone: p.driverPhone || v?.driver_phone || '' }));
+                  }}
+                >
+                  <option value="">{vehicles.length ? '— choose a company vehicle —' : 'No vehicles registered yet'}</option>
+                  {vehicles.map((v) => <option key={v.id} value={v.id}>{v.plate_number}{v.make || v.model ? ` · ${[v.make, v.model].filter(Boolean).join(' ')}` : ''}</option>)}
+                </select>
+              </div>
             </div>
           </div>
 
@@ -1356,14 +1369,22 @@ export function DeliveriesPage() {
             required
           />
 
-          <InputField
-            label="Vehicle License Plate *"
-            id="dispPlate"
-            value={dispatchForm.vehiclePlate}
-            onChange={(val) => setDispatchForm((p) => ({ ...p, vehiclePlate: val }))}
-            placeholder="e.g. 49302-SL"
-            required
-          />
+          <div className="form-field">
+            <label className="form-field__label" htmlFor="dispVehicle">Vehicle</label>
+            <select
+              id="dispVehicle"
+              className="form-select"
+              value={dispatchForm.vehicleId}
+              onChange={(e) => {
+                const v = vehicles.find((x) => x.id === e.target.value);
+                setDispatchForm((p) => ({ ...p, vehicleId: e.target.value, driverName: p.driverName || v?.driver_name || '' }));
+              }}
+            >
+              <option value="">{vehicles.length ? '— choose a company vehicle —' : 'No vehicles registered yet'}</option>
+              {vehicles.map((v) => <option key={v.id} value={v.id}>{v.plate_number}{v.make || v.model ? ` · ${[v.make, v.model].filter(Boolean).join(' ')}` : ''}</option>)}
+            </select>
+            <span className="mm-sub">Vehicles are registered under Employees → Company Vehicles.</span>
+          </div>
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '10px' }}>
             <button type="button" className="btn btn-secondary" onClick={() => setIsDispatchOpen(false)}>

@@ -144,7 +144,11 @@ test('4. another branch\'s records cannot be reached by ID, URL or parameter', a
   assert.equal(sneaky.status, 400);
   // writing into another branch / asking for another branch or "all"
   const forCL = await asHQ('POST', '/sales/orders', { branchId: CL, lines: [{ productId: ids.pHQ, quantity: 1, unitPrice: 1 }] });
-  assert.ok(forCL.status === 403 || (await t.q('SELECT branch_id FROM sales_orders WHERE id = $1', [forCL.body.id]))[0]?.branch_id === HQ, 'an order for CL is refused or pinned to HQ');
+  assert.equal(forCL.status, 403, 'an order for another branch is refused with a clear message');
+  assert.match(forCL.body.message, /branch you work from/);
+  const noBranch = await asHQ('POST', '/sales/orders', { lines: [{ productId: ids.pHQ, quantity: 1, unitPrice: 1 }] });
+  assert.equal(noBranch.status, 201, 'no branch needs to be sent: it comes from who is signed in');
+  assert.equal((await t.q('SELECT branch_id FROM sales_orders WHERE id = $1', [noBranch.body.id]))[0].branch_id, HQ);
   for (const q of [`branch_id=${CL}`, `branchId=${CL}`]) {
     for (const path of ['/sales/orders?page=1', '/expenses?page=1', '/deliveries?page=1', '/sales/customers?page=1', '/inventory/stock?page=1', '/purchasing/orders?page=1', '/products?page=1']) {
       const res = await asHQ('GET', `${path}&${q}`);
@@ -269,4 +273,28 @@ test('10. warehouses: names for choosing a destination; stock and writes only fo
   assert.equal((await t.api('GET', '/sales/customers?page=1', undefined, noLocation.token)).status, 403, 'unassigned staff are refused, never treated as administrators');
   assert.equal((await t.api('GET', '/inventory/stock?page=1', undefined, noLocation.token)).status, 403);
   assert.equal((await t.api('GET', '/audit?page=1', undefined, noLocation.token)).status === 200, true, 'audit shows only their own actions');
+});
+
+test('11. an accountant sees the whole company\'s books (even if assigned to a branch) and nothing else widens', async () => {
+  const acc = await t.createUser({ branchId: HQ, roleId: 'role-accountant', role: 'accountant' });
+  const adminIS = (await t.api('GET', '/accounting/income-statement')).body.summary;
+  const accIS = await t.api('GET', '/accounting/income-statement', undefined, acc.token);
+  assert.equal(accIS.status, 200);
+  assert.equal(accIS.body.summary.total_expenses, adminIS.total_expenses, 'consolidated P&L equals the Owner\'s');
+  assert.ok(adminIS.total_expenses >= 110, 'the HQ and CL expenses are both in it');
+  for (const path of ['/accounting/trial-balance', '/accounting/balance-sheet', '/accounting/cash-flow', '/accounting/dashboard', '/accounting/branch-summary']) {
+    const a = await t.api('GET', path, undefined, acc.token);
+    const o = await t.api('GET', path);
+    assert.equal(a.status, 200, path);
+    assert.deepEqual(a.body, o.body, `${path}: the accountant's figures are the Owner's consolidated ones`);
+  }
+  const je = await t.api('GET', '/accounting/journal-entries?page=1&pageSize=100', undefined, acc.token);
+  const branchesInJournal = new Set((je.body.items ?? je.body).map((e: any) => e.branch_id));
+  assert.ok(branchesInJournal.has(HQ) && branchesInJournal.has(CL), 'journal entries of every branch');
+  assert.equal((await t.api('GET', '/accounting/general-ledger', undefined, acc.token)).status, 200);
+  // ...but company-wide books are not company-wide administration
+  assert.ok(!idsOf((await t.api('GET', '/sales/orders?page=1&pageSize=100', undefined, acc.token)).body).includes(ids.oCL), 'sales stay on their own branch');
+  assert.equal((await t.api('POST', '/users', { email: `x${tag}@t.local`, password: 'Test-pass-12345', fullName: 'X', roleIds: ['role-branch-user'] }, acc.token)).status, 403, 'no user administration');
+  assert.equal((await t.api('POST', '/branches', { code: 'Q', name: 'Q', city: 'Q' }, acc.token)).status, 403, 'no branch administration');
+  assert.equal((await t.api('POST', '/agent/session', {}, acc.token)).status, 403, 'no assistant unless granted');
 });

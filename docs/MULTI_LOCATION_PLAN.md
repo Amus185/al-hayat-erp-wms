@@ -325,3 +325,22 @@ assistant needs `assistant.use` (both enforced on the server). The Owner can giv
 the Online Store menu is still visible to branch managers (its server rules are unchanged); manufacture numbers
 (MF-00001...) are one company-wide sequence; customers and products that no branch deals with yet are visible to the
 Owner only until a branch sells, stocks or registers them.
+
+
+---
+
+## 12. Sales, vehicles and accountant improvements (implemented, not deployed)
+
+- **Sales branch.** The branch comes from who is signed in; the field is gone for anyone who works from a
+  branch. The Owner (no branch of their own) uses the branch they are viewing or must choose one: nobody gets
+  "the first branch in the list" by default any more. The server refuses a sale sent for another branch with a clear
+  message instead of silently re-assigning it.
+- **Plain error messages.** One place in the app turns server answers into plain language (what happened, what to do
+  next): technical text and server errors are never shown; our own explanations are. The terse "Forbidden" is
+  now a sentence.
+- **Accountants** see the consolidated books (dashboard, ledger, trial balance, P&L, balance sheet, cash flow,
+  journal, branch summary, receivables) even when assigned to a branch; this widens nothing else (no users,
+  branches, assistant, or other branches' sales).
+- **Company Vehicles** (Employees tab): `vehicles` table; a delivery picks a vehicle and keeps its own
+  driver; the usual driver is only a suggestion; the plate is copied onto the delivery; vehicles with
+  delivery history are made inactive, never deleted.

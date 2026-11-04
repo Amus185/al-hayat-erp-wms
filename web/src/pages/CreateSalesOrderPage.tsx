@@ -4,12 +4,13 @@ import {
   ShoppingCart, ArrowLeft, Plus, Trash2, Loader2, Wrench, Info,
   AlertTriangle, CreditCard, DollarSign, Store, Truck, Package
 } from 'lucide-react';
-import { apiGet, apiPost } from '../api/client';
+import { getViewBranch, apiGet, apiPost } from '../api/client';
 import { FormField, InputField, TextareaField } from '../components/FormField';
 import { SearchableSelect } from '../components/SearchableSelect';
 import { useProductCatalog } from '../utils/productCatalog';
 import { ProductItemSelect, type SelectableProduct } from '../components/ProductItemSelect';
 import { Modal } from '../components/Modal';
+import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 
 interface Customer {
@@ -100,7 +101,12 @@ export function CreateSalesOrderPage() {
 
   // Form states
   const [customerId, setCustomerId] = useState('');
-  const [branchId, setBranchId] = useState('');
+  // Sales are recorded under the branch the person works from (the server decides and enforces it).
+  // Company-level people (the Owner) have no branch of their own: they use the branch they are
+  // viewing, or must choose one. Nobody gets "the first branch in the list" by accident.
+  const { branchId: myBranchId } = useAuth();
+  const fixedBranchId = myBranchId || getViewBranch();
+  const [branchId, setBranchId] = useState(fixedBranchId);
   const [notes, setNotes] = useState('');
 
   // Fulfillment Mode: ON HAND / PICKUP vs REQUIRES DELIVERY
@@ -150,9 +156,6 @@ export function CreateSalesOrderPage() {
         const brs = await apiGet<Branch[]>('/branches');
         setBranches(brs || []);
 
-        if (brs && brs.length > 0 && !branchId) {
-          setBranchId(brs[0].id);
-        }
       } catch (err) {
         console.error('Failed to load Sales Order creation metadata', err);
       }
@@ -386,7 +389,7 @@ export function CreateSalesOrderPage() {
       return;
     }
     if (!branchId) {
-      addToast('error', 'Please select a retail branch');
+      addToast('error', 'Please choose which branch this sale is for.');
       return;
     }
     if (lines.length === 0) {
@@ -480,19 +483,27 @@ export function CreateSalesOrderPage() {
           <h3 style={{ margin: '0 0 14px', color: '#066006', fontSize: '16px' }}>Order Details & Fulfillment</h3>
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '16px' }}>
-            <FormField label="Retail Branch *">
-              <select
-                className="form-control"
-                value={branchId}
-                onChange={(e) => setBranchId(e.target.value)}
-                style={{ width: '100%', height: '38px', borderRadius: '6px', border: '1px solid #c8d8c8', padding: '0 10px' }}
-              >
-                <option value="">Select Retail Branch</option>
-                {branches.map((b) => (
-                  <option key={b.id} value={b.id}>{b.name}</option>
-                ))}
-              </select>
-            </FormField>
+            {fixedBranchId ? (
+              <FormField label="Selling from">
+                <div id="sale-branch-fixed" style={{ height: '38px', display: 'flex', alignItems: 'center', padding: '0 10px', borderRadius: '6px', background: '#f4f8f4', border: '1px solid #dbe7db', color: '#066006', fontWeight: 600 }}>
+                  {selectedBranchName === 'Selected Branch' ? '…' : selectedBranchName}
+                </div>
+              </FormField>
+            ) : (
+              <FormField label="Branch *">
+                <select
+                  className="form-control"
+                  value={branchId}
+                  onChange={(e) => setBranchId(e.target.value)}
+                  style={{ width: '100%', height: '38px', borderRadius: '6px', border: '1px solid #c8d8c8', padding: '0 10px' }}
+                >
+                  <option value="">Choose the branch</option>
+                  {branches.map((b) => (
+                    <option key={b.id} value={b.id}>{b.name}</option>
+                  ))}
+                </select>
+              </FormField>
+            )}
 
             <FormField label="Customer *">
               <div style={{ display: 'flex', gap: '6px' }}>

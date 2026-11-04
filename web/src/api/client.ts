@@ -117,11 +117,40 @@ async function authorizedFetchOnce(url: string, init: RequestInit, retryOnNetwor
       if (i < retryOnNetworkError) await new Promise((resolve) => setTimeout(resolve, 250 * (i + 1)));
     }
   }
-  throw lastError;
+  throw new ApiError(0, 'Network error', null);
 }
 
 async function fetchGetWithRetry(url: string, attempts = 2): Promise<Response> {
   return authorizedFetch(url, { method: 'GET' }, attempts);
+}
+
+/**
+ * What a person reads when something goes wrong. Messages our own server writes for people
+ * (a rule that was not met, "cancel instead of delete"...) are shown as they are; everything
+ * technical (raw HTTP status text, database or server errors) is replaced by a plain
+ * explanation of what it means and what to do next.
+ */
+export function friendlyMessage(status: number, body: Record<string, unknown> | null): string {
+  const own = [body?.message, body?.error].find((m) => typeof m === 'string' && m.trim()) as string | undefined;
+  const technical = !own || /^(forbidden|not found|unauthorized|bad request|conflict|internal server error|route not found)\.?$/i.test(own.trim()) || /api error|internal server|sql|violates|constraint|syntax|parameter \$|undefined|null value|ECONN|stack|at \w+\.|\bpg\b/i.test(own);
+  if (status >= 500) {
+    return 'Something went wrong on our side, not with what you entered. Nothing was lost. Please try again in a moment, and tell your manager if it keeps happening.';
+  }
+  if (own && !technical) {
+    const details = Array.isArray(body?.details) ? (body!.details as string[]) : [];
+    return details.length ? `${own} ${details.join(' ')}` : own;
+  }
+  switch (status) {
+    case 0: return "We can't reach the server. Please check your internet connection and try again.";
+    case 400: return "Some of the information isn't valid. Please check what you entered and try again.";
+    case 401: return 'Your session has ended. Please sign in again.';
+    case 403: return "You don't have permission to do this. If you need it, ask the Owner or your manager.";
+    case 404: return "We couldn't find that record. It may have been removed, or it may belong to another branch.";
+    case 409: return 'Someone else just changed this. Please refresh the page and try again.';
+    case 413: return 'That file is too large. Please choose a smaller one.';
+    case 429: return 'Too many attempts in a short time. Please wait a moment and try again.';
+    default: return 'That did not work. Please try again, and tell your manager if it keeps happening.';
+  }
 }
 
 export class ApiError extends Error {
@@ -130,9 +159,7 @@ export class ApiError extends Error {
     public statusText: string,
     public body: Record<string, unknown> | null
   ) {
-    const detailsList = Array.isArray(body?.details) ? (body!.details as string[]) : undefined;
-    const detailSuffix = detailsList && detailsList.length > 0 ? ` Details: ${detailsList.join('; ')}` : '';
-    super((body?.message as string ?? `API error ${status}: ${statusText}`) + detailSuffix);
+    super(friendlyMessage(status, body));
     this.name = 'ApiError';
   }
 }

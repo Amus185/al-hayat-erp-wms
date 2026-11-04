@@ -11,6 +11,7 @@ import { useServerList, useOpenParam } from '../utils/serverList';
 import { useToast } from '../contexts/ToastContext';
 import { confirmAction } from '../utils/swal';
 import { useAuth } from '../contexts/AuthContext';
+import { VehiclesPanel } from '../components/VehiclesPanel';
 
 interface Employee {
   id: string; full_name: string; phone: string | null; email: string | null; position: string | null;
@@ -38,6 +39,7 @@ function Photo({ emp, small }: { emp: Pick<Employee, 'photo_key' | 'full_name'>;
 export function EmployeesPage() {
   const { addToast } = useToast();
   const { hasPermission, isAdmin } = useAuth();
+  const [tab, setTab] = useState<'EMPLOYEES' | 'VEHICLES'>('EMPLOYEES');
   // Pay is shown only with payroll access (Owner decision D3); the server enforces the same.
   const canPay = hasPermission('payroll.view');
   const canManagePay = hasPermission('payroll.manage');
@@ -162,8 +164,15 @@ export function EmployeesPage() {
             {list.total.toLocaleString()} employees{canPay && <> · salaries {money(list.totals?.salary ?? 0)} · advances owed {money(list.totals?.balance ?? 0)}</>}
           </p>
         </div>
-        {canEdit && <button type="button" className="btn btn-primary" id="new-employee" onClick={openCreate}><Plus size={16} /> New Employee</button>}
+        {canEdit && tab === 'EMPLOYEES' && <button type="button" className="btn btn-primary" id="new-employee" onClick={openCreate}><Plus size={16} /> New Employee</button>}
       </div>
+
+      <div className="status-tabs" role="tablist" id="people-tabs" style={{ marginBottom: 12 }}>
+        <button type="button" role="tab" aria-selected={tab === 'EMPLOYEES'} className={`status-tab${tab === 'EMPLOYEES' ? ' status-tab--active' : ''}`} onClick={() => setTab('EMPLOYEES')}>Employees</button>
+        <button type="button" role="tab" id="tab-vehicles" aria-selected={tab === 'VEHICLES'} className={`status-tab${tab === 'VEHICLES' ? ' status-tab--active' : ''}`} onClick={() => setTab('VEHICLES')}>Company Vehicles</button>
+      </div>
+
+      {tab === 'VEHICLES' ? <VehiclesPanel /> : (
 
       <div className="panel" style={{ padding: '12px' }}>
         <StatusTabs id="emp-status" value={list.filters.status} counts={list.counts} onChange={(v) => list.setFilter('status', v)}
@@ -176,6 +185,8 @@ export function EmployeesPage() {
         <DataTable id="emp-table" data={list.items} columns={columns} server={list} keyExtractor={(e) => e.id} onRowClick={(e) => openProfile(e.id)}
           emptyMessage={list.activeFilters ? 'No employees match your filters' : "No employees yet. Click 'New Employee' to add one."} />
       </div>
+
+      )}
 
       {/* Profile */}
       <Modal isOpen={!!profileId} onClose={() => setProfileId(null)} title={profile ? profile.full_name : 'Employee profile'} width="lg">

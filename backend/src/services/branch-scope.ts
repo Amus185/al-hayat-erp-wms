@@ -101,6 +101,18 @@ export async function resolveWriteBranch(c: any, requested: string | null | unde
   return req;
 }
 
+/**
+ * Accountants see the company's whole financial position, consolidated, even when
+ * they are assigned to a branch. This is applied only inside the accounting module and
+ * its finance reports (never to sales, stock or administration), so it grants no other
+ * access. Anyone who is not an accountant is unchanged (a branch manager the Owner
+ * gave accounting.view still sees only their own branch).
+ */
+export function accountingPayload(payload: JwtPayload): JwtPayload {
+  const isAccountant = (payload.roles ?? [payload.role]).includes('accountant');
+  return isAccountant && payload.branch_id ? { ...payload, branch_id: null } : payload;
+}
+
 // ── One location scope for every module ─────────────────────────────────────
 //
 // Who sees what, decided in one place:

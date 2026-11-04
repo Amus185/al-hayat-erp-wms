@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ShoppingCart, Plus, Trash2, Loader2, Wrench, Info, AlertTriangle, CreditCard, DollarSign, Wallet, Store, Truck, Package } from 'lucide-react';
-import { apiGet, apiPost } from '../api/client';
+import { getViewBranch, apiGet, apiPost } from '../api/client';
 import { FormField, InputField, TextareaField } from './FormField';
 import { SearchInput } from './SearchInput';
 import { SearchableSelect } from './SearchableSelect';
 import { useProductCatalog } from '../utils/productCatalog';
 import { ProductItemSelect, type SelectableProduct } from './ProductItemSelect';
 import { Modal } from './Modal';
+import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 
 interface Customer {
@@ -102,7 +103,12 @@ export function CreateSalesOrderModal({ isOpen, onClose, onOrderCreated }: Creat
 
   // Form states
   const [customerId, setCustomerId] = useState('');
-  const [branchId, setBranchId] = useState('');
+  // Sales are recorded under the branch the person works from (the server decides and enforces it).
+  // Company-level people (the Owner) have no branch of their own: they use the branch they are
+  // viewing, or must choose one. Nobody gets "the first branch in the list" by accident.
+  const { branchId: myBranchId } = useAuth();
+  const fixedBranchId = myBranchId || getViewBranch();
+  const [branchId, setBranchId] = useState(fixedBranchId);
   const [notes, setNotes] = useState('');
 
   // Fulfillment Mode: ON HAND / PICKUP vs REQUIRES DELIVERY
@@ -156,9 +162,6 @@ export function CreateSalesOrderModal({ isOpen, onClose, onOrderCreated }: Creat
         const brs = await apiGet<Branch[]>('/branches');
         setBranches(brs || []);
 
-        if (brs && brs.length > 0 && !branchId) {
-          setBranchId(brs[0].id);
-        }
       } catch (err) {
         console.error('Failed to load Sales Order creation metadata', err);
       }
@@ -392,7 +395,7 @@ export function CreateSalesOrderModal({ isOpen, onClose, onOrderCreated }: Creat
       return;
     }
     if (!branchId) {
-      addToast('error', 'Please select a retail branch');
+      addToast('error', 'Please choose which branch this sale is for.');
       return;
     }
     if (lines.length === 0) {
@@ -512,22 +515,28 @@ export function CreateSalesOrderModal({ isOpen, onClose, onOrderCreated }: Creat
             )}
           </div>
 
-          <div>
-            <label style={{ fontSize: '13px', fontWeight: 600, color: '#1a331e', marginBottom: '6px', display: 'block' }}>
-              Dispatch Branch *
-            </label>
-            <select
-              className="form-control"
-              value={branchId}
-              onChange={(e) => setBranchId(e.target.value)}
-              style={{ width: '100%', height: '38px', borderRadius: '6px', border: '1px solid #c8d8c8', padding: '0 10px' }}
-            >
-              <option value="">Select Retail Branch</option>
-              {branches.map((b) => (
-                <option key={b.id} value={b.id}>{b.name}</option>
-              ))}
-            </select>
-          </div>
+          {fixedBranchId ? (
+            <div id="sale-branch-fixed" style={{ fontSize: '13px', color: '#066006', fontWeight: 600 }}>
+              Selling from: {branches.find((b) => b.id === branchId)?.name || '…'}
+            </div>
+          ) : (
+            <div>
+              <label style={{ fontSize: '13px', fontWeight: 600, color: '#1a331e', marginBottom: '6px', display: 'block' }}>
+                Branch *
+              </label>
+              <select
+                className="form-control"
+                value={branchId}
+                onChange={(e) => setBranchId(e.target.value)}
+                style={{ width: '100%', height: '38px', borderRadius: '6px', border: '1px solid #c8d8c8', padding: '0 10px' }}
+              >
+                <option value="">Choose the branch</option>
+                {branches.map((b) => (
+                  <option key={b.id} value={b.id}>{b.name}</option>
+                ))}
+              </select>
+            </div>
+          )}
 
           {/* Sale Type Selector */}
           <div>

@@ -772,6 +772,20 @@ export async function ensureBranchIsolation(pool: Pool) {
         PRIMARY KEY (product_id, branch_id)
       );
       CREATE INDEX IF NOT EXISTS idx_product_branches_branch ON product_branches (branch_id);
+      -- Company vehicles (Employees section), picked on deliveries.
+      CREATE TABLE IF NOT EXISTS vehicles (
+        id TEXT PRIMARY KEY, plate_number TEXT NOT NULL, make TEXT, model TEXT, vehicle_type TEXT, capacity_note TEXT,
+        status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE', 'INACTIVE')),
+        default_driver_id TEXT REFERENCES employees(id) ON DELETE SET NULL, driver_name TEXT, driver_phone TEXT,
+        branch_id TEXT REFERENCES branches(id), notes TEXT, created_by TEXT REFERENCES users(id),
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+      DROP INDEX IF EXISTS vehicles_plate_uq;
+      CREATE UNIQUE INDEX IF NOT EXISTS vehicles_plate_norm_uq ON vehicles (upper(regexp_replace(plate_number, '[^A-Za-z0-9]', '', 'g')));
+      CREATE INDEX IF NOT EXISTS idx_vehicles_branch ON vehicles (branch_id);
+      ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS vehicle_id TEXT REFERENCES vehicles(id) ON DELETE SET NULL;
+      CREATE INDEX IF NOT EXISTS idx_deliveries_vehicle ON deliveries (vehicle_id);
       -- Existing deliveries belong to the branch of their sales order.
       UPDATE deliveries d SET branch_id = so.branch_id
         FROM sales_orders so WHERE so.id = d.sales_order_id AND d.branch_id IS NULL AND so.branch_id IS NOT NULL;

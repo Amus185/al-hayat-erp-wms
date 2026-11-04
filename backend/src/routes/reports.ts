@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { Env } from '../db';
 import { authMiddleware, requirePermissions, isAdminUser } from '../middleware/auth';
-import { resolveBranchScope, resolveLoc, locSql, ScopeError } from '../services/branch-scope';
+import { resolveBranchScope, resolveLoc, locSql, ScopeError, accountingPayload } from '../services/branch-scope';
 import { hideUnless, PERM, COST_FIELDS, sortsFor } from '../services/privacy';
 
 // Financial (sales-based) reports use the strict branch scope: branch users
@@ -527,7 +527,7 @@ reports.get('/supplier-performance', async (c) => {
 
 // 7. Receivables / Cash Flow Aging
 // Receivables & cash flow is a Finance report: it needs accounting access (Owner and accountants by default).
-reports.get('/receivables', requirePermissions(['accounting.view']), async (c) => {
+reports.get('/receivables', requirePermissions(['accounting.view']), async (c, next) => { (c as any).set('jwtPayload', accountingPayload((c as any).get('jwtPayload'))); await next(); }, async (c) => {
   const payload = c.get('jwtPayload');
   const scopedBranchId = await salesReportBranch(c);
 

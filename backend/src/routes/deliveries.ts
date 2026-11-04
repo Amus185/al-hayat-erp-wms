@@ -4,6 +4,7 @@ import { authMiddleware, requirePermissions } from '../middleware/auth';
 import { logAudit, createAuditLogStmt } from '../services/audit';
 import { csvResponse, listRequest, pagedResponse, pagedRows, type ListOptions } from '../services/listing';
 import { resolveLoc, locSql, type Loc } from '../services/branch-scope';
+import { usableVehicle } from './vehicles';
 
 const deliveries = new Hono<{ Bindings: Env; Variables: { jwtPayload: any } }>();
 
@@ -229,14 +230,28 @@ deliveries.post('/', requirePermissions(['manage_sales']), async (c) => {
   const status = body.scheduledDate || body.driverName ? 'SCHEDULED' : 'PENDING';
   const totalBoxes = Math.max(1, Number(body.totalBoxes || 1));
 
+  // A registered company vehicle (its plate is copied onto the delivery, so history never changes
+  // if the vehicle record is edited later). The driver of this trip is whoever is typed or chosen.
+  let vehicleId: string | null = null;
+  let vehiclePlateText: string | null = body.vehiclePlate?.trim() || null;
+  if (body.vehicleId) {
+    const veh = await usableVehicle(c, body.vehicleId);
+    if (!veh) return c.json({ message: 'Please choose one of the registered company vehicles (it may have been made inactive).' }, 400);
+    vehicleId = veh.id;
+    vehiclePlateText = veh.plate_number;
+    if (!body.driverName && veh.driver_name) body.driverName = veh.driver_name;
+    if (!body.driverPhone && veh.driver_phone) body.driverPhone = veh.driver_phone;
+  }
+  const status2 = body.scheduledDate || body.driverName ? 'SCHEDULED' : 'PENDING';
+
   const stmts: any[] = [];
   stmts.push(c.env.DB.prepare(`
     INSERT INTO deliveries (
       id, delivery_number, sales_order_id, customer_name, customer_phone,
       delivery_address, city, source_warehouse_id, driver_name, driver_phone,
       vehicle_plate, status, scheduled_date, installation_required, installer_name,
-      installation_fee, notes, total_boxes, delivered_boxes, remaining_boxes, created_by, branch_id
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
+      installation_fee, notes, total_boxes, delivered_boxes, remaining_boxes, created_by, branch_id, vehicle_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
   `).bind(
     id,
     deliveryNumber,
@@ -248,8 +263,8 @@ deliveries.post('/', requirePermissions(['manage_sales']), async (c) => {
     body.sourceWarehouseId || null,
     body.driverName?.trim() || null,
     body.driverPhone?.trim() || null,
-    body.vehiclePlate?.trim() || null,
-    status,
+    vehiclePlateText,
+    status2,
     body.scheduledDate || null,
     body.installationRequired ? 1 : 0,
     body.installerName?.trim() || null,
@@ -258,7 +273,8 @@ deliveries.post('/', requirePermissions(['manage_sales']), async (c) => {
     totalBoxes,
     totalBoxes,
     userId,
-    deliveryBranch
+    deliveryBranch,
+    vehicleId
   ));
 
   // Add delivery items if provided
@@ -307,7 +323,17 @@ deliveries.patch('/:id', requirePermissions(['manage_sales']), async (c) => {
 
   if (body.driverName !== undefined) { fields.push('driver_name = ?'); vals.push(body.driverName?.trim() || null); }
   if (body.driverPhone !== undefined) { fields.push('driver_phone = ?'); vals.push(body.driverPhone?.trim() || null); }
-  if (body.vehiclePlate !== undefined) { fields.push('vehicle_plate = ?'); vals.push(body.vehiclePlate?.trim() || null); }
+  if (body.vehicleId !== undefined) {
+    if (body.vehicleId) {
+      const veh = await usableVehicle(c, body.vehicleId);
+      if (!veh) return c.json({ message: 'Please choose one of the registered company vehicles (it may have been made inactive).' }, 400);
+      fields.push('vehicle_id = ?'); vals.push(veh.id);
+      fields.push('vehicle_plate = ?'); vals.push(veh.plate_number);
+    } else {
+      fields.push('vehicle_id = ?'); vals.push(null);
+      fields.push('vehicle_plate = ?'); vals.push(null);
+    }
+  } else if (body.vehiclePlate !== undefined) { fields.push('vehicle_plate = ?'); vals.push(body.vehiclePlate?.trim() || null); }
   if (body.scheduledDate !== undefined) { fields.push('scheduled_date = ?'); vals.push(body.scheduledDate || null); }
   if (body.deliveryAddress !== undefined) { fields.push('delivery_address = ?'); vals.push(body.deliveryAddress.trim()); }
   if (body.installerName !== undefined) { fields.push('installer_name = ?'); vals.push(body.installerName?.trim() || null); }
@@ -354,18 +380,27 @@ deliveries.post('/:id/dispatch', requirePermissions(['manage_sales']), async (c)
   const blocked = await deliveryBlockReason(c.env.DB, existing);
   if (blocked) return c.json({ message: blocked }, 400);
 
-  const driverName = body.driverName?.trim() || existing.driver_name;
-  const vehiclePlate = body.vehiclePlate?.trim() || existing.vehicle_plate;
+  let driverName = body.driverName?.trim() || existing.driver_name;
+  let vehiclePlate = body.vehiclePlate?.trim() || existing.vehicle_plate;
+  let vehicleId = existing.vehicle_id ?? null;
+  if (body.vehicleId) {
+    const veh = await usableVehicle(c, body.vehicleId);
+    if (!veh) return c.json({ message: 'Please choose one of the registered company vehicles (it may have been made inactive).' }, 400);
+    vehicleId = veh.id;
+    vehiclePlate = veh.plate_number;
+    if (!driverName && veh.driver_name) driverName = veh.driver_name;
+  }
 
   await c.env.DB.prepare(`
     UPDATE deliveries
     SET status = 'DISPATCHED',
         dispatched_at = CURRENT_TIMESTAMP,
+        vehicle_id = ?,
         driver_name = ?,
         vehicle_plate = ?,
         updated_at = CURRENT_TIMESTAMP
     WHERE id = ?
-  `).bind(driverName || null, vehiclePlate || null, id).run();
+  `).bind(vehicleId, driverName || null, vehiclePlate || null, id).run();
 
   await logAudit(c, 'DELIVERY_DISPATCH', 'deliveries', id, existing, { status: 'DISPATCHED', driverName, vehiclePlate });
   const updated = await c.env.DB.prepare('SELECT * FROM deliveries WHERE id = ?').bind(id).first();

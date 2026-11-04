@@ -3,7 +3,7 @@ import { Env } from '../db';
 import { authMiddleware, requirePermissions } from '../middleware/auth';
 import { createAuditLogStmt } from '../services/audit';
 import { prepareJournalReversal, prepareJournalEntryPosting, prepareOpeningStock, fetchOpenFiscalPeriodId, reconcileMissingReceiptJournalEntries, reconcileMissingSalesJournalEntries } from '../services/accounting-service';
-import { resolveBranchScope, branchSql, inScope, assertAllBranchAccess, resolveWriteBranch, ScopeError, type BranchScope } from '../services/branch-scope';
+import { resolveBranchScope, branchSql, inScope, assertAllBranchAccess, resolveWriteBranch, ScopeError, accountingPayload, type BranchScope } from '../services/branch-scope';
 import { csvResponse, dateRange, likeTerm, listRequest, pagedResponse, pagedRows, type ListOptions } from '../services/listing';
 
 // Every report below is computed from journal lines restricted to the caller's
@@ -30,6 +30,8 @@ accounting.use('/*', async (c, next) => {
   if (!(p?.permissions?.includes('accounting.view') || p?.permissions?.includes('*'))) {
     return c.json({ message: 'Accounting is limited to the Owner and accountants.' }, 403);
   }
+  // Accountants see the whole company here, whatever branch they are assigned to.
+  (c as any).set('jwtPayload', accountingPayload(p));
   await next();
 });
 

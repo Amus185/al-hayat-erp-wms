@@ -25,6 +25,7 @@ import storefront from './routes/storefront';
 import storefrontAdmin from './routes/storefront-admin';
 import agent from './routes/agent';
 import employees from './routes/employees';
+import vehicles from './routes/vehicles';
 
 // Global router instances...
 
@@ -167,6 +168,7 @@ app.route('/api/v1/assets', assets);
 app.route('/api/v1/deliveries', deliveries);
 app.route('/api/v1/manufacturing', manufacturing);
 app.route('/api/v1/employees', employees);
+app.route('/api/v1/vehicles', vehicles);
 // Public storefront (no login; whitelisted fields) and its staff-side management
 app.route('/api/v1/storefront', storefront);
 app.route('/api/v1/storefront-admin', storefrontAdmin);

@@ -318,7 +318,7 @@ export function SalesPage() {
       await apiPost(`/sales/orders/${cancellingOrderId}/cancel`, {
         reason: cancellationReason.trim() || 'Order cancelled by staff',
       });
-      addToast('success', 'Sales order cancelled and inventory restored to warehouse.');
+      addToast('success', 'Sales order cancelled. The stock was put back in the branch and the accounting was reversed.');
       setIsCancelModalOpen(false);
       setSelectedOrder(null);
       loadData();
