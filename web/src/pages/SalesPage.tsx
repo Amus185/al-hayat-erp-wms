@@ -23,6 +23,7 @@ import { useAuth } from '../contexts/AuthContext';
 import type { PaymentMethod, InvoicePayment, PaymentSummary } from '../types';
 import { confirmAction } from '../utils/swal';
 import { useLatest } from '../utils/latest';
+import { EditDraftModal, ReturnModal } from '../components/SaleAdjustModals';
 import { ModalLoading } from '../components/ModalLoading';
 import { html, writePrintDocument } from '../utils/html';
 
@@ -194,6 +195,7 @@ export function SalesPage() {
   const [isNewOrderModalOpen, setIsNewOrderModalOpen] = useState(false);
 
   // Cancellation Modal
+  const [adjust, setAdjust] = useState<'edit' | 'return' | null>(null);
   const [isCancelModalOpen, setIsCancelModalOpen] = useState(false);
   const [cancellingOrderId, setCancellingOrderId] = useState<string | null>(null);
   const [cancellationReason, setCancellationReason] = useState('');
@@ -316,9 +318,9 @@ export function SalesPage() {
       setActionProcessing('cancel');
       setOrderDetailsLoading(true);
       await apiPost(`/sales/orders/${cancellingOrderId}/cancel`, {
-        reason: cancellationReason.trim() || 'Order cancelled by staff',
+        reason: cancellationReason.trim(),
       });
-      addToast('success', 'Sales order cancelled. The stock was put back in the branch and the accounting was reversed.');
+      addToast('success', 'Sales order cancelled. The stock was put back and the accounting was reversed.');
       setIsCancelModalOpen(false);
       setSelectedOrder(null);
       loadData();
@@ -1160,6 +1162,16 @@ export function SalesPage() {
                 </>
               )}
 
+              {selectedOrder.status === 'DRAFT' && hasPermission('manage_sales') && (
+                <button type="button" id="edit-draft" className="btn btn-secondary" disabled={orderDetailsLoading || !!actionProcessing} onClick={() => setAdjust('edit')}>
+                  Edit sale
+                </button>
+              )}
+              {selectedOrder.invoice_id && selectedOrder.status !== 'CANCELLED' && hasPermission('manage_sales') && (
+                <button type="button" id="return-items" className="btn btn-secondary" disabled={orderDetailsLoading || !!actionProcessing} onClick={() => setAdjust('return')}>
+                  Return items
+                </button>
+              )}
               {selectedOrder.status !== 'PAID' && selectedOrder.status !== 'CANCELLED' && hasPermission('manage_sales') && (
                 <button type="button" className="btn btn-secondary" disabled={orderDetailsLoading || !!actionProcessing}
                   onClick={() => promptCancelOrder(selectedOrder.id)}
@@ -1284,6 +1296,9 @@ export function SalesPage() {
           loadData();
         }}
       />
+
+      {adjust === 'edit' && selectedOrder && <EditDraftModal order={selectedOrder} onClose={() => setAdjust(null)} onDone={() => { setAdjust(null); setSelectedOrder(null); loadData(); }} />}
+      {adjust === 'return' && selectedOrder && <ReturnModal order={selectedOrder} onClose={() => setAdjust(null)} onDone={() => { setAdjust(null); setSelectedOrder(null); loadData(); }} />}
 
       {/* Safe Cancel Order Modal with Static Backdrop */}
       <Modal

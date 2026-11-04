@@ -62,7 +62,7 @@ test('a delivery for a cancelled order cannot be completed', async () => {
     salesOrderId: order.body.id, customerName: 'A', customerPhone: '1', deliveryAddress: 'Street',
   });
   assert.equal(delivery.status, 201, JSON.stringify(delivery.body));
-  assert.equal((await t.api('POST', `/sales/orders/${order.body.id}/cancel`, { reason: 'x' })).status, 200);
+  assert.equal((await t.api('POST', `/sales/orders/${order.body.id}/cancel`, { reason: 'Customer cancelled' })).status, 200);
   const done = await t.api('POST', `/deliveries/${delivery.body.id}/complete`);
   assert.equal(done.status, 400, JSON.stringify(done.body));
   const so = await t.q('SELECT status FROM sales_orders WHERE id = $1', [order.body.id]);
@@ -77,7 +77,7 @@ test('a branch user cannot act on another branch\'s orders and invoices', async 
   const other = await t.api('POST', '/sales/orders', { branchId: 'branch-cl-show', lines: [{ productId: p, quantity: 1, unitPrice: 100 }] });
   const hq = await t.createUser({ branchId: BRANCH_HQ, roleId: 'role-branch-user', role: 'branch_user' });
   for (const [method, path, body] of [
-    ['POST', `/sales/orders/${order.body.id}/cancel`, { reason: 'x' }],
+    ['POST', `/sales/orders/${order.body.id}/cancel`, { reason: 'Customer cancelled' }],
     ['POST', `/sales/orders/${other.body.id}/confirm`, {}],
     ['POST', `/sales/orders/${other.body.id}/complete`, {}],
     ['POST', `/sales/invoices/${done.body.invoiceId}/payments`, { amount: 10 }],

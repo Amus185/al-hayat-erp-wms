@@ -45,7 +45,7 @@ test('two simultaneous cancels restore stock once and reverse the sale once', as
   const id = await draftOrder(p, 4);
   assert.equal((await t.api('POST', `/sales/orders/${id}/complete`)).status, 200);
   const revenue0 = await t.accountBalance('4010');
-  const results = await Promise.all([1, 2].map(() => t.api('POST', `/sales/orders/${id}/cancel`, { reason: 'x' })));
+  const results = await Promise.all([1, 2].map(() => t.api('POST', `/sales/orders/${id}/cancel`, { reason: 'duplicate click' })));
   assert.deepEqual(results.map((r) => r.status).sort(), [200, 409]);
   assert.equal(await t.stockOf(p, { branchId: BRANCH_HQ }), 4);
   assert.equal(await t.accountBalance('4010') - revenue0, 400, 'revenue reversed more than once');

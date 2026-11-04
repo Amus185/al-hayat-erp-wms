@@ -772,6 +772,25 @@ export async function ensureBranchIsolation(pool: Pool) {
         PRIMARY KEY (product_id, branch_id)
       );
       CREATE INDEX IF NOT EXISTS idx_product_branches_branch ON product_branches (branch_id);
+      -- Sales returns: goods that came back after a sale (separate from cancelling a sale).
+      ALTER TABLE invoices ADD COLUMN IF NOT EXISTS returned_amount DOUBLE PRECISION NOT NULL DEFAULT 0;
+      ALTER TABLE invoices ADD COLUMN IF NOT EXISTS refunded_amount DOUBLE PRECISION NOT NULL DEFAULT 0;
+      CREATE TABLE IF NOT EXISTS sales_returns (
+        id TEXT PRIMARY KEY, return_number TEXT NOT NULL UNIQUE,
+        sales_order_id TEXT NOT NULL REFERENCES sales_orders(id), invoice_id TEXT NOT NULL REFERENCES invoices(id),
+        branch_id TEXT REFERENCES branches(id), customer_id TEXT REFERENCES customers(id),
+        reason TEXT NOT NULL, return_value DOUBLE PRECISION NOT NULL DEFAULT 0, refund_amount DOUBLE PRECISION NOT NULL DEFAULT 0,
+        refund_method TEXT, created_by TEXT REFERENCES users(id),
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS idx_sales_returns_order ON sales_returns (sales_order_id);
+      CREATE INDEX IF NOT EXISTS idx_sales_returns_branch ON sales_returns (branch_id);
+      CREATE TABLE IF NOT EXISTS sales_return_lines (
+        id TEXT PRIMARY KEY, return_id TEXT NOT NULL REFERENCES sales_returns(id) ON DELETE CASCADE,
+        product_id TEXT NOT NULL REFERENCES products(id), quantity INTEGER NOT NULL CHECK (quantity > 0),
+        unit_price DOUBLE PRECISION NOT NULL DEFAULT 0, line_value DOUBLE PRECISION NOT NULL DEFAULT 0,
+        condition TEXT NOT NULL DEFAULT 'RESALEABLE' CHECK (condition IN ('RESALEABLE', 'DAMAGED'))
+      );
       -- Company vehicles (Employees section), picked on deliveries.
       CREATE TABLE IF NOT EXISTS vehicles (
         id TEXT PRIMARY KEY, plate_number TEXT NOT NULL, make TEXT, model TEXT, vehicle_type TEXT, capacity_note TEXT,

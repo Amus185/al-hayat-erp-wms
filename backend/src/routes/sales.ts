@@ -2438,13 +2438,24 @@ sales.post('/orders/:id/cancel', requirePermissions(['manage_sales']), async (c)
   await assertOrderInScope(c, orderId);
   const userId = c.get('jwtPayload').sub;
   const body = await c.req.json().catch(() => ({}));
-  const reason = body.reason?.trim() || 'Order cancelled by authorized staff';
+  const reason = typeof body.reason === 'string' ? body.reason.trim() : '';
+  if (reason.length < 3) return c.json({ message: 'Please write the reason for cancelling this sale (it is kept in the record).' }, 400);
 
   const order = await c.env.DB.prepare('SELECT * FROM sales_orders WHERE id = ?').bind(orderId).first() as any;
   if (!order) return c.json({ message: 'Order not found.' }, 404);
   if (order.status === 'CANCELLED') {
     return c.json({ message: 'Order is already cancelled.' }, 400);
   }
+  // A cancellation undoes a sale that never completed. Once goods have left, or part was already
+  // returned, the right tool is a Return (it counts what actually came back).
+  const left = await c.env.DB.prepare(
+    "SELECT COUNT(*)::int AS n FROM deliveries WHERE sales_order_id = ? AND status IN ('DISPATCHED', 'PARTIALLY_DELIVERED', 'DELIVERED')",
+  ).bind(orderId).first() as any;
+  if (Number(left?.n) > 0 || order.status === 'DELIVERED') {
+    return c.json({ message: "The goods for this sale have already left or been delivered, so it can't be cancelled. Use Return to record what the customer sends back." }, 409);
+  }
+  const hasReturns = await c.env.DB.prepare('SELECT 1 AS x FROM sales_returns WHERE sales_order_id = ? LIMIT 1').bind(orderId).first();
+  if (hasReturns) return c.json({ message: "Some items of this sale were already returned, so it can't be cancelled. Record a Return for what is left." }, 409);
 
   const prevStatus = order.status;
   const branchId = order.branch_id;
@@ -2466,6 +2477,8 @@ sales.post('/orders/:id/cancel', requirePermissions(['manage_sales']), async (c)
 
   // Check if invoice exists
   const invoice = await c.env.DB.prepare('SELECT * FROM invoices WHERE sales_order_id = ?').bind(orderId).first() as any;
+  const paidRow = invoice ? await c.env.DB.prepare('SELECT COALESCE(SUM(amount), 0) AS paid FROM invoice_payments WHERE invoice_id = ?').bind(invoice.id).first() as any : null;
+  const refunded = Number(paidRow?.paid || 0);
 
   // Restore exactly what the sale issued, per the inventory ledger (this covers
   // grouped-product components, and orders that never deducted stock restore nothing).
@@ -2506,16 +2519,27 @@ sales.post('/orders/:id/cancel', requirePermissions(['manage_sales']), async (c)
     status: 'CANCELLED',
     reason,
     cancelledBy: userId,
+    moneyGivenBack: refunded,
   }));
 
   // Reverse the order's posted journal entries in the same transaction.
   // (Same selection as before; payments recorded later under their own
   // payment ids are not reversed — see AUDIT_REPORT: refund policy.)
+  // Money already collected is given back: the payments' cash entries are reversed with the sale,
+  // so cash and receivables both return to zero for this order.
+  const payIds: string[] = [];
+  if (invoice) {
+    const { results: ip } = await c.env.DB.prepare('SELECT id FROM invoice_payments WHERE invoice_id = ?').bind(invoice.id).all();
+    const { results: cp } = await c.env.DB.prepare('SELECT id FROM customer_payments WHERE invoice_id = ?').bind(invoice.id).all();
+    for (const r of [...(ip || []), ...(cp || [])] as any[]) payIds.push(String(r.id));
+  }
+  const payMarks = payIds.length ? payIds.map(() => '?').join(', ') : "''";
   const { results: jes } = await c.env.DB.prepare(`
     SELECT id FROM journal_entries
     WHERE status = 'POSTED' AND reference_type != 'MANUAL'
-      AND (reference_id = ? OR reference_id = ? OR reference_id LIKE ?)
-  `).bind(orderId, invoice?.id || orderId, `${orderId}%`).all();
+      AND (reference_id = ? OR reference_id = ? OR reference_id LIKE ? OR reference_id IN (${payMarks}))
+  `).bind(orderId, invoice?.id || orderId, `${orderId}%`, ...payIds).all();
+
   for (const je of (jes || []) as any[]) {
     stmts.push(...await prepareJournalReversal(c, je.id, `Reversal due to cancelled order #${order.order_number}: ${reason}`, userId));
   }
@@ -2524,7 +2548,10 @@ sales.post('/orders/:id/cancel', requirePermissions(['manage_sales']), async (c)
 
   return c.json({
     success: true,
-    message: 'Sales order cancelled. The stock was put back in the branch and the accounting was reversed.',
+    refunded,
+    message: refunded > 0
+      ? `Sales order cancelled. The stock was put back, the accounting was reversed and ${refunded.toFixed(2)} collected from the customer is to be given back.`
+      : 'Sales order cancelled. The stock was put back in the branch and the accounting was reversed.',
   });
 });
 
@@ -2559,6 +2586,213 @@ sales.delete('/orders/:id', requirePermissions(['manage_sales']), async (c) => {
 
   await c.env.DB.batch(stmts);
   return c.json({ success: true });
+});
+
+// ──────────────────────────────────────────────────────────────────────
+// EDIT A DRAFT SALE — only drafts: nothing has been invoiced, taken from stock or posted yet.
+// Body: { customerId?, lines?: [{productId, quantity, unitPrice, discountAmount?}], installationFee?, installerName?, installerNotes?, fulfillmentType? }
+// ──────────────────────────────────────────────────────────────────────
+sales.patch('/orders/:id', requirePermissions(['manage_sales']), async (c) => {
+  const orderId = c.req.param('id') as string;
+  await assertOrderInScope(c, orderId);
+  const userId = c.get('jwtPayload').sub;
+  const body = await c.req.json().catch(() => ({})) as any;
+  const order = await c.env.DB.prepare('SELECT * FROM sales_orders WHERE id = ?').bind(orderId).first() as any;
+  if (!order) return c.json({ message: 'Order not found.' }, 404);
+  if (order.status !== 'DRAFT') {
+    return c.json({ message: `Only draft sales can be edited. This one is ${String(order.status).toLowerCase()}: to change it, cancel it (before delivery) or record a Return, then enter the sale again.` }, 409);
+  }
+  const stmts: any[] = [];
+  const sets: string[] = [];
+  const vals: unknown[] = [];
+
+  if ('customerId' in body) {
+    if (body.customerId) {
+      const scope = await resolveBranchScope(c, 'ALL');
+      const cust = scope.kind === 'BRANCH'
+        ? await c.env.DB.prepare(`SELECT cu.id FROM customers cu WHERE cu.id = ? AND ${customerVisibleSql(scope.branchId)}`).bind(body.customerId).first()
+        : await c.env.DB.prepare('SELECT id FROM customers WHERE id = ?').bind(body.customerId).first();
+      if (!cust) return c.json({ message: 'Customer does not exist.' }, 400);
+    }
+    sets.push('customer_id = ?'); vals.push(body.customerId || null);
+  }
+  if ('installationFee' in body) {
+    const fee = Math.max(0, Number(body.installationFee || 0));
+    sets.push('installation_fee = ?', 'installation_status = ?'); vals.push(fee, fee > 0 ? (order.installation_status === 'NONE' ? 'PENDING' : order.installation_status) : 'NONE');
+  }
+  if ('installerName' in body) { sets.push('installer_name = ?'); vals.push(body.installerName ? String(body.installerName).trim() : null); }
+  if ('installerNotes' in body) { sets.push('installer_notes = ?'); vals.push(body.installerNotes ? String(body.installerNotes).trim() : null); }
+  if ('fulfillmentType' in body) { sets.push('fulfillment_type = ?'); vals.push(String(body.fulfillmentType).toUpperCase() === 'PICKUP' ? 'PICKUP' : 'DELIVERY'); }
+
+  if (body.lines !== undefined) {
+    if (!Array.isArray(body.lines) || body.lines.length === 0) return c.json({ message: 'A sale needs at least one product line.' }, 400);
+    const seen = new Set<string>();
+    for (let i = 0; i < body.lines.length; i++) {
+      const l = body.lines[i];
+      if (!l.productId) return c.json({ message: `Line ${i + 1}: choose a product.` }, 400);
+      if (!Number.isInteger(l.quantity) || l.quantity <= 0) return c.json({ message: `Line ${i + 1}: quantity must be a whole number above 0.` }, 400);
+      if (l.unitPrice === undefined || l.unitPrice === null || !(Number(l.unitPrice) >= 0)) return c.json({ message: `Line ${i + 1}: the price cannot be negative.` }, 400);
+      if (seen.has(l.productId)) return c.json({ message: `Line ${i + 1}: this product is already on the sale. Combine the quantities.` }, 400);
+      seen.add(l.productId);
+      const pr = await c.env.DB.prepare('SELECT id, name, COALESCE(is_active, 1) AS is_active FROM products WHERE id = ?').bind(l.productId).first() as any;
+      if (!pr) return c.json({ message: `Line ${i + 1}: that product does not exist.` }, 400);
+      if (pr.is_active === 0) return c.json({ message: `"${pr.name}" is inactive and cannot be sold.` }, 400);
+    }
+    stmts.push(c.env.DB.prepare('DELETE FROM sales_order_lines WHERE sales_order_id = ?').bind(orderId));
+    const lineType = String(body.fulfillmentType || order.fulfillment_type || 'DELIVERY').toUpperCase() === 'PICKUP' ? 'PICKUP' : 'DELIVERY';
+    for (const l of body.lines) {
+      const disc = Math.max(0, Number(l.discountAmount || 0));
+      stmts.push(c.env.DB.prepare('INSERT INTO sales_order_lines (id, sales_order_id, product_id, quantity, unit_price, discount_amount, line_total, fulfillment_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+        .bind(uuidv4(), orderId, l.productId, l.quantity, Number(l.unitPrice), disc, l.quantity * Number(l.unitPrice) - disc, lineType));
+    }
+  }
+  if (!sets.length && body.lines === undefined) return c.json({ message: 'Nothing to change.' }, 400);
+  sets.push('updated_at = CURRENT_TIMESTAMP');
+  // Claim as DRAFT: if it was confirmed or invoiced meanwhile, nothing is changed.
+  stmts.unshift(c.env.DB.prepare(`UPDATE sales_orders SET ${sets.join(', ')} WHERE id = ? AND status = 'DRAFT'`).bind(...vals, orderId)
+    .mustAffect('This sale was just confirmed or changed by someone else. Please reload it.'));
+  stmts.push(createAuditLogStmt(c, 'SALES_ORDER_EDIT', 'sales_orders', orderId, { status: 'DRAFT' }, { ...body, editedBy: userId }));
+  await c.env.DB.batch(stmts);
+  return c.json(await c.env.DB.prepare('SELECT * FROM sales_orders WHERE id = ?').bind(orderId).first());
+});
+
+// ──────────────────────────────────────────────────────────────────────
+// SALES RETURNS — goods the customer brings back after an invoiced sale.
+// GET  /orders/:id/returns  → what can still be returned + past returns
+// POST /orders/:id/returns  → { reason, lines:[{productId, quantity, condition}], refundMethod? }
+// Stock: resaleable items go back to the branch, damaged ones do not.
+// Money: the customer's invoice shrinks by the value returned; anything they had
+// already paid beyond the new total is refunded (refundMethod required then).
+// ──────────────────────────────────────────────────────────────────────
+async function returnableLines(db: any, invoiceId: string) {
+  const { results } = await db.prepare(`
+    SELECT il.product_id, p.name AS product_name, SUM(il.quantity)::int AS sold, MAX(il.unit_price) AS unit_price,
+           COALESCE((SELECT SUM(rl.quantity) FROM sales_return_lines rl JOIN sales_returns r ON r.id = rl.return_id
+                     WHERE r.invoice_id = il.invoice_id AND rl.product_id = il.product_id), 0)::int AS returned
+    FROM invoice_lines il JOIN products p ON p.id = il.product_id
+    WHERE il.invoice_id = ? GROUP BY il.product_id, p.name, il.invoice_id
+  `).bind(invoiceId).all();
+  return ((results || []) as any[]).map((r) => ({ ...r, returnable: Number(r.sold) - Number(r.returned) }));
+}
+
+sales.get('/orders/:id/returns', async (c) => {
+  const orderId = c.req.param('id') as string;
+  await assertOrderInScope(c, orderId);
+  const invoice = await c.env.DB.prepare('SELECT id, status FROM invoices WHERE sales_order_id = ?').bind(orderId).first() as any;
+  if (!invoice) return c.json({ returnable: [], returns: [] });
+  const { results } = await c.env.DB.prepare(`
+    SELECT r.*, u.full_name AS created_by_name,
+           (SELECT json_agg(json_build_object('product_id', rl.product_id, 'product_name', p.name, 'quantity', rl.quantity, 'condition', rl.condition, 'line_value', rl.line_value))
+            FROM sales_return_lines rl JOIN products p ON p.id = rl.product_id WHERE rl.return_id = r.id) AS lines
+    FROM sales_returns r LEFT JOIN users u ON u.id = r.created_by WHERE r.sales_order_id = ? ORDER BY r.created_at DESC
+  `).bind(orderId).all();
+  return c.json({ returnable: invoice.status === 'CANCELLED' ? [] : await returnableLines(c.env.DB, invoice.id), returns: results || [] });
+});
+
+sales.post('/orders/:id/returns', requirePermissions(['manage_sales']), async (c) => {
+  const orderId = c.req.param('id') as string;
+  await assertOrderInScope(c, orderId);
+  const userId = c.get('jwtPayload').sub;
+  const body = await c.req.json().catch(() => ({})) as any;
+  const reason = typeof body.reason === 'string' ? body.reason.trim() : '';
+  if (reason.length < 3) return c.json({ message: 'Please write the reason for the return (it is kept in the record).' }, 400);
+  const order = await c.env.DB.prepare('SELECT * FROM sales_orders WHERE id = ?').bind(orderId).first() as any;
+  if (!order) return c.json({ message: 'Order not found.' }, 404);
+  const invoice = await c.env.DB.prepare('SELECT * FROM invoices WHERE sales_order_id = ?').bind(orderId).first() as any;
+  if (!invoice || order.status === 'CANCELLED' || invoice.status === 'CANCELLED') {
+    return c.json({ message: "Only an invoiced sale that is not cancelled can have items returned. For a sale that hasn't been invoiced, edit or cancel it instead." }, 409);
+  }
+  if (!Array.isArray(body.lines) || !body.lines.length) return c.json({ message: 'Choose at least one product and quantity to return.' }, 400);
+
+  const avail = new Map((await returnableLines(c.env.DB, invoice.id)).map((r: any) => [r.product_id, r]));
+  const picked: Array<{ productId: string; quantity: number; condition: 'RESALEABLE' | 'DAMAGED'; unitPrice: number; name: string }> = [];
+  const seen = new Set<string>();
+  for (const l of body.lines) {
+    const q = Number(l.quantity);
+    if (!q) continue;
+    const row = avail.get(l.productId) as any;
+    if (!row) return c.json({ message: 'One of the products was not on this sale.' }, 400);
+    if (seen.has(l.productId)) return c.json({ message: `${row.product_name} is listed twice. Combine the quantities.` }, 400);
+    seen.add(l.productId);
+    if (!Number.isInteger(q) || q < 0) return c.json({ message: `${row.product_name}: the quantity must be a whole number.` }, 400);
+    if (q > row.returnable) return c.json({ message: `${row.product_name}: only ${row.returnable} can still be returned (sold ${row.sold}, already returned ${row.returned}).` }, 400);
+    picked.push({ productId: l.productId, quantity: q, condition: l.condition === 'DAMAGED' ? 'DAMAGED' : 'RESALEABLE', unitPrice: Number(row.unit_price), name: row.product_name });
+  }
+  if (!picked.length) return c.json({ message: 'Enter the quantity being returned.' }, 400);
+
+  // Value: the price the customer actually paid per unit (the sale's discount is shared out pro rata).
+  const gross = picked.reduce((a, l) => a + l.quantity * l.unitPrice, 0);
+  const ratio = Number(invoice.total_amount) > 0 ? Number(invoice.discount_amount || 0) / Number(invoice.total_amount) : 0;
+  const discountPart = gross * ratio;
+  const value = Math.round((gross - discountPart) * 100) / 100;
+  const newGross = Number(invoice.total_amount) - gross - (Number(invoice.discount_amount || 0) - discountPart) + Number(invoice.installation_fee || 0);
+  const paidRow = await c.env.DB.prepare('SELECT COALESCE(SUM(amount), 0) AS paid FROM invoice_payments WHERE invoice_id = ?').bind(invoice.id).first() as any;
+  const paid = Number(paidRow?.paid || 0);
+  const refund = Math.max(0, Math.round((paid - Number(invoice.refunded_amount || 0) - Math.max(0, newGross)) * 100) / 100);
+  const method = ['CASH', 'BANK', 'MOBILE'].includes(String(body.refundMethod).toUpperCase()) ? String(body.refundMethod).toUpperCase() : null;
+  if (refund > 0 && !method) {
+    return c.json({ message: `The customer has already paid ${refund.toFixed(2)} more than the remaining sale. Choose how it is refunded (cash, bank or mobile money).`, refundDue: refund, needs: 'refundMethod' }, 400);
+  }
+
+  const returnId = uuidv4();
+  const stmts: any[] = [
+    c.env.DB.prepare('INSERT INTO sales_returns (id, return_number, sales_order_id, invoice_id, branch_id, customer_id, reason, return_value, refund_amount, refund_method, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .bind(returnId, `RET-${Date.now()}`, orderId, invoice.id, order.branch_id, order.customer_id || null, reason, value, refund, refund > 0 ? method : null, userId),
+  ];
+  const resaleable: Array<{ product_id: string; quantity: number }> = [];
+  for (const l of picked) {
+    const lineValue = Math.round(l.quantity * l.unitPrice * (1 - ratio) * 100) / 100;
+    stmts.push(c.env.DB.prepare('INSERT INTO sales_return_lines (id, return_id, product_id, quantity, unit_price, line_value, condition) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .bind(uuidv4(), returnId, l.productId, l.quantity, l.unitPrice, lineValue, l.condition));
+    if (l.condition === 'RESALEABLE') resaleable.push({ product_id: l.productId, quantity: l.quantity });
+  }
+  // Resaleable goods go back into the branch's stock (a grouped product returns its components).
+  if (resaleable.length) {
+    const reqs = await resolveLinesToInventoryRequirements(c.env.DB, resaleable);
+    for (const r of reqs) {
+      stmts.push(c.env.DB.prepare(`
+        UPDATE inventory_stock SET quantity_on_hand = quantity_on_hand + ?, updated_at = CURRENT_TIMESTAMP
+        WHERE product_id = ? AND owner_type = 'BRANCH' AND branch_id = ?
+      `).bind(r.quantity, r.productId, order.branch_id).mustAffect('The branch stock record for a returned product no longer exists.'));
+      stmts.push(c.env.DB.prepare(`
+        INSERT INTO inventory_transactions (id, product_id, transaction_type, quantity, destination_owner_type, destination_branch_id, dest_owner_type, dest_branch_id, reference_type, reference_id, notes, created_by)
+        VALUES (?, ?, 'SALE_RETURN', ?, 'BRANCH', ?, 'BRANCH', ?, 'SALES_RETURN', ?, ?, ?)
+      `).bind(uuidv4(), r.productId, r.quantity, order.branch_id, order.branch_id, returnId, `Returned from order #${order.order_number}: ${reason}`, userId));
+    }
+  }
+  // The invoice shrinks by what came back; the status follows what is still owed.
+  const paidNow = paid - Number(invoice.refunded_amount || 0) - refund;
+  const remaining = Math.max(0, newGross - paidNow);
+  const newStatus = remaining <= 0.005 ? 'PAID' : (paidNow > 0 ? 'PARTIALLY_PAID' : 'UNPAID');
+  stmts.push(c.env.DB.prepare(`
+    UPDATE invoices SET total_amount = total_amount - ?, discount_amount = discount_amount - ?, returned_amount = returned_amount + ?,
+      refunded_amount = refunded_amount + ?, status = ?
+    WHERE id = ? AND status <> 'CANCELLED'
+  `).bind(gross, discountPart, value, refund, newStatus, invoice.id).mustAffect('This sale was just cancelled or changed. Please refresh.'));
+
+  // Books: sales revenue and the customer's receivable go down; stock value and cost of sales are
+  // restored for resaleable goods only (damaged goods stay expensed); a refund pays cash out.
+  const jBase = { referenceType: 'SALE', branchId: order.branch_id, userId } as const;
+  stmts.push(...(await prepareJournalEntryPosting(c, {
+    ...jBase, description: `Sales return ${order.order_number}: ${reason}`, referenceId: returnId,
+    lines: [{ accountCode: '4010', debitAmount: value, creditAmount: 0 }, { accountCode: '1020', debitAmount: 0, creditAmount: value }],
+  })).statements);
+  if (resaleable.length) {
+    const cost = await calculateLinesCogs(c.env.DB, resaleable);
+    if (cost > 0) stmts.push(...(await prepareJournalEntryPosting(c, {
+      ...jBase, description: `Returned stock back in ${order.order_number}`, referenceId: `${returnId}:stock`,
+      lines: [{ accountCode: '1030', debitAmount: cost, creditAmount: 0 }, { accountCode: '5010', debitAmount: 0, creditAmount: cost }],
+    })).statements);
+  }
+  if (refund > 0) stmts.push(...(await prepareJournalEntryPosting(c, {
+    ...jBase, description: `Refund to customer for ${order.order_number} (${method})`, referenceId: `${returnId}:refund`,
+    lines: [{ accountCode: '1020', debitAmount: refund, creditAmount: 0 }, { accountCode: '1010', debitAmount: 0, creditAmount: refund }],
+  })).statements);
+  stmts.push(createAuditLogStmt(c, 'SALES_RETURN', 'sales_returns', returnId, null, { orderId, reason, value, refund, method, lines: picked }));
+
+  await c.env.DB.batch(stmts);
+  return c.json({ success: true, id: returnId, value, refund, invoiceStatus: newStatus,
+    message: refund > 0 ? `Return recorded. Refund ${refund.toFixed(2)} to the customer (${method}).` : 'Return recorded. The customer\'s balance was reduced.' }, 201);
 });
 
 export default sales;
