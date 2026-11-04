@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { Env, uuidv4 } from '../db';
 import { PgAdapter } from '../pg-client';
 import { authMiddleware, requirePermissions, isAdminUser } from '../middleware/auth';
+import { has } from '../services/privacy';
 import { resolveBranchScope, resolveLoc, locBranch, resolveWriteBranch, branchSql, inScope, ScopeError, customerVisibleSql, type BranchScope } from '../services/branch-scope';
 import { logAudit, createAuditLogStmt } from '../services/audit';
 import { releaseReservationsStmt, returnWebQuantityStmt } from '../services/storefront';
@@ -1392,6 +1393,33 @@ async function resolveLinesToInventoryRequirements(
 // ──────────────────────────────────────────────────────────────────────
 // CREATE ORDER — with full input validation
 // ──────────────────────────────────────────────────────────────────────
+
+/** Reasons a seller may give when the sold price differs from the product's price. */
+const cleanReason = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, 80) : null);
+
+/** Tells the Owner/admins and accountants about price changes on an order's lines (one message per order). */
+function priceAdjustmentNotice(db: any, orderId: string, actorId: string | null) {
+  return db.prepare(`
+    INSERT INTO notifications (id, user_id, title, message, type)
+    SELECT gen_random_uuid()::text, u.id, 'Price changed on ' || so.order_number,
+           COALESCE(a.full_name, 'A seller') || COALESCE(' (' || b.name || ')', '') || ': ' ||
+           (SELECT string_agg(p.name || ' ' || to_char(sol.list_price, 'FM999999990.00') || ' → ' || to_char(sol.unit_price, 'FM999999990.00')
+                              || ' (' || CASE WHEN sol.unit_price > sol.list_price THEN '+' ELSE '-' END || to_char(abs(sol.unit_price - sol.list_price), 'FM999999990.00') || ')'
+                              || COALESCE(' – ' || sol.adjustment_reason, ''), '; ')
+            FROM sales_order_lines sol JOIN products p ON p.id = sol.product_id
+            WHERE sol.sales_order_id = so.id AND sol.list_price IS NOT NULL AND abs(sol.unit_price - sol.list_price) > 0.005),
+           'PRICE'
+    FROM sales_orders so
+    LEFT JOIN users a ON a.id = ?::text
+    LEFT JOIN branches b ON b.id = so.branch_id
+    JOIN users u ON u.is_active = 1 AND u.id IS DISTINCT FROM ?::text AND (
+      EXISTS (SELECT 1 FROM user_roles ur JOIN roles r ON r.id = ur.role_id WHERE ur.user_id = u.id AND r.code IN ('admin', 'accountant'))
+      OR EXISTS (SELECT 1 FROM user_permissions up JOIN permissions pm ON pm.id = up.permission_id WHERE up.user_id = u.id AND pm.code = 'accounting.view'))
+    WHERE so.id = ?
+      AND EXISTS (SELECT 1 FROM sales_order_lines x WHERE x.sales_order_id = so.id AND x.list_price IS NOT NULL AND abs(x.unit_price - x.list_price) > 0.005)
+  `).bind(actorId, actorId, orderId);
+}
+
 sales.post('/orders', requirePermissions(['manage_sales']), async (c) => {
   const body = await c.req.json();
   const payload = c.get('jwtPayload');
@@ -1450,6 +1478,8 @@ sales.post('/orders', requirePermissions(['manage_sales']), async (c) => {
     line.unitPrice = (line.unitPrice !== undefined && line.unitPrice !== null && !isNaN(Number(line.unitPrice)) && Number(line.unitPrice) >= 0)
       ? Number(line.unitPrice)
       : Number(product.selling_price || 0);
+    // The product's own price is the reference, taken from the server (never from the client).
+    line.listPrice = Number(product.selling_price || 0);
   }
 
   const isCreditSale = Boolean(body.isCreditSale);
@@ -1521,8 +1551,8 @@ sales.post('/orders', requirePermissions(['manage_sales']), async (c) => {
     const lineFulfillmentType = (line.fulfillmentType || line.fulfillment_type || fulfillmentType).toUpperCase() === 'PICKUP' ? 'PICKUP' : 'DELIVERY';
 
     stmts.push(c.env.DB.prepare(`
-      INSERT INTO sales_order_lines (id, sales_order_id, product_id, quantity, unit_price, discount_amount, line_total, fulfillment_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).bind(uuidv4(), id, line.productId, line.quantity, line.unitPrice, discountAmount, lineTotal, lineFulfillmentType));
+      INSERT INTO sales_order_lines (id, sales_order_id, product_id, quantity, unit_price, discount_amount, line_total, fulfillment_type, list_price, adjustment_reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(uuidv4(), id, line.productId, line.quantity, line.unitPrice, discountAmount, lineTotal, lineFulfillmentType, line.listPrice, Math.abs(line.unitPrice - line.listPrice) > 0.005 ? cleanReason(line.priceReason) : null));
   }
 
   const netTotal = subtotal - totalDiscount;
@@ -1587,6 +1617,7 @@ sales.post('/orders', requirePermissions(['manage_sales']), async (c) => {
     }
   }
 
+  stmts.push(priceAdjustmentNotice(c.env.DB, id, userId));
   stmts.push(createAuditLogStmt(c, 'SALES_ORDER_CREATE', 'sales_orders', id, null, {
     orderNumber,
     branchId: body.branchId,
@@ -2634,7 +2665,8 @@ sales.patch('/orders/:id', requirePermissions(['manage_sales']), async (c) => {
       if (l.unitPrice === undefined || l.unitPrice === null || !(Number(l.unitPrice) >= 0)) return c.json({ message: `Line ${i + 1}: the price cannot be negative.` }, 400);
       if (seen.has(l.productId)) return c.json({ message: `Line ${i + 1}: this product is already on the sale. Combine the quantities.` }, 400);
       seen.add(l.productId);
-      const pr = await c.env.DB.prepare('SELECT id, name, COALESCE(is_active, 1) AS is_active FROM products WHERE id = ?').bind(l.productId).first() as any;
+      const pr = await c.env.DB.prepare('SELECT id, name, selling_price, COALESCE(is_active, 1) AS is_active FROM products WHERE id = ?').bind(l.productId).first() as any;
+      l.listPrice = Number(pr?.selling_price || 0);
       if (!pr) return c.json({ message: `Line ${i + 1}: that product does not exist.` }, 400);
       if (pr.is_active === 0) return c.json({ message: `"${pr.name}" is inactive and cannot be sold.` }, 400);
     }
@@ -2642,9 +2674,11 @@ sales.patch('/orders/:id', requirePermissions(['manage_sales']), async (c) => {
     const lineType = String(body.fulfillmentType || order.fulfillment_type || 'DELIVERY').toUpperCase() === 'PICKUP' ? 'PICKUP' : 'DELIVERY';
     for (const l of body.lines) {
       const disc = Math.max(0, Number(l.discountAmount || 0));
-      stmts.push(c.env.DB.prepare('INSERT INTO sales_order_lines (id, sales_order_id, product_id, quantity, unit_price, discount_amount, line_total, fulfillment_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-        .bind(uuidv4(), orderId, l.productId, l.quantity, Number(l.unitPrice), disc, l.quantity * Number(l.unitPrice) - disc, lineType));
+      stmts.push(c.env.DB.prepare('INSERT INTO sales_order_lines (id, sales_order_id, product_id, quantity, unit_price, discount_amount, line_total, fulfillment_type, list_price, adjustment_reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+        .bind(uuidv4(), orderId, l.productId, l.quantity, Number(l.unitPrice), disc, l.quantity * Number(l.unitPrice) - disc, lineType, l.listPrice,
+          Math.abs(Number(l.unitPrice) - l.listPrice) > 0.005 ? cleanReason(l.priceReason) : null));
     }
+    stmts.push(priceAdjustmentNotice(c.env.DB, orderId, userId));
   }
   if (!sets.length && body.lines === undefined) return c.json({ message: 'Nothing to change.' }, 400);
   sets.push('updated_at = CURRENT_TIMESTAMP');
@@ -2793,6 +2827,33 @@ sales.post('/orders/:id/returns', requirePermissions(['manage_sales']), async (c
   await c.env.DB.batch(stmts);
   return c.json({ success: true, id: returnId, value, refund, invoiceStatus: newStatus,
     message: refund > 0 ? `Return recorded. Refund ${refund.toFixed(2)} to the customer (${method}).` : 'Return recorded. The customer\'s balance was reduced.' }, 201);
+});
+
+
+// Price adjustments: every sale line sold above or below the product's price, and who did it.
+sales.get('/price-adjustments', async (c) => {
+  const p = c.get('jwtPayload');
+  if (!has(p, 'accounting.view') && !isAdminUser(p)) return c.json({ message: "You don't have permission to see price changes." }, 403);
+  const scoped = await scopedSalesBranch(c);
+  const from = c.req.query('from') || '1970-01-01';
+  const to = c.req.query('to') || '2999-12-31';
+  const params: unknown[] = [from, `${to} 23:59:59`];
+  let where = 'WHERE sol.list_price IS NOT NULL AND abs(sol.unit_price - sol.list_price) > 0.005 AND so.created_at >= ? AND so.created_at <= ?';
+  if (scoped) { where += ' AND so.branch_id = ?'; params.push(scoped); }
+  const { results } = await c.env.DB.prepare(`
+    SELECT so.id AS order_id, so.order_number, so.created_at, b.name AS branch_name, u.full_name AS seller, p.name AS product_name,
+           sol.quantity, sol.list_price, sol.unit_price, (sol.unit_price - sol.list_price) AS adjustment,
+           ((sol.unit_price - sol.list_price) * sol.quantity) AS adjustment_total, sol.adjustment_reason
+    FROM sales_order_lines sol JOIN sales_orders so ON so.id = sol.sales_order_id
+    JOIN products p ON p.id = sol.product_id LEFT JOIN users u ON u.id = so.created_by LEFT JOIN branches b ON b.id = so.branch_id
+    ${where} AND so.status <> 'CANCELLED' ORDER BY so.created_at DESC LIMIT 500
+  `).bind(...params).all();
+  const rows = (results || []) as any[];
+  return c.json({
+    rows,
+    below: rows.filter((r) => r.adjustment < 0).reduce((a, r) => a + Number(r.adjustment_total), 0),
+    above: rows.filter((r) => r.adjustment > 0).reduce((a, r) => a + Number(r.adjustment_total), 0),
+  });
 });
 
 export default sales;

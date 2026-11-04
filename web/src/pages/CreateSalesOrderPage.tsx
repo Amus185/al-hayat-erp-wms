@@ -12,6 +12,7 @@ import { ProductItemSelect, type SelectableProduct } from '../components/Product
 import { Modal } from '../components/Modal';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
+import { PriceAdjustment, confirmFarPrice } from '../components/PriceAdjustment';
 
 interface Customer {
   id: string;
@@ -142,9 +143,8 @@ export function CreateSalesOrderPage() {
     unitPrice: number;
     discount: number;
     productType?: 'STANDARD' | 'GROUPED';
-    priceTiers?: ProductPriceTier[];
     groupItems?: ProductGroupItem[];
-    selectedTier?: string;
+    priceReason?: string;
     fulfillmentType: 'DELIVERY' | 'PICKUP';
   }[]>([]);
 
@@ -293,9 +293,8 @@ export function CreateSalesOrderPage() {
         unitPrice: initialPrice,
         discount: 0,
         productType: prod?.productType,
-        priceTiers: prod?.priceTiers || [],
         groupItems: prod?.groupItems || [],
-        selectedTier: '',
+        priceReason: '',
         fulfillmentType: fulfillmentType,
       },
     ]);
@@ -322,29 +321,6 @@ export function CreateSalesOrderPage() {
     setLines((prev) => prev.filter((_, i) => i !== idx));
   };
 
-  const handleSelectTier = (idx: number, tierName: string) => {
-    const line = lines[idx];
-    const prod = products.find((p) => p.id === line.productId);
-    let newPrice = line.unitPrice;
-    if (!tierName) {
-      newPrice = prod?.sellingPrice || line.unitPrice;
-    } else {
-      const tier = line.priceTiers?.find((t) => t.tier_name === tierName);
-      if (tier) {
-        newPrice = Number(tier.price) || 0;
-      }
-    }
-    setLines((prev) => {
-      const copy = [...prev];
-      copy[idx] = {
-        ...copy[idx],
-        selectedTier: tierName,
-        unitPrice: newPrice,
-      };
-      return copy;
-    });
-  };
-
   const updateLine = (idx: number, field: 'quantity' | 'unitPrice' | 'discount', val: number) => {
     let num = isNaN(val) ? 0 : val;
     if (field === 'quantity' && branchId) {
@@ -367,7 +343,6 @@ export function CreateSalesOrderPage() {
       copy[idx] = {
         ...copy[idx],
         [field]: field === 'quantity' ? Math.max(1, num) : Math.max(0, num),
-        ...(field === 'unitPrice' ? { selectedTier: 'CUSTOM' } : {}),
       };
       return copy;
     });
@@ -397,6 +372,15 @@ export function CreateSalesOrderPage() {
       return;
     }
 
+    const unexplained = lines.find((l) => {
+      const ref = products.find((p) => p.id === l.productId)?.sellingPrice ?? l.unitPrice;
+      return Math.abs(l.unitPrice - ref) > 0.005 && !l.priceReason;
+    });
+    if (unexplained) {
+      addToast('error', `Choose why the price of "${unexplained.name}" differs from its list price.`);
+      return;
+    }
+
     const isCredit = saleType === 'DEBT';
     const payload = {
       customerId,
@@ -414,6 +398,7 @@ export function CreateSalesOrderPage() {
         quantity: Number(l.quantity),
         unitPrice: Number(l.unitPrice),
         discountAmount: Number(l.discount || 0),
+        priceReason: l.priceReason || undefined,
         fulfillmentType: l.fulfillmentType,
       })),
     };
@@ -798,24 +783,16 @@ export function CreateSalesOrderPage() {
                                   step={0.01}
                                   value={l.unitPrice}
                                   onChange={(e) => updateLine(idx, 'unitPrice', parseFloat(e.target.value) || 0)}
+                                  onBlur={async () => {
+                                    const ref = products.find((p) => p.id === l.productId)?.sellingPrice ?? l.unitPrice;
+                                    if (!(await confirmFarPrice(ref, l.unitPrice))) updateLine(idx, 'unitPrice', ref);
+                                  }}
                                   style={{ width: '85px', padding: '4px 6px', textAlign: 'right', borderRadius: '4px', border: '1px solid #c8d8c8', fontWeight: 600 }}
                                 />
                               </div>
-                              {l.priceTiers && l.priceTiers.length > 0 && (
-                                <select
-                                  value={l.selectedTier || ''}
-                                  onChange={(e) => handleSelectTier(idx, e.target.value)}
-                                  style={{ fontSize: '11px', padding: '2px 4px', borderRadius: '4px', border: '1px solid #c8d8c8', maxWidth: '125px' }}
-                                >
-                                  <option value="">Base (${(products.find(p => p.id === l.productId)?.sellingPrice ?? l.unitPrice).toFixed(2)})</option>
-                                  {l.priceTiers.map((t) => (
-                                    <option key={t.tier_name} value={t.tier_name}>
-                                      {t.tier_name} (${Number(t.price).toFixed(2)})
-                                    </option>
-                                  ))}
-                                  {l.selectedTier === 'CUSTOM' && <option value="CUSTOM">Custom</option>}
-                                </select>
-                              )}
+                              <PriceAdjustment name={l.name} reference={products.find((p) => p.id === l.productId)?.sellingPrice ?? l.unitPrice}
+                                price={l.unitPrice} reason={l.priceReason || ''}
+                                onReason={(v) => setLines((prev) => prev.map((x, i) => (i === idx ? { ...x, priceReason: v } : x)))} />
                             </div>
                           </td>
                           <td style={{ padding: '8px 12px', textAlign: 'right' }}>

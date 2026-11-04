@@ -351,3 +351,9 @@ Owner only until a branch sells, stocks or registers them.
 - **Edit sale:** `PATCH /sales/orders/:id`, drafts only (nothing is invoiced, deducted or posted yet). Anything later: cancel or return.
 - **Cancel:** reason required; refused once goods left/delivered or after any return; reverses stock and sale entries and the entries of money already collected.
 - **Returns:** `POST /sales/orders/:id/returns` (reason, products, quantities, good/damaged, refund method). Good items restock the branch; invoice total shrinks; paid-over amount is refunded (cash 1010 out); revenue 4010 / receivable 1020 reversed, stock 1030 / COGS 5010 restored for good items only. Tables: `sales_returns`, `sales_return_lines`; `invoices.returned_amount/refunded_amount`.
+
+## 14. Product pricing: one price, adjustments recorded (price tiers retired)
+
+- A product has one selling price. Price tiers are no longer offered or saved (existing rows are kept, unused).
+- On a sale line the seller may sell above or below it. The line stores the product's price at that moment (`sales_order_lines.list_price`), the sold price, and the reason (`adjustment_reason`; chosen from a short list in the form). A far-off price (over 30%) asks for confirmation; a changed price needs a reason in the form.
+- Revenue is always the price sold at. The adjustment is information only: the Owner/admins and accountants get a notification (type `PRICE`) per sale that carries a change, and `GET /sales/price-adjustments` lists who changed what, with totals below and above the product price (accounting/admin only).

@@ -791,6 +791,9 @@ export async function ensureBranchIsolation(pool: Pool) {
         unit_price DOUBLE PRECISION NOT NULL DEFAULT 0, line_value DOUBLE PRECISION NOT NULL DEFAULT 0,
         condition TEXT NOT NULL DEFAULT 'RESALEABLE' CHECK (condition IN ('RESALEABLE', 'DAMAGED'))
       );
+      -- Price adjustments: the product's price at the time of sale and why the sold price differs.
+      ALTER TABLE sales_order_lines ADD COLUMN IF NOT EXISTS list_price DOUBLE PRECISION;
+      ALTER TABLE sales_order_lines ADD COLUMN IF NOT EXISTS adjustment_reason TEXT;
       -- Company vehicles (Employees section), picked on deliveries.
       CREATE TABLE IF NOT EXISTS vehicles (
         id TEXT PRIMARY KEY, plate_number TEXT NOT NULL, make TEXT, model TEXT, vehicle_type TEXT, capacity_note TEXT,

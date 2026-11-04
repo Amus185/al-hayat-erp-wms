@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Modal } from './Modal';
+import { PriceAdjustment } from './PriceAdjustment';
 import { SearchableSelect } from './SearchableSelect';
 import { apiGet, apiPatch, apiPost } from '../api/client';
 import { searchProducts } from '../utils/lookups';
@@ -10,15 +11,18 @@ interface Props { order: any; onClose: () => void; onDone: () => void }
 /** Edit a DRAFT sale: quantities, prices, remove or add products. Nothing is invoiced or taken from stock yet. */
 export function EditDraftModal({ order, onClose, onDone }: Props) {
   const { addToast } = useToast();
-  const [rows, setRows] = useState<{ productId: string; name: string; quantity: string; unitPrice: string; discountAmount: number }[]>(
-    (order.lines || []).map((l: any) => ({ productId: l.product_id, name: l.product_name, quantity: String(l.quantity), unitPrice: String(l.unit_price), discountAmount: Number(l.discount_amount || 0) })));
+  const [rows, setRows] = useState<{ productId: string; name: string; quantity: string; unitPrice: string; discountAmount: number; ref: number; reason: string }[]>(
+    (order.lines || []).map((l: any) => ({ productId: l.product_id, name: l.product_name, quantity: String(l.quantity), unitPrice: String(l.unit_price), discountAmount: Number(l.discount_amount || 0),
+      ref: Number(l.list_price ?? l.unit_price), reason: l.adjustment_reason || '' })));
   const [saving, setSaving] = useState(false);
   const [added, setAdded] = useState<Record<string, any>>({});
   const set = (i: number, k: 'quantity' | 'unitPrice', v: string) => setRows((r) => r.map((x, j) => (j === i ? { ...x, [k]: v } : x)));
   const total = rows.reduce((a, r) => a + Number(r.quantity || 0) * Number(r.unitPrice || 0) - r.discountAmount, 0);
 
   const save = async () => {
-    const lines = rows.map((r) => ({ productId: r.productId, quantity: Number(r.quantity), unitPrice: Number(r.unitPrice), discountAmount: r.discountAmount }));
+    const lines = rows.map((r) => ({ productId: r.productId, quantity: Number(r.quantity), unitPrice: Number(r.unitPrice), discountAmount: r.discountAmount, priceReason: r.reason || undefined }));
+    const unexplained = rows.find((r) => Math.abs(Number(r.unitPrice) - r.ref) > 0.005 && !r.reason);
+    if (unexplained) { addToast('error', `Choose why the price of "${unexplained.name}" differs from its list price.`); return; }
     if (!lines.length) { addToast('error', 'A sale needs at least one product.'); return; }
     if (lines.some((l) => !Number.isInteger(l.quantity) || l.quantity <= 0)) { addToast('error', 'Quantities must be whole numbers above 0.'); return; }
     if (lines.some((l) => !(l.unitPrice >= 0))) { addToast('error', 'A price cannot be negative.'); return; }
@@ -44,7 +48,10 @@ export function EditDraftModal({ order, onClose, onDone }: Props) {
             <tr key={r.productId}>
               <td>{r.name}</td>
               <td><input className="form-input" type="number" min={1} value={r.quantity} onChange={(e) => set(i, 'quantity', e.target.value)} aria-label={`Quantity of ${r.name}`} /></td>
-              <td><input className="form-input" type="number" min={0} step="0.01" value={r.unitPrice} onChange={(e) => set(i, 'unitPrice', e.target.value)} aria-label={`Price of ${r.name}`} /></td>
+              <td><input className="form-input" type="number" min={0} step="0.01" value={r.unitPrice} onChange={(e) => set(i, 'unitPrice', e.target.value)} aria-label={`Price of ${r.name}`} />
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4 }}>
+                  <PriceAdjustment name={r.name} reference={r.ref} price={Number(r.unitPrice)} reason={r.reason} onReason={(v) => setRows((x) => x.map((y, j) => (j === i ? { ...y, reason: v } : y)))} />
+                </div></td>
               <td><button type="button" className="btn btn-secondary btn-sm" onClick={() => setRows((x) => x.filter((_, j) => j !== i))}>Remove</button></td>
             </tr>
           ))}
@@ -55,7 +62,7 @@ export function EditDraftModal({ order, onClose, onDone }: Props) {
           loadOptions={async (q) => { const items = await searchProducts(q); setAdded((p) => ({ ...p, ...Object.fromEntries(items.map((x: any) => [x.id, x])) })); return items.map((p: any) => ({ value: p.id, label: p.name, sublabel: p.sku })); }}
           onChange={(id) => {
             const p = added[id]; if (!p || rows.some((r) => r.productId === id)) return;
-            setRows((r) => [...r, { productId: id, name: p.name, quantity: '1', unitPrice: String(p.selling_price ?? 0), discountAmount: 0 }]);
+            setRows((r) => [...r, { productId: id, name: p.name, quantity: '1', unitPrice: String(p.selling_price ?? 0), discountAmount: 0, ref: Number(p.selling_price ?? 0), reason: '' }]);
           }} />
       </div>
     </Modal>

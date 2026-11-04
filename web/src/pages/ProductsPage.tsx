@@ -138,10 +138,8 @@ export function ProductsPage() {
     totalOpeningStock: 0,
   });
 
-  const [newPriceTiers, setNewPriceTiers] = useState<{ tierName: string; price: number | string }[]>([]);
   const [newGroupItems, setNewGroupItems] = useState<{ componentProductId: string; quantity: number | string }[]>([]);
 
-  const [editPriceTiers, setEditPriceTiers] = useState<{ id?: string; tier_name: string; price: number | string }[]>([]);
   const [editGroupItems, setEditGroupItems] = useState<{ component_product_id: string; quantity: number | string }[]>([]);
 
   // Multi-location initial stock lines
@@ -201,13 +199,6 @@ export function ProductsPage() {
       product_type: prod.product_type || 'STANDARD',
       is_active: prod.is_active !== undefined ? prod.is_active : 1,
     });
-    setEditPriceTiers(
-      (prod.price_tiers || []).map((t) => ({
-        id: t.id,
-        tier_name: t.tier_name,
-        price: t.price,
-      }))
-    );
     setEditGroupItems(
       (prod.group_items || []).map((g) => ({
         component_product_id: g.component_product_id,
@@ -450,12 +441,6 @@ export function ProductsPage() {
             quantity: Number(g.quantity),
           }))
         : [],
-      priceTiers: newPriceTiers
-        .filter(t => t.tierName.trim() && Number(t.price) >= 0)
-        .map(t => ({
-          tierName: t.tierName.trim(),
-          price: Number(t.price),
-        })),
     };
     if (newProduct.categoryId) payload.categoryId = newProduct.categoryId;
     if (newProduct.brandId) payload.brandId = newProduct.brandId;
@@ -490,7 +475,6 @@ export function ProductsPage() {
         productType: 'STANDARD',
         totalOpeningStock: 0,
       });
-      setNewPriceTiers([]);
       setNewGroupItems([]);
       setInitialStockLines([]);
       loadData();
@@ -560,19 +544,12 @@ export function ProductsPage() {
               quantity: Number(g.quantity),
             }))
           : [],
-        priceTiers: editPriceTiers
-          .filter(t => t.tier_name.trim() && Number(t.price) >= 0)
-          .map(t => ({
-            tierName: t.tier_name.trim(),
-            price: Number(t.price),
-          })),
         isActive: editingProduct.is_active !== undefined ? (editingProduct.is_active ? 1 : 0) : 1,
       });
 
       addToast('success', 'Product updated successfully');
       setIsEditOpen(false);
       setEditingProduct(null);
-      setEditPriceTiers([]);
       setEditGroupItems([]);
       loadData();
     } catch (err: any) {
@@ -607,20 +584,11 @@ export function ProductsPage() {
       sortKey: 'price',
       label: 'Selling Price',
       render: (row) => {
-        const tierCount = row.price_tiers?.length || 0;
         return (
           <div>
             <div style={{ fontWeight: 600, color: '#0f172a' }}>
               ${Number(row.selling_price).toLocaleString()}
             </div>
-            {tierCount > 0 && (
-              <div
-                style={{ fontSize: '11px', color: '#0284c7', cursor: 'help' }}
-                title={row.price_tiers?.map((t) => `${t.tier_name}: $${Number(t.price).toLocaleString()}`).join(', ')}
-              >
-                +{tierCount} {tierCount === 1 ? 'price tier' : 'price tiers'}
-              </div>
-            )}
           </div>
         );
       },
@@ -1081,69 +1049,6 @@ export function ProductsPage() {
             </div>
           )}
 
-          {/* Price Tiers Section */}
-          <div style={{ marginTop: '16px', padding: '14px', background: '#f8fafc', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-              <div>
-                <div style={{ fontWeight: 700, color: '#1e293b', fontSize: '13px' }}>Price Tiers (Optional)</div>
-                <div style={{ fontSize: '12px', color: '#64748b' }}>Configure multiple selling prices for this product (e.g. Wholesale, Special).</div>
-              </div>
-              <button
-                type="button"
-                className="btn btn-secondary btn-sm"
-                onClick={() => setNewPriceTiers(prev => [...prev, { tierName: '', price: 0 }])}
-                style={{ fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px' }}
-              >
-                <Plus size={12} /> Add Price Tier
-              </button>
-            </div>
-
-            {newPriceTiers.length > 0 && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                {newPriceTiers.map((tier, idx) => (
-                  <div key={idx} style={{ display: 'flex', gap: '8px', alignItems: 'center', background: '#fff', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1' }}>
-                    <div style={{ flex: 1 }}>
-                      <input
-                        type="text"
-                        placeholder="Tier Name (e.g. Wholesale, VIP)"
-                        value={tier.tierName}
-                        onChange={(e) => {
-                          const val = e.target.value;
-                          setNewPriceTiers(prev => prev.map((t, i) => i === idx ? { ...t, tierName: val } : t));
-                        }}
-                        style={{ width: '100%', padding: '6px 8px', borderRadius: '4px', border: '1px solid #cbd5e1', fontSize: '13px' }}
-                        required
-                      />
-                    </div>
-                    <div style={{ width: '140px' }}>
-                      <input
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        placeholder="Price ($)"
-                        value={tier.price}
-                        onChange={(e) => {
-                          const val = parseFloat(e.target.value) || 0;
-                          setNewPriceTiers(prev => prev.map((t, i) => i === idx ? { ...t, price: val } : t));
-                        }}
-                        style={{ width: '100%', padding: '6px 8px', borderRadius: '4px', border: '1px solid #cbd5e1', fontSize: '13px', textAlign: 'right' }}
-                        required
-                      />
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setNewPriceTiers(prev => prev.filter((_, i) => i !== idx))}
-                      style={{ background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer', padding: '4px' }}
-                      title="Remove Price Tier"
-                    >
-                      <Trash2 size={16} />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
           {/* Initial Stock Section — Multi-location (STANDARD only) */}
           {newProduct.productType === 'STANDARD' ? (
           <div style={{ marginTop: '16px', padding: '16px', background: '#f4fbf4', borderRadius: '10px', border: '1px solid #d1e8d1' }}>
@@ -1542,69 +1447,6 @@ export function ProductsPage() {
                 )}
               </div>
             )}
-
-            {/* Price Tiers Section */}
-            <div style={{ marginTop: '16px', padding: '14px', background: '#f8fafc', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-                <div>
-                  <div style={{ fontWeight: 700, color: '#1e293b', fontSize: '13px' }}>Price Tiers (Optional)</div>
-                  <div style={{ fontSize: '12px', color: '#64748b' }}>Configure multiple selling prices for this product (e.g. Wholesale, Special).</div>
-                </div>
-                <button
-                  type="button"
-                  className="btn btn-secondary btn-sm"
-                  onClick={() => setEditPriceTiers(prev => [...prev, { tier_name: '', price: 0 }])}
-                  style={{ fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px' }}
-                >
-                  <Plus size={12} /> Add Price Tier
-                </button>
-              </div>
-
-              {editPriceTiers.length > 0 && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                  {editPriceTiers.map((tier, idx) => (
-                    <div key={idx} style={{ display: 'flex', gap: '8px', alignItems: 'center', background: '#fff', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1' }}>
-                      <div style={{ flex: 1 }}>
-                        <input
-                          type="text"
-                          placeholder="Tier Name (e.g. Wholesale, VIP)"
-                          value={tier.tier_name}
-                          onChange={(e) => {
-                            const val = e.target.value;
-                            setEditPriceTiers(prev => prev.map((t, i) => i === idx ? { ...t, tier_name: val } : t));
-                          }}
-                          style={{ width: '100%', padding: '6px 8px', borderRadius: '4px', border: '1px solid #cbd5e1', fontSize: '13px' }}
-                          required
-                        />
-                      </div>
-                      <div style={{ width: '140px' }}>
-                        <input
-                          type="number"
-                          min="0"
-                          step="0.01"
-                          placeholder="Price ($)"
-                          value={tier.price}
-                          onChange={(e) => {
-                            const val = parseFloat(e.target.value) || 0;
-                            setEditPriceTiers(prev => prev.map((t, i) => i === idx ? { ...t, price: val } : t));
-                          }}
-                          style={{ width: '100%', padding: '6px 8px', borderRadius: '4px', border: '1px solid #cbd5e1', fontSize: '13px', textAlign: 'right' }}
-                          required
-                        />
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => setEditPriceTiers(prev => prev.filter((_, i) => i !== idx))}
-                        style={{ background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer', padding: '4px' }}
-                        title="Remove Price Tier"
-                      >
-                        <Trash2 size={16} />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
 
             <div style={{ marginTop: '16px', display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 14px', background: '#f8fafc', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
               <input

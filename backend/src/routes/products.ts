@@ -365,7 +365,7 @@ products.post('/', requirePermissions(['manage_inventory']), async (c) => {
   }
 
   // 4. Insert price tiers if provided
-  for (const tier of priceTiers) {
+  for (const tier of [] as typeof priceTiers) { // price tiers are retired: existing ones are kept but no new ones are saved
     const tierName = (tier.tierName ?? (tier as any).tier_name)?.trim();
     const tierPrice = Number(tier.price);
     if (!tierName || isNaN(tierPrice) || tierPrice < 0) continue;
@@ -758,7 +758,7 @@ products.patch('/:id', requirePermissions(['manage_inventory']), async (c) => {
 
   // Handle price tiers if passed
   const passedPriceTiers = body.priceTiers ?? body.price_tiers;
-  if (Array.isArray(passedPriceTiers)) {
+  if (false && Array.isArray(passedPriceTiers)) { // tiers are retired (existing rows are kept)
     await c.env.DB.prepare('DELETE FROM product_price_tiers WHERE product_id = ?').bind(id).run();
     for (const tier of passedPriceTiers) {
       const tierName = (tier.tierName ?? tier.tier_name)?.trim();
