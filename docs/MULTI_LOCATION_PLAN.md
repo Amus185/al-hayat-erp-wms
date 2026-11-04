@@ -344,3 +344,10 @@ Owner only until a branch sells, stocks or registers them.
 - **Company Vehicles** (Employees tab): `vehicles` table; a delivery picks a vehicle and keeps its own
   driver; the usual driver is only a suggestion; the plate is copied onto the delivery; vehicles with
   delivery history are made inactive, never deleted.
+
+## 13. Transfers, sale edits, cancellations and returns
+
+- **Transfers (one step):** the sender creates a request (branches can send to any other branch: `GET /transfers/destinations`). The receiver **accepts** (`POST /transfers/:id/accept`, all or part, per-line quantity) and the stock leaves the sender and arrives at the receiver in one transaction, with the inter-branch entries. **Decline** (`/reject`, by the receiver) or sender **withdraw** (`/cancel`) moves nothing. Old approve/dispatch/receive stay only for transfers already in flight.
+- **Edit sale:** `PATCH /sales/orders/:id`, drafts only (nothing is invoiced, deducted or posted yet). Anything later: cancel or return.
+- **Cancel:** reason required; refused once goods left/delivered or after any return; reverses stock and sale entries and the entries of money already collected.
+- **Returns:** `POST /sales/orders/:id/returns` (reason, products, quantities, good/damaged, refund method). Good items restock the branch; invoice total shrinks; paid-over amount is refunded (cash 1010 out); revenue 4010 / receivable 1020 reversed, stock 1030 / COGS 5010 restored for good items only. Tables: `sales_returns`, `sales_return_lines`; `invoices.returned_amount/refunded_amount`.
