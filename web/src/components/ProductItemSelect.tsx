@@ -8,6 +8,8 @@ export interface SelectableProduct {
   barcode?: string | null;
   price?: number | null;
   priceLabel?: string;
+  /** Price levels: the next price and after how many units it starts. */
+  nextPrice?: { price: number; after: number } | null;
   category?: string | null;
   stock?: number | null;
   stockHint?: string | null;
@@ -409,6 +411,11 @@ export function ProductItemSelect({
                           <span style={{ fontWeight: 700, fontSize: '13px', color: '#0b8f08' }}>
                             ${Number(p.price).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                           </span>
+                          {p.nextPrice && (
+                            <span style={{ fontSize: '10px', color: '#1d4ed8', display: 'block', whiteSpace: 'nowrap' }}>
+                              then ${Number(p.nextPrice.price).toFixed(2)} after {p.nextPrice.after}
+                            </span>
+                          )}
                         </div>
                       )}
 

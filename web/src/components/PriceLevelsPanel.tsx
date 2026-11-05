@@ -31,7 +31,11 @@ export function PriceLevelsPanel({ productId, isOwner, canCosts, warehouses, bra
   const [form, setForm] = useState({ costPrice: '', sellingPrice: '', quantity: '', where: '', payment: 'PAID', note: '' });
   const [editPrice, setEditPrice] = useState<Record<string, string>>({});
 
-  const load = () => apiGet<Level[]>(`/products/${productId}/price-levels`).then((l) => { setLevels(l || []); onLoaded((l || []).length > 0); }).catch(() => setLevels([]));
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const load = () => apiGet<Level[]>(`/products/${productId}/price-levels`)
+    .then((l) => { setLoadError(null); setLevels(l || []); onLoaded((l || []).length > 0); })
+    // Never show an empty list when the levels could not be read: say so.
+    .catch((e) => { setLevels([]); setLoadError(e?.message || 'The price levels could not be loaded.'); });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { load(); }, [productId]);
 
@@ -78,6 +82,11 @@ export function PriceLevelsPanel({ productId, isOwner, canCosts, warehouses, bra
         )}
       </div>
 
+      {loadError && (
+        <div style={{ marginTop: 10, padding: '8px 10px', borderRadius: 6, background: '#fef2f2', color: '#b91c1c', fontSize: 12 }}>
+          Price levels could not be loaded ({loadError}). If this keeps happening, the server is not up to date: deploy the backend.
+        </div>
+      )}
       {levels.length > 0 && (
         <div style={{ overflowX: 'auto', marginTop: 10 }}>
           <table className="table" style={{ width: '100%', fontSize: 12, whiteSpace: 'nowrap' }}>

@@ -665,6 +665,7 @@ export function CreateSalesOrderModal({ isOpen, onClose, onOrderCreated }: Creat
                 sku: p.sku,
                 name: p.name,
                 price: p.sellingPrice,
+                nextPrice: p.priceSteps && p.priceSteps.length > 1 ? { price: p.priceSteps[1].price, after: p.priceSteps[0].left } : null,
                 category: p.productType === 'GROUPED' ? 'Bundle' : 'Furniture',
                 stock: sInfo ? sInfo.branchQty : undefined,
                 stockHint: hint,

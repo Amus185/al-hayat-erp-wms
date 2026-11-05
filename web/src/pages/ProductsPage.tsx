@@ -606,11 +606,19 @@ export function ProductsPage() {
       sortKey: 'price',
       label: 'Selling Price',
       render: (row) => {
+        // Price levels: what sells now, and the next price with when it starts.
+        const steps = (row as any).price_steps as { left: number; price: number }[] | undefined;
+        const next = steps && steps.length > 1 ? steps[1] : null;
         return (
           <div>
             <div style={{ fontWeight: 600, color: '#0f172a' }}>
               ${Number(row.selling_price).toLocaleString()}
             </div>
+            {next && (
+              <div style={{ fontSize: '11px', color: '#1d4ed8', whiteSpace: 'nowrap' }} title={`${steps!.length} price levels with stock`}>
+                Next ${next.price.toLocaleString()} after {steps![0].left} sold
+              </div>
+            )}
           </div>
         );
       },
