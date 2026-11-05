@@ -9,6 +9,7 @@
 //
 // The average is company-wide (products are shared by all branches and warehouses).
 // All statements here are meant to run inside the caller's db.batch (one transaction).
+// Products with price levels (services/price-levels.ts) follow their levels instead.
 
 /** Units on hand everywhere, ignoring negative rows. */
 const ON_HAND = `(SELECT COALESCE(SUM(GREATEST(s.quantity_on_hand, 0)), 0) FROM inventory_stock s WHERE s.product_id = p.id)`;
@@ -35,11 +36,13 @@ export function costInStatements(db: any, o: {
       INSERT INTO product_price_history (id, product_id, kind, old_value, new_value, source, reference_id, changed_by)
       SELECT gen_random_uuid()::text, p.id, 'COST', p.cost_price, ${newCost}, ?, ?, ?
       FROM products p WHERE p.id = ? AND COALESCE(p.product_type, 'STANDARD') <> 'GROUPED'
+        AND NOT EXISTS (SELECT 1 FROM product_price_levels l WHERE l.product_id = p.id)
         AND abs(COALESCE(p.cost_price, -1) - ${newCost}) > 0.00005
     `).bind(...binds, o.source, o.referenceId ?? null, o.userId ?? null, o.productId, ...binds),
     db.prepare(`
       UPDATE products p SET cost_price = ${newCost}, updated_at = CURRENT_TIMESTAMP
       WHERE p.id = ? AND COALESCE(p.product_type, 'STANDARD') <> 'GROUPED'
+        AND NOT EXISTS (SELECT 1 FROM product_price_levels l WHERE l.product_id = p.id)
     `).bind(...binds, o.productId),
   ];
 }

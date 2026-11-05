@@ -8,6 +8,7 @@ import { prepareOpeningStock, prepareJournalEntryPosting, type OpeningStockItem 
 import { csvResponse, likeTerm, listRequest, pagedResponse, pagedRows, type ListOptions, type ListRequest } from '../services/listing';
 
 import { isOwner, sellingPriceHistoryStmt } from '../services/costing';
+import { baseLevelStatement, newLevelStatements, syncProductStatements } from '../services/price-levels';
 
 const products = new Hono<{ Bindings: Env; Variables: { jwtPayload: any } }>();
 
@@ -96,7 +97,8 @@ async function listProducts(c: any, r: ListRequest) {
   if (ids.length) {
     const ph = ids.map(() => '?').join(', ');
     [tiers, groups] = await Promise.all([
-      c.env.DB.prepare(`SELECT * FROM product_price_tiers WHERE product_id IN (${ph}) ORDER BY price ASC`).bind(...ids).all().then((x: any) => x.results || []).catch(() => []),
+      // Price levels still to sell (oldest first): the sale form prices a quantity that crosses levels.
+      c.env.DB.prepare(`SELECT product_id, quantity_left AS left_qty, selling_price AS price FROM product_price_levels WHERE product_id IN (${ph}) AND quantity_left > 0 ORDER BY product_id, level_no`).bind(...ids).all().then((x: any) => x.results || []).catch(() => []),
       c.env.DB.prepare(`
         SELECT pgi.*, cp.name AS component_name, cp.sku AS component_sku
         FROM product_group_items pgi JOIN products cp ON cp.id = pgi.component_product_id
@@ -105,7 +107,8 @@ async function listProducts(c: any, r: ListRequest) {
   }
   const items = rows.map((p: any) => ({
     ...p,
-    price_tiers: tiers.filter((t) => t.product_id === p.id),
+    price_tiers: [],
+    price_steps: tiers.filter((t) => t.product_id === p.id).map((t) => ({ left: Number(t.left_qty), price: Number(t.price) })),
     group_items: groups.filter((g) => g.parent_product_id === p.id),
   }));
   // ?withStock=1 (sale/transfer forms): stock rows of these products and their
@@ -666,6 +669,108 @@ products.get('/:id', async (c) => {
 });
 
 /** Cost and selling-price history of a product (cost lines only for people who may see costs). */
+/** Price levels of a product (oldest first). Costs only for people who may see costs. */
+products.get('/:id/price-levels', async (c) => {
+  const id = c.req.param('id') as string;
+  if (!(await productAllowed(c, id))) return c.json({ message: 'Product not found' }, 404);
+  const { results } = await c.env.DB.prepare(`
+    SELECT l.id, l.level_no, l.cost_price, l.selling_price, l.quantity_in, l.quantity_left, l.source, l.note, l.created_at, l.activated_at, l.depleted_at,
+           u.full_name AS created_by_name
+    FROM product_price_levels l LEFT JOIN users u ON u.id = l.created_by WHERE l.product_id = ? ORDER BY l.level_no
+  `).bind(id).all();
+  const rows = (results || []) as any[];
+  const activeId = rows.find((r) => Number(r.quantity_left) > 0)?.id;
+  const out = rows.map((r) => ({
+    ...r, status: r.id === activeId ? 'SELLING' : Number(r.quantity_left) > 0 ? 'WAITING' : 'SOLD_OUT',
+    ...(canSeeCosts(c) ? {} : { cost_price: undefined }),
+  }));
+  return c.json(out);
+});
+
+/**
+ * Add New Price Level (Owner): new goods of this same product at a new cost and selling price.
+ * Adds the stock at the chosen place and posts it (Inventory against Cash if paid, or Accounts
+ * Payable if owed). Today's stock becomes level 1 first, so it is sold at the old price first.
+ */
+products.post('/:id/price-levels', requirePermissions(['manage_inventory']), async (c) => {
+  const id = c.req.param('id') as string;
+  const actor = c.get('jwtPayload');
+  if (!isOwner(actor)) return c.json({ message: 'Only the Owner can add a price level (it sets new prices).' }, 403);
+  if (!(await productAllowed(c, id))) return c.json({ message: 'Product not found' }, 404);
+  const p = await c.env.DB.prepare("SELECT id, name, COALESCE(product_type, 'STANDARD') AS product_type FROM products WHERE id = ?").bind(id).first() as any;
+  if (!p) return c.json({ message: 'Product not found' }, 404);
+  if (p.product_type === 'GROUPED') return c.json({ message: 'A bundle has no stock of its own: add price levels to the products inside it.' }, 400);
+  const body = await c.req.json().catch(() => ({})) as any;
+  const cost = Math.round(Number(body.costPrice) * 10000) / 10000;
+  const price = Math.round(Number(body.sellingPrice) * 100) / 100;
+  const qty = Number(body.quantity);
+  if (!(cost >= 0)) return c.json({ message: 'Enter the new cost price.' }, 400);
+  if (!(price > 0)) return c.json({ message: 'Enter the new selling price.' }, 400);
+  if (!Number.isInteger(qty) || qty <= 0) return c.json({ message: 'Enter the quantity received (a whole number above 0).' }, 400);
+  const ownerType = body.ownerType === 'BRANCH' ? 'BRANCH' : 'WAREHOUSE';
+  const locId = ownerType === 'BRANCH' ? body.branchId : body.warehouseId;
+  if (!locId) return c.json({ message: 'Choose where the goods are kept (warehouse or branch).' }, 400);
+  if (!(await c.env.DB.prepare(`SELECT id FROM ${ownerType === 'BRANCH' ? 'branches' : 'warehouses'} WHERE id = ?`).bind(locId).first())) {
+    return c.json({ message: 'That warehouse or branch does not exist.' }, 400);
+  }
+  const paid = body.payment === 'OWED' ? false : true;
+  const note = typeof body.note === 'string' && body.note.trim() ? body.note.trim().slice(0, 200) : null;
+  const userId = actor?.sub ?? null;
+  const levelId = uuidv4();
+  const value = Math.round(qty * cost * 100) / 100;
+  const stmts: any[] = [
+    // today's stock first becomes level 1 (old cost, old price), so it sells first
+    baseLevelStatement(c.env.DB, id, userId),
+    ...newLevelStatements(c.env.DB, { productId: id, costPrice: cost, sellingPrice: price, quantity: qty, source: 'ADDED_BY_OWNER', refId: levelId, note, userId, levelId }),
+  ];
+  const stock = await c.env.DB.prepare(`SELECT id FROM inventory_stock WHERE product_id = ? AND owner_type = ? AND warehouse_id IS NOT DISTINCT FROM ? AND branch_id IS NOT DISTINCT FROM ?`)
+    .bind(id, ownerType, ownerType === 'WAREHOUSE' ? locId : null, ownerType === 'BRANCH' ? locId : null).first() as any;
+  // The base level (first statement) counts the stock before this; the new units are added after it.
+  stmts.push(stock
+    ? c.env.DB.prepare('UPDATE inventory_stock SET quantity_on_hand = quantity_on_hand + ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').bind(qty, stock.id)
+    : c.env.DB.prepare('INSERT INTO inventory_stock (id, product_id, owner_type, warehouse_id, branch_id, quantity_on_hand) VALUES (?, ?, ?, ?, ?, ?)')
+        .bind(uuidv4(), id, ownerType, ownerType === 'WAREHOUSE' ? locId : null, ownerType === 'BRANCH' ? locId : null, qty));
+  stmts.push(c.env.DB.prepare(`
+    INSERT INTO inventory_transactions (id, product_id, transaction_type, quantity, destination_owner_type, destination_warehouse_id, destination_branch_id, dest_owner_type, dest_warehouse_id, dest_branch_id, reference_type, reference_id, notes, created_by)
+    VALUES (?, ?, 'PRICE_LEVEL_RECEIPT', ?, ?, ?, ?, ?, ?, ?, 'PRICE_LEVEL', ?, ?, ?)
+  `).bind(uuidv4(), id, qty, ownerType, ownerType === 'WAREHOUSE' ? locId : null, ownerType === 'BRANCH' ? locId : null,
+    ownerType, ownerType === 'WAREHOUSE' ? locId : null, ownerType === 'BRANCH' ? locId : null, levelId, note || `New price level for ${p.name}`, userId));
+  if (value > 0) {
+    stmts.push(...(await prepareJournalEntryPosting(c, {
+      description: `${p.name}: ${qty} received at ${cost.toFixed(2)} (new price level)${paid ? '' : ' — owed to supplier'}`,
+      referenceType: 'PURCHASE', referenceId: `level:${levelId}`,
+      branchId: ownerType === 'BRANCH' ? locId : null, userId,
+      lines: [
+        { accountCode: '1030', debitAmount: value, creditAmount: 0 },
+        { accountCode: paid ? '1010' : '2010', debitAmount: 0, creditAmount: value },
+      ],
+    })).statements);
+  }
+  stmts.push(createAuditLogStmt(c, 'PRICE_LEVEL_ADD', 'products', id, null, { levelId, cost, price, qty, ownerType, locId, paid }));
+  await c.env.DB.batch(stmts);
+  const levels = await c.env.DB.prepare('SELECT * FROM product_price_levels WHERE product_id = ? ORDER BY level_no').bind(id).all();
+  return c.json({ success: true, levels: levels.results }, 201);
+});
+
+/** The Owner changes the selling price of a level (e.g. one that is still waiting). Its cost is what was paid: it stays. */
+products.patch('/:id/price-levels/:levelId', requirePermissions(['manage_inventory']), async (c) => {
+  const id = c.req.param('id') as string;
+  const actor = c.get('jwtPayload');
+  if (!isOwner(actor)) return c.json({ message: 'Only the Owner can change prices.' }, 403);
+  const body = await c.req.json().catch(() => ({})) as any;
+  const price = Math.round(Number(body.sellingPrice) * 100) / 100;
+  if (!(price > 0)) return c.json({ message: 'Enter the selling price.' }, 400);
+  const level = await c.env.DB.prepare('SELECT * FROM product_price_levels WHERE id = ? AND product_id = ?').bind(c.req.param('levelId'), id).first() as any;
+  if (!level) return c.json({ message: 'Price level not found.' }, 404);
+  await c.env.DB.batch([
+    c.env.DB.prepare('UPDATE product_price_levels SET selling_price = ? WHERE id = ?').bind(price, level.id),
+    c.env.DB.prepare(`INSERT INTO product_price_history (id, product_id, kind, old_value, new_value, source, reference_id, changed_by) VALUES (gen_random_uuid()::text, ?, 'SELLING', ?, ?, 'LEVEL_PRICE_CHANGED', ?, ?)`)
+      .bind(id, Number(level.selling_price), price, level.id, actor?.sub ?? null),
+    ...syncProductStatements(c.env.DB, id, actor?.sub ?? null),
+  ]);
+  return c.json({ success: true });
+});
+
 products.get('/:id/price-history', async (c) => {
   const id = c.req.param('id') as string;
   if (!(await productAllowed(c, id))) return c.json({ message: 'Product not found' }, 404);
@@ -727,6 +832,13 @@ products.patch('/:id', requirePermissions(['manage_inventory']), async (c) => {
 
   const priceStmts: any[] = [];
   const actor = c.get('jwtPayload');
+  const usesLevels = !!(await c.env.DB.prepare('SELECT 1 AS x FROM product_price_levels WHERE product_id = ? LIMIT 1').bind(id).first());
+  if (usesLevels) {
+    const wantsCost = (body.costPrice !== undefined || body.cost_price !== undefined) && Math.abs(Number(body.costPrice ?? body.cost_price) - Number((existing as any).cost_price || 0)) > 0.005;
+    const wantsPrice = (body.sellingPrice !== undefined || body.selling_price !== undefined) && Math.abs(Number(body.sellingPrice ?? body.selling_price) - Number((existing as any).selling_price || 0)) > 0.005;
+    if (wantsCost || wantsPrice) return c.json({ message: 'This product is sold by price levels: change the price of a level, or add a new price level.' }, 409);
+    delete body.costPrice; delete body.cost_price; delete body.sellingPrice; delete body.selling_price;
+  }
   // Cost price: the Owner sets it in Products (purchases also move it, as a running average).
   // When the product has stock, the stock's value in the books follows the new cost: one
   // balanced entry per branch holding it (Inventory 1030 against Inventory Gain 5030 or

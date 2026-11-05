@@ -844,6 +844,26 @@ export async function ensureCosting(pool: Pool) {
         created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
       );
       CREATE INDEX IF NOT EXISTS idx_price_history_product ON product_price_history (product_id, created_at DESC);
+      -- Price levels: batches of one product at different cost/selling prices, sold oldest first.
+      CREATE TABLE IF NOT EXISTS product_price_levels (
+        id TEXT PRIMARY KEY, product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+        level_no INTEGER NOT NULL, cost_price DOUBLE PRECISION NOT NULL CHECK (cost_price >= 0),
+        selling_price DOUBLE PRECISION NOT NULL CHECK (selling_price >= 0),
+        quantity_in INTEGER NOT NULL CHECK (quantity_in >= 0), quantity_left INTEGER NOT NULL CHECK (quantity_left >= 0),
+        source TEXT NOT NULL, reference_id TEXT, note TEXT, created_by TEXT REFERENCES users(id),
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        activated_at TIMESTAMP WITH TIME ZONE, depleted_at TIMESTAMP WITH TIME ZONE,
+        UNIQUE (product_id, level_no)
+      );
+      CREATE TABLE IF NOT EXISTS product_price_level_moves (
+        id TEXT PRIMARY KEY, level_id TEXT NOT NULL REFERENCES product_price_levels(id) ON DELETE CASCADE,
+        product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE, quantity INTEGER NOT NULL,
+        unit_cost DOUBLE PRECISION NOT NULL DEFAULT 0, reference_type TEXT NOT NULL, reference_id TEXT,
+        created_by TEXT REFERENCES users(id), created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS idx_level_moves_ref ON product_price_level_moves (reference_id);
+      CREATE INDEX IF NOT EXISTS idx_level_moves_product ON product_price_level_moves (product_id);
+      ALTER TABLE sales_order_lines ADD COLUMN IF NOT EXISTS price_breakdown TEXT;
     `);
     const done = await client.query("SELECT 1 FROM app_migrations WHERE name = 'costing_recalc_v1'");
     if (!done.rowCount) {

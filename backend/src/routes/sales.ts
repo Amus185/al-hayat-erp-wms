@@ -3,7 +3,8 @@ import { Env, uuidv4 } from '../db';
 import { PgAdapter } from '../pg-client';
 import { authMiddleware, requirePermissions, isAdminUser } from '../middleware/auth';
 import { has } from '../services/privacy';
-import { costInStatements, stampOrderLineCosts, unitCosts } from '../services/costing';
+import { costInStatements, unitCosts } from '../services/costing';
+import { levelPlanner, restoreToLevels } from '../services/price-levels';
 import { resolveBranchScope, resolveLoc, locBranch, resolveWriteBranch, branchSql, inScope, ScopeError, customerVisibleSql, type BranchScope } from '../services/branch-scope';
 import { logAudit, createAuditLogStmt } from '../services/audit';
 import { releaseReservationsStmt, returnWebQuantityStmt } from '../services/storefront';
@@ -1321,6 +1322,34 @@ function branchStockIssue(db: PgAdapter, productId: string, qty: number, branchI
     .mustAffect('Insufficient stock: these units were just sold or moved. Please refresh and try again.');
 }
 
+/**
+ * Cost of the stock a sale takes: from the price levels, oldest first, for products that have
+ * them; otherwise the product's cost. Also stamps each sale line with its unit cost and records
+ * the level moves (under the invoice id, so a cancel or return can put the units back).
+ */
+async function saleIssueCost(db: any, orderId: string, lines: Array<{ product_id: string; quantity: number }>, invoiceId: string, userId: string | null) {
+  const perLine: Array<{ line: { product_id: string; quantity: number }; reqs: Array<{ productId: string; quantity: number }> }> = [];
+  const ids = new Set<string>();
+  for (const line of lines) {
+    const reqs = await resolveLinesToInventoryRequirements(db, [{ productId: line.product_id, quantity: Number(line.quantity) }]);
+    perLine.push({ line, reqs });
+    reqs.forEach((r) => ids.add(r.productId));
+  }
+  const planner = await levelPlanner(db, [...ids]);
+  let cogs = 0;
+  const stmts: any[] = [];
+  for (const { line, reqs } of perLine) {
+    let lineCost = 0;
+    for (const r of reqs) lineCost += planner.take(r.productId, r.quantity).cost;
+    cogs += lineCost;
+    const q = Number(line.quantity) || 1;
+    stmts.push(db.prepare('UPDATE sales_order_lines SET unit_cost = ? WHERE sales_order_id = ? AND product_id = ? AND unit_cost IS NULL')
+      .bind(Math.round((lineCost / q) * 10000) / 10000, orderId, line.product_id));
+  }
+  stmts.push(...planner.statements('SALE', invoiceId, userId));
+  return { cogs: Math.round(cogs * 100) / 100, stmts };
+}
+
 // ──────────────────────────────────────────────────────────────────────
 // Helper: Resolve sales lines to inventory requirements (standard vs grouped)
 // ──────────────────────────────────────────────────────────────────────
@@ -1464,6 +1493,9 @@ sales.post('/orders', requirePermissions(['manage_sales']), async (c) => {
     `).bind(String(body.webRequestId)).all();
     for (const r of (wl || []) as any[]) webPrices.set(r.product_id, Number(r.unit_price));
   }
+  // Products with price levels: the oldest level's price first (a quantity that crosses into the
+  // next level is priced at both, e.g. 5 × 100 + 3 × 120).
+  const pricePlanner = await levelPlanner(c.env.DB, Array.isArray(body.lines) ? body.lines.map((l: any) => l.productId) : []);
   for (let i = 0; i < body.lines.length; i++) {
     const line = body.lines[i];
     if (!line.productId) return c.json({ message: `Line ${i + 1}: productId is required.` }, 400);
@@ -1485,6 +1517,11 @@ sales.post('/orders', requirePermissions(['manage_sales']), async (c) => {
     // Products). Nobody can type a price on a sale; a price sent by the client is ignored.
     // Only a website request being converted keeps the price the customer was quoted.
     line.unitPrice = webPrices.has(line.productId) ? webPrices.get(line.productId)! : Number(product.selling_price || 0);
+    line.priceBreakdown = null;
+    if (!webPrices.has(line.productId) && pricePlanner.has(line.productId)) {
+      const t = pricePlanner.take(line.productId, line.quantity, false);
+      if (Number.isFinite(t.unitPrice)) { line.unitPrice = Math.round(t.unitPrice * 10000) / 10000; line.priceBreakdown = t.breakdown; }
+    }
     line.listPrice = line.unitPrice;
   }
 
@@ -1557,8 +1594,8 @@ sales.post('/orders', requirePermissions(['manage_sales']), async (c) => {
     const lineFulfillmentType = (line.fulfillmentType || line.fulfillment_type || fulfillmentType).toUpperCase() === 'PICKUP' ? 'PICKUP' : 'DELIVERY';
 
     stmts.push(c.env.DB.prepare(`
-      INSERT INTO sales_order_lines (id, sales_order_id, product_id, quantity, unit_price, discount_amount, line_total, fulfillment_type, list_price, adjustment_reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).bind(uuidv4(), id, line.productId, line.quantity, line.unitPrice, discountAmount, lineTotal, lineFulfillmentType, line.listPrice, null));
+      INSERT INTO sales_order_lines (id, sales_order_id, product_id, quantity, unit_price, discount_amount, line_total, fulfillment_type, list_price, adjustment_reason, price_breakdown) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(uuidv4(), id, line.productId, line.quantity, line.unitPrice, discountAmount, lineTotal, lineFulfillmentType, line.listPrice, null, line.priceBreakdown || null));
   }
 
   const netTotal = subtotal - totalDiscount;
@@ -1616,8 +1653,9 @@ sales.post('/orders', requirePermissions(['manage_sales']), async (c) => {
 
     // 4. Revenue/receivable/COGS and the deposit commit with the sale.
     const orderRef = { id, order_number: orderNumber, branch_id: body.branchId };
-    const cogsAmount = await calculateLinesCogs(c.env.DB, body.lines.map((l: any) => ({ product_id: l.productId, quantity: l.quantity })));
-    stmts.push(stampOrderLineCosts(c.env.DB, id));
+    const issue = await saleIssueCost(c.env.DB, id, body.lines.map((l: any) => ({ product_id: l.productId, quantity: l.quantity })), invoiceId, userId);
+    const cogsAmount = issue.cogs;
+    stmts.push(...issue.stmts);
     stmts.push(...(await prepareSaleJournalEntry(c, orderRef, netTotal, cogsAmount, userId, undefined, undefined, installFee)).statements);
     if (deposit > 0) {
       stmts.push(...(await prepareCustomerPaymentJournalEntry(c, { id: invoiceId, amount: deposit }, orderRef, userId)).statements);
@@ -1833,8 +1871,10 @@ sales.post('/orders/:id/invoice', requirePermissions(['manage_sales']), async (c
     stmts.push(createAuditLogStmt(c, 'SALES_ORDER_INVOICE', 'sales_orders', orderId, { status: 'CONFIRMED' }, { status: 'INVOICED', invoiceId, total }));
 
     // Revenue, receivable (incl. installation fee) and COGS commit with the invoice.
-    const cogsAmount = await calculateOrderCogs(c.env.DB, orderId as string);
-    stmts.push(stampOrderLineCosts(c.env.DB, orderId as string));
+    const { results: issueLines } = await c.env.DB.prepare('SELECT product_id, quantity FROM sales_order_lines WHERE sales_order_id = ?').bind(orderId).all();
+    const issue = await saleIssueCost(c.env.DB, orderId as string, (issueLines || []) as any[], invoiceId, userId);
+    const cogsAmount = issue.cogs;
+    stmts.push(...issue.stmts);
     const orderRef = { id: orderId as string, order_number: String((order as any)?.order_number || orderId), branch_id: branchId ? String(branchId) : null };
     stmts.push(...(await prepareSaleJournalEntry(c, orderRef, total, cogsAmount, userId, undefined, undefined, installFee)).statements);
 
@@ -2098,8 +2138,10 @@ sales.post('/orders/:id/complete', requirePermissions(['manage_sales']), async (
       fetchOpenFiscalPeriodId(c.env.DB, entryDate),
       fetchCoaMapForCodes(c.env.DB, ['1010', '1020', '1030', '2050', '4010', '5010']),
     ]);
-    const cogsAmount = await calculateOrderCogs(c.env.DB, order.id as string);
-    stmts.push(stampOrderLineCosts(c.env.DB, order.id as string));
+    const { results: issueLines } = await c.env.DB.prepare('SELECT product_id, quantity FROM sales_order_lines WHERE sales_order_id = ?').bind(order.id).all();
+    const issue = await saleIssueCost(c.env.DB, order.id as string, (issueLines || []) as any[], invoiceId, userId);
+    const cogsAmount = issue.cogs;
+    stmts.push(...issue.stmts);
     const saleJournal = await prepareJournalEntryPosting(c, {
       description: `Sales Order Completed & Invoiced #${(order as any).order_number || order.id}`,
       referenceType: 'SALE',
@@ -2539,6 +2581,8 @@ sales.post('/orders/:id/cancel', requirePermissions(['manage_sales']), async (c)
         if (soldCost.has(line.product_id)) {
           stmts.push(...costInStatements(c.env.DB, { productId: line.product_id, quantity: qty, unitCost: soldCost.get(line.product_id)!, source: 'SALE_CANCELLED', referenceId: String(orderId), userId }));
         }
+        // Price levels: the units go back into the levels this sale took them from.
+        stmts.push(...(await restoreToLevels(c.env.DB, { productId: line.product_id, quantity: qty, fromRefId: invoice.id, refType: 'SALE_CANCELLED', refId: String(orderId), userId })).stmts);
         stmts.push(c.env.DB.prepare(`
           UPDATE inventory_stock
           SET quantity_on_hand = quantity_on_hand + ?, updated_at = CURRENT_TIMESTAMP
@@ -2674,6 +2718,7 @@ sales.patch('/orders/:id', requirePermissions(['manage_sales']), async (c) => {
   if (body.lines !== undefined) {
     if (!Array.isArray(body.lines) || body.lines.length === 0) return c.json({ message: 'A sale needs at least one product line.' }, 400);
     const seen = new Set<string>();
+    const editPlanner = await levelPlanner(c.env.DB, body.lines.map((l: any) => l.productId));
     for (let i = 0; i < body.lines.length; i++) {
       const l = body.lines[i];
       if (!l.productId) return c.json({ message: `Line ${i + 1}: choose a product.` }, 400);
@@ -2682,16 +2727,20 @@ sales.patch('/orders/:id', requirePermissions(['manage_sales']), async (c) => {
       seen.add(l.productId);
       const pr = await c.env.DB.prepare('SELECT id, name, selling_price, COALESCE(is_active, 1) AS is_active FROM products WHERE id = ?').bind(l.productId).first() as any;
       if (!pr) return c.json({ message: `Line ${i + 1}: that product does not exist.` }, 400);
-      // Always the product's current selling price; a price from the client is ignored.
-      l.unitPrice = Number(pr.selling_price || 0);
+      // Always the product's current selling price (price levels: oldest first); a price from the client is ignored.
+      l.unitPrice = Number(pr.selling_price || 0); l.priceBreakdown = null;
+      if (editPlanner.has(l.productId)) {
+        const t = editPlanner.take(l.productId, l.quantity, false);
+        if (Number.isFinite(t.unitPrice)) { l.unitPrice = Math.round(t.unitPrice * 10000) / 10000; l.priceBreakdown = t.breakdown; }
+      }
       if (pr.is_active === 0) return c.json({ message: `"${pr.name}" is inactive and cannot be sold.` }, 400);
     }
     stmts.push(c.env.DB.prepare('DELETE FROM sales_order_lines WHERE sales_order_id = ?').bind(orderId));
     const lineType = String(body.fulfillmentType || order.fulfillment_type || 'DELIVERY').toUpperCase() === 'PICKUP' ? 'PICKUP' : 'DELIVERY';
     for (const l of body.lines) {
       const disc = Math.max(0, Number(l.discountAmount || 0));
-      stmts.push(c.env.DB.prepare('INSERT INTO sales_order_lines (id, sales_order_id, product_id, quantity, unit_price, discount_amount, line_total, fulfillment_type, list_price, adjustment_reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-        .bind(uuidv4(), orderId, l.productId, l.quantity, l.unitPrice, disc, l.quantity * l.unitPrice - disc, lineType, l.unitPrice, null));
+      stmts.push(c.env.DB.prepare('INSERT INTO sales_order_lines (id, sales_order_id, product_id, quantity, unit_price, discount_amount, line_total, fulfillment_type, list_price, adjustment_reason, price_breakdown) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+        .bind(uuidv4(), orderId, l.productId, l.quantity, l.unitPrice, disc, l.quantity * l.unitPrice - disc, lineType, l.unitPrice, null, l.priceBreakdown || null));
     }
   }
   if (!sets.length && body.lines === undefined) return c.json({ message: 'Nothing to change.' }, 400);
@@ -2807,9 +2856,18 @@ sales.post('/orders/:id/returns', requirePermissions(['manage_sales']), async (c
     for (const r of resaleable) {
       const row = sold.get(r.product_id) as any;
       const unit = row?.unit_cost != null ? Number(row.unit_cost) : (nowCosts.get(r.product_id) ?? 0);
-      returnedCost += r.quantity * unit;
+      // Price levels: the units go back into the levels the sale took them from, at their cost.
+      const back = row?.product_type !== 'GROUPED'
+        ? await restoreToLevels(c.env.DB, { productId: r.product_id, quantity: r.quantity, fromRefId: invoice.id, refType: 'SALES_RETURN', refId: returnId, userId })
+        : { stmts: [], restored: 0, cost: 0 };
+      stmts.push(...back.stmts);
+      returnedCost += back.cost + (r.quantity - back.restored) * unit;
       if (row?.product_type !== 'GROUPED') {
         stmts.push(...costInStatements(c.env.DB, { productId: r.product_id, quantity: r.quantity, unitCost: unit, source: 'SALES_RETURN', referenceId: returnId, userId }));
+      } else {
+        for (const comp of await resolveLinesToInventoryRequirements(c.env.DB, [{ productId: r.product_id, quantity: r.quantity }])) {
+          stmts.push(...(await restoreToLevels(c.env.DB, { productId: comp.productId, quantity: comp.quantity, fromRefId: invoice.id, refType: 'SALES_RETURN', refId: returnId, userId })).stmts);
+        }
       }
     }
   }

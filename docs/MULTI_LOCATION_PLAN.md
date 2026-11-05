@@ -371,3 +371,9 @@ Owner only until a branch sells, stocks or registers them.
 - Sales always use the product's current selling price; the server ignores any typed price (seller or Owner). Website requests keep the price the customer was quoted.
 - The Owner changes cost and selling price in Products → Edit at any time. A cost change with stock posts one entry per location (1030 against 5030 Inventory Gain / 5020 Inventory Loss), so the ledger stays stock × cost. Purchases still move the average cost and alert the Owner.
 - The "new price when receiving" box and the per-sale price adjustment are removed.
+
+### 15b. Price levels (Owner request, 5 Nov)
+- One product record; Products → Edit → **Add New Price Level** (Owner): new cost, selling price, quantity, where the goods are kept, paid or owed. The stock is added and posted (1030 against 1010 cash or 2010 payable). Today's stock first becomes level 1 at today's cost and price.
+- Sales take the oldest level with units first (FIFO, company-wide). A quantity crossing two levels is priced at both on one line (`sales_order_lines.price_breakdown`, e.g. "31 × 26.00 + 2 × 32.00"). When a level runs out the next level's price switches on (`products.selling_price` follows; `products.cost_price` = average of units left, so stock value = Σ levels).
+- Cost of each sale = cost of the levels it took (`product_price_level_moves`). Cancels and returns put units back into the level they came from. Purchase receipts and production of such a product become new levels; stock counts take from the oldest level / add to the one selling now.
+- Discount is unchanged. Tables: product_price_levels, product_price_level_moves (`services/price-levels.ts`).

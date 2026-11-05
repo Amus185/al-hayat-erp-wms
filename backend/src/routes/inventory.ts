@@ -7,6 +7,7 @@ import { hideUnless, PERM, COST_FIELDS, sortsFor, canSeeCosts } from '../service
 import { prepareInventoryAdjustmentJournalEntry } from '../services/accounting-service';
 import { csvResponse, dateRange, likeTerm, listRequest, pagedResponse, pagedRows, type ListOptions, type ListRequest } from '../services/listing';
 
+import { levelPlanner, addToActiveLevelStatements } from '../services/price-levels';
 const inventory = new Hono<{ Bindings: Env; Variables: { jwtPayload: any } }>();
 
 inventory.use('/*', authMiddleware);
@@ -321,7 +322,20 @@ inventory.post('/adjust', requirePermissions(['manage_inventory']), async (c) =>
   // GL entry commits with the stock change, valued at the product's actual cost
   // (no invented fallback cost; a zero-cost product moves stock only).
   const prodInfo = await c.env.DB.prepare('SELECT cost_price FROM products WHERE id = ?').bind(body.productId).first();
-  const unitCost = Number(prodInfo?.cost_price || 0);
+  let unitCost = Number(prodInfo?.cost_price || 0);
+  // Price levels: units taken away come off the oldest level (at its cost); units found are
+  // added to the level being sold now (at its cost).
+  const planner = await levelPlanner(c.env.DB, [body.productId]);
+  if (planner.has(body.productId)) {
+    if (body.direction === 'DECREASE') {
+      unitCost = planner.take(body.productId, Number(body.quantity)).unitCost;
+      stmts.push(...planner.statements('INVENTORY_ADJUSTMENT', txId, userId));
+    } else {
+      const active = await c.env.DB.prepare('SELECT cost_price FROM product_price_levels WHERE product_id = ? ORDER BY (quantity_left > 0) DESC, level_no ASC LIMIT 1').bind(body.productId).first() as any;
+      unitCost = Number(active?.cost_price ?? unitCost);
+      stmts.push(...addToActiveLevelStatements(c.env.DB, body.productId, Number(body.quantity), 'INVENTORY_ADJUSTMENT', txId, userId));
+    }
+  }
   if (unitCost > 0) {
     stmts.push(...(await prepareInventoryAdjustmentJournalEntry(
       c,

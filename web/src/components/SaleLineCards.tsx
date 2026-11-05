@@ -3,7 +3,7 @@ import { Minus, Plus, Store, Trash2, Truck } from 'lucide-react';
 
 export interface SaleLineView {
   productId: string; name: string; sku: string; quantity: number; unitPrice: number; discount: number;
-  fulfillmentType: 'DELIVERY' | 'PICKUP'; priceReason?: string; productType?: string;
+  fulfillmentType: 'DELIVERY' | 'PICKUP'; priceReason?: string; priceNote?: string | null; productType?: string;
   groupItems?: { quantity: number; component_name?: string; component_sku?: string }[];
 }
 
@@ -66,9 +66,10 @@ export function SaleLineCards({ lines, listPrice, onChange, onFulfillment, onRem
               <div className="sale-card__field">
                 <span>Unit price</span>
                 {/* Set by the Owner in Products; not editable on a sale. */}
-                <div className="sale-card__price" aria-label={`Price of ${l.name}`}>${ref.toFixed(2)}</div>
+                <div className="sale-card__price" aria-label={`Price of ${l.name}`}>${Number(l.unitPrice || ref).toFixed(2)}</div>
               </div>
             </div>
+            {l.priceNote && <div className="sale-card__sku" style={{ color: '#0369a1' }}>Price levels: {l.priceNote}</div>}
 
             <div className="sale-card__row">
               <label className="sale-card__field">

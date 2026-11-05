@@ -14,6 +14,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { PriceAdjustment, confirmFarPrice } from '../components/PriceAdjustment';
 import { SaleLineCards, useNarrow } from '../components/SaleLineCards';
+import { priceForQty, type PriceStep } from '../utils/priceLevels';
 
 interface Customer {
   id: string;
@@ -50,6 +51,7 @@ interface ProductLine {
   productType?: 'STANDARD' | 'GROUPED';
   priceTiers?: ProductPriceTier[];
   groupItems?: ProductGroupItem[];
+  priceSteps?: PriceStep[];
 }
 
 interface StockRecord {
@@ -80,6 +82,7 @@ export function CreateSalesOrderPage() {
       barcode: p.barcode,
       name: p.name,
       sellingPrice: Number(p.selling_price) || 0,
+      priceSteps: p.price_steps || [],
       productType: p.product_type || 'STANDARD',
       priceTiers: p.price_tiers || [],
       groupItems: p.group_items || [],
@@ -146,6 +149,7 @@ export function CreateSalesOrderPage() {
     productType?: 'STANDARD' | 'GROUPED';
     groupItems?: ProductGroupItem[];
     priceReason?: string;
+    priceNote?: string | null;
     fulfillmentType: 'DELIVERY' | 'PICKUP';
   }[]>([]);
 
@@ -345,6 +349,12 @@ export function CreateSalesOrderPage() {
       copy[idx] = {
         ...copy[idx],
         [field]: field === 'quantity' ? Math.max(1, num) : Math.max(0, num),
+        // Price levels: a quantity that crosses into the next level is priced at both.
+        ...(field === 'quantity' ? (() => {
+          const pr = products.find((p) => p.id === copy[idx].productId);
+          const r = priceForQty(pr?.priceSteps, pr?.sellingPrice ?? copy[idx].unitPrice, Math.max(1, num));
+          return { unitPrice: r.unitPrice, priceNote: r.note };
+        })() : {}),
       };
       return copy;
     });
@@ -785,6 +795,7 @@ export function CreateSalesOrderPage() {
                             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px' }}>
                               {/* The product's price, set by the Owner in Products: not editable on a sale. */}
                               <span style={{ fontWeight: 600 }} title="Price set by the Owner in Products">${Number(l.unitPrice).toFixed(2)}</span>
+                              {l.priceNote && <span style={{ fontSize: 11, color: '#0369a1' }}>{l.priceNote}</span>}
                             </div>
                           </td>
                           <td style={{ padding: '8px 12px', textAlign: 'right' }}>

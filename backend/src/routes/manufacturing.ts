@@ -8,6 +8,7 @@ import { resolveLoc, locSql, locBranch, ScopeError } from '../services/branch-sc
 import { csvResponse, dateRange, likeTerm, listRequest, pagedResponse, pagedRows, type ListOptions } from '../services/listing';
 
 import { costInStatements } from '../services/costing';
+import { newLevelStatements } from '../services/price-levels';
 const manufacturing = new Hono<{ Bindings: Env; Variables: { jwtPayload: any } }>();
 
 manufacturing.use('/*', authMiddleware);
@@ -617,6 +618,9 @@ manufacturing.post('/work-orders/:id/complete', requirePermissions(['manage_inve
   if (unitProductionCost > 0) {
     stmts.push(...costInStatements(c.env.DB, { productId: wo.product_id, quantity: completedQty, unitCost: unitProductionCost, source: 'MANUFACTURED', referenceId: String(id), userId, stockAlreadyAdded: true }));
   }
+  // A product sold by price levels: the finished units become a new level at their production cost.
+  const lv = await c.env.DB.prepare(`SELECT selling_price FROM product_price_levels WHERE product_id = ? ORDER BY level_no DESC LIMIT 1`).bind(wo.product_id).first() as any;
+  if (lv) stmts.push(...newLevelStatements(c.env.DB, { productId: wo.product_id, costPrice: Math.round(unitProductionCost * 10000) / 10000, sellingPrice: Number(lv.selling_price), quantity: completedQty, source: 'MANUFACTURED', refId: String(id), userId }));
 
   // Inventory transaction for finished product
   stmts.push(c.env.DB.prepare(`

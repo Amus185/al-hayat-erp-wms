@@ -9,6 +9,7 @@ import { prepareJournalEntryPosting } from '../services/accounting-service';
 import { csvResponse, likeTerm, listRequest, pagedResponse, pagedRows, type ListOptions } from '../services/listing';
 
 import { costInStatements } from '../services/costing';
+import { newLevelStatements } from '../services/price-levels';
 
 const purchasing = new Hono<{ Bindings: Env; Variables: { jwtPayload: any } }>();
 
@@ -601,7 +602,9 @@ purchasing.post('/receipts', requirePermissions(['manage_purchasing']), async (c
   for (const line of body.lines) {
     const info = await c.env.DB.prepare(`
       SELECT p.id, p.name, COALESCE(p.cost_price, 0) AS cost, COALESCE(p.selling_price, 0) AS price,
-             (SELECT COALESCE(SUM(GREATEST(s.quantity_on_hand, 0)), 0) FROM inventory_stock s WHERE s.product_id = p.id) AS on_hand
+             (SELECT COALESCE(SUM(GREATEST(s.quantity_on_hand, 0)), 0) FROM inventory_stock s WHERE s.product_id = p.id) AS on_hand,
+             EXISTS (SELECT 1 FROM product_price_levels l WHERE l.product_id = p.id) AS has_levels,
+             (SELECT selling_price FROM product_price_levels l WHERE l.product_id = p.id ORDER BY level_no DESC LIMIT 1) AS newest_price
       FROM products p WHERE p.id = ?`).bind(line.productId).first() as any;
     productInfo.set(line.productId, info);
   }
@@ -650,6 +653,11 @@ purchasing.post('/receipts', requirePermissions(['manage_purchasing']), async (c
 
     // Running-average cost: computed from stock on hand BEFORE these units are added.
     stmts.push(...costInStatements(c.env.DB, { productId: line.productId, quantity: qty, unitCost: netUnitCost, source: 'PURCHASE_RECEIPT', referenceId: receiptId, userId }));
+    // A product sold by price levels: these goods become a new level (sold after the older ones),
+    // at their cost and the newest level's selling price; the Owner can change that price.
+    if (productInfo.get(line.productId)?.has_levels) {
+      stmts.push(...newLevelStatements(c.env.DB, { productId: line.productId, costPrice: Math.round(netUnitCost * 10000) / 10000, sellingPrice: Number(productInfo.get(line.productId)?.newest_price ?? productInfo.get(line.productId)?.price ?? 0), quantity: qty, source: 'PURCHASE_RECEIPT', refId: receiptId, note: `Received ${receiptNumber}`, userId }));
+    }
     // Tell the Owner when the cost went up, with the price that keeps the old margin.
     {
       const info = productInfo.get(line.productId);

@@ -7,6 +7,7 @@ import { SearchInput } from '../components/SearchInput';
 import { ListToolbar } from '../components/ListToolbar';
 import { useServerList } from '../utils/serverList';
 import { confirmAction } from '../utils/swal';
+import { PriceLevelsPanel } from '../components/PriceLevelsPanel';
 import { useColumnChooser } from '../components/ColumnChooser';
 import { BulkBar, selectionColumn, useSelection } from '../components/BulkBar';
 import { searchProducts } from '../utils/lookups';
@@ -32,6 +33,7 @@ interface Brand {
 const PRICE_SOURCES: Record<string, string> = {
   PURCHASE_RECEIPT: 'Goods received', SALES_RETURN: 'Customer return', SALE_CANCELLED: 'Sale cancelled', MANUFACTURED: 'Produced',
   SET_BY_OWNER: 'Changed by Owner', SET_WHEN_RECEIVING: 'Set when receiving', CREATED: 'New product', RECALCULATED_FROM_PURCHASES: 'Recalculated from purchases',
+  PRICE_LEVEL_ACTIVATED: 'Next price level started', LEVEL_PRICE_CHANGED: 'Level price changed by Owner',
 };
 
 export interface PriceTier {
@@ -75,6 +77,7 @@ export function ProductsPage() {
   const { hasPermission, isAdmin: isOwner } = useAuth();
   const [priceHistory, setPriceHistory] = useState<any[] | null>(null);
   const [openedCost, setOpenedCost] = useState<number | null>(null);
+  const [usesLevels, setUsesLevels] = useState(false);
   // Cost prices only with cost access (Owner decision D4); the server sends none otherwise.
   const canCosts = hasPermission('costs.view');
 
@@ -203,6 +206,7 @@ export function ProductsPage() {
 
   const openEditModal = (prod: Product) => {
     setPriceHistory(null);
+    setUsesLevels(false);
     apiGet<any[]>(`/products/${prod.id}/price-history`).then((h) => setPriceHistory(h || [])).catch(() => setPriceHistory([]));
     // Cost shown to 2 decimals; it is only sent back if the Owner actually changes it.
     const shownCost = prod.cost_price == null ? prod.cost_price : Number(Number(prod.cost_price).toFixed(2));
@@ -528,7 +532,7 @@ export function ProductsPage() {
     const costLocked = !isOwner;
 
     // Cost can rise above the price after a purchase; selling below cost is allowed, but confirmed.
-    if (canCosts && costPrice > sellingPrice && sellingPrice > 0 &&
+    if (!usesLevels && canCosts && costPrice > sellingPrice && sellingPrice > 0 &&
         !(await confirmAction('Selling below cost?', `The cost is $${costPrice.toFixed(2)} and the selling price $${sellingPrice.toFixed(2)}. Every sale would lose money. Save anyway?`, 'Save anyway', 'warning'))) {
       return;
     }
@@ -551,8 +555,9 @@ export function ProductsPage() {
         description: editingProduct.description,
         categoryId: editingProduct.category_id || null,
         brandId: editingProduct.brand_id || null,
-        ...(costLocked || (openedCost != null && Math.abs(costPrice - openedCost) < 0.005) ? {} : { costPrice }),
-        sellingPrice,
+        // A product sold by price levels takes its cost and price from the levels: none sent.
+        ...(usesLevels || costLocked || (openedCost != null && Math.abs(costPrice - openedCost) < 0.005) ? {} : { costPrice }),
+        ...(usesLevels ? {} : { sellingPrice }),
         reorderLevel,
         productType: editingProduct.product_type || 'STANDARD',
         groupItems: isGrouped
@@ -1370,22 +1375,22 @@ export function ProductsPage() {
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '14px', marginTop: '10px' }}>
               {canCosts && <InputField
                 type="number"
-                label={isOwner ? 'Cost Price ($)' : 'Cost Price ($) — Owner sets it'}
+                label={usesLevels ? 'Cost ($) — average of the levels' : isOwner ? 'Cost Price ($)' : 'Cost Price ($) — Owner sets it'}
                 id="editCost"
-                value={!isOwner ? Number(editingProduct.cost_price || 0).toFixed(2) : editingProduct.cost_price}
+                value={!isOwner || usesLevels ? Number(editingProduct.cost_price || 0).toFixed(2) : editingProduct.cost_price}
                 onChange={(val) => setEditingProduct({ ...editingProduct, cost_price: val })}
                 onBlur={() => setEditingProduct(p => p ? { ...p, cost_price: Number(p.cost_price) || 0 } : null)}
-                disabled={!isOwner}
+                disabled={!isOwner || usesLevels}
                 required
               />}
               <InputField
                 type="number"
-                label={isOwner ? 'Selling Price ($)' : 'Selling Price ($) — Owner sets it'}
+                label={usesLevels ? 'Selling Price ($) — level selling now' : isOwner ? 'Selling Price ($)' : 'Selling Price ($) — Owner sets it'}
                 id="editSell"
                 value={editingProduct.selling_price}
                 onChange={(val) => setEditingProduct({ ...editingProduct, selling_price: val })}
                 onBlur={() => setEditingProduct(p => p ? { ...p, selling_price: Number(p.selling_price) || 0 } : null)}
-                disabled={!isOwner}
+                disabled={!isOwner || usesLevels}
                 required
               />
               <InputField
@@ -1399,7 +1404,7 @@ export function ProductsPage() {
               />
             </div>
             <p className="mm-sub" style={{ margin: '6px 0 0' }}>
-              {!canCosts ? '' : Number(editingProduct.total_stock ?? 0) > 0
+              {usesLevels ? 'This product is sold by price levels: its cost and selling price come from the levels below. ' : !canCosts ? '' : Number(editingProduct.total_stock ?? 0) > 0
                 ? 'Purchases update the average cost by itself; you can also change it here. If there is stock, the books are adjusted to the new cost automatically. '
                 : 'You can set the cost here; purchases will update it as an average. '}
               {isOwner ? 'All sales use this selling price. Changes are kept in the history below; past sales keep their price.' : 'Only the Owner can change prices. Sales use this price.'}
@@ -1422,6 +1427,17 @@ export function ProductsPage() {
                 </table>
                 </div>
               </details>
+            )}
+
+            {(editingProduct.product_type || 'STANDARD') === 'STANDARD' && (
+              <PriceLevelsPanel productId={editingProduct.id} isOwner={isOwner} canCosts={canCosts} warehouses={warehouses} branches={branches}
+                onLoaded={setUsesLevels}
+                onChanged={async () => {
+                  list.refresh();
+                  const fresh = await apiGet<any>(`/products/${editingProduct.id}`).catch(() => null);
+                  if (fresh) setEditingProduct((p) => (p ? { ...p, cost_price: Number(Number(fresh.cost_price ?? p.cost_price).toFixed(2)), selling_price: fresh.selling_price, total_stock: fresh.total_stock ?? p.total_stock } : p));
+                  apiGet<any[]>(`/products/${editingProduct.id}/price-history`).then((h) => setPriceHistory(h || [])).catch(() => {});
+                }} />
             )}
 
             {/* Grouped Product Bundle Components */}
