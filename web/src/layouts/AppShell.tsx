@@ -40,7 +40,7 @@ import { BranchSwitcher } from '../components/BranchSwitcher';
 
 const navItems = [
   { label: 'Dashboard', path: '/', icon: Home, permission: '' },
-  { label: 'Products', path: '/products', icon: PackageSearch, permission: 'manage_inventory' },
+  { label: 'Products', path: '/products', icon: PackageSearch, permission: 'manage_inventory|manage_sales' },
   { label: 'Warehouses', path: '/warehouses', icon: Boxes, permission: 'manage_inventory', adminOnly: true },
   { label: 'Inventory', path: '/inventory', icon: ClipboardList, permission: 'manage_inventory' },
   { label: 'Manufacturing', path: '/manufacturing', icon: Factory, permission: 'manage_inventory' },

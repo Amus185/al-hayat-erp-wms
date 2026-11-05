@@ -386,7 +386,7 @@ export function DeliveriesPage() {
         customerPhone: createForm.customerPhone || 'N/A',
         deliveryAddress: createForm.deliveryAddress || 'Customer Location',
         city: createForm.city || 'Hargeisa',
-        driverName: createForm.driverName?.trim() || undefined,
+        driverName: createForm.driverName?.trim() || 'To be assigned',
         driverPhone: createForm.driverPhone?.trim() || undefined,
         vehicleId: createForm.vehicleId || undefined,
         scheduledDate: createForm.scheduledDate || undefined,
@@ -1182,7 +1182,7 @@ export function DeliveriesPage() {
                     setCreateForm((p) => ({ ...p, vehicleId: e.target.value, driverName: p.driverName || v?.driver_name || '', driverPhone: p.driverPhone || v?.driver_phone || '' }));
                   }}
                 >
-                  <option value="">{vehicles.length ? '— choose a company vehicle —' : 'No vehicles registered yet'}</option>
+                  <option value="">{vehicles.length ? '— choose a company vehicle (optional) —' : 'No vehicle registered (Optional)'}</option>
                   {vehicles.map((v) => <option key={v.id} value={v.id}>{v.plate_number}{v.make || v.model ? ` · ${[v.make, v.model].filter(Boolean).join(' ')}` : ''}</option>)}
                 </select>
               </div>
@@ -1300,7 +1300,7 @@ export function DeliveriesPage() {
           )}
 
           <InputField
-            label="Total Delivery Boxes"
+            label="Total Delivery Boxes (Optional)"
             id="delTotalBoxes"
             type="number"
             min={1}
@@ -1312,7 +1312,6 @@ export function DeliveriesPage() {
               }
             }}
             placeholder="1"
-            required
           />
 
           <TextareaField

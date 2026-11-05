@@ -340,7 +340,29 @@ export function TransfersPage() {
         if (row.status === 'DISPATCHED') tone = 'blue';
         if (['COMPLETED', 'RECEIVED'].includes(row.status)) tone = 'green';
         if (['REJECTED', 'CANCELLED'].includes(row.status)) tone = 'red';
-        return <StatusBadge label={row.status.replace('_', ' ')} tone={tone} />;
+
+        let label = row.status.replace('_', ' ');
+        if (row.status === 'DISPATCHED') {
+          label = row.is_dest ? 'On the way (Click Receive)' : 'Dispatched (In transit)';
+        } else if (row.status === 'PENDING_APPROVAL') {
+          label = row.is_dest ? 'Pending your acceptance' : 'Pending approval';
+        }
+
+        return (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', alignItems: 'flex-start' }}>
+            <StatusBadge label={label} tone={tone} />
+            {row.is_dest && !row.is_source && (
+              <span style={{ fontSize: '10px', fontWeight: 700, padding: '1px 6px', borderRadius: '8px', background: '#dbeafe', color: '#1d4ed8' }}>
+                INCOMING
+              </span>
+            )}
+            {row.is_source && !row.is_dest && (
+              <span style={{ fontSize: '10px', fontWeight: 700, padding: '1px 6px', borderRadius: '8px', background: '#f1f5f9', color: '#475569' }}>
+                OUTGOING
+              </span>
+            )}
+          </div>
+        );
       },
     },
     {
@@ -356,40 +378,104 @@ export function TransfersPage() {
             View / Manage
           </button>
 
-          {row.status === 'PENDING_APPROVAL' && hasPermission('manage_transfers') && (
-            <button
-              type="button"
-              className="btn btn-sm"
-              style={{ background: '#0b8f08', color: '#fff', border: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '12px', padding: '4px 8px', borderRadius: '6px' }}
-              onClick={(e) => { e.stopPropagation(); handleApproveAndDispatch(row.id, false); }}
-              title="Approve & Dispatch"
-            >
-              Approve & Dispatch
-            </button>
+          {/* Incoming Transfer Actions for Destination Branch */}
+          {row.is_dest && hasPermission('manage_transfers') && (
+            <>
+              {row.status === 'DISPATCHED' && (
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  style={{ background: '#16a34a', color: '#fff', border: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '12px', padding: '4px 8px', borderRadius: '6px', fontWeight: 600 }}
+                  onClick={(e) => { e.stopPropagation(); handleReceive(row.id, false); }}
+                  title="Confirm transfer received at your location"
+                >
+                  <CheckCircle size={13} /> Receive
+                </button>
+              )}
+              {row.status === 'PENDING_APPROVAL' && (
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  style={{ background: '#16a34a', color: '#fff', border: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '12px', padding: '4px 8px', borderRadius: '6px', fontWeight: 600 }}
+                  onClick={(e) => { e.stopPropagation(); handleAccept(row); }}
+                  title="Accept transfer: stock moves directly into your branch"
+                >
+                  <CheckCircle size={13} /> Accept & Receive
+                </button>
+              )}
+            </>
           )}
 
-          {row.status === 'APPROVED' && hasPermission('manage_transfers') && (
-            <button
-              type="button"
-              className="btn btn-sm"
-              style={{ background: '#0284c7', color: '#fff', border: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '12px', padding: '4px 8px', borderRadius: '6px' }}
-              onClick={(e) => { e.stopPropagation(); handleDispatch(row.id, false); }}
-              title="Dispatch transfer"
-            >
-              Dispatch
-            </button>
+          {/* Outgoing Transfer Actions for Source Branch */}
+          {row.is_source && !row.is_dest && hasPermission('manage_transfers') && (
+            <>
+              {row.status === 'PENDING_APPROVAL' && (
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  style={{ background: '#0b8f08', color: '#fff', border: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '12px', padding: '4px 8px', borderRadius: '6px' }}
+                  onClick={(e) => { e.stopPropagation(); handleApproveAndDispatch(row.id, false); }}
+                  title="Approve & Dispatch"
+                >
+                  Approve & Dispatch
+                </button>
+              )}
+              {row.status === 'APPROVED' && (
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  style={{ background: '#0284c7', color: '#fff', border: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '12px', padding: '4px 8px', borderRadius: '6px' }}
+                  onClick={(e) => { e.stopPropagation(); handleDispatch(row.id, false); }}
+                  title="Dispatch transfer"
+                >
+                  Dispatch
+                </button>
+              )}
+              {row.status === 'DISPATCHED' && (
+                <span style={{ fontSize: '11px', color: '#0369a1', fontWeight: 600, padding: '2px 6px', background: '#f0f9ff', borderRadius: '4px' }}>
+                  In transit (sent)
+                </span>
+              )}
+            </>
           )}
 
-          {row.status === 'DISPATCHED' && hasPermission('manage_transfers') && (
-            <button
-              type="button"
-              className="btn btn-sm"
-              style={{ background: '#16a34a', color: '#fff', border: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '12px', padding: '4px 8px', borderRadius: '6px' }}
-              onClick={(e) => { e.stopPropagation(); handleReceive(row.id, false); }}
-              title="Confirm transfer received"
-            >
-              Receive
-            </button>
+          {/* Company-wide Admin Actions (when both source & dest or neither) */}
+          {row.is_source && row.is_dest && hasPermission('manage_transfers') && (
+            <>
+              {row.status === 'PENDING_APPROVAL' && (
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  style={{ background: '#0b8f08', color: '#fff', border: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '12px', padding: '4px 8px', borderRadius: '6px' }}
+                  onClick={(e) => { e.stopPropagation(); handleApproveAndDispatch(row.id, false); }}
+                  title="Approve & Dispatch"
+                >
+                  Approve & Dispatch
+                </button>
+              )}
+              {row.status === 'APPROVED' && (
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  style={{ background: '#0284c7', color: '#fff', border: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '12px', padding: '4px 8px', borderRadius: '6px' }}
+                  onClick={(e) => { e.stopPropagation(); handleDispatch(row.id, false); }}
+                  title="Dispatch transfer"
+                >
+                  Dispatch
+                </button>
+              )}
+              {row.status === 'DISPATCHED' && (
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  style={{ background: '#16a34a', color: '#fff', border: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '12px', padding: '4px 8px', borderRadius: '6px' }}
+                  onClick={(e) => { e.stopPropagation(); handleReceive(row.id, false); }}
+                  title="Confirm transfer received"
+                >
+                  <CheckCircle size={13} /> Receive
+                </button>
+              )}
+            </>
           )}
         </div>
       ),

@@ -137,6 +137,12 @@ transfers.get('/', async (c) => {
     if (q('status')) { statusWhere.push('status = ?'); statusParams.push(q('status')); }
     const base = `FROM (${query}) x ${statusWhere.length ? 'WHERE ' + statusWhere.join(' AND ') : ''}`;
     const { rows, total } = await pagedRows(c.env.DB, '*', base, [...params, ...statusParams], listReq);
+    for (const r of (rows || []) as any[]) {
+      const side = sidesOf(own, r);
+      r.is_source = side.isSource;
+      r.is_dest = side.isDest;
+      r.direction = side.isDest && !side.isSource ? 'incoming' : (side.isSource && !side.isDest ? 'outgoing' : 'both');
+    }
     if (listReq.csv) {
       return csvResponse(c, 'transfers', [
         { label: 'Transfer', value: (r: any) => r.transfer_number },
@@ -160,6 +166,12 @@ transfers.get('/', async (c) => {
   query += ` ORDER BY t.requested_at DESC LIMIT 200`;
   const stmt = c.env.DB.prepare(query);
   const { results } = params.length > 0 ? await stmt.bind(...params).all() : await stmt.all();
+  for (const r of (results || []) as any[]) {
+    const side = sidesOf(own, r);
+    r.is_source = side.isSource;
+    r.is_dest = side.isDest;
+    r.direction = side.isDest && !side.isSource ? 'incoming' : (side.isSource && !side.isDest ? 'outgoing' : 'both');
+  }
   return c.json(results);
 });
 

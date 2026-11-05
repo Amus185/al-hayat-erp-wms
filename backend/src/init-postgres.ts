@@ -36,7 +36,6 @@ export const DEFAULT_AUTH_SEED = {
     { role_id: '77777777-7777-7777-7777-777777777777', permission_id: '66666666-6666-6666-6666-666666666666' },
     { role_id: 'role-branch-user', permission_id: '22222222-2222-2222-2222-222222222222' },
     { role_id: 'role-branch-user', permission_id: '33333333-3333-3333-3333-333333333333' },
-    { role_id: 'role-branch-user', permission_id: '44444444-4444-4444-4444-444444444444' },
     { role_id: 'role-branch-user', permission_id: '55555555-5555-5555-5555-555555555555' },
     { role_id: 'role-branch-user', permission_id: '66666666-6666-6666-6666-666666666666' },
     { role_id: 'role-warehouse-manager', permission_id: '22222222-2222-2222-2222-222222222222' },
@@ -733,6 +732,7 @@ export async function ensurePostgresInit(pool: Pool) {
   await ensureBranchIsolation(pool);
   await ensureCosting(pool);
   await ensurePerformanceIndexes(pool);
+  await ensureRoleSeparation(pool);
 }
 
 /**
@@ -1528,6 +1528,42 @@ export async function ensureBranchAttribution(pool: Pool) {
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
     console.error('❌ Branch attribution migration failed (no data changed):', err);
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Role Separation & Least Privilege:
+ * - Sales and branch roles should NOT have purchasing permissions.
+ * - Deduplicate role_permissions and enforce unique index.
+ * - Ensure branch managers do not have accidental accountant role.
+ */
+export async function ensureRoleSeparation(pool: Pool) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(`
+      DELETE FROM role_permissions
+      WHERE role_id IN ('role-branch-user', 'role-sales-rep')
+        AND permission_id = '44444444-4444-4444-4444-444444444444'
+    `);
+    await client.query(`
+      DELETE FROM role_permissions a USING role_permissions b
+      WHERE a.ctid < b.ctid AND a.role_id = b.role_id AND a.permission_id = b.permission_id
+    `);
+    await client.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_role_permissions ON role_permissions (role_id, permission_id)
+    `);
+    await client.query(`
+      DELETE FROM user_roles
+      WHERE user_id IN ('user-hq-branch-01', 'user-cl-branch-02')
+        AND role_id = 'role-accountant'
+    `);
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('❌ Role separation migration failed:', err);
   } finally {
     client.release();
   }

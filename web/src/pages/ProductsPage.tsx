@@ -205,6 +205,7 @@ export function ProductsPage() {
   };
 
   const openEditModal = (prod: Product) => {
+    if (!isOwner) return;
     setPriceHistory(null);
     setUsesLevels(false);
     apiGet<any[]>(`/products/${prod.id}/price-history`).then((h) => setPriceHistory(h || [])).catch(() => setPriceHistory([]));
@@ -698,7 +699,7 @@ export function ProductsPage() {
       label: 'Actions',
       render: (row) => (
         <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-          {hasPermission('manage_inventory') && (
+          {isOwner && (
             <button
               type="button"
               className="btn btn-secondary btn-sm"
@@ -712,7 +713,7 @@ export function ProductsPage() {
               {Number(row.is_published) === 1 ? '● Website' : 'Website'}
             </button>
           )}
-          {hasPermission('manage_inventory') && (
+          {isOwner && (
             <button
               type="button"
               className="btn btn-secondary btn-sm"
@@ -725,7 +726,7 @@ export function ProductsPage() {
               Edit
             </button>
           )}
-          {hasPermission('manage_inventory') && (
+          {isOwner && (
             <button
               type="button"
               className="btn btn-secondary btn-sm"
@@ -740,7 +741,7 @@ export function ProductsPage() {
               {row.is_active ? 'Deactivate' : 'Activate'}
             </button>
           )}
-          {hasPermission('manage_inventory') && (
+          {isOwner && (
             <button
               type="button"
               className="btn btn-danger btn-sm"
@@ -755,11 +756,11 @@ export function ProductsPage() {
       ),
     },
   ];
-  const columns = canCosts ? allColumns : allColumns.filter((col) => col.key !== 'cost_price');
+  const columns = (canCosts ? allColumns : allColumns.filter((col) => col.key !== 'cost_price')).filter((col) => isOwner || col.key !== 'actions');
 
   // Wide table: people choose their columns. Bulk actions on ticked rows.
   const { columns: shownColumns, chooser } = useColumnChooser('products', columns, ['brand_name']);
-  const canBulk = hasPermission('manage_inventory');
+  const canBulk = isOwner;
   const sel = useSelection(`${list.currentQuery()}|${list.page}|${list.pageSize}`);
   const selCol = selectionColumn(sel, products);
   const [bulkBusy, setBulkBusy] = useState(false);
@@ -798,17 +799,17 @@ export function ProductsPage() {
           <h2>Products, images, and barcode lookup</h2>
         </div>
         <div style={{ display: 'flex', gap: '8px' }}>
-          {hasPermission('manage_inventory') && (
+          {isOwner && (
             <button type="button" className="btn btn-secondary" onClick={() => setIsCategoryModalOpen(true)}>
               Manage Categories
             </button>
           )}
-          {hasPermission('manage_inventory') && (
+          {isOwner && (
             <button type="button" className="btn btn-secondary" onClick={() => setIsWebCategoriesOpen(true)}>
               Website categories
             </button>
           )}
-          {hasPermission('manage_inventory') && (
+          {isOwner && (
             <button
               type="button"
               className="btn btn-secondary"
@@ -821,7 +822,7 @@ export function ProductsPage() {
               <Upload size={16} /> Bulk Import
             </button>
           )}
-          {hasPermission('manage_inventory') && (
+          {isOwner && (
             <button type="button" className="btn btn-primary" onClick={() => setIsCreateOpen(true)}>
               <Plus size={16} style={{ marginRight: '6px', inlineSize: 'auto' }} /> New Product
             </button>

@@ -104,8 +104,10 @@ export function App() {
             <Route path="/transfers/new" element={<CreateTransferPage />} />
             
             {/* Procurement POs */}
+            <Route element={<ProtectedRoute permission="manage_purchasing" />}>
             <Route path="/purchasing" element={<PurchasingPage />} />
             <Route path="/purchasing/new" element={<CreatePOPage />} />
+            </Route>
             
             {/* Sales orders */}
             <Route path="/sales" element={<SalesPage />} />

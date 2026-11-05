@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { Env, uuidv4 } from '../db';
-import { authMiddleware, requirePermissions, isAdminUser } from '../middleware/auth';
+import { authMiddleware, requirePermissions, isAdminUser, requireAdmin } from '../middleware/auth';
 import { logAudit, createAuditLogStmt } from '../services/audit';
 import { hideUnless, PERM, COST_FIELDS, sortsFor, canSeeCosts } from '../services/privacy';
 import { resolveLoc, locBranch, productVisibleSql, ScopeError, type Loc } from '../services/branch-scope';
@@ -190,7 +190,7 @@ products.get('/', async (c) => {
   return c.json(enriched);
 });
 
-products.post('/', requirePermissions(['manage_inventory']), async (c) => {
+products.post('/', requireAdmin, async (c) => {
   const body = await c.req.json();
   const payload = c.get('jwtPayload');
 
@@ -412,7 +412,7 @@ products.post('/', requirePermissions(['manage_inventory']), async (c) => {
   return c.json(product, 201);
 });
 
-products.post('/bulk', requirePermissions(['manage_inventory']), async (c) => {
+products.post('/bulk', requireAdmin, async (c) => {
   const body = await c.req.json();
   const items: any[] = Array.isArray(body) ? body : (body.products || []);
   if (!items.length) return c.json({ message: 'No product items provided' }, 400);
@@ -605,7 +605,7 @@ products.get('/categories', async (c) => {
   return c.json(results);
 });
 
-products.post('/categories', requirePermissions(['manage_inventory']), async (c) => {
+products.post('/categories', requireAdmin, async (c) => {
   const body = await c.req.json();
   if (!body.name || !body.name.trim()) return c.json({ message: 'Category name is required.' }, 400);
 
@@ -624,7 +624,7 @@ products.get('/brands', async (c) => {
   return c.json(results);
 });
 
-products.delete('/categories/:id', requirePermissions(['manage_inventory']), async (c) => {
+products.delete('/categories/:id', requireAdmin, async (c) => {
   const id = c.req.param('id');
   // Check for products referencing this category
   const refs = await c.env.DB.prepare('SELECT id FROM products WHERE category_id = ? LIMIT 1').bind(id).first();
@@ -692,7 +692,7 @@ products.get('/:id/price-levels', async (c) => {
  * Adds the stock at the chosen place and posts it (Inventory against Cash if paid, or Accounts
  * Payable if owed). Today's stock becomes level 1 first, so it is sold at the old price first.
  */
-products.post('/:id/price-levels', requirePermissions(['manage_inventory']), async (c) => {
+products.post('/:id/price-levels', requireAdmin, async (c) => {
   const id = c.req.param('id') as string;
   const actor = c.get('jwtPayload');
   if (!isOwner(actor)) return c.json({ message: 'Only the Owner can add a price level (it sets new prices).' }, 403);
@@ -753,7 +753,7 @@ products.post('/:id/price-levels', requirePermissions(['manage_inventory']), asy
 });
 
 /** The Owner changes the selling price of a level (e.g. one that is still waiting). Its cost is what was paid: it stays. */
-products.patch('/:id/price-levels/:levelId', requirePermissions(['manage_inventory']), async (c) => {
+products.patch('/:id/price-levels/:levelId', requireAdmin, async (c) => {
   const id = c.req.param('id') as string;
   const actor = c.get('jwtPayload');
   if (!isOwner(actor)) return c.json({ message: 'Only the Owner can change prices.' }, 403);
@@ -783,7 +783,7 @@ products.get('/:id/price-history', async (c) => {
   return c.json(results || []);
 });
 
-products.patch('/:id', requirePermissions(['manage_inventory']), async (c) => {
+products.patch('/:id', requireAdmin, async (c) => {
   const id = c.req.param('id');
   if (!(await productAllowed(c, id as string))) return c.json({ message: 'Product not found' }, 404);
   const body = await c.req.json();
@@ -969,7 +969,7 @@ products.patch('/:id', requirePermissions(['manage_inventory']), async (c) => {
  * activate, deactivate, or move to a category. Each product is audited like
  * a single change. Up to 500 at a time.
  */
-products.post('/bulk-update', requirePermissions(['manage_inventory']), async (c) => {
+products.post('/bulk-update', requireAdmin, async (c) => {
   const body = await c.req.json().catch(() => ({}));
   const ids = Array.isArray(body.ids) ? Array.from(new Set(body.ids.filter((x: unknown) => typeof x === 'string' && x.length <= 100))) as string[] : [];
   if (!ids.length || ids.length > 500) return c.json({ message: 'Choose between 1 and 500 products.' }, 400);
@@ -1004,7 +1004,7 @@ products.post('/bulk-update', requirePermissions(['manage_inventory']), async (c
   return c.json({ updated: stmts.length / 2, unchanged: found.length - stmts.length / 2, missing: ids.length - found.length });
 });
 
-products.patch('/:id/status', requirePermissions(['manage_inventory']), async (c) => {
+products.patch('/:id/status', requireAdmin, async (c) => {
   const id = c.req.param('id');
   if (!(await productAllowed(c, id as string))) return c.json({ message: 'Product not found' }, 404);
   const body = await c.req.json();
@@ -1019,7 +1019,7 @@ products.patch('/:id/status', requirePermissions(['manage_inventory']), async (c
   return c.json({ success: true, is_active: isActive });
 });
 
-products.delete('/:id', requirePermissions(['manage_inventory']), async (c) => {
+products.delete('/:id', requireAdmin, async (c) => {
   const id = c.req.param('id');
   if (!(await productAllowed(c, id as string))) return c.json({ message: 'Product not found' }, 404);
 

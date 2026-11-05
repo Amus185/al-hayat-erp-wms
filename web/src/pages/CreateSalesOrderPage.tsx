@@ -115,7 +115,7 @@ export function CreateSalesOrderPage() {
   const [notes, setNotes] = useState('');
 
   // Fulfillment Mode: ON HAND / PICKUP vs REQUIRES DELIVERY
-  const [fulfillmentType, setFulfillmentType] = useState<'DELIVERY' | 'PICKUP'>('DELIVERY');
+  const [fulfillmentType, setFulfillmentType] = useState<'DELIVERY' | 'PICKUP'>('PICKUP');
 
   // Sale Type: CASH_SALE vs DEBT_SALE
   const [saleType, setSaleType] = useState<'CASH' | 'DEBT'>('CASH');
