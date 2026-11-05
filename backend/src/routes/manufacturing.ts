@@ -7,6 +7,7 @@ import { prepareJournalEntryPosting } from '../services/accounting-service';
 import { resolveLoc, locSql, locBranch, ScopeError } from '../services/branch-scope';
 import { csvResponse, dateRange, likeTerm, listRequest, pagedResponse, pagedRows, type ListOptions } from '../services/listing';
 
+import { costInStatements } from '../services/costing';
 const manufacturing = new Hono<{ Bindings: Env; Variables: { jwtPayload: any } }>();
 
 manufacturing.use('/*', authMiddleware);
@@ -611,10 +612,10 @@ manufacturing.post('/work-orders/:id/complete', requirePermissions(['manage_inve
   }
 
   // Update newly manufactured product unit cost from actual production run
+  // Running average: the finished units join the stock at their production cost
+  // (the stock was already increased above in this batch).
   if (unitProductionCost > 0) {
-    stmts.push(c.env.DB.prepare(`
-      UPDATE products SET cost_price = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
-    `).bind(unitProductionCost, wo.product_id));
+    stmts.push(...costInStatements(c.env.DB, { productId: wo.product_id, quantity: completedQty, unitCost: unitProductionCost, source: 'MANUFACTURED', referenceId: String(id), userId, stockAlreadyAdded: true }));
   }
 
   // Inventory transaction for finished product

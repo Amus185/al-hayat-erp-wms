@@ -731,6 +731,7 @@ export async function ensurePostgresInit(pool: Pool) {
   await ensureWorkforceSchema(pool);
   await ensureAccessGrants(pool);
   await ensureBranchIsolation(pool);
+  await ensureCosting(pool);
   await ensurePerformanceIndexes(pool);
 }
 
@@ -816,6 +817,66 @@ export async function ensureBranchIsolation(pool: Pool) {
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
     console.error('❌ Branch isolation migration failed (no data changed):', err);
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Running-average costing (Owner request): cost comes from goods coming in, never typed
+ * once a product has stock; each sale line keeps its unit cost; every cost and selling
+ * price change is kept with who/when/why. Additive. The one-time recalculation of current
+ * costs (from the purchases that make up today's stock) runs once, recorded in app_migrations,
+ * and writes every old value into product_price_history so it can be reviewed or undone.
+ */
+export async function ensureCosting(pool: Pool) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS app_migrations (name TEXT PRIMARY KEY, ran_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP);
+      ALTER TABLE sales_order_lines ADD COLUMN IF NOT EXISTS unit_cost DOUBLE PRECISION;
+      CREATE TABLE IF NOT EXISTS product_price_history (
+        id TEXT PRIMARY KEY, product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL CHECK (kind IN ('COST', 'SELLING')),
+        old_value DOUBLE PRECISION, new_value DOUBLE PRECISION NOT NULL,
+        source TEXT NOT NULL, reference_id TEXT, changed_by TEXT REFERENCES users(id),
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS idx_price_history_product ON product_price_history (product_id, created_at DESC);
+    `);
+    const done = await client.query("SELECT 1 FROM app_migrations WHERE name = 'costing_recalc_v1'");
+    if (!done.rowCount) {
+      // Today's stock is made of the most recent purchases: cost each product from the newest
+      // receipts until its stock on hand is covered; any part not covered keeps the current cost.
+      const { rows: prods } = await client.query(`
+        SELECT p.id, COALESCE(p.cost_price, 0) AS cost,
+               (SELECT COALESCE(SUM(GREATEST(s.quantity_on_hand, 0)), 0) FROM inventory_stock s WHERE s.product_id = p.id) AS on_hand
+        FROM products p WHERE COALESCE(p.product_type, 'STANDARD') <> 'GROUPED'`);
+      for (const pr of prods) {
+        const onHand = Number(pr.on_hand);
+        if (!(onHand > 0)) continue;
+        const { rows: rec } = await client.query(`
+          SELECT grl.quantity_received AS q, COALESCE(grl.line_total / NULLIF(grl.quantity_received, 0), grl.unit_cost, 0) AS u
+          FROM goods_receipt_lines grl JOIN goods_receipts gr ON gr.id = grl.goods_receipt_id
+          WHERE grl.product_id = $1 AND COALESCE(gr.status, 'COMPLETED') <> 'CANCELLED' AND grl.quantity_received > 0
+          ORDER BY gr.received_at DESC, grl.id DESC`, [pr.id]);
+        if (!rec.length) continue;
+        let left = onHand; let value = 0;
+        for (const r of rec) { if (left <= 0) break; const take = Math.min(left, Number(r.q)); value += take * Number(r.u); left -= take; }
+        value += left * Number(pr.cost);
+        const next = Math.round((value / onHand) * 10000) / 10000;
+        if (Math.abs(next - Number(pr.cost)) < 0.00005) continue;
+        await client.query(`INSERT INTO product_price_history (id, product_id, kind, old_value, new_value, source)
+                            VALUES (gen_random_uuid()::text, $1, 'COST', $2, $3, 'RECALCULATED_FROM_PURCHASES')`, [pr.id, pr.cost, next]);
+        await client.query('UPDATE products SET cost_price = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2', [next, pr.id]);
+      }
+      await client.query("INSERT INTO app_migrations (name) VALUES ('costing_recalc_v1')");
+    }
+    await client.query('COMMIT');
+  } catch (e) {
+    await client.query('ROLLBACK');
+    console.error('❌ ensureCosting failed:', e);
   } finally {
     client.release();
   }

@@ -25,6 +25,7 @@ import inventory from './inventory';
 import products from './products';
 
 type Vars = { jwtPayload: JwtPayload };
+import { isOwner } from '../services/costing';
 const agent = new Hono<{ Bindings: Env; Variables: Vars }>();
 
 export const AGENT_TOKEN_TTL_S = 5 * 60;
@@ -320,7 +321,7 @@ agent.post('/proposals', agentAuth, async (c) => {
     // Shown to the manager on the Confirm card, in Somali.
     summary = `${qty > 0 ? 'Ku dar' : 'Ka dhim'} ${Math.abs(qty)} xabbo oo ${found.product.name} ah, ${branch.name} (${before} -> ${before + qty}). Sababta: ${reason}`;
   } else if (action === 'set_price') {
-    if (!can(p, 'manage_inventory')) return refuse(c, 'You do not have permission to change prices.');
+    if (!isOwner(p)) return refuse(c, 'Only the Owner can change selling prices.');
     const price = Math.round(Number(args.price) * 100) / 100;
     if (!Number.isFinite(price) || price <= 0 || price > 10_000_000) return refuse(c, 'The price must be a positive amount.');
     const found = await findProduct(db, text(args.product));

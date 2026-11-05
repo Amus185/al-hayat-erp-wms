@@ -1,3 +1,4 @@
+import { unitCosts } from './costing';
 import { uuidv4 } from '../db';
 import { ConflictError } from '../pg-client';
 
@@ -147,9 +148,8 @@ export async function getAccountIdByCode(
 
 /**
  * Dynamic Inventory Costing Extension Point
- * Computes Cost of Goods Sold (COGS) for a sales order using the weighted
- * actual unit cost of completed goods receipts. Product cost is only a
- * fallback for opening stock or products with no receipt history.
+ * Computes Cost of Goods Sold (COGS) for a sales order at each product's
+ * running-average cost (kept up to date by goods coming in).
  */
 export async function calculateOrderCogs(db: any, orderId: string): Promise<number> {
   const { results } = await db.prepare(
@@ -161,54 +161,9 @@ export async function calculateOrderCogs(db: any, orderId: string): Promise<numb
 /** COGS for order lines that may not be saved yet (prepared before the batch). */
 export async function calculateLinesCogs(db: any, orderLines: Array<{ product_id: string; quantity: number }>): Promise<number> {
   if (!orderLines.length) return 0;
-  const ids = Array.from(new Set(orderLines.map((l) => l.product_id)));
-  const { results: products } = await db.prepare(`
-    SELECT p.id,
-           COALESCE((
-             SELECT SUM(COALESCE(grl.line_total, grl.quantity_received * grl.unit_cost)) /
-                    NULLIF(SUM(grl.quantity_received), 0)
-             FROM goods_receipt_lines grl
-             JOIN goods_receipts gr ON gr.id = grl.goods_receipt_id
-             WHERE grl.product_id = p.id
-               AND COALESCE(gr.status, 'COMPLETED') != 'CANCELLED'
-           ), p.cost_price, 0) AS cost_price,
-           COALESCE(p.product_type, 'STANDARD') AS product_type
-    FROM products p
-    WHERE p.id IN (${ids.map(() => '?').join(', ')})
-  `).bind(...ids).all();
-  const productMap = new Map<string, any>((products || []).map((p: any) => [p.id, p]));
-  const lines = orderLines.map((l) => ({ ...productMap.get(l.product_id), quantity: l.quantity, product_id: l.product_id }));
-
-  let totalCogs = 0;
-  for (const line of lines as any[]) {
-    const qty = Number(line.quantity || 0);
-    if (line.product_type === 'GROUPED') {
-      const { results: components } = await db.prepare(`
-        SELECT pgi.quantity,
-               COALESCE((
-                 SELECT SUM(COALESCE(grl.line_total, grl.quantity_received * grl.unit_cost)) /
-                        NULLIF(SUM(grl.quantity_received), 0)
-                 FROM goods_receipt_lines grl
-                 JOIN goods_receipts gr ON gr.id = grl.goods_receipt_id
-                 WHERE grl.product_id = cp.id
-                   AND COALESCE(gr.status, 'COMPLETED') != 'CANCELLED'
-               ), cp.cost_price, 0) AS cost_price
-        FROM product_group_items pgi
-        JOIN products cp ON cp.id = pgi.component_product_id
-        WHERE pgi.parent_product_id = ?
-      `).bind(line.product_id).all();
-
-      let groupUnitCost = 0;
-      for (const comp of (components || []) as any[]) {
-        groupUnitCost += Number(comp.quantity || 0) * Number(comp.cost_price || 0);
-      }
-      totalCogs += qty * groupUnitCost;
-    } else {
-      const unitCost = Number(line.cost_price || 0);
-      totalCogs += qty * unitCost;
-    }
-  }
-  return totalCogs;
+  // Running-average cost now (see services/costing.ts); grouped = sum of components.
+  const costs = await unitCosts(db, orderLines.map((l) => l.product_id));
+  return orderLines.reduce((sum, l) => sum + Number(l.quantity || 0) * (costs.get(l.product_id) ?? 0), 0);
 }
 
 /**

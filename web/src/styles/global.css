@@ -2089,3 +2089,30 @@ html.api-busy, html.api-busy * { cursor: progress !important; }
 .branch-switcher select { border: none; background: transparent; font-size: 13px; font-weight: 600; color: var(--text); max-width: 190px; outline: none; cursor: pointer; text-overflow: ellipsis; }
 .branch-switcher--active { border-color: var(--primary); background: var(--primary-light); color: var(--primary); }
 @media (max-width: 900px) { .branch-switcher { max-width: 44px; padding: 0 8px; } .branch-switcher select { width: 0; max-width: 0; padding: 0; } .branch-switcher:focus-within select { width: 150px; max-width: 150px; } }
+
+/* ── Sale lines on a phone: one card per product ─────────────────── */
+.sale-cards { display: grid; gap: 10px; }
+.sale-card { border: 1px solid #d1e8d1; border-radius: 12px; padding: 12px; background: #fff; display: grid; gap: 10px; }
+.sale-card__head { display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; }
+.sale-card__name { font-weight: 700; color: #1a331e; font-size: 15px; overflow-wrap: anywhere; }
+.sale-card__sku { font-size: 12px; color: #667066; margin-top: 2px; }
+.sale-card__remove { border: none; background: #fef2f2; color: #dc2626; border-radius: 8px; width: 40px; height: 40px; display: grid; place-items: center; flex-shrink: 0; cursor: pointer; }
+.sale-card__row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.sale-card__field { display: grid; gap: 4px; min-width: 0; }
+.sale-card__field > span { font-size: 12px; color: #667066; font-weight: 600; }
+.sale-card__field input { width: 100%; min-height: 42px; padding: 8px 10px; border: 1px solid #c8d8c8; border-radius: 8px; font-size: 16px; font-weight: 600; text-align: right; box-sizing: border-box; }
+.sale-card__stepper { display: grid; grid-template-columns: 40px 1fr 40px; border: 1px solid #c8d8c8; border-radius: 8px; overflow: hidden; min-height: 42px; }
+.sale-card__stepper button { border: none; background: #f4fbf4; color: #066006; cursor: pointer; display: grid; place-items: center; }
+.sale-card__stepper input { border: none; border-radius: 0; text-align: center; min-height: 40px; }
+.sale-card__adjust { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.sale-card__adjust:empty { display: none; }
+.sale-card__adjust select { min-height: 38px; font-size: 14px !important; max-width: 100% !important; }
+.sale-card__toggle { display: grid; grid-template-columns: 1fr 1fr; border: 1px solid #c8d8c8; border-radius: 8px; overflow: hidden; min-height: 42px; }
+.sale-card__toggle button { border: none; background: #fff; color: #475569; font-size: 12px; font-weight: 600; display: inline-flex; align-items: center; justify-content: center; gap: 4px; cursor: pointer; padding: 0 4px; }
+.sale-card__toggle button.is-on { background: #e9f6e8; color: #15803d; }
+.sale-card__total { display: flex; justify-content: space-between; align-items: baseline; border-top: 1px dashed #d1e8d1; padding-top: 8px; color: #475569; font-size: 13px; }
+.sale-card__total strong { color: #0b8f08; font-size: 17px; }
+
+/* Grid items may shrink below their content's natural width (otherwise one wide child,
+   e.g. a long product name or a table, makes the whole page wider than a phone). */
+.module-page > *, .module-page > div > *, .panel > div > * { min-width: 0; }

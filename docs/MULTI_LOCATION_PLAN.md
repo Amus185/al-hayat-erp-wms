@@ -357,3 +357,12 @@ Owner only until a branch sells, stocks or registers them.
 - A product has one selling price. Price tiers are no longer offered or saved (existing rows are kept, unused).
 - On a sale line the seller may sell above or below it. The line stores the product's price at that moment (`sales_order_lines.list_price`), the sold price, and the reason (`adjustment_reason`; chosen from a short list in the form). A far-off price (over 30%) asks for confirmation; a changed price needs a reason in the form.
 - Revenue is always the price sold at. The adjustment is information only: the Owner/admins and accountants get a notification (type `PRICE`) per sale that carries a change, and `GET /sales/price-adjustments` lists who changed what, with totals below and above the product price (accounting/admin only).
+
+## 15. Costing and product prices (running average, Owner-only selling price)
+
+- **Cost is never typed once a product has stock.** Goods coming in set it as a running weighted average, company-wide: new cost = (on hand × cost + units in × their cost) ÷ (on hand + in). Purchase receipts (net of the PO discount), resaleable customer returns and cancelled sales (both at the cost they were sold at), and finished production feed it (`services/costing.ts`). Stock adjustments move units at the current cost (no change).
+- **Each sale keeps its cost:** `sales_order_lines.unit_cost` is stamped when the sale's cost of goods is posted; COGS = quantity × that cost. Later cost changes never change past profit.
+- **Selling price:** only the Owner (admin with no branch) changes it: product edit, while receiving goods (`lines[].newSellingPrice`), or through the assistant. Sellers still adjust the price of one sale with a reason (section 14).
+- **History:** `product_price_history` keeps every cost and selling-price change (old, new, why, who, when); `GET /products/:id/price-history` (cost rows only for cost viewers). Product edit shows it.
+- **Alert:** when a receipt raises the cost, the Owner gets a notification with old → new cost, the margin drop and the price that keeps the old margin.
+- **One-time recalculation (migration `costing_recalc_v1`):** each product's current cost is recomputed from the newest purchases that make up today's stock (part not covered by purchases keeps the old cost). Old values are kept in the history (`RECALCULATED_FROM_PURCHASES`). It does not post a journal entry; see the report for the stock-value check.

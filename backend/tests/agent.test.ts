@@ -155,13 +155,10 @@ test('changes: price changes, refusals, cancel and expiry', async () => {
   assert.match((await raw('POST', '/agent/proposals', token, { action: 'delete_everything', args: {} })).body.error, /Unknown action/);
   assert.match((await raw('POST', '/agent/proposals', token, { action: 'set_price', args: { product: name, price: -1 } })).body.error, /positive/);
 
-  // a user without stock permission cannot even get a proposal
+  // only the Owner can change a selling price: anyone else cannot even get a proposal
   const accountant = await t.createUser({ branchId: null, roleId: 'role-accountant', role: 'accountant', grants: ['assistant.use', 'accounting.view'] });
-  const perms = (await t.q(`SELECT p.code FROM role_permissions rp JOIN permissions p ON p.id = rp.permission_id WHERE rp.role_id = 'role-accountant'`)).map((r: any) => r.code);
-  if (!perms.includes('manage_inventory')) {
-    const denied = await raw('POST', '/agent/proposals', await agentToken(accountant.token), { action: 'set_price', args: { product: name, price: 1 } });
-    assert.match(denied.body.error, /permission/);
-  }
+  const denied = await raw('POST', '/agent/proposals', await agentToken(accountant.token), { action: 'set_price', args: { product: name, price: 1 } });
+  assert.match(denied.body.error, /Only the Owner/);
 
   const later = await raw('POST', '/agent/proposals', token, { action: 'set_price', args: { product: name, price: 130 } });
   assert.equal((await t.api('POST', `/agent/actions/${later.body.proposal.id}/cancel`)).status, 200);

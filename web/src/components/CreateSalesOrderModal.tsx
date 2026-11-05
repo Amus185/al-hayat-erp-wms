@@ -10,6 +10,7 @@ import { Modal } from './Modal';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { PriceAdjustment, confirmFarPrice } from './PriceAdjustment';
+import { SaleLineCards, useNarrow } from './SaleLineCards';
 
 interface Customer {
   id: string;
@@ -154,6 +155,7 @@ export function CreateSalesOrderModal({ isOpen, onClose, onOrderCreated }: Creat
     fulfillmentType: 'DELIVERY' | 'PICKUP';
   }[]>([]);
   const [submitting, setSubmitting] = useState(false);
+  const narrow = useNarrow();
 
   useEffect(() => {
     if (!isOpen) return;
@@ -684,6 +686,11 @@ export function CreateSalesOrderModal({ isOpen, onClose, onOrderCreated }: Creat
             <div style={{ textAlign: 'center', padding: '24px', background: '#fbfdfb', border: '1px dashed #c8d8c8', borderRadius: '8px', color: '#667066' }}>
               No items selected yet. Choose products from the catalog above.
             </div>
+          ) : narrow ? (
+            <SaleLineCards lines={lines}
+              listPrice={(id, fb) => products.find((p) => p.id === id)?.sellingPrice ?? fb}
+              onChange={updateLine} onFulfillment={updateLineFulfillment} onRemove={removeLine}
+              onReason={(i, v) => setLines((prev) => prev.map((x, j) => (j === i ? { ...x, priceReason: v } : x)))} />
           ) : (
             <div style={{ overflowX: 'auto', border: '1px solid #d1e8d1', borderRadius: '8px' }}>
               <table style={{ width: '100%', fontSize: '13px', borderCollapse: 'collapse' }}>

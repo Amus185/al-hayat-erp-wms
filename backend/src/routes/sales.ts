@@ -3,6 +3,7 @@ import { Env, uuidv4 } from '../db';
 import { PgAdapter } from '../pg-client';
 import { authMiddleware, requirePermissions, isAdminUser } from '../middleware/auth';
 import { has } from '../services/privacy';
+import { costInStatements, stampOrderLineCosts, unitCosts } from '../services/costing';
 import { resolveBranchScope, resolveLoc, locBranch, resolveWriteBranch, branchSql, inScope, ScopeError, customerVisibleSql, type BranchScope } from '../services/branch-scope';
 import { logAudit, createAuditLogStmt } from '../services/audit';
 import { releaseReservationsStmt, returnWebQuantityStmt } from '../services/storefront';
@@ -1611,6 +1612,7 @@ sales.post('/orders', requirePermissions(['manage_sales']), async (c) => {
     // 4. Revenue/receivable/COGS and the deposit commit with the sale.
     const orderRef = { id, order_number: orderNumber, branch_id: body.branchId };
     const cogsAmount = await calculateLinesCogs(c.env.DB, body.lines.map((l: any) => ({ product_id: l.productId, quantity: l.quantity })));
+    stmts.push(stampOrderLineCosts(c.env.DB, id));
     stmts.push(...(await prepareSaleJournalEntry(c, orderRef, netTotal, cogsAmount, userId, undefined, undefined, installFee)).statements);
     if (deposit > 0) {
       stmts.push(...(await prepareCustomerPaymentJournalEntry(c, { id: invoiceId, amount: deposit }, orderRef, userId)).statements);
@@ -1828,6 +1830,7 @@ sales.post('/orders/:id/invoice', requirePermissions(['manage_sales']), async (c
 
     // Revenue, receivable (incl. installation fee) and COGS commit with the invoice.
     const cogsAmount = await calculateOrderCogs(c.env.DB, orderId as string);
+    stmts.push(stampOrderLineCosts(c.env.DB, orderId as string));
     const orderRef = { id: orderId as string, order_number: String((order as any)?.order_number || orderId), branch_id: branchId ? String(branchId) : null };
     stmts.push(...(await prepareSaleJournalEntry(c, orderRef, total, cogsAmount, userId, undefined, undefined, installFee)).statements);
 
@@ -2092,6 +2095,7 @@ sales.post('/orders/:id/complete', requirePermissions(['manage_sales']), async (
       fetchCoaMapForCodes(c.env.DB, ['1010', '1020', '1030', '2050', '4010', '5010']),
     ]);
     const cogsAmount = await calculateOrderCogs(c.env.DB, order.id as string);
+    stmts.push(stampOrderLineCosts(c.env.DB, order.id as string));
     const saleJournal = await prepareJournalEntryPosting(c, {
       description: `Sales Order Completed & Invoiced #${(order as any).order_number || order.id}`,
       referenceType: 'SALE',
@@ -2520,9 +2524,17 @@ sales.post('/orders/:id/cancel', requirePermissions(['manage_sales']), async (c)
       GROUP BY product_id
     `).bind(invoice.id).all();
 
+    // Stock comes back at the cost it was sold at (sale line), keeping the average cost right.
+    const { results: soldCosts } = await c.env.DB.prepare(
+      'SELECT product_id, unit_cost FROM sales_order_lines WHERE sales_order_id = ? AND unit_cost IS NOT NULL',
+    ).bind(orderId).all();
+    const soldCost = new Map(((soldCosts || []) as any[]).map((r) => [r.product_id, Number(r.unit_cost)]));
     for (const line of (issued || []) as any[]) {
       const qty = Number(line.qty || 0);
       if (qty > 0) {
+        if (soldCost.has(line.product_id)) {
+          stmts.push(...costInStatements(c.env.DB, { productId: line.product_id, quantity: qty, unitCost: soldCost.get(line.product_id)!, source: 'SALE_CANCELLED', referenceId: String(orderId), userId }));
+        }
         stmts.push(c.env.DB.prepare(`
           UPDATE inventory_stock
           SET quantity_on_hand = quantity_on_hand + ?, updated_at = CURRENT_TIMESTAMP
@@ -2781,6 +2793,24 @@ sales.post('/orders/:id/returns', requirePermissions(['manage_sales']), async (c
     if (l.condition === 'RESALEABLE') resaleable.push({ product_id: l.productId, quantity: l.quantity });
   }
   // Resaleable goods go back into the branch's stock (a grouped product returns its components).
+  // They come back at the cost they were sold at (kept on the sale line), so the books and the
+  // average cost stay right even if the cost changed since the sale.
+  let returnedCost = 0;
+  if (resaleable.length) {
+    const nowCosts = await unitCosts(c.env.DB, resaleable.map((r) => r.product_id));
+    const { results: soldRows } = await c.env.DB.prepare(
+      "SELECT sol.product_id, sol.unit_cost, COALESCE(p.product_type, 'STANDARD') AS product_type FROM sales_order_lines sol JOIN products p ON p.id = sol.product_id WHERE sol.sales_order_id = ?",
+    ).bind(orderId).all();
+    const sold = new Map(((soldRows || []) as any[]).map((r) => [r.product_id, r]));
+    for (const r of resaleable) {
+      const row = sold.get(r.product_id) as any;
+      const unit = row?.unit_cost != null ? Number(row.unit_cost) : (nowCosts.get(r.product_id) ?? 0);
+      returnedCost += r.quantity * unit;
+      if (row?.product_type !== 'GROUPED') {
+        stmts.push(...costInStatements(c.env.DB, { productId: r.product_id, quantity: r.quantity, unitCost: unit, source: 'SALES_RETURN', referenceId: returnId, userId }));
+      }
+    }
+  }
   if (resaleable.length) {
     const reqs = await resolveLinesToInventoryRequirements(c.env.DB, resaleable);
     for (const r of reqs) {
@@ -2812,7 +2842,7 @@ sales.post('/orders/:id/returns', requirePermissions(['manage_sales']), async (c
     lines: [{ accountCode: '4010', debitAmount: value, creditAmount: 0 }, { accountCode: '1020', debitAmount: 0, creditAmount: value }],
   })).statements);
   if (resaleable.length) {
-    const cost = await calculateLinesCogs(c.env.DB, resaleable);
+    const cost = Math.round(returnedCost * 100) / 100;
     if (cost > 0) stmts.push(...(await prepareJournalEntryPosting(c, {
       ...jBase, description: `Returned stock back in ${order.order_number}`, referenceId: `${returnId}:stock`,
       lines: [{ accountCode: '1030', debitAmount: cost, creditAmount: 0 }, { accountCode: '5010', debitAmount: 0, creditAmount: cost }],

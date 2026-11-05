@@ -8,6 +8,8 @@ import { resolveLoc, locSql, locBranch } from '../services/branch-scope';
 import { prepareJournalEntryPosting } from '../services/accounting-service';
 import { csvResponse, likeTerm, listRequest, pagedResponse, pagedRows, type ListOptions } from '../services/listing';
 
+import { costInStatements, sellingPriceHistoryStmt, isOwner } from '../services/costing';
+
 const purchasing = new Hono<{ Bindings: Env; Variables: { jwtPayload: any } }>();
 
 purchasing.use('/*', authMiddleware);
@@ -260,7 +262,7 @@ purchasing.get('/orders/:id', async (c) => {
   if (!po) return c.json({ message: 'PO not found' }, 404);
 
   const { results: lines } = await c.env.DB.prepare(`
-    SELECT pol.*, pol.quantity AS quantity_ordered, p.name as product_name, p.sku as variant_sku,
+    SELECT pol.*, pol.quantity AS quantity_ordered, p.name as product_name, p.sku as variant_sku, p.selling_price AS current_selling_price, p.cost_price AS current_cost_price,
       COALESCE(pol.quantity_received, (
         SELECT COALESCE(SUM(grl.quantity_received), 0) 
         FROM goods_receipt_lines grl 
@@ -593,6 +595,23 @@ purchasing.post('/receipts', requirePermissions(['manage_purchasing']), async (c
     batchValue += (qty * netUnitCost);
   }
 
+  // Cost before this receipt (for the Owner's alert) and optional new selling prices.
+  const payloadUser = c.get('jwtPayload');
+  const owner = isOwner(payloadUser);
+  const productInfo = new Map<string, any>();
+  for (const line of body.lines) {
+    const info = await c.env.DB.prepare(`
+      SELECT p.id, p.name, COALESCE(p.cost_price, 0) AS cost, COALESCE(p.selling_price, 0) AS price,
+             (SELECT COALESCE(SUM(GREATEST(s.quantity_on_hand, 0)), 0) FROM inventory_stock s WHERE s.product_id = p.id) AS on_hand
+      FROM products p WHERE p.id = ?`).bind(line.productId).first() as any;
+    productInfo.set(line.productId, info);
+    if (line.newSellingPrice !== undefined && line.newSellingPrice !== null && line.newSellingPrice !== '') {
+      if (!owner) return c.json({ message: 'Only the Owner can set a new selling price. Receive the goods without it; the Owner will be notified of the new cost.' }, 403);
+      const sp = Number(line.newSellingPrice);
+      if (!Number.isFinite(sp) || sp < 0) return c.json({ message: `${info?.name || 'A product'}: the new selling price must be 0 or more.` }, 400);
+    }
+  }
+
   // Pre-flight: gather existing stock rows
   const stockLookups = new Map<string, string | null>();
   await Promise.all(
@@ -634,6 +653,43 @@ purchasing.post('/receipts', requirePermissions(['manage_purchasing']), async (c
       INSERT INTO inventory_transactions (id, product_id, transaction_type, quantity, destination_owner_type, destination_warehouse_id, destination_location_id, reference_type, reference_id, created_by)
       VALUES (?, ?, 'PURCHASE_RECEIPT', ?, 'WAREHOUSE', ?, ?, 'GOODS_RECEIPT', ?, ?)
     `).bind(uuidv4(), line.productId, qty, warehouseId, line.warehouseLocationId || null, receiptId, userId));
+
+    // Running-average cost: computed from stock on hand BEFORE these units are added.
+    stmts.push(...costInStatements(c.env.DB, { productId: line.productId, quantity: qty, unitCost: netUnitCost, source: 'PURCHASE_RECEIPT', referenceId: receiptId, userId }));
+    if (owner && line.newSellingPrice !== undefined && line.newSellingPrice !== null && line.newSellingPrice !== '') {
+      const sp = Math.round(Number(line.newSellingPrice) * 100) / 100;
+      const info = productInfo.get(line.productId);
+      if (Math.abs(sp - Number(info?.price || 0)) > 0.005) {
+        stmts.push(sellingPriceHistoryStmt(c.env.DB, { productId: line.productId, oldPrice: Number(info?.price ?? 0), newPrice: sp, source: 'SET_WHEN_RECEIVING', referenceId: receiptId, userId }));
+        stmts.push(c.env.DB.prepare('UPDATE products SET selling_price = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').bind(sp, line.productId));
+        if (info) info.price = sp;
+      }
+    }
+    // Tell the Owner when the cost went up, with the price that keeps the old margin.
+    {
+      const info = productInfo.get(line.productId);
+      const onHand = Number(info?.on_hand || 0);
+      const oldCost = Number(info?.cost || 0);
+      const newCost = onHand > 0 ? (onHand * oldCost + qty * netUnitCost) / (onHand + qty) : netUnitCost;
+      if (info && newCost > oldCost + 0.005) {
+        const price = Number(info.price || 0);
+        const oldMargin = price > 0 ? (price - oldCost) / price : 0;
+        const newMargin = price > 0 ? (price - newCost) / price : 0;
+        const suggested = oldMargin > 0 && oldMargin < 1 ? newCost / (1 - oldMargin) : null;
+        const pct = (m: number) => `${(m * 100).toFixed(1)}%`;
+        const msg = `${info.name}: cost ${oldCost.toFixed(2)} → ${newCost.toFixed(2)} after receipt ${receiptNumber}. `
+          + (price > 0 ? `At the selling price ${price.toFixed(2)} the margin falls from ${pct(oldMargin)} to ${pct(newMargin)}.` : 'It has no selling price yet.')
+          + (suggested ? ` To keep ${pct(oldMargin)}, the price would be ${suggested.toFixed(2)}.` : '')
+          + ' Change it in Products (Owner only).';
+        stmts.push(c.env.DB.prepare(`
+          INSERT INTO notifications (id, user_id, title, message, type)
+          SELECT gen_random_uuid()::text, u.id, ?, ?, 'PRICE'
+          FROM users u WHERE u.is_active = 1 AND u.branch_id IS NULL
+            AND EXISTS (SELECT 1 FROM user_roles ur JOIN roles r ON r.id = ur.role_id WHERE ur.user_id = u.id AND r.code = 'admin')
+        `).bind(`Cost went up: ${info.name}`, msg));
+      }
+      if (info) { info.cost = newCost; info.on_hand = onHand + qty; }
+    }
 
     const existingStockId = stockLookups.get(line.productId);
     if (existingStockId) {

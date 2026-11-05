@@ -7,6 +7,8 @@ import { resolveLoc, locBranch, productVisibleSql, ScopeError, type Loc } from '
 import { prepareOpeningStock, type OpeningStockItem } from '../services/accounting-service';
 import { csvResponse, likeTerm, listRequest, pagedResponse, pagedRows, type ListOptions, type ListRequest } from '../services/listing';
 
+import { isOwner, sellingPriceHistoryStmt } from '../services/costing';
+
 const products = new Hono<{ Bindings: Env; Variables: { jwtPayload: any } }>();
 
 products.use('/*', authMiddleware);
@@ -310,7 +312,7 @@ products.post('/', requirePermissions(['manage_inventory']), async (c) => {
 
   const stmts = [];
 
-  // 1. Insert product catalog entry
+  // 1. Insert product catalog entry (its first selling price starts the price history)
   stmts.push(c.env.DB.prepare(`
     INSERT INTO products (id, sku, name, description, category_id, brand_id, cost_price, selling_price, reorder_level, product_type, barcode)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -376,6 +378,7 @@ products.post('/', requirePermissions(['manage_inventory']), async (c) => {
   }
 
   // 5. Audit log statement
+  if (Number(sell) > 0) stmts.push(sellingPriceHistoryStmt(c.env.DB, { productId, oldPrice: null, newPrice: Number(sell), source: 'CREATED', userId: c.get('jwtPayload')?.sub ?? null }));
   stmts.push(createAuditLogStmt(c, 'PRODUCT_CREATE', 'products', productId, null, {
     ...body,
     initialInventory: { ownerType, warehouseId, branchId, initialQuantity: initialQty }
@@ -662,6 +665,19 @@ products.get('/:id', async (c) => {
   });
 });
 
+/** Cost and selling-price history of a product (cost lines only for people who may see costs). */
+products.get('/:id/price-history', async (c) => {
+  const id = c.req.param('id') as string;
+  if (!(await productAllowed(c, id))) return c.json({ message: 'Product not found' }, 404);
+  const { results } = await c.env.DB.prepare(`
+    SELECT h.id, h.kind, h.old_value, h.new_value, h.source, h.reference_id, h.created_at, u.full_name AS changed_by_name
+    FROM product_price_history h LEFT JOIN users u ON u.id = h.changed_by
+    WHERE h.product_id = ? ${canSeeCosts(c) ? '' : "AND h.kind = 'SELLING'"}
+    ORDER BY h.created_at DESC LIMIT 200
+  `).bind(id).all();
+  return c.json(results || []);
+});
+
 products.patch('/:id', requirePermissions(['manage_inventory']), async (c) => {
   const id = c.req.param('id');
   if (!(await productAllowed(c, id as string))) return c.json({ message: 'Product not found' }, 404);
@@ -709,16 +725,34 @@ products.patch('/:id', requirePermissions(['manage_inventory']), async (c) => {
     fields.push('brand_id = ?'); vals.push(brId || null);
   }
 
+  const priceStmts: any[] = [];
+  const actor = c.get('jwtPayload');
+  // Cost comes from goods coming in (running average). It can be typed only while the
+  // product has no stock at all (e.g. before the first purchase), and only by the Owner.
   if ((body.costPrice !== undefined || body.cost_price !== undefined) && canSeeCosts(c)) {
     const cost = Number(body.costPrice ?? body.cost_price ?? 0);
     if (cost < 0) return c.json({ message: 'Cost price cannot be negative.' }, 400);
-    fields.push('cost_price = ?'); vals.push(cost);
+    if (Math.abs(cost - Number((existing as any).cost_price || 0)) > 0.00005) {
+      const stock = await c.env.DB.prepare('SELECT COALESCE(SUM(GREATEST(quantity_on_hand, 0)), 0) AS n FROM inventory_stock WHERE product_id = ?').bind(id).first() as any;
+      if (Number(stock?.n) > 0) {
+        return c.json({ message: 'The cost of a product in stock comes from its purchases (average cost), so it cannot be typed. Receive the new goods at their new cost and the average updates by itself.' }, 409);
+      }
+      if (!isOwner(actor)) return c.json({ message: 'Only the Owner can set a cost price.' }, 403);
+      fields.push('cost_price = ?'); vals.push(cost);
+      priceStmts.push(c.env.DB.prepare(`INSERT INTO product_price_history (id, product_id, kind, old_value, new_value, source, changed_by)
+        VALUES (gen_random_uuid()::text, ?, 'COST', ?, ?, 'SET_BY_OWNER', ?)`).bind(id, Number((existing as any).cost_price || 0), cost, actor?.sub ?? null));
+    }
   }
 
+  // Selling price: the Owner's decision only; every change is kept with who and when.
   if (body.sellingPrice !== undefined || body.selling_price !== undefined) {
-    const sell = Number(body.sellingPrice ?? body.selling_price ?? 0);
-    if (sell < 0) return c.json({ message: 'Selling price cannot be negative.' }, 400);
-    fields.push('selling_price = ?'); vals.push(sell);
+    const sell = Math.round(Number(body.sellingPrice ?? body.selling_price ?? 0) * 100) / 100;
+    if (!(sell >= 0)) return c.json({ message: 'Selling price cannot be negative.' }, 400);
+    if (Math.abs(sell - Number((existing as any).selling_price || 0)) > 0.005) {
+      if (!isOwner(actor)) return c.json({ message: "Only the Owner can change a product's selling price. For one customer, change the price on the sale itself (with a reason)." }, 403);
+      fields.push('selling_price = ?'); vals.push(sell);
+      priceStmts.push(sellingPriceHistoryStmt(c.env.DB, { productId: id as string, oldPrice: Number((existing as any).selling_price || 0), newPrice: sell, source: 'SET_BY_OWNER', userId: actor?.sub ?? null }));
+    }
   }
 
   if (body.reorderLevel !== undefined || body.reorder_level !== undefined) {
@@ -739,7 +773,8 @@ products.patch('/:id', requirePermissions(['manage_inventory']), async (c) => {
   if (fields.length > 0) {
     fields.push('updated_at = CURRENT_TIMESTAMP');
     vals.push(id);
-    await c.env.DB.prepare(`UPDATE products SET ${fields.join(', ')} WHERE id = ?`).bind(...vals).run();
+    // The change and its price history are written together.
+    await c.env.DB.batch([c.env.DB.prepare(`UPDATE products SET ${fields.join(', ')} WHERE id = ?`).bind(...vals), ...priceStmts]);
   }
 
   // Handle group items if passed

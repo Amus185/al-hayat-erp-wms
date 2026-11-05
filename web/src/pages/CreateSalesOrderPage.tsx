@@ -13,6 +13,7 @@ import { Modal } from '../components/Modal';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { PriceAdjustment, confirmFarPrice } from '../components/PriceAdjustment';
+import { SaleLineCards, useNarrow } from '../components/SaleLineCards';
 
 interface Customer {
   id: string;
@@ -149,6 +150,7 @@ export function CreateSalesOrderPage() {
   }[]>([]);
 
   const [submittingAction, setSubmittingAction] = useState<'complete' | 'draft' | null>(null);
+  const narrow = useNarrow();
 
   useEffect(() => {
     async function loadData() {
@@ -701,7 +703,7 @@ export function CreateSalesOrderPage() {
               <label style={{ fontSize: '14px', fontWeight: 600, color: '#1a331e', margin: 0, display: 'block' }}>
                 Order Line Items ({lines.length})
               </label>
-              {lines.length > 0 && (
+              {lines.length > 0 && !narrow && (
                 <span style={{ fontSize: '12px', color: '#667066' }}>
                   Tip: Toggle fulfillment per line for small items taken on hand without delivery
                 </span>
@@ -713,7 +715,13 @@ export function CreateSalesOrderPage() {
                 No items selected yet. Choose products or bundles from the catalog above.
               </div>
             ) : (
-              <div style={{ overflowX: 'auto', border: '1px solid #d1e8d1', borderRadius: '8px' }}>
+              <div style={narrow ? {} : { overflowX: 'auto', border: '1px solid #d1e8d1', borderRadius: '8px' }}>
+                {narrow ? (
+                  <SaleLineCards lines={lines}
+                    listPrice={(id, fb) => products.find((p) => p.id === id)?.sellingPrice ?? fb}
+                    onChange={updateLine} onFulfillment={updateLineFulfillment} onRemove={removeLine}
+                    onReason={(i, v) => setLines((prev) => prev.map((x, j) => (j === i ? { ...x, priceReason: v } : x)))} />
+                ) : (
                 <table style={{ width: '100%', fontSize: '13px', borderCollapse: 'collapse' }}>
                   <thead>
                     <tr style={{ background: '#f4fbf4', borderBottom: '1px solid #d1e8d1' }}>
@@ -823,10 +831,11 @@ export function CreateSalesOrderPage() {
                     })}
                   </tbody>
                 </table>
+                )}
 
                 {/* Summary Row */}
-                <div style={{ display: 'flex', justifyContent: 'flex-end', borderTop: '2px solid #edf1ed', padding: '16px' }}>
-                  <div style={{ minWidth: '340px', display: 'grid', gap: '8px' }}>
+                <div style={{ display: 'flex', justifyContent: 'flex-end', borderTop: '2px solid #edf1ed', padding: narrow ? '14px 4px' : '16px' }}>
+                  <div style={{ minWidth: 'min(340px, 100%)', width: narrow ? '100%' : undefined, display: 'grid', gap: '8px' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '14px', color: '#444' }}>
                       <span>Merchandise Subtotal</span>
                       <span>${subtotalOrder.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>

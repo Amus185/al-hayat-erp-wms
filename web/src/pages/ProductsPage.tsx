@@ -29,6 +29,11 @@ interface Brand {
   name: string;
 }
 
+const PRICE_SOURCES: Record<string, string> = {
+  PURCHASE_RECEIPT: 'Goods received', SALES_RETURN: 'Customer return', SALE_CANCELLED: 'Sale cancelled', MANUFACTURED: 'Produced',
+  SET_BY_OWNER: 'Changed by Owner', SET_WHEN_RECEIVING: 'Set when receiving', CREATED: 'New product', RECALCULATED_FROM_PURCHASES: 'Recalculated from purchases',
+};
+
 export interface PriceTier {
   id?: string;
   tier_name: string;
@@ -58,6 +63,7 @@ export interface Product {
   price_tiers?: PriceTier[];
   group_items?: GroupItem[];
   is_active: boolean | number; // the API sends 1/0
+  total_stock?: number | string;
   is_published?: number | boolean;
   category_name?: string;
   brand_name?: string;
@@ -66,7 +72,8 @@ export interface Product {
 export function ProductsPage() {
   const navigate = useNavigate();
   const { addToast } = useToast();
-  const { hasPermission } = useAuth();
+  const { hasPermission, isAdmin: isOwner } = useAuth();
+  const [priceHistory, setPriceHistory] = useState<any[] | null>(null);
   // Cost prices only with cost access (Owner decision D4); the server sends none otherwise.
   const canCosts = hasPermission('costs.view');
 
@@ -194,6 +201,8 @@ export function ProductsPage() {
   };
 
   const openEditModal = (prod: Product) => {
+    setPriceHistory(null);
+    apiGet<any[]>(`/products/${prod.id}/price-history`).then((h) => setPriceHistory(h || [])).catch(() => setPriceHistory([]));
     setEditingProduct({
       ...prod,
       product_type: prod.product_type || 'STANDARD',
@@ -1353,20 +1362,22 @@ export function ProductsPage() {
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '14px', marginTop: '10px' }}>
               {canCosts && <InputField
                 type="number"
-                label="Cost Price ($)"
+                label={Number(editingProduct.total_stock ?? 0) > 0 ? 'Average cost ($) — from purchases' : 'Cost Price ($)'}
                 id="editCost"
                 value={editingProduct.cost_price}
                 onChange={(val) => setEditingProduct({ ...editingProduct, cost_price: val })}
                 onBlur={() => setEditingProduct(p => p ? { ...p, cost_price: Number(p.cost_price) || 0 } : null)}
+                disabled={!isOwner || Number(editingProduct.total_stock ?? 0) > 0}
                 required
               />}
               <InputField
                 type="number"
-                label="Base Selling Price ($)"
+                label={isOwner ? 'Selling Price ($)' : 'Selling Price ($) — Owner sets it'}
                 id="editSell"
                 value={editingProduct.selling_price}
                 onChange={(val) => setEditingProduct({ ...editingProduct, selling_price: val })}
                 onBlur={() => setEditingProduct(p => p ? { ...p, selling_price: Number(p.selling_price) || 0 } : null)}
+                disabled={!isOwner}
                 required
               />
               <InputField
@@ -1379,6 +1390,29 @@ export function ProductsPage() {
                 required
               />
             </div>
+            <p className="mm-sub" style={{ margin: '6px 0 0' }}>
+              {Number(editingProduct.total_stock ?? 0) > 0
+                ? 'Cost is the average of the purchases in stock; it updates by itself when goods are received. '
+                : 'With no stock yet, the first purchase will set the cost. '}
+              {isOwner ? 'A selling-price change is kept in the history below; past sales keep their price.' : 'Only the Owner can change the selling price.'}
+            </p>
+            {priceHistory && priceHistory.length > 0 && (
+              <details style={{ marginTop: 8 }} id="price-history">
+                <summary style={{ cursor: 'pointer', fontWeight: 600, fontSize: 13 }}>Price history ({priceHistory.length})</summary>
+                <table className="table" style={{ width: '100%', fontSize: 12, marginTop: 6 }}>
+                  <thead><tr><th>Date</th><th>What</th><th>Old</th><th>New</th><th>Why</th><th>By</th></tr></thead>
+                  <tbody>{priceHistory.map((h) => (
+                    <tr key={h.id}>
+                      <td>{new Date(h.created_at).toLocaleDateString()}</td>
+                      <td>{h.kind === 'COST' ? 'Cost' : 'Selling price'}</td>
+                      <td>{h.old_value == null ? '—' : `$${Number(h.old_value).toFixed(2)}`}</td>
+                      <td>${Number(h.new_value).toFixed(2)}</td>
+                      <td>{PRICE_SOURCES[h.source] || h.source}</td>
+                      <td>{h.changed_by_name || '—'}</td>
+                    </tr>))}</tbody>
+                </table>
+              </details>
+            )}
 
             {/* Grouped Product Bundle Components */}
             {editingProduct.product_type === 'GROUPED' && (
