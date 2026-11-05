@@ -1,0 +1,13 @@
+# Cloudflare Pages project for the Al Hayat staff app (deployed with `npm run deploy:web`).
+#
+# The binding below lives here, not in the dashboard: when a Pages project has a Wrangler
+# config, the dashboard's Bindings are read-only and this file is what counts. Every deploy
+# therefore carries the API binding, and the pages always reach the backend Worker
+# (web/functions/api/[[path]].ts proxies /api/* to it through env.API).
+name = "al-hayat-erp"
+pages_build_output_dir = "./dist"
+compatibility_date = "2026-08-01"
+
+[[services]]
+binding = "API"
+service = "al-hayat-api"
