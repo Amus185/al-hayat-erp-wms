@@ -53,7 +53,7 @@ const navItems = [
   { label: 'Online Store', path: '/online-store', icon: Globe, permission: 'manage_sales|manage_inventory' },
   // Shown once the assistant Worker is deployed (VITE_AGENT_URL), and only to people holding assistant.use (the Owner by default); the server refuses everyone else.
   ...(AGENT_URL ? [{ label: 'Assistant', path: '/assistant', icon: Sparkles, permission: 'assistant.use' }] : []),
-  { label: 'Expenses', path: '/expenses', icon: Receipt, permission: 'manage_purchasing' },
+  { label: 'Expenses', path: '/expenses', icon: Receipt, permission: 'expenses.manage' },
   { label: 'Owner\'s Assets', path: '/assets', icon: Landmark, permission: '', adminOnly: true },
   { label: 'Reports', path: '/reports', icon: BarChart3, permission: 'view_reports' },
   { label: 'Accounting', path: '/accounting', icon: BookOpen, permission: 'accounting.view' },

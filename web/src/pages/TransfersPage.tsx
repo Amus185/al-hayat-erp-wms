@@ -236,6 +236,20 @@ export function TransfersPage() {
   };
 
   const handleAccept = async (t: Transfer) => {
+    // From the list (no lines loaded): accept everything that was sent.
+    if (!t.lines) {
+      try {
+        setActionLoading(true);
+        await apiPost(`/transfers/${t.id}/accept`, {});
+        addToast('success', 'Transfer accepted: the stock has moved to you');
+        loadData();
+      } catch (err: any) {
+        addToast('error', err?.message || 'Could not accept the transfer');
+      } finally {
+        setActionLoading(false);
+      }
+      return;
+    }
     const lines = (t.lines || []).map((l) => ({
       productId: l.product_id,
       quantity: Number(acceptQty[l.product_id] ?? (l.quantity_requested ?? l.quantity ?? 0)),

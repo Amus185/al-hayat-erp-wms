@@ -31,7 +31,7 @@ async function branchActivity(branch: string, price: number, expense: number, de
 
 before(async () => {
   t = await setupTestApp();
-  userA = await t.createUser({ branchId: A, roleId: 'role-branch-user', role: 'branch_user', grants: ['accounting.view'] });
+  userA = await t.createUser({ branchId: A, roleId: 'role-branch-user', role: 'branch_user', grants: ['accounting.view', 'manage_purchasing'] });
   userB = await t.createUser({ branchId: B, roleId: 'role-branch-user', role: 'branch_user', grants: ['accounting.view'] });
   accountant = await t.createUser({ branchId: null, roleId: 'role-accountant', role: 'accountant' });
   noBranch = await t.createUser({ branchId: null, roleId: 'role-sales-rep', role: 'sales_rep' });

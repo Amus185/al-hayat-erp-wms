@@ -915,6 +915,10 @@ export const ACCESS_PERMISSIONS = [
   // Financial statements, ledger, journal, cash and bank, depreciation (the Accounting module).
   { id: 'perm-accounting-view', code: 'accounting.view', description: 'Open the Accounting module: statements, ledger, journal, cash and bank',
     roles: ['77777777-7777-7777-7777-777777777777', 'role-accountant'] },
+  // Expenses used to need the purchasing right; branch managers record their branch's daily
+  // expenses without being allowed to purchase, so expenses have their own right.
+  { id: 'perm-expenses-manage', code: 'expenses.manage', description: 'Record, change and delete expenses (own branch)',
+    roles: ['77777777-7777-7777-7777-777777777777', 'role-branch-user', 'role-warehouse-manager'] },
   // The AI Assistant: the Owner's by default; it only ever sees what its user may see.
   { id: 'perm-assistant-use', code: 'assistant.use', description: 'Use the AI Assistant',
     roles: ['77777777-7777-7777-7777-777777777777'] },
@@ -1543,11 +1547,7 @@ export async function ensureRoleSeparation(pool: Pool) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    await client.query(`
-      DELETE FROM role_permissions
-      WHERE role_id IN ('role-branch-user', 'role-sales-rep')
-        AND permission_id = '44444444-4444-4444-4444-444444444444'
-    `);
+    // Duplicates and the unique index are safe to check on every start.
     await client.query(`
       DELETE FROM role_permissions a USING role_permissions b
       WHERE a.ctid < b.ctid AND a.role_id = b.role_id AND a.permission_id = b.permission_id
@@ -1555,11 +1555,22 @@ export async function ensureRoleSeparation(pool: Pool) {
     await client.query(`
       CREATE UNIQUE INDEX IF NOT EXISTS uq_role_permissions ON role_permissions (role_id, permission_id)
     `);
-    await client.query(`
-      DELETE FROM user_roles
-      WHERE user_id IN ('user-hq-branch-01', 'user-cl-branch-02')
-        AND role_id = 'role-accountant'
-    `);
+    // Removing rights runs ONCE: afterwards the Owner's own choices in Roles stay as they are.
+    await client.query('CREATE TABLE IF NOT EXISTS app_migrations (name TEXT PRIMARY KEY, ran_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP)');
+    const done = await client.query("SELECT 1 FROM app_migrations WHERE name = 'role_separation_v1'");
+    if (!done.rowCount) {
+      await client.query(`
+        DELETE FROM role_permissions
+        WHERE role_id IN ('role-branch-user', 'role-sales-rep')
+          AND permission_id = '44444444-4444-4444-4444-444444444444'
+      `);
+      await client.query(`
+        DELETE FROM user_roles
+        WHERE user_id IN ('user-hq-branch-01', 'user-cl-branch-02')
+          AND role_id = 'role-accountant'
+      `);
+      await client.query("INSERT INTO app_migrations (name) VALUES ('role_separation_v1')");
+    }
     await client.query('COMMIT');
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});

@@ -114,7 +114,7 @@ expenses.get('/summary', requirePermissions(['view_reports']), async (c) => {
 });
 
 // ── POST /expenses ────────────────────────────────────────
-expenses.post('/', requirePermissions(['manage_purchasing']), async (c) => {
+expenses.post('/', requirePermissions(['expenses.manage']), async (c) => {
   const body = await c.req.json<{
     title: string;
     amount: number;
@@ -162,7 +162,7 @@ expenses.post('/', requirePermissions(['manage_purchasing']), async (c) => {
 });
 
 // ── PATCH /expenses/:id ───────────────────────────────────
-expenses.patch('/:id', requirePermissions(['manage_purchasing']), async (c) => {
+expenses.patch('/:id', requirePermissions(['expenses.manage']), async (c) => {
   const { id } = c.req.param();
   const body = await c.req.json<Partial<{
     title: string; amount: number; category: string;
@@ -217,7 +217,7 @@ expenses.patch('/:id', requirePermissions(['manage_purchasing']), async (c) => {
 });
 
 // ── DELETE /expenses/:id ──────────────────────────────────
-expenses.delete('/:id', requirePermissions(['manage_purchasing']), async (c) => {
+expenses.delete('/:id', requirePermissions(['expenses.manage']), async (c) => {
   const { id } = c.req.param();
   const existing = await c.env.DB.prepare('SELECT * FROM expenses WHERE id = ?').bind(id).first();
   if (!existing || !inScope(await resolveBranchScope(c, 'ALL'), (existing as any).branch_id)) return c.json({ message: 'Expense not found.' }, 404);

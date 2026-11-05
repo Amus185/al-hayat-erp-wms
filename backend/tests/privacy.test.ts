@@ -95,7 +95,8 @@ test('D4: Sales staff and Branch Managers do not see stock value or profit; acco
   assert.equal((await t.api('POST', '/purchasing/orders', { supplierId: 'x', lines: [] }, manager.token)).status, 403, 'priced purchase orders need cost access');
   await t.api('PUT', `/users/${manager.id}/extra-permissions`, { codes: ['costs.view'] });
   assert.ok(hasKeyDeep((await t.api('GET', '/reports/inventory-valuation', undefined, manager.token)).body, ['total_cost_value']), 'granted by the Owner');
-  assert.notEqual((await t.api('POST', '/purchasing/orders', { supplierId: 'x', lines: [] }, manager.token)).status, 403);
+  // Owner policy (role separation): branch managers do not purchase at all, even with cost access.
+  assert.equal((await t.api('POST', '/purchasing/orders', { supplierId: 'x', lines: [] }, manager.token)).status, 403);
   const accountant = await t.createUser({ branchId: null, roleId: 'role-accountant', role: 'accountant' });
   assert.ok(hasKeyDeep((await t.api('GET', '/reports/inventory-valuation', undefined, accountant.token)).body, ['total_cost_value']));
 });
