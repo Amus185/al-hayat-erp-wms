@@ -413,7 +413,7 @@ export function ProductItemSelect({
                           </span>
                           {p.nextPrice && (
                             <span style={{ fontSize: '10px', color: '#1d4ed8', display: 'block', whiteSpace: 'nowrap' }}>
-                              then ${Number(p.nextPrice.price).toFixed(2)} after {p.nextPrice.after}
+                              {p.nextPrice.after} left, then ${Number(p.nextPrice.price).toFixed(2)}
                             </span>
                           )}
                         </div>

@@ -615,8 +615,13 @@ export function ProductsPage() {
               ${Number(row.selling_price).toLocaleString()}
             </div>
             {next && (
-              <div style={{ fontSize: '11px', color: '#1d4ed8', whiteSpace: 'nowrap' }} title={`${steps!.length} price levels with stock`}>
-                Next ${next.price.toLocaleString()} after {steps![0].left} sold
+              <div style={{ marginTop: 3, display: 'grid', gap: 2 }} title="Price levels: the current price sells first; when its units are gone, the next price starts by itself.">
+                <span style={{ justifySelf: 'start', fontSize: '10px', fontWeight: 700, color: '#1d4ed8', background: '#dbeafe', borderRadius: 8, padding: '1px 7px' }}>
+                  {steps!.length} price levels
+                </span>
+                <span style={{ fontSize: '11px', color: '#334155', whiteSpace: 'nowrap' }}>
+                  {steps![0].left} left at ${steps![0].price.toLocaleString()}, then ${next.price.toLocaleString()}
+                </span>
               </div>
             )}
           </div>
