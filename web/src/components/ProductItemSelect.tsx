@@ -46,6 +46,7 @@ export function ProductItemSelect({
   const containerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const skipFocusOpen = useRef(false);
 
   // Close on outside click
   useEffect(() => {
@@ -95,9 +96,12 @@ export function ProductItemSelect({
     }
     setSearch('');
     setIsOpen(false);
-    if (inputRef.current) {
-      inputRef.current.focus();
-    }
+    // After adding, the list closes and stays closed. On a phone the keyboard is put
+    // away so the added line is visible; on a computer the cursor stays in the box,
+    // ready to type the next product (typing reopens the list).
+    const touch = typeof window !== 'undefined' && window.matchMedia?.('(pointer: coarse)').matches;
+    if (touch) inputRef.current?.blur();
+    else { skipFocusOpen.current = true; inputRef.current?.focus(); }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -157,7 +161,7 @@ export function ProductItemSelect({
             setSearch(e.target.value);
             if (!isOpen) setIsOpen(true);
           }}
-          onFocus={() => setIsOpen(true)}
+          onFocus={() => { if (skipFocusOpen.current) { skipFocusOpen.current = false; return; } setIsOpen(true); }}
           onKeyDown={handleKeyDown}
           placeholder={placeholder}
           style={{
