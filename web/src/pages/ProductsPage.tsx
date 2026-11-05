@@ -519,9 +519,12 @@ export function ProductsPage() {
     const costPrice = Number(editingProduct.cost_price) || 0;
     const sellingPrice = Number(editingProduct.selling_price) || 0;
     const reorderLevel = Math.max(0, Number(editingProduct.reorder_level) || 0);
+    // The cost is locked once the product has stock (it comes from purchases): never send it then.
+    const costLocked = !isOwner || Number(editingProduct.total_stock ?? 0) > 0;
 
-    if (costPrice > sellingPrice) {
-      addToast('error', 'Cost Price cannot be greater than Selling Price');
+    // Cost can rise above the price after a purchase; selling below cost is allowed, but confirmed.
+    if (canCosts && costPrice > sellingPrice && sellingPrice > 0 &&
+        !(await confirmAction('Selling below cost?', `The cost is $${costPrice.toFixed(2)} and the selling price $${sellingPrice.toFixed(2)}. Every sale would lose money. Save anyway?`, 'Save anyway', 'warning'))) {
       return;
     }
 
@@ -543,7 +546,7 @@ export function ProductsPage() {
         description: editingProduct.description,
         categoryId: editingProduct.category_id || null,
         brandId: editingProduct.brand_id || null,
-        costPrice,
+        ...(costLocked ? {} : { costPrice }),
         sellingPrice,
         reorderLevel,
         productType: editingProduct.product_type || 'STANDARD',
@@ -1311,7 +1314,7 @@ export function ProductsPage() {
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
               <InputField label="Product ID (SKU) *" id="editSku" value={editingProduct.sku} onChange={(val) => setEditingProduct({ ...editingProduct, sku: val })} required />
-              <InputField label="Barcode *" id="editBarcode" value={editingProduct.barcode || ''} onChange={(val) => setEditingProduct({ ...editingProduct, barcode: val })} required />
+              <InputField label="Barcode" id="editBarcode" value={editingProduct.barcode || ''} onChange={(val) => setEditingProduct({ ...editingProduct, barcode: val })} />
             </div>
             <div style={{ marginTop: '10px' }}>
               <InputField label="Product Name *" id="editName" value={editingProduct.name} onChange={(val) => setEditingProduct({ ...editingProduct, name: val })} required />
@@ -1364,7 +1367,7 @@ export function ProductsPage() {
                 type="number"
                 label={Number(editingProduct.total_stock ?? 0) > 0 ? 'Average cost ($) — from purchases' : 'Cost Price ($)'}
                 id="editCost"
-                value={editingProduct.cost_price}
+                value={!isOwner || Number(editingProduct.total_stock ?? 0) > 0 ? Number(editingProduct.cost_price || 0).toFixed(2) : editingProduct.cost_price}
                 onChange={(val) => setEditingProduct({ ...editingProduct, cost_price: val })}
                 onBlur={() => setEditingProduct(p => p ? { ...p, cost_price: Number(p.cost_price) || 0 } : null)}
                 disabled={!isOwner || Number(editingProduct.total_stock ?? 0) > 0}
@@ -1391,7 +1394,7 @@ export function ProductsPage() {
               />
             </div>
             <p className="mm-sub" style={{ margin: '6px 0 0' }}>
-              {Number(editingProduct.total_stock ?? 0) > 0
+              {!canCosts ? '' : Number(editingProduct.total_stock ?? 0) > 0
                 ? 'Cost is the average of the purchases in stock; it updates by itself when goods are received. '
                 : 'With no stock yet, the first purchase will set the cost. '}
               {isOwner ? 'A selling-price change is kept in the history below; past sales keep their price.' : 'Only the Owner can change the selling price.'}
@@ -1399,7 +1402,8 @@ export function ProductsPage() {
             {priceHistory && priceHistory.length > 0 && (
               <details style={{ marginTop: 8 }} id="price-history">
                 <summary style={{ cursor: 'pointer', fontWeight: 600, fontSize: 13 }}>Price history ({priceHistory.length})</summary>
-                <table className="table" style={{ width: '100%', fontSize: 12, marginTop: 6 }}>
+                <div style={{ overflowX: 'auto', marginTop: 6 }}>
+                <table className="table" style={{ width: '100%', fontSize: 12, whiteSpace: 'nowrap' }}>
                   <thead><tr><th>Date</th><th>What</th><th>Old</th><th>New</th><th>Why</th><th>By</th></tr></thead>
                   <tbody>{priceHistory.map((h) => (
                     <tr key={h.id}>
@@ -1411,6 +1415,7 @@ export function ProductsPage() {
                       <td>{h.changed_by_name || '—'}</td>
                     </tr>))}</tbody>
                 </table>
+                </div>
               </details>
             )}
 

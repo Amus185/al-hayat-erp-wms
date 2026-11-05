@@ -2115,4 +2115,7 @@ html.api-busy, html.api-busy * { cursor: progress !important; }
 
 /* Grid items may shrink below their content's natural width (otherwise one wide child,
    e.g. a long product name or a table, makes the whole page wider than a phone). */
-.module-page > *, .module-page > div > *, .panel > div > * { min-width: 0; }
+.module-page > :not(button), .module-page > div > :not(button), .panel > div > :not(button) { min-width: 0; }
+/* Same inside pop-up windows: a wide table scrolls inside its own box instead of pushing
+   the whole window content past the right edge (where it was cut off). */
+.modal-panel__body > :not(button), .modal-panel__body > div > :not(button), .modal-panel__body > div > div > :not(button) { min-width: 0; }

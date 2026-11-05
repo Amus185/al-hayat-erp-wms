@@ -749,7 +749,7 @@ export function PurchasingPage() {
         isOpen={!!selectedPO || !!openingPO}
         onClose={closePoDetails}
         title={selectedPO || openingPO ? `Purchase Order: ${(selectedPO || openingPO)!.po_number}` : 'PO Details'}
-        width="lg"
+        width="xl"
       >
         {!selectedPO && openingPO && <ModalLoading />}
         {selectedPO && (() => {
@@ -834,7 +834,7 @@ export function PurchasingPage() {
                           <th style={{ padding: '8px 12px', textAlign: 'center' }}>Received</th>
                           <th style={{ padding: '8px 12px', textAlign: 'center' }}>Remaining</th>
                           {isReceivable && <th style={{ padding: '8px 12px', textAlign: 'center', background: '#ecfdf5', color: '#065f46' }}>Receive Now</th>}
-                          {isReceivable && isOwner && <th style={{ padding: '8px 12px', textAlign: 'center' }} title="Optional. Leave empty to keep the current price.">New selling price</th>}
+                          {isReceivable && isOwner && <th style={{ padding: '8px 12px', textAlign: 'center' }} title="New selling price (optional). Leave empty to keep the current price.">New price</th>}
                           {canCosts && <>
                           <th style={{ padding: '8px 12px', textAlign: 'right' }}>Unit Cost</th>
                           <th style={{ padding: '8px 12px', textAlign: 'right' }}>Discount</th>
@@ -895,16 +895,23 @@ export function PurchasingPage() {
                                 const price = Number(line.current_selling_price || 0);
                                 const oldCost = Number(line.current_cost_price ?? 0);
                                 const inCost = Number(line.unit_cost || 0);
-                                const keep = price > 0 && oldCost > 0 && oldCost < price && inCost > oldCost ? inCost / (1 - (price - oldCost) / price) : null;
+                                // Same formula as the server: stock on hand at the old cost + the units received now.
+                                const onHand = Number(line.current_on_hand || 0);
+                                const qtyIn = Number(receiptLines[line.product_id] || 0) || remaining;
+                                const newAvg = onHand > 0 ? (onHand * oldCost + qtyIn * inCost) / (onHand + qtyIn) : inCost;
+                                const keep = price > 0 && oldCost > 0 && oldCost < price && newAvg > oldCost + 0.005 ? newAvg / (1 - (price - oldCost) / price) : null;
                                 return (
-                                  <td style={{ padding: '10px 12px', textAlign: 'center' }}>
+                                  <td style={{ padding: '10px 6px', textAlign: 'center' }}>
                                     <input type="number" min={0} step="0.01" className="form-input" placeholder={price ? price.toFixed(2) : '—'}
                                       aria-label={`New selling price for ${line.product_name}`}
-                                      style={{ width: '100px', padding: '4px 6px', textAlign: 'right', minHeight: '32px' }}
+                                      style={{ width: '86px', padding: '4px 6px', textAlign: 'right', minHeight: '32px' }}
                                       value={newPrices[line.product_id] ?? ''}
                                       onChange={(e) => setNewPrices((p) => ({ ...p, [line.product_id]: e.target.value }))} />
-                                    <div className="mm-sub" style={{ fontSize: 11, marginTop: 2 }}>
-                                      Now ${price.toFixed(2)}{keep ? ` · same margin on new stock: $${keep.toFixed(2)}` : ''}
+                                    <div className="mm-sub" style={{ fontSize: 11, marginTop: 2, lineHeight: 1.35 }}>
+                                      Now ${price.toFixed(2)}
+                                      {canCosts && Math.abs(newAvg - oldCost) > 0.005 ? <><br />Avg cost → ${newAvg.toFixed(2)}</> : null}
+                                      {keep ? <><br />Same margin: <button type="button" className="link-btn" style={{ border: 'none', background: 'none', padding: 0, color: '#0284c7', cursor: 'pointer', fontSize: 11 }}
+                                        title="Use this price" onClick={() => setNewPrices((p) => ({ ...p, [line.product_id]: keep.toFixed(2) }))}>${keep.toFixed(2)}</button></> : null}
                                     </div>
                                   </td>
                                 );

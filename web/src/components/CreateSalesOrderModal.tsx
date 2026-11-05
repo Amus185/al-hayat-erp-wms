@@ -467,7 +467,7 @@ export function CreateSalesOrderModal({ isOpen, onClose, onOrderCreated }: Creat
               Customer *
             </label>
             <div style={{ display: 'flex', gap: '8px' }}>
-              <div style={{ flex: 1 }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
                 <SearchableSelect
                   options={[]}
                   loadOptions={async (q) => {
@@ -486,10 +486,10 @@ export function CreateSalesOrderModal({ isOpen, onClose, onOrderCreated }: Creat
                 type="button"
                 className="btn btn-secondary"
                 onClick={() => setIsInlineCustomerOpen(true)}
-                style={{ padding: '0 12px', fontSize: '12px' }}
+                style={{ padding: '0 12px', fontSize: '12px', flexShrink: 0, width: 'auto', display: 'inline-flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}
                 title="Create New Customer"
               >
-                <Plus size={16} />
+                <Plus size={16} /> New
               </button>
             </div>
             {selectedCustomerObj?.outstanding_balance !== undefined && (
@@ -676,7 +676,7 @@ export function CreateSalesOrderModal({ isOpen, onClose, onOrderCreated }: Creat
             <label style={{ fontSize: '14px', fontWeight: 600, color: '#1a331e', margin: 0, display: 'block' }}>
               Order Line Items ({lines.length})
             </label>
-            {lines.length > 0 && (
+            {lines.length > 0 && !narrow && (
               <span style={{ fontSize: '12px', color: '#667066' }}>
                 Tip: Toggle fulfillment per line for small items taken on hand without delivery
               </span>

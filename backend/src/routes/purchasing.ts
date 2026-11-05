@@ -263,6 +263,7 @@ purchasing.get('/orders/:id', async (c) => {
 
   const { results: lines } = await c.env.DB.prepare(`
     SELECT pol.*, pol.quantity AS quantity_ordered, p.name as product_name, p.sku as variant_sku, p.selling_price AS current_selling_price, p.cost_price AS current_cost_price,
+      (SELECT COALESCE(SUM(GREATEST(s.quantity_on_hand, 0)), 0) FROM inventory_stock s WHERE s.product_id = p.id) AS current_on_hand,
       COALESCE(pol.quantity_received, (
         SELECT COALESCE(SUM(grl.quantity_received), 0) 
         FROM goods_receipt_lines grl 
@@ -656,6 +657,7 @@ purchasing.post('/receipts', requirePermissions(['manage_purchasing']), async (c
 
     // Running-average cost: computed from stock on hand BEFORE these units are added.
     stmts.push(...costInStatements(c.env.DB, { productId: line.productId, quantity: qty, unitCost: netUnitCost, source: 'PURCHASE_RECEIPT', referenceId: receiptId, userId }));
+    const priceBefore = Number(productInfo.get(line.productId)?.price || 0);
     if (owner && line.newSellingPrice !== undefined && line.newSellingPrice !== null && line.newSellingPrice !== '') {
       const sp = Math.round(Number(line.newSellingPrice) * 100) / 100;
       const info = productInfo.get(line.productId);
@@ -672,15 +674,19 @@ purchasing.post('/receipts', requirePermissions(['manage_purchasing']), async (c
       const oldCost = Number(info?.cost || 0);
       const newCost = onHand > 0 ? (onHand * oldCost + qty * netUnitCost) / (onHand + qty) : netUnitCost;
       if (info && newCost > oldCost + 0.005) {
+        // Margin before: old price and old cost. Margin now: today's price (maybe just changed) and new cost.
         const price = Number(info.price || 0);
-        const oldMargin = price > 0 ? (price - oldCost) / price : 0;
+        const oldMargin = priceBefore > 0 ? (priceBefore - oldCost) / priceBefore : 0;
         const newMargin = price > 0 ? (price - newCost) / price : 0;
         const suggested = oldMargin > 0 && oldMargin < 1 ? newCost / (1 - oldMargin) : null;
         const pct = (m: number) => `${(m * 100).toFixed(1)}%`;
+        const changed = Math.abs(price - priceBefore) > 0.005;
         const msg = `${info.name}: cost ${oldCost.toFixed(2)} → ${newCost.toFixed(2)} after receipt ${receiptNumber}. `
-          + (price > 0 ? `At the selling price ${price.toFixed(2)} the margin falls from ${pct(oldMargin)} to ${pct(newMargin)}.` : 'It has no selling price yet.')
-          + (suggested ? ` To keep ${pct(oldMargin)}, the price would be ${suggested.toFixed(2)}.` : '')
-          + ' Change it in Products (Owner only).';
+          + (price <= 0 ? 'It has no selling price yet.'
+            : changed ? `The selling price was changed ${priceBefore.toFixed(2)} → ${price.toFixed(2)}: margin ${pct(oldMargin)} → ${pct(newMargin)}.`
+            : `At the selling price ${price.toFixed(2)} the margin falls from ${pct(oldMargin)} to ${pct(newMargin)}.`)
+          + (suggested && newMargin < oldMargin - 0.0005 ? ` To keep ${pct(oldMargin)}, the price would be ${suggested.toFixed(2)}.` : '')
+          + (changed ? '' : ' Change it in Products (Owner only).');
         stmts.push(c.env.DB.prepare(`
           INSERT INTO notifications (id, user_id, title, message, type)
           SELECT gen_random_uuid()::text, u.id, ?, ?, 'PRICE'
