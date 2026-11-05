@@ -46,7 +46,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = useCallback(async (credentials: LoginRequest) => {
     const { error } = await authClient.signIn.email(credentials);
-    if (error) throw new Error(error.status === 429 || error.status === 403 ? (error.message || 'Sign-in refused') : 'Invalid email or password');
+    if (error) {
+      // Only a 401 means wrong email or password; a server or connection problem must not look like one.
+      if (error.status === 429 || error.status === 403) throw new Error(error.message || 'Sign-in refused');
+      if (!error.status || error.status >= 500) throw new Error('The server could not be reached, so you could not be signed in. Try again in a minute; if it continues, tell the administrator.');
+      throw new Error('Invalid email or password');
+    }
     const profile = await fetchProfile<AuthUser>();
     if (!profile) throw new Error('Signed in, but your account has no access. Contact your administrator.');
     setUser(profile);
