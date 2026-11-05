@@ -596,7 +596,10 @@ admin.post('/requests/:id/convert', requirePermissions(['manage_sales']), async 
         branchId: settings.locationId,
         customerId: customer.id,
         fulfillmentType: 'DELIVERY',
-        lines: (lines || []).map((l: any) => ({ productId: l.product_id, quantity: Number(l.quantity), unitPrice: Number(l.unit_price) })),
+        // The sale keeps the price the customer was quoted on the website (read by the sales
+        // route from this request itself, never from the body).
+        webRequestId: id,
+        lines: (lines || []).map((l: any) => ({ productId: l.product_id, quantity: Number(l.quantity) })),
       }),
     }), asUser(c.env, c.get('jwtPayload')) as any); // as the signed-in user, whether they use a cookie or a bearer token
     const order: any = await res.json().catch(() => ({}));

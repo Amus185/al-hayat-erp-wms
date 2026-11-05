@@ -754,24 +754,8 @@ export function CreateSalesOrderModal({ isOpen, onClose, onOrderCreated }: Creat
                         </td>
                         <td style={{ padding: '8px 12px', textAlign: 'right' }}>
                           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
-                              <span style={{ fontSize: '12px', color: '#667066' }}>$</span>
-                              <input
-                                type="number"
-                                min="0"
-                                step="0.01"
-                                value={l.unitPrice}
-                                onChange={(e) => updateLine(idx, 'unitPrice', parseFloat(e.target.value) || 0)}
-                                onBlur={async () => {
-                                  const ref = products.find((p) => p.id === l.productId)?.sellingPrice ?? l.unitPrice;
-                                  if (!(await confirmFarPrice(ref, l.unitPrice))) updateLine(idx, 'unitPrice', ref);
-                                }}
-                                style={{ width: '85px', padding: '4px 6px', textAlign: 'right', borderRadius: '4px', border: '1px solid #c8d8c8', fontWeight: 600 }}
-                              />
-                            </div>
-                            <PriceAdjustment name={l.name} reference={products.find((p) => p.id === l.productId)?.sellingPrice ?? l.unitPrice}
-                              price={l.unitPrice} reason={l.priceReason || ''}
-                              onReason={(v) => setLines((prev) => prev.map((x, i) => (i === idx ? { ...x, priceReason: v } : x)))} />
+                            {/* The product's price, set by the Owner in Products: not editable on a sale. */}
+                            <span style={{ fontWeight: 600 }} title="Price set by the Owner in Products">${Number(l.unitPrice).toFixed(2)}</span>
                           </div>
                         </td>
                         <td style={{ padding: '8px 12px', textAlign: 'right' }}>

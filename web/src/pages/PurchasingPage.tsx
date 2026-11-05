@@ -141,7 +141,7 @@ function PurchaseInvoiceSummaryBox({ summary, discountAmount }: { summary: Payme
 export function PurchasingPage() {
   const navigate = useNavigate();
   const { addToast } = useToast();
-  const { hasPermission, isAdmin: isOwner } = useAuth();
+  const { hasPermission } = useAuth();
   // Prices and supplier balances only with cost access (Owner decision D4); quantities and receiving stay.
   const canCosts = hasPermission('costs.view');
 
@@ -170,7 +170,6 @@ export function PurchasingPage() {
   const [warehouses, setWarehouses] = useState<any[]>([]);
   const [selectedWHId, setSelectedWHId] = useState('');
   const [receiptLines, setReceiptLines] = useState<Record<string, number>>({});
-  const [newPrices, setNewPrices] = useState<Record<string, string>>({});
   const [receiptLocations, setReceiptLocations] = useState<Record<string, string>>({});
   const [locationsList, setLocationsList] = useState<any[]>([]);
 
@@ -270,7 +269,6 @@ export function PurchasingPage() {
         productId: l.product_id,
         quantityReceived: Number(receiptLines[l.product_id] || 0),
         warehouseLocationId: receiptLocations[l.product_id] || undefined,
-        newSellingPrice: isOwner && newPrices[l.product_id] !== undefined && newPrices[l.product_id] !== '' ? Number(newPrices[l.product_id]) : undefined,
       }))
       .filter((l: any) => l.quantityReceived > 0);
 
@@ -288,7 +286,6 @@ export function PurchasingPage() {
       });
       const totalUnits = linesToReceive.reduce((sum: number, l: any) => sum + l.quantityReceived, 0);
       addToast('success', `Goods receipt recorded. Received ${totalUnits} items.`);
-      setNewPrices({});
       await viewPoDetails({ id: selectedPO.id } as any, true);
       loadData();
     } catch (err: any) {
@@ -834,7 +831,6 @@ export function PurchasingPage() {
                           <th style={{ padding: '8px 12px', textAlign: 'center' }}>Received</th>
                           <th style={{ padding: '8px 12px', textAlign: 'center' }}>Remaining</th>
                           {isReceivable && <th style={{ padding: '8px 12px', textAlign: 'center', background: '#ecfdf5', color: '#065f46' }}>Receive Now</th>}
-                          {isReceivable && isOwner && <th style={{ padding: '8px 12px', textAlign: 'center' }} title="New selling price (optional). Leave empty to keep the current price.">New price</th>}
                           {canCosts && <>
                           <th style={{ padding: '8px 12px', textAlign: 'right' }}>Unit Cost</th>
                           <th style={{ padding: '8px 12px', textAlign: 'right' }}>Discount</th>
@@ -890,32 +886,6 @@ export function PurchasingPage() {
                                   </div>
                                 </td>
                               )}
-                              {isReceivable && isOwner && (() => {
-                                // What the average cost becomes, and the price that keeps today's margin.
-                                const price = Number(line.current_selling_price || 0);
-                                const oldCost = Number(line.current_cost_price ?? 0);
-                                const inCost = Number(line.unit_cost || 0);
-                                // Same formula as the server: stock on hand at the old cost + the units received now.
-                                const onHand = Number(line.current_on_hand || 0);
-                                const qtyIn = Number(receiptLines[line.product_id] || 0) || remaining;
-                                const newAvg = onHand > 0 ? (onHand * oldCost + qtyIn * inCost) / (onHand + qtyIn) : inCost;
-                                const keep = price > 0 && oldCost > 0 && oldCost < price && newAvg > oldCost + 0.005 ? newAvg / (1 - (price - oldCost) / price) : null;
-                                return (
-                                  <td style={{ padding: '10px 6px', textAlign: 'center' }}>
-                                    <input type="number" min={0} step="0.01" className="form-input" placeholder={price ? price.toFixed(2) : '—'}
-                                      aria-label={`New selling price for ${line.product_name}`}
-                                      style={{ width: '86px', padding: '4px 6px', textAlign: 'right', minHeight: '32px' }}
-                                      value={newPrices[line.product_id] ?? ''}
-                                      onChange={(e) => setNewPrices((p) => ({ ...p, [line.product_id]: e.target.value }))} />
-                                    <div className="mm-sub" style={{ fontSize: 11, marginTop: 2, lineHeight: 1.35 }}>
-                                      Now ${price.toFixed(2)}
-                                      {canCosts && Math.abs(newAvg - oldCost) > 0.005 ? <><br />Avg cost → ${newAvg.toFixed(2)}</> : null}
-                                      {keep ? <><br />Same margin: <button type="button" className="link-btn" style={{ border: 'none', background: 'none', padding: 0, color: '#0284c7', cursor: 'pointer', fontSize: 11 }}
-                                        title="Use this price" onClick={() => setNewPrices((p) => ({ ...p, [line.product_id]: keep.toFixed(2) }))}>${keep.toFixed(2)}</button></> : null}
-                                    </div>
-                                  </td>
-                                );
-                              })()}
                               {canCosts && <>
                               <td style={{ padding: '10px 12px', textAlign: 'right' }}>${Number(line.unit_cost).toLocaleString()}</td>
                               <td style={{ padding: '10px 12px', textAlign: 'right', color: '#b45309' }}>

@@ -1455,14 +1455,20 @@ sales.post('/orders', requirePermissions(['manage_sales']), async (c) => {
   }
 
   const seenProducts = new Set<string>();
+  // Quoted website prices: only from a website request that is being converted right now.
+  const webPrices = new Map<string, number>();
+  if (body.webRequestId) {
+    const { results: wl } = await c.env.DB.prepare(`
+      SELECT l.product_id, l.unit_price FROM storefront_request_lines l JOIN storefront_requests r ON r.id = l.request_id
+      WHERE r.id = ? AND r.status = 'PROCESSING'
+    `).bind(String(body.webRequestId)).all();
+    for (const r of (wl || []) as any[]) webPrices.set(r.product_id, Number(r.unit_price));
+  }
   for (let i = 0; i < body.lines.length; i++) {
     const line = body.lines[i];
     if (!line.productId) return c.json({ message: `Line ${i + 1}: productId is required.` }, 400);
     if (!line.quantity || !Number.isInteger(line.quantity) || line.quantity <= 0) {
       return c.json({ message: `Line ${i + 1}: quantity must be a positive integer.` }, 400);
-    }
-    if (line.unitPrice === undefined || line.unitPrice === null || Number(line.unitPrice) < 0) {
-      return c.json({ message: `Line ${i + 1}: unitPrice cannot be negative.` }, 400);
     }
     if (seenProducts.has(line.productId)) {
       return c.json({ message: `Line ${i + 1}: duplicate product. Combine quantities into one line.` }, 400);
@@ -1475,12 +1481,11 @@ sales.post('/orders', requirePermissions(['manage_sales']), async (c) => {
       return c.json({ message: `Cannot sell inactive product "${product.name}". Please activate the product before creating new sales orders.` }, 400);
     }
 
-    // Support price tiers & negotiated selling price overrides (preserve actual transaction unit price)
-    line.unitPrice = (line.unitPrice !== undefined && line.unitPrice !== null && !isNaN(Number(line.unitPrice)) && Number(line.unitPrice) >= 0)
-      ? Number(line.unitPrice)
-      : Number(product.selling_price || 0);
-    // The product's own price is the reference, taken from the server (never from the client).
-    line.listPrice = Number(product.selling_price || 0);
+    // Owner rule: a sale always uses the product's current selling price (set by the Owner in
+    // Products). Nobody can type a price on a sale; a price sent by the client is ignored.
+    // Only a website request being converted keeps the price the customer was quoted.
+    line.unitPrice = webPrices.has(line.productId) ? webPrices.get(line.productId)! : Number(product.selling_price || 0);
+    line.listPrice = line.unitPrice;
   }
 
   const isCreditSale = Boolean(body.isCreditSale);
@@ -1553,7 +1558,7 @@ sales.post('/orders', requirePermissions(['manage_sales']), async (c) => {
 
     stmts.push(c.env.DB.prepare(`
       INSERT INTO sales_order_lines (id, sales_order_id, product_id, quantity, unit_price, discount_amount, line_total, fulfillment_type, list_price, adjustment_reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).bind(uuidv4(), id, line.productId, line.quantity, line.unitPrice, discountAmount, lineTotal, lineFulfillmentType, line.listPrice, Math.abs(line.unitPrice - line.listPrice) > 0.005 ? cleanReason(line.priceReason) : null));
+    `).bind(uuidv4(), id, line.productId, line.quantity, line.unitPrice, discountAmount, lineTotal, lineFulfillmentType, line.listPrice, null));
   }
 
   const netTotal = subtotal - totalDiscount;
@@ -1619,7 +1624,6 @@ sales.post('/orders', requirePermissions(['manage_sales']), async (c) => {
     }
   }
 
-  stmts.push(priceAdjustmentNotice(c.env.DB, id, userId));
   stmts.push(createAuditLogStmt(c, 'SALES_ORDER_CREATE', 'sales_orders', id, null, {
     orderNumber,
     branchId: body.branchId,
@@ -2674,12 +2678,12 @@ sales.patch('/orders/:id', requirePermissions(['manage_sales']), async (c) => {
       const l = body.lines[i];
       if (!l.productId) return c.json({ message: `Line ${i + 1}: choose a product.` }, 400);
       if (!Number.isInteger(l.quantity) || l.quantity <= 0) return c.json({ message: `Line ${i + 1}: quantity must be a whole number above 0.` }, 400);
-      if (l.unitPrice === undefined || l.unitPrice === null || !(Number(l.unitPrice) >= 0)) return c.json({ message: `Line ${i + 1}: the price cannot be negative.` }, 400);
       if (seen.has(l.productId)) return c.json({ message: `Line ${i + 1}: this product is already on the sale. Combine the quantities.` }, 400);
       seen.add(l.productId);
       const pr = await c.env.DB.prepare('SELECT id, name, selling_price, COALESCE(is_active, 1) AS is_active FROM products WHERE id = ?').bind(l.productId).first() as any;
-      l.listPrice = Number(pr?.selling_price || 0);
       if (!pr) return c.json({ message: `Line ${i + 1}: that product does not exist.` }, 400);
+      // Always the product's current selling price; a price from the client is ignored.
+      l.unitPrice = Number(pr.selling_price || 0);
       if (pr.is_active === 0) return c.json({ message: `"${pr.name}" is inactive and cannot be sold.` }, 400);
     }
     stmts.push(c.env.DB.prepare('DELETE FROM sales_order_lines WHERE sales_order_id = ?').bind(orderId));
@@ -2687,10 +2691,8 @@ sales.patch('/orders/:id', requirePermissions(['manage_sales']), async (c) => {
     for (const l of body.lines) {
       const disc = Math.max(0, Number(l.discountAmount || 0));
       stmts.push(c.env.DB.prepare('INSERT INTO sales_order_lines (id, sales_order_id, product_id, quantity, unit_price, discount_amount, line_total, fulfillment_type, list_price, adjustment_reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-        .bind(uuidv4(), orderId, l.productId, l.quantity, Number(l.unitPrice), disc, l.quantity * Number(l.unitPrice) - disc, lineType, l.listPrice,
-          Math.abs(Number(l.unitPrice) - l.listPrice) > 0.005 ? cleanReason(l.priceReason) : null));
+        .bind(uuidv4(), orderId, l.productId, l.quantity, l.unitPrice, disc, l.quantity * l.unitPrice - disc, lineType, l.unitPrice, null));
     }
-    stmts.push(priceAdjustmentNotice(c.env.DB, orderId, userId));
   }
   if (!sets.length && body.lines === undefined) return c.json({ message: 'Nothing to change.' }, 400);
   sets.push('updated_at = CURRENT_TIMESTAMP');

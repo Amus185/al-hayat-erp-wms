@@ -74,6 +74,7 @@ export function ProductsPage() {
   const { addToast } = useToast();
   const { hasPermission, isAdmin: isOwner } = useAuth();
   const [priceHistory, setPriceHistory] = useState<any[] | null>(null);
+  const [openedCost, setOpenedCost] = useState<number | null>(null);
   // Cost prices only with cost access (Owner decision D4); the server sends none otherwise.
   const canCosts = hasPermission('costs.view');
 
@@ -203,8 +204,12 @@ export function ProductsPage() {
   const openEditModal = (prod: Product) => {
     setPriceHistory(null);
     apiGet<any[]>(`/products/${prod.id}/price-history`).then((h) => setPriceHistory(h || [])).catch(() => setPriceHistory([]));
+    // Cost shown to 2 decimals; it is only sent back if the Owner actually changes it.
+    const shownCost = prod.cost_price == null ? prod.cost_price : Number(Number(prod.cost_price).toFixed(2));
+    setOpenedCost(shownCost == null ? null : Number(shownCost));
     setEditingProduct({
       ...prod,
+      cost_price: shownCost as any,
       product_type: prod.product_type || 'STANDARD',
       is_active: prod.is_active !== undefined ? prod.is_active : 1,
     });
@@ -520,7 +525,7 @@ export function ProductsPage() {
     const sellingPrice = Number(editingProduct.selling_price) || 0;
     const reorderLevel = Math.max(0, Number(editingProduct.reorder_level) || 0);
     // The cost is locked once the product has stock (it comes from purchases): never send it then.
-    const costLocked = !isOwner || Number(editingProduct.total_stock ?? 0) > 0;
+    const costLocked = !isOwner;
 
     // Cost can rise above the price after a purchase; selling below cost is allowed, but confirmed.
     if (canCosts && costPrice > sellingPrice && sellingPrice > 0 &&
@@ -546,7 +551,7 @@ export function ProductsPage() {
         description: editingProduct.description,
         categoryId: editingProduct.category_id || null,
         brandId: editingProduct.brand_id || null,
-        ...(costLocked ? {} : { costPrice }),
+        ...(costLocked || (openedCost != null && Math.abs(costPrice - openedCost) < 0.005) ? {} : { costPrice }),
         sellingPrice,
         reorderLevel,
         productType: editingProduct.product_type || 'STANDARD',
@@ -1365,12 +1370,12 @@ export function ProductsPage() {
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '14px', marginTop: '10px' }}>
               {canCosts && <InputField
                 type="number"
-                label={Number(editingProduct.total_stock ?? 0) > 0 ? 'Average cost ($) — from purchases' : 'Cost Price ($)'}
+                label={isOwner ? 'Cost Price ($)' : 'Cost Price ($) — Owner sets it'}
                 id="editCost"
-                value={!isOwner || Number(editingProduct.total_stock ?? 0) > 0 ? Number(editingProduct.cost_price || 0).toFixed(2) : editingProduct.cost_price}
+                value={!isOwner ? Number(editingProduct.cost_price || 0).toFixed(2) : editingProduct.cost_price}
                 onChange={(val) => setEditingProduct({ ...editingProduct, cost_price: val })}
                 onBlur={() => setEditingProduct(p => p ? { ...p, cost_price: Number(p.cost_price) || 0 } : null)}
-                disabled={!isOwner || Number(editingProduct.total_stock ?? 0) > 0}
+                disabled={!isOwner}
                 required
               />}
               <InputField
@@ -1395,9 +1400,9 @@ export function ProductsPage() {
             </div>
             <p className="mm-sub" style={{ margin: '6px 0 0' }}>
               {!canCosts ? '' : Number(editingProduct.total_stock ?? 0) > 0
-                ? 'Cost is the average of the purchases in stock; it updates by itself when goods are received. '
-                : 'With no stock yet, the first purchase will set the cost. '}
-              {isOwner ? 'A selling-price change is kept in the history below; past sales keep their price.' : 'Only the Owner can change the selling price.'}
+                ? 'Purchases update the average cost by itself; you can also change it here. If there is stock, the books are adjusted to the new cost automatically. '
+                : 'You can set the cost here; purchases will update it as an average. '}
+              {isOwner ? 'All sales use this selling price. Changes are kept in the history below; past sales keep their price.' : 'Only the Owner can change prices. Sales use this price.'}
             </p>
             {priceHistory && priceHistory.length > 0 && (
               <details style={{ marginTop: 8 }} id="price-history">

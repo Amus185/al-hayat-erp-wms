@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
 import { Minus, Plus, Store, Trash2, Truck } from 'lucide-react';
-import { PriceAdjustment, confirmFarPrice } from './PriceAdjustment';
 
 export interface SaleLineView {
   productId: string; name: string; sku: string; quantity: number; unitPrice: number; discount: number;
@@ -64,15 +63,11 @@ export function SaleLineCards({ lines, listPrice, onChange, onFulfillment, onRem
                   <button type="button" aria-label="One more" onClick={() => onChange(idx, 'quantity', l.quantity + 1)}><Plus size={16} /></button>
                 </div>
               </div>
-              <label className="sale-card__field">
+              <div className="sale-card__field">
                 <span>Unit price</span>
-                <input type="number" inputMode="decimal" min={0} step={0.01} value={l.unitPrice} aria-label={`Price of ${l.name}`}
-                  onChange={(e) => onChange(idx, 'unitPrice', parseFloat(e.target.value) || 0)}
-                  onBlur={async () => { if (!(await confirmFarPrice(ref, l.unitPrice))) onChange(idx, 'unitPrice', ref); }} />
-              </label>
-            </div>
-            <div className="sale-card__adjust">
-              <PriceAdjustment name={l.name} reference={ref} price={l.unitPrice} reason={l.priceReason || ''} onReason={(v) => onReason(idx, v)} />
+                {/* Set by the Owner in Products; not editable on a sale. */}
+                <div className="sale-card__price" aria-label={`Price of ${l.name}`}>${ref.toFixed(2)}</div>
+              </div>
             </div>
 
             <div className="sale-card__row">

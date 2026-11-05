@@ -60,29 +60,40 @@ test('bought at 129, then at 149: average cost, each sale keeps its own cost, re
   assert.deepEqual(history.map((h: any) => h.source), ['PURCHASE_RECEIPT', 'PURCHASE_RECEIPT', 'SALES_RETURN']);
 });
 
-test('only the Owner changes the selling price; cost cannot be typed while in stock; Owner is alerted when cost rises', async () => {
+test('only the Owner changes cost and selling price in Products; the books follow the cost; Owner alerted when a purchase raises it', async () => {
   const p = await t.createProduct({ cost: 0, price: 300 });
   assert.equal((await buy(p, 4, 100)).status, 201);
-  const mgr = await t.createUser({ branchId: BRANCH_HQ, roleId: 'role-branch-user', role: 'branch_user', grants: ['manage_inventory'] });
+  const mgr = await t.createUser({ branchId: BRANCH_HQ, roleId: 'role-branch-user', role: 'branch_user', grants: ['manage_inventory', 'costs.view'] });
   const acct = await t.createUser({ branchId: null, roleId: 'role-accountant', role: 'accountant', grants: ['manage_inventory'] });
   for (const u of [mgr, acct]) {
-    const r = await t.api('PATCH', `/products/${p}`, { sellingPrice: 350 }, u.token);
-    assert.ok([403, 404].includes(r.status), `non-owner refused (${r.status})`);
+    for (const change of [{ sellingPrice: 350 }, { costPrice: 90 }]) {
+      const r = await t.api('PATCH', `/products/${p}`, change, u.token);
+      assert.ok([403, 404].includes(r.status), `non-owner refused (${r.status})`);
+    }
   }
-  assert.equal((await t.api('PATCH', `/products/${p}`, { costPrice: 90 })).status, 409, 'cost of a product in stock cannot be typed');
-  assert.equal((await t.api('PATCH', `/products/${p}`, { sellingPrice: 300, name: 'Renamed desk' })).status, 200, 'saving the same price is fine');
-  assert.equal((await t.api('PATCH', `/products/${p}`, { sellingPrice: 320 })).status, 200, 'the Owner can');
+  assert.equal((await t.api('PATCH', `/products/${p}`, { sellingPrice: 300, costPrice: 100, name: 'Renamed desk' })).status, 200, 'saving the same values is fine');
 
-  // cost rises 100 → 120 (4 at 100 + 4 at 140); the Owner sets the new price while receiving
-  const rec = await buy(p, 4, 140, { newSellingPrice: 380 });
-  assert.equal(rec.status, 201, JSON.stringify(rec.body));
+  // the Owner raises the cost of the 4 in stock from 100 to 120: the books gain 4 × 20 = 80
+  const inv0 = await t.accountBalance('1030'); const gain0 = await t.accountBalance('5030');
+  assert.equal((await t.api('PATCH', `/products/${p}`, { costPrice: 120, sellingPrice: 380 })).status, 200);
   near(await cost(p), 120);
-  assert.equal(Number((await t.q('SELECT selling_price FROM products WHERE id = $1', [p]))[0].selling_price), 380);
-  const alert = await t.q("SELECT message FROM notifications WHERE type = 'PRICE' AND title LIKE 'Cost went up:%' AND message LIKE '%100.00 → 120.00%'");
+  near((await t.accountBalance('1030')) - inv0, 80, 'inventory value follows the new cost');
+  near(Math.abs((await t.accountBalance('5030')) - gain0), 80, 'against Inventory Gain');
+  // and lowering it back posts the opposite (Inventory Loss)
+  const loss0 = await t.accountBalance('5020');
+  assert.equal((await t.api('PATCH', `/products/${p}`, { costPrice: 110 })).status, 200);
+  near((await t.accountBalance('1030')) - inv0, 40);
+  near(Math.abs((await t.accountBalance('5020')) - loss0), 40);
+
+  // a purchase at a higher cost: average 4 at 110 + 4 at 150 = 130, and the Owner is told
+  assert.equal((await buy(p, 4, 150)).status, 201);
+  near(await cost(p), 130);
+  const alert = await t.q("SELECT message FROM notifications WHERE type = 'PRICE' AND title LIKE 'Cost went up:%' AND message LIKE '%110.00 → 130.00%'");
   assert.ok(alert.length > 0, 'Owner told about the cost rise');
   const hist = await t.api('GET', `/products/${p}/price-history`);
-  assert.deepEqual(hist.body.filter((h: any) => h.kind === 'SELLING').map((h: any) => [h.old_value, h.new_value, h.source]),
-    [[320, 380, 'SET_WHEN_RECEIVING'], [300, 320, 'SET_BY_OWNER'], [null, 300, 'CREATED']].filter((x) => x[2] !== 'CREATED'));
+  assert.deepEqual(hist.body.filter((h: any) => h.kind === 'SELLING').map((h: any) => [h.old_value, h.new_value, h.source]), [[300, 380, 'SET_BY_OWNER']]);
+  assert.deepEqual(hist.body.filter((h: any) => h.kind === 'COST').map((h: any) => h.source),
+    ['PURCHASE_RECEIPT', 'SET_BY_OWNER', 'SET_BY_OWNER', 'PURCHASE_RECEIPT']);
 });
 
 test('one-time recalculation: today\'s cost comes from the newest purchases that make up the stock', async () => {

@@ -8,7 +8,7 @@ import { resolveLoc, locSql, locBranch } from '../services/branch-scope';
 import { prepareJournalEntryPosting } from '../services/accounting-service';
 import { csvResponse, likeTerm, listRequest, pagedResponse, pagedRows, type ListOptions } from '../services/listing';
 
-import { costInStatements, sellingPriceHistoryStmt, isOwner } from '../services/costing';
+import { costInStatements } from '../services/costing';
 
 const purchasing = new Hono<{ Bindings: Env; Variables: { jwtPayload: any } }>();
 
@@ -596,9 +596,7 @@ purchasing.post('/receipts', requirePermissions(['manage_purchasing']), async (c
     batchValue += (qty * netUnitCost);
   }
 
-  // Cost before this receipt (for the Owner's alert) and optional new selling prices.
-  const payloadUser = c.get('jwtPayload');
-  const owner = isOwner(payloadUser);
+  // Cost before this receipt, for the Owner's alert. (Prices are changed only in Products.)
   const productInfo = new Map<string, any>();
   for (const line of body.lines) {
     const info = await c.env.DB.prepare(`
@@ -606,11 +604,6 @@ purchasing.post('/receipts', requirePermissions(['manage_purchasing']), async (c
              (SELECT COALESCE(SUM(GREATEST(s.quantity_on_hand, 0)), 0) FROM inventory_stock s WHERE s.product_id = p.id) AS on_hand
       FROM products p WHERE p.id = ?`).bind(line.productId).first() as any;
     productInfo.set(line.productId, info);
-    if (line.newSellingPrice !== undefined && line.newSellingPrice !== null && line.newSellingPrice !== '') {
-      if (!owner) return c.json({ message: 'Only the Owner can set a new selling price. Receive the goods without it; the Owner will be notified of the new cost.' }, 403);
-      const sp = Number(line.newSellingPrice);
-      if (!Number.isFinite(sp) || sp < 0) return c.json({ message: `${info?.name || 'A product'}: the new selling price must be 0 or more.` }, 400);
-    }
   }
 
   // Pre-flight: gather existing stock rows
@@ -657,16 +650,6 @@ purchasing.post('/receipts', requirePermissions(['manage_purchasing']), async (c
 
     // Running-average cost: computed from stock on hand BEFORE these units are added.
     stmts.push(...costInStatements(c.env.DB, { productId: line.productId, quantity: qty, unitCost: netUnitCost, source: 'PURCHASE_RECEIPT', referenceId: receiptId, userId }));
-    const priceBefore = Number(productInfo.get(line.productId)?.price || 0);
-    if (owner && line.newSellingPrice !== undefined && line.newSellingPrice !== null && line.newSellingPrice !== '') {
-      const sp = Math.round(Number(line.newSellingPrice) * 100) / 100;
-      const info = productInfo.get(line.productId);
-      if (Math.abs(sp - Number(info?.price || 0)) > 0.005) {
-        stmts.push(sellingPriceHistoryStmt(c.env.DB, { productId: line.productId, oldPrice: Number(info?.price ?? 0), newPrice: sp, source: 'SET_WHEN_RECEIVING', referenceId: receiptId, userId }));
-        stmts.push(c.env.DB.prepare('UPDATE products SET selling_price = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').bind(sp, line.productId));
-        if (info) info.price = sp;
-      }
-    }
     // Tell the Owner when the cost went up, with the price that keeps the old margin.
     {
       const info = productInfo.get(line.productId);
@@ -674,19 +657,15 @@ purchasing.post('/receipts', requirePermissions(['manage_purchasing']), async (c
       const oldCost = Number(info?.cost || 0);
       const newCost = onHand > 0 ? (onHand * oldCost + qty * netUnitCost) / (onHand + qty) : netUnitCost;
       if (info && newCost > oldCost + 0.005) {
-        // Margin before: old price and old cost. Margin now: today's price (maybe just changed) and new cost.
         const price = Number(info.price || 0);
-        const oldMargin = priceBefore > 0 ? (priceBefore - oldCost) / priceBefore : 0;
+        const oldMargin = price > 0 ? (price - oldCost) / price : 0;
         const newMargin = price > 0 ? (price - newCost) / price : 0;
         const suggested = oldMargin > 0 && oldMargin < 1 ? newCost / (1 - oldMargin) : null;
         const pct = (m: number) => `${(m * 100).toFixed(1)}%`;
-        const changed = Math.abs(price - priceBefore) > 0.005;
         const msg = `${info.name}: cost ${oldCost.toFixed(2)} → ${newCost.toFixed(2)} after receipt ${receiptNumber}. `
-          + (price <= 0 ? 'It has no selling price yet.'
-            : changed ? `The selling price was changed ${priceBefore.toFixed(2)} → ${price.toFixed(2)}: margin ${pct(oldMargin)} → ${pct(newMargin)}.`
-            : `At the selling price ${price.toFixed(2)} the margin falls from ${pct(oldMargin)} to ${pct(newMargin)}.`)
-          + (suggested && newMargin < oldMargin - 0.0005 ? ` To keep ${pct(oldMargin)}, the price would be ${suggested.toFixed(2)}.` : '')
-          + (changed ? '' : ' Change it in Products (Owner only).');
+          + (price > 0 ? `At the selling price ${price.toFixed(2)} the margin falls from ${pct(oldMargin)} to ${pct(newMargin)}.` : 'It has no selling price yet.')
+          + (suggested ? ` To keep ${pct(oldMargin)}, the price would be ${suggested.toFixed(2)}.` : '')
+          + ' Change it in Products → Edit (Owner only).';
         stmts.push(c.env.DB.prepare(`
           INSERT INTO notifications (id, user_id, title, message, type)
           SELECT gen_random_uuid()::text, u.id, ?, ?, 'PRICE'

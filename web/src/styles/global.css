@@ -2119,3 +2119,4 @@ html.api-busy, html.api-busy * { cursor: progress !important; }
 /* Same inside pop-up windows: a wide table scrolls inside its own box instead of pushing
    the whole window content past the right edge (where it was cut off). */
 .modal-panel__body > :not(button), .modal-panel__body > div > :not(button), .modal-panel__body > div > div > :not(button) { min-width: 0; }
+.sale-card__price { min-height: 42px; display: flex; align-items: center; justify-content: flex-end; padding: 0 10px; border: 1px solid #e2e8e2; border-radius: 8px; background: #f8faf8; font-size: 16px; font-weight: 700; color: #1a331e; }

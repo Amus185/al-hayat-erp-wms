@@ -4,7 +4,7 @@ import { authMiddleware, requirePermissions, isAdminUser } from '../middleware/a
 import { logAudit, createAuditLogStmt } from '../services/audit';
 import { hideUnless, PERM, COST_FIELDS, sortsFor, canSeeCosts } from '../services/privacy';
 import { resolveLoc, locBranch, productVisibleSql, ScopeError, type Loc } from '../services/branch-scope';
-import { prepareOpeningStock, type OpeningStockItem } from '../services/accounting-service';
+import { prepareOpeningStock, prepareJournalEntryPosting, type OpeningStockItem } from '../services/accounting-service';
 import { csvResponse, likeTerm, listRequest, pagedResponse, pagedRows, type ListOptions, type ListRequest } from '../services/listing';
 
 import { isOwner, sellingPriceHistoryStmt } from '../services/costing';
@@ -727,20 +727,38 @@ products.patch('/:id', requirePermissions(['manage_inventory']), async (c) => {
 
   const priceStmts: any[] = [];
   const actor = c.get('jwtPayload');
-  // Cost comes from goods coming in (running average). It can be typed only while the
-  // product has no stock at all (e.g. before the first purchase), and only by the Owner.
+  // Cost price: the Owner sets it in Products (purchases also move it, as a running average).
+  // When the product has stock, the stock's value in the books follows the new cost: one
+  // balanced entry per branch holding it (Inventory 1030 against Inventory Gain 5030 or
+  // Inventory Loss 5020), so the ledger always equals stock × cost.
   if ((body.costPrice !== undefined || body.cost_price !== undefined) && canSeeCosts(c)) {
-    const cost = Number(body.costPrice ?? body.cost_price ?? 0);
-    if (cost < 0) return c.json({ message: 'Cost price cannot be negative.' }, 400);
-    if (Math.abs(cost - Number((existing as any).cost_price || 0)) > 0.00005) {
-      const stock = await c.env.DB.prepare('SELECT COALESCE(SUM(GREATEST(quantity_on_hand, 0)), 0) AS n FROM inventory_stock WHERE product_id = ?').bind(id).first() as any;
-      if (Number(stock?.n) > 0) {
-        return c.json({ message: 'The cost of a product in stock comes from its purchases (average cost), so it cannot be typed. Receive the new goods at their new cost and the average updates by itself.' }, 409);
-      }
-      if (!isOwner(actor)) return c.json({ message: 'Only the Owner can set a cost price.' }, 403);
+    const cost = Math.round(Number(body.costPrice ?? body.cost_price ?? 0) * 10000) / 10000;
+    if (!(cost >= 0)) return c.json({ message: 'Cost price cannot be negative.' }, 400);
+    const oldCost = Number((existing as any).cost_price || 0);
+    if (Math.abs(cost - oldCost) > 0.00005) {
+      if (!isOwner(actor)) return c.json({ message: 'Only the Owner can change a cost price.' }, 403);
       fields.push('cost_price = ?'); vals.push(cost);
       priceStmts.push(c.env.DB.prepare(`INSERT INTO product_price_history (id, product_id, kind, old_value, new_value, source, changed_by)
-        VALUES (gen_random_uuid()::text, ?, 'COST', ?, ?, 'SET_BY_OWNER', ?)`).bind(id, Number((existing as any).cost_price || 0), cost, actor?.sub ?? null));
+        VALUES (gen_random_uuid()::text, ?, 'COST', ?, ?, 'SET_BY_OWNER', ?)`).bind(id, oldCost, cost, actor?.sub ?? null));
+      if ((existing as any).product_type !== 'GROUPED') {
+        const { results: held } = await c.env.DB.prepare(`
+          SELECT CASE WHEN owner_type = 'BRANCH' THEN branch_id END AS branch_id, SUM(GREATEST(quantity_on_hand, 0)) AS qty
+          FROM inventory_stock WHERE product_id = ? GROUP BY 1 HAVING SUM(GREATEST(quantity_on_hand, 0)) > 0
+        `).bind(id).all();
+        for (const h of (held || []) as any[]) {
+          const diff = Math.round(Number(h.qty) * (cost - oldCost) * 100) / 100;
+          if (Math.abs(diff) < 0.01) continue;
+          const up = diff > 0;
+          priceStmts.push(...(await prepareJournalEntryPosting(c, {
+            description: `Cost of ${(existing as any).name} changed ${oldCost.toFixed(2)} → ${cost.toFixed(2)} (${h.qty} in stock)`,
+            referenceType: 'INVENTORY_ADJUSTMENT', referenceId: `cost:${id}:${Date.now()}:${h.branch_id ?? 'company'}`,
+            branchId: h.branch_id ?? null, userId: actor?.sub ?? null,
+            lines: up
+              ? [{ accountCode: '1030', debitAmount: diff, creditAmount: 0 }, { accountCode: '5030', debitAmount: 0, creditAmount: diff }]
+              : [{ accountCode: '5020', debitAmount: -diff, creditAmount: 0 }, { accountCode: '1030', debitAmount: 0, creditAmount: -diff }],
+          })).statements);
+        }
+      }
     }
   }
 

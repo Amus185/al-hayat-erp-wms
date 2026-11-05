@@ -366,3 +366,8 @@ Owner only until a branch sells, stocks or registers them.
 - **History:** `product_price_history` keeps every cost and selling-price change (old, new, why, who, when); `GET /products/:id/price-history` (cost rows only for cost viewers). Product edit shows it.
 - **Alert:** when a receipt raises the cost, the Owner gets a notification with old → new cost, the margin drop and the price that keeps the old margin.
 - **One-time recalculation (migration `costing_recalc_v1`):** each product's current cost is recomputed from the newest purchases that make up today's stock (part not covered by purchases keeps the old cost). Old values are kept in the history (`RECALCULATED_FROM_PURCHASES`). It does not post a journal entry; see the report for the stock-value check.
+
+### 15a. Owner decision (5 Nov): prices only in Products, fixed price on sales
+- Sales always use the product's current selling price; the server ignores any typed price (seller or Owner). Website requests keep the price the customer was quoted.
+- The Owner changes cost and selling price in Products → Edit at any time. A cost change with stock posts one entry per location (1030 against 5030 Inventory Gain / 5020 Inventory Loss), so the ledger stays stock × cost. Purchases still move the average cost and alert the Owner.
+- The "new price when receiving" box and the per-sale price adjustment are removed.

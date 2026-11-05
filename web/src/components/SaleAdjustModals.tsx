@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
 import { Modal } from './Modal';
-import { PriceAdjustment } from './PriceAdjustment';
 import { SearchableSelect } from './SearchableSelect';
 import { apiGet, apiPatch, apiPost } from '../api/client';
 import { searchProducts } from '../utils/lookups';
@@ -21,8 +20,6 @@ export function EditDraftModal({ order, onClose, onDone }: Props) {
 
   const save = async () => {
     const lines = rows.map((r) => ({ productId: r.productId, quantity: Number(r.quantity), unitPrice: Number(r.unitPrice), discountAmount: r.discountAmount, priceReason: r.reason || undefined }));
-    const unexplained = rows.find((r) => Math.abs(Number(r.unitPrice) - r.ref) > 0.005 && !r.reason);
-    if (unexplained) { addToast('error', `Choose why the price of "${unexplained.name}" differs from its list price.`); return; }
     if (!lines.length) { addToast('error', 'A sale needs at least one product.'); return; }
     if (lines.some((l) => !Number.isInteger(l.quantity) || l.quantity <= 0)) { addToast('error', 'Quantities must be whole numbers above 0.'); return; }
     if (lines.some((l) => !(l.unitPrice >= 0))) { addToast('error', 'A price cannot be negative.'); return; }
@@ -40,7 +37,7 @@ export function EditDraftModal({ order, onClose, onDone }: Props) {
           <button type="button" id="save-draft-edit" className="btn btn-primary" onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save changes'}</button>
         </span>
       </div>}>
-      <p className="mm-sub" style={{ marginTop: 0 }}>Only drafts can be edited. Once a sale is confirmed or invoiced, cancel it (before delivery) or record a Return.</p>
+      <p className="mm-sub" style={{ marginTop: 0 }}>Only drafts can be edited. Prices are the products' current prices (set by the Owner in Products). Once a sale is confirmed or invoiced, cancel it (before delivery) or record a Return.</p>
       <table className="table" style={{ width: '100%' }}>
         <thead><tr><th>Product</th><th style={{ width: 90 }}>Qty</th><th style={{ width: 120 }}>Price</th><th /></tr></thead>
         <tbody>
@@ -48,10 +45,7 @@ export function EditDraftModal({ order, onClose, onDone }: Props) {
             <tr key={r.productId}>
               <td>{r.name}</td>
               <td><input className="form-input" type="number" min={1} value={r.quantity} onChange={(e) => set(i, 'quantity', e.target.value)} aria-label={`Quantity of ${r.name}`} /></td>
-              <td><input className="form-input" type="number" min={0} step="0.01" value={r.unitPrice} onChange={(e) => set(i, 'unitPrice', e.target.value)} aria-label={`Price of ${r.name}`} />
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4 }}>
-                  <PriceAdjustment name={r.name} reference={r.ref} price={Number(r.unitPrice)} reason={r.reason} onReason={(v) => setRows((x) => x.map((y, j) => (j === i ? { ...y, reason: v } : y)))} />
-                </div></td>
+              <td style={{ fontWeight: 600 }} title="Price set by the Owner in Products">${Number(r.unitPrice).toFixed(2)}</td>
               <td><button type="button" className="btn btn-secondary btn-sm" onClick={() => setRows((x) => x.filter((_, j) => j !== i))}>Remove</button></td>
             </tr>
           ))}

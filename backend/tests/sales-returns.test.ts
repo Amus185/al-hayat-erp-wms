@@ -19,7 +19,7 @@ test('a draft sale can be edited; a confirmed one cannot', async () => {
   const ed = await t.api('PATCH', `/sales/orders/${id}`, { lines: [{ productId: p2, quantity: 3, unitPrice: 50 }] });
   assert.equal(ed.status, 200, JSON.stringify(ed.body));
   const rows = await t.q('SELECT product_id, quantity, line_total FROM sales_order_lines WHERE sales_order_id = $1', [id]);
-  assert.equal(rows.length, 1); assert.equal(rows[0].product_id, p2); assert.equal(Number(rows[0].line_total), 150);
+  assert.equal(rows.length, 1); assert.equal(rows[0].product_id, p2); assert.equal(Number(rows[0].line_total), 300, 'priced at the product price (100), not the typed 50');
   assert.equal((await t.api('PATCH', `/sales/orders/${id}`, { lines: [{ productId: p2, quantity: 0, unitPrice: 5 }] })).status, 400);
   assert.equal((await t.api('POST', `/sales/orders/${id}/confirm`)).status, 200);
   const late = await t.api('PATCH', `/sales/orders/${id}`, { lines: [{ productId: p, quantity: 1, unitPrice: 1 }] });
