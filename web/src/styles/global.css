@@ -164,6 +164,14 @@ a { color: inherit; text-decoration: none; }
   margin-top: 4px;
 }
 .sidebar-logout:hover { background: rgba(248,113,113,0.1); }
+/* Log Out never scrolls out of sight: it stays at the bottom of the menu while the links scroll. */
+.sidebar-logout {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  background: var(--sidebar-bg);
+}
+.sidebar-logout:hover { background: #fdecec; }
 
 .sidebar-divider {
   height: 1px;
@@ -1232,6 +1240,27 @@ tbody tr:hover { background: var(--primary-lighter); }
   .sidebar.mobile-open {
     transform: translateX(0);
   }
+
+  /* Phones: the panel is exactly the visible screen (100vh is taller than it while the
+     browser bar shows), and Log Out stays pinned at the bottom while the menu scrolls above it. */
+  .sidebar {
+    height: auto;
+    max-height: 100dvh;
+    padding-bottom: 0;
+  }
+  .sidebar-logout {
+    position: sticky;
+    bottom: 0;
+    z-index: 1;
+    margin-top: 0;
+    padding: 14px 12px calc(14px + env(safe-area-inset-bottom, 0px));
+    border-radius: 0;
+    background: #ffffff;
+    border-top: 1px solid var(--border);
+    font-size: 15px;
+    font-weight: 600;
+  }
+  .sidebar-logout:hover { background: #fff5f5; }
 
   .topbar {
     padding: 12px 16px;
