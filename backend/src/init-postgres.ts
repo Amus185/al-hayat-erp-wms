@@ -733,6 +733,7 @@ export async function ensurePostgresInit(pool: Pool) {
   await ensureCosting(pool);
   await ensurePerformanceIndexes(pool);
   await ensureRoleSeparation(pool);
+  await ensureSalesTransfers(pool);
 }
 
 /**
@@ -1575,6 +1576,36 @@ export async function ensureRoleSeparation(pool: Pool) {
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
     console.error('❌ Role separation migration failed:', err);
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Transfers between sales teams (Owner request, 7 Nov): sales representatives send stock to
+ * another branch and accept or decline what is sent to them. Adds the transfer right to the
+ * Sales Representative role ONCE (recorded in app_migrations), so a later change by the Owner
+ * in Roles is never undone. Additive only.
+ */
+export async function ensureSalesTransfers(pool: Pool) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('CREATE TABLE IF NOT EXISTS app_migrations (name TEXT PRIMARY KEY, ran_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP)');
+    const done = await client.query("SELECT 1 FROM app_migrations WHERE name = 'sales_rep_transfers_v1'");
+    if (!done.rowCount) {
+      await client.query(`
+        INSERT INTO role_permissions (role_id, permission_id)
+        SELECT 'role-sales-rep', '33333333-3333-3333-3333-333333333333'
+        WHERE EXISTS (SELECT 1 FROM roles WHERE id = 'role-sales-rep')
+          AND NOT EXISTS (SELECT 1 FROM role_permissions WHERE role_id = 'role-sales-rep' AND permission_id = '33333333-3333-3333-3333-333333333333')
+      `);
+      await client.query("INSERT INTO app_migrations (name) VALUES ('sales_rep_transfers_v1')");
+    }
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('❌ Sales transfer rights migration failed (no data changed):', err);
   } finally {
     client.release();
   }

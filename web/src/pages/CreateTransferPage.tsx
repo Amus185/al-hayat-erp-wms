@@ -117,7 +117,7 @@ export function CreateTransferPage() {
     });
   };
 
-  const handleSubmit = async (e: React.FormEvent, dispatchImmediately = false) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (submitting) return;
     if (!sourceId) {
@@ -165,19 +165,8 @@ export function CreateTransferPage() {
       setSubmitting(false);
       return;
     }
-    // The transfer exists from here on. If dispatching it fails, staying on
-    // this form invites a retry that creates a second transfer, so always go
-    // to the list, where the new transfer waits for approval.
-    if (dispatchImmediately && created?.id) {
-      try {
-        await apiPost(`/transfers/${created.id}/dispatch`, {});
-        addToast('success', 'Transfer created and dispatched immediately — stock deducted from origin!');
-      } catch (err: any) {
-        addToast('error', `Transfer ${created.transfer_number || created.transferNumber || ''} was created but not dispatched: ${err?.message || 'unknown error'}. It is in the list as Pending approval; fix the problem and dispatch it from there instead of creating it again.`);
-      }
-    } else {
-      addToast('success', 'Sent. The receiving location will accept or decline it; stock moves when they accept.');
-    }
+    // One step: nothing moves now. The receiver accepts (stock moves then) or declines.
+    addToast('success', `Sent${created?.transfer_number ? ` (${created.transfer_number})` : ''}. The receiving branch will accept or decline it; the stock moves when they accept.`);
     navigate('/transfers');
   };
 
@@ -376,7 +365,7 @@ export function CreateTransferPage() {
             type="button"
             id="send-transfer"
             className="btn btn-primary"
-            onClick={(e) => handleSubmit(e, false)}
+            onClick={(e) => handleSubmit(e)}
             disabled={lines.length === 0 || submitting}
             title="The receiving location accepts it (all or part) and the stock moves in one step"
           >

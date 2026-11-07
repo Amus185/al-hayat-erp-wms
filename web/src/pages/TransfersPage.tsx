@@ -60,6 +60,24 @@ interface Transfer {
   lines?: TransferLine[];
 }
 
+/**
+ * One wording for every status. A transfer now has one step: the sender sends, the receiver
+ * accepts (the stock moves then) or declines (nothing moves). "In transit" only appears on
+ * transfers that were already on the way under the old steps.
+ */
+function transferStatus(t: { status: string; is_dest?: boolean; is_source?: boolean }): { label: string; tone: 'green' | 'yellow' | 'red' | 'neutral' | 'blue' } {
+  switch (t.status) {
+    case 'PENDING_APPROVAL':
+      return { label: t.is_dest && !t.is_source ? 'Waiting for you' : t.is_source && !t.is_dest ? 'Waiting for receiver' : 'Waiting', tone: 'yellow' };
+    case 'COMPLETED': case 'RECEIVED': return { label: 'Received', tone: 'green' };
+    case 'REJECTED': return { label: 'Declined', tone: 'red' };
+    case 'CANCELLED': return { label: 'Withdrawn', tone: 'neutral' };
+    case 'APPROVED': return { label: 'Approved (old steps)', tone: 'blue' };
+    case 'DISPATCHED': return { label: t.is_dest ? 'On the way: click Receive' : 'On the way', tone: 'blue' };
+    default: return { label: t.status.replace(/_/g, ' ').toLowerCase(), tone: 'neutral' };
+  }
+}
+
 export function TransfersPage() {
   const navigate = useNavigate();
   const { addToast } = useToast();
@@ -139,49 +157,6 @@ export function TransfersPage() {
       if (full) setSelectedTransfer((cur) => (cur && cur.id === id ? full : cur));
     } catch {
       // ignore
-    }
-  };
-
-  const handleApprove = async (id: string, stayOpen = true) => {
-    try {
-      setActionLoading(true);
-      await apiPost(`/transfers/${id}/approve`, {});
-      addToast('success', 'Transfer approved successfully');
-      loadData();
-      if (stayOpen && selectedTransfer?.id === id) {
-        await refreshSelectedTransfer(id);
-      } else if (!stayOpen) {
-        setSelectedTransfer(null);
-      }
-    } catch (err: any) {
-      addToast('error', err?.message || 'Failed to approve transfer');
-    } finally {
-      setActionLoading(false);
-    }
-  };
-
-  const handleApproveAndDispatch = async (id: string, stayOpen = true) => {
-    const confirmed = await confirmAction(
-      'Approve & Dispatch Transfer?',
-      'This will approve the transfer and immediately deduct stock from the origin for transit.',
-      'Yes, Approve & Dispatch',
-      'info'
-    );
-    if (!confirmed) return;
-    try {
-      setActionLoading(true);
-      await apiPost(`/transfers/${id}/dispatch`, {});
-      addToast('success', 'Transfer approved & dispatched! Stock deducted from origin.');
-      loadData();
-      if (stayOpen && selectedTransfer?.id === id) {
-        await refreshSelectedTransfer(id);
-      } else if (!stayOpen) {
-        setSelectedTransfer(null);
-      }
-    } catch (err: any) {
-      addToast('error', err?.message || 'Failed to dispatch transfer');
-    } finally {
-      setActionLoading(false);
     }
   };
 
@@ -281,7 +256,7 @@ export function TransfersPage() {
         setSelectedTransfer(null);
       }
     } catch (err: any) {
-      addToast('error', err?.message || 'Failed to reject transfer');
+      addToast('error', err?.message || 'Could not decline the transfer');
     } finally {
       setActionLoading(false);
       setIsRejecting(false);
@@ -289,11 +264,11 @@ export function TransfersPage() {
   };
 
   const handleCancel = async (id: string) => {
-    if (!window.confirm('Are you sure you want to cancel this transfer request?')) return;
+    if (!window.confirm('Withdraw this transfer? Nothing has moved yet, and the receiver will no longer see it as waiting.')) return;
     try {
       setActionLoading(true);
       await apiPost(`/transfers/${id}/cancel`, {});
-      addToast('success', 'Transfer cancelled');
+      addToast('success', 'Transfer withdrawn: nothing was moved');
       loadData();
       if (selectedTransfer?.id === id) {
         await refreshSelectedTransfer(id);
@@ -321,12 +296,14 @@ export function TransfersPage() {
     },
     {
       key: 'route',
-      label: 'Source → Destination',
+      label: 'From → To',
       render: (row) => (
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600, color: '#0f172a' }}>
+        <div style={{ display: 'grid', gap: '2px', fontWeight: 600, color: '#0f172a', whiteSpace: 'normal', minWidth: 120 }}>
           <span>{row.source_name || getOwnerName(row.source_owner_type, row.source_warehouse_id, row.source_branch_id)}</span>
-          <ArrowRight size={14} style={{ color: '#0b8f08' }} />
-          <span>{row.destination_name || getOwnerName(row.destination_owner_type, row.destination_warehouse_id, row.destination_branch_id)}</span>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+            <ArrowRight size={13} style={{ color: '#0b8f08', flexShrink: 0 }} />
+            {row.destination_name || getOwnerName(row.destination_owner_type, row.destination_warehouse_id, row.destination_branch_id)}
+          </span>
         </div>
       ),
     },
@@ -348,19 +325,7 @@ export function TransfersPage() {
       sortKey: 'status',
       label: 'Status',
       render: (row) => {
-        let tone: 'green' | 'yellow' | 'red' | 'neutral' | 'blue' = 'neutral';
-        if (row.status === 'APPROVED') tone = 'green';
-        if (row.status === 'PENDING_APPROVAL') tone = 'yellow';
-        if (row.status === 'DISPATCHED') tone = 'blue';
-        if (['COMPLETED', 'RECEIVED'].includes(row.status)) tone = 'green';
-        if (['REJECTED', 'CANCELLED'].includes(row.status)) tone = 'red';
-
-        let label = row.status.replace('_', ' ');
-        if (row.status === 'DISPATCHED') {
-          label = row.is_dest ? 'On the way (Click Receive)' : 'Dispatched (In transit)';
-        } else if (row.status === 'PENDING_APPROVAL') {
-          label = row.is_dest ? 'Pending your acceptance' : 'Pending approval';
-        }
+        const { label, tone } = transferStatus(row);
 
         return (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', alignItems: 'flex-start' }}>
@@ -383,113 +348,47 @@ export function TransfersPage() {
       key: 'actions',
       label: 'Actions',
       render: (row) => (
-        <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: '6px', alignItems: 'center', justifyContent: 'flex-end', whiteSpace: 'nowrap' }}>
           <button
             type="button"
             className="btn btn-secondary btn-sm"
             onClick={(e) => { e.stopPropagation(); openDetailModal(row); }}
           >
-            View / Manage
+            Open
           </button>
 
-          {/* Incoming Transfer Actions for Destination Branch */}
-          {row.is_dest && hasPermission('manage_transfers') && (
+          {hasPermission('manage_transfers') && row.status === 'PENDING_APPROVAL' && row.is_dest && (
             <>
-              {row.status === 'DISPATCHED' && (
-                <button
-                  type="button"
-                  className="btn btn-sm"
-                  style={{ background: '#16a34a', color: '#fff', border: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '12px', padding: '4px 8px', borderRadius: '6px', fontWeight: 600 }}
-                  onClick={(e) => { e.stopPropagation(); handleReceive(row.id, false); }}
-                  title="Confirm transfer received at your location"
-                >
-                  <CheckCircle size={13} /> Receive
-                </button>
-              )}
-              {row.status === 'PENDING_APPROVAL' && (
-                <button
-                  type="button"
-                  className="btn btn-sm"
-                  style={{ background: '#16a34a', color: '#fff', border: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '12px', padding: '4px 8px', borderRadius: '6px', fontWeight: 600 }}
-                  onClick={(e) => { e.stopPropagation(); handleAccept(row); }}
-                  title="Accept transfer: stock moves directly into your branch"
-                >
-                  <CheckCircle size={13} /> Accept & Receive
-                </button>
-              )}
+              <button type="button" className="btn btn-sm btn-primary" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
+                onClick={(e) => { e.stopPropagation(); handleAccept(row); }} disabled={actionLoading}
+                title="Accept everything that was sent: the stock moves to you now. Open it to accept only part.">
+                <CheckCircle size={13} /> Accept
+              </button>
+              <button type="button" className="btn btn-sm btn-danger"
+                onClick={(e) => { e.stopPropagation(); openDetailModal(row); setIsRejecting(true); }} disabled={actionLoading}
+                title="Refuse it: nothing moves and the sender is told">
+                Decline
+              </button>
             </>
           )}
-
-          {/* Outgoing Transfer Actions for Source Branch */}
-          {row.is_source && !row.is_dest && hasPermission('manage_transfers') && (
-            <>
-              {row.status === 'PENDING_APPROVAL' && (
-                <button
-                  type="button"
-                  className="btn btn-sm"
-                  style={{ background: '#0b8f08', color: '#fff', border: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '12px', padding: '4px 8px', borderRadius: '6px' }}
-                  onClick={(e) => { e.stopPropagation(); handleApproveAndDispatch(row.id, false); }}
-                  title="Approve & Dispatch"
-                >
-                  Approve & Dispatch
-                </button>
-              )}
-              {row.status === 'APPROVED' && (
-                <button
-                  type="button"
-                  className="btn btn-sm"
-                  style={{ background: '#0284c7', color: '#fff', border: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '12px', padding: '4px 8px', borderRadius: '6px' }}
-                  onClick={(e) => { e.stopPropagation(); handleDispatch(row.id, false); }}
-                  title="Dispatch transfer"
-                >
-                  Dispatch
-                </button>
-              )}
-              {row.status === 'DISPATCHED' && (
-                <span style={{ fontSize: '11px', color: '#0369a1', fontWeight: 600, padding: '2px 6px', background: '#f0f9ff', borderRadius: '4px' }}>
-                  In transit (sent)
-                </span>
-              )}
-            </>
+          {hasPermission('manage_transfers') && row.status === 'PENDING_APPROVAL' && row.is_source && !row.is_dest && (
+            <button type="button" className="btn btn-sm btn-secondary"
+              onClick={(e) => { e.stopPropagation(); handleCancel(row.id); }} disabled={actionLoading}
+              title="Take the request back before it is accepted">
+              Withdraw
+            </button>
           )}
-
-          {/* Company-wide Admin Actions (when both source & dest or neither) */}
-          {row.is_source && row.is_dest && hasPermission('manage_transfers') && (
-            <>
-              {row.status === 'PENDING_APPROVAL' && (
-                <button
-                  type="button"
-                  className="btn btn-sm"
-                  style={{ background: '#0b8f08', color: '#fff', border: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '12px', padding: '4px 8px', borderRadius: '6px' }}
-                  onClick={(e) => { e.stopPropagation(); handleApproveAndDispatch(row.id, false); }}
-                  title="Approve & Dispatch"
-                >
-                  Approve & Dispatch
-                </button>
-              )}
-              {row.status === 'APPROVED' && (
-                <button
-                  type="button"
-                  className="btn btn-sm"
-                  style={{ background: '#0284c7', color: '#fff', border: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '12px', padding: '4px 8px', borderRadius: '6px' }}
-                  onClick={(e) => { e.stopPropagation(); handleDispatch(row.id, false); }}
-                  title="Dispatch transfer"
-                >
-                  Dispatch
-                </button>
-              )}
-              {row.status === 'DISPATCHED' && (
-                <button
-                  type="button"
-                  className="btn btn-sm"
-                  style={{ background: '#16a34a', color: '#fff', border: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '12px', padding: '4px 8px', borderRadius: '6px' }}
-                  onClick={(e) => { e.stopPropagation(); handleReceive(row.id, false); }}
-                  title="Confirm transfer received"
-                >
-                  <CheckCircle size={13} /> Receive
-                </button>
-              )}
-            </>
+          {/* Transfers already on the way under the old steps */}
+          {hasPermission('manage_transfers') && row.status === 'APPROVED' && row.is_source && (
+            <button type="button" className="btn btn-sm btn-secondary" onClick={(e) => { e.stopPropagation(); handleDispatch(row.id, false); }}>
+              Send now
+            </button>
+          )}
+          {hasPermission('manage_transfers') && row.status === 'DISPATCHED' && row.is_dest && (
+            <button type="button" className="btn btn-sm btn-primary" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
+              onClick={(e) => { e.stopPropagation(); handleReceive(row.id, false); }}>
+              <CheckCircle size={13} /> Receive
+            </button>
           )}
         </div>
       ),
@@ -533,12 +432,10 @@ export function TransfersPage() {
           onChange={(v) => list.setFilter('status', v)}
           tabs={[
             { key: 'ALL', label: 'All' },
-            { key: 'PENDING_APPROVAL', label: 'Pending approval' },
-            { key: 'APPROVED', label: 'Approved' },
-            { key: 'DISPATCHED', label: 'In transit' },
+            { key: 'PENDING_APPROVAL', label: 'Waiting' },
             { key: 'COMPLETED', label: 'Received' },
-            { key: 'REJECTED', label: 'Rejected' },
-            { key: 'CANCELLED', label: 'Cancelled' },
+            { key: 'REJECTED', label: 'Declined' },
+            { key: 'CANCELLED', label: 'Withdrawn' },
           ]}
         />
         <ListToolbar
@@ -590,14 +487,14 @@ export function TransfersPage() {
               border: '1px solid #e1e8e1'
             }}>
               <div>
-                <span style={{ fontSize: '11px', color: '#667066', textTransform: 'uppercase', fontWeight: 600 }}>Source Origin</span>
+                <span style={{ fontSize: '11px', color: '#667066', textTransform: 'uppercase', fontWeight: 600 }}>From</span>
                 <p style={{ margin: '2px 0 0', fontWeight: '700', color: '#066006', fontSize: '15px' }}>
                   {selectedTransfer.source_name || getOwnerName(selectedTransfer.source_owner_type, selectedTransfer.source_warehouse_id, selectedTransfer.source_branch_id)}
                 </p>
               </div>
               <ArrowRight size={22} style={{ color: '#0b8f08' }} />
               <div>
-                <span style={{ fontSize: '11px', color: '#667066', textTransform: 'uppercase', fontWeight: 600 }}>Destination</span>
+                <span style={{ fontSize: '11px', color: '#667066', textTransform: 'uppercase', fontWeight: 600 }}>To</span>
                 <p style={{ margin: '2px 0 0', fontWeight: '700', color: '#066006', fontSize: '15px' }}>
                   {selectedTransfer.destination_name || getOwnerName(selectedTransfer.destination_owner_type, selectedTransfer.destination_warehouse_id, selectedTransfer.destination_branch_id)}
                 </p>
@@ -650,49 +547,38 @@ export function TransfersPage() {
               </div>
             </div>
 
-            {/* Complete Audit & Lifecycle Timeline */}
-            <div style={{ background: '#f8fafc', padding: '14px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
-              <h4 style={{ margin: '0 0 10px', fontSize: '13px', color: '#1e293b', fontWeight: 700 }}>
-                Audit & History Timeline
-              </h4>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', fontSize: '12px' }}>
-                <div>
-                  <span style={{ color: '#64748b' }}>Requested:</span>
-                  <div style={{ fontWeight: 600, color: '#0f172a' }}>
-                    {selectedTransfer.requester_name || 'System User'} — {new Date(selectedTransfer.requested_at).toLocaleString()}
+            {/* What happened, in plain steps: sent, then accepted / declined / withdrawn */}
+            {(() => {
+              const t = selectedTransfer;
+              const when = (d?: string | null) => (d ? new Date(d).toLocaleString() : '');
+              // "On the way" only for transfers sent under the old steps (dispatched, not yet received).
+              const oldInTransit = t.status === 'DISPATCHED' || t.status === 'APPROVED';
+              const second: { label: string; text: string; color: string } =
+                t.status === 'COMPLETED' || t.status === 'RECEIVED' ? { label: 'Accepted', text: `${t.receiver_name || '—'} · ${when(t.received_at)}`, color: '#15803d' }
+                : t.status === 'REJECTED' ? { label: 'Declined', text: when(t.rejected_at) || 'Declined', color: '#b91c1c' }
+                : t.status === 'CANCELLED' ? { label: 'Withdrawn', text: 'Taken back by the sender. Nothing moved.', color: '#475569' }
+                : oldInTransit ? { label: 'On the way', text: t.dispatched_at ? `Sent off · ${when(t.dispatched_at)}` : 'Approved, not sent off yet', color: '#0369a1' }
+                : { label: 'Waiting', text: 'For the receiving branch to accept or decline. Nothing has moved yet.', color: '#a16207' };
+              return (
+                <div style={{ background: '#f8fafc', padding: '14px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '12px', fontSize: '12px' }}>
+                    <div>
+                      <span style={{ color: '#64748b' }}>Sent</span>
+                      <div style={{ fontWeight: 600, color: '#0f172a' }}>{t.requester_name || '—'} · {when(t.requested_at)}</div>
+                    </div>
+                    <div>
+                      <span style={{ color: '#64748b' }}>{second.label}</span>
+                      <div style={{ fontWeight: 600, color: second.color }}>{second.text}</div>
+                    </div>
+                    {t.rejection_reason && (
+                      <div style={{ gridColumn: '1 / -1', color: '#b91c1c', background: '#fef2f2', padding: '6px 10px', borderRadius: '6px', border: '1px solid #fecaca' }}>
+                        <strong>Reason:</strong> {t.rejection_reason}
+                      </div>
+                    )}
                   </div>
                 </div>
-                <div>
-                  <span style={{ color: '#64748b' }}>Approved:</span>
-                  <div style={{ fontWeight: 600, color: selectedTransfer.approved_at ? '#15803d' : '#94a3b8' }}>
-                    {selectedTransfer.approved_at
-                      ? `${selectedTransfer.approver_name || 'Authorized User'} — ${new Date(selectedTransfer.approved_at).toLocaleString()}`
-                      : 'Pending Approval'}
-                  </div>
-                </div>
-                <div>
-                  <span style={{ color: '#64748b' }}>Dispatched (Transit):</span>
-                  <div style={{ fontWeight: 600, color: selectedTransfer.dispatched_at ? '#0369a1' : '#94a3b8' }}>
-                    {selectedTransfer.dispatched_at
-                      ? `${selectedTransfer.dispatcher_name || 'Authorized User'} — ${new Date(selectedTransfer.dispatched_at).toLocaleString()}`
-                      : 'Not Dispatched Yet'}
-                  </div>
-                </div>
-                <div>
-                  <span style={{ color: '#64748b' }}>Received (Completed):</span>
-                  <div style={{ fontWeight: 600, color: selectedTransfer.received_at ? '#15803d' : '#94a3b8' }}>
-                    {selectedTransfer.received_at
-                      ? `${selectedTransfer.receiver_name || 'Authorized User'} — ${new Date(selectedTransfer.received_at).toLocaleString()}`
-                      : 'Not Received Yet'}
-                  </div>
-                </div>
-                {selectedTransfer.rejection_reason && (
-                  <div style={{ gridColumn: '1 / -1', color: '#b91c1c', background: '#fef2f2', padding: '6px 10px', borderRadius: '6px', border: '1px solid #fecaca' }}>
-                    <strong>Rejection Reason:</strong> {selectedTransfer.rejection_reason}
-                  </div>
-                )}
-              </div>
-            </div>
+              );
+            })()}
 
             {/* Rejection input box */}
             {isRejecting && (
@@ -721,24 +607,15 @@ export function TransfersPage() {
               paddingTop: '14px',
               display: 'flex',
               justifyContent: 'space-between',
-              alignItems: 'center'
+              alignItems: 'center',
+              flexWrap: 'wrap',
+              gap: '10px'
             }}>
               <div>
-                <StatusBadge
-                  label={selectedTransfer.status.replace('_', ' ')}
-                  tone={
-                    ['APPROVED', 'COMPLETED', 'RECEIVED'].includes(selectedTransfer.status)
-                      ? 'green'
-                      : selectedTransfer.status === 'PENDING_APPROVAL'
-                      ? 'yellow'
-                      : selectedTransfer.status === 'DISPATCHED'
-                      ? 'blue'
-                      : 'red'
-                  }
-                />
+                <StatusBadge {...transferStatus(selectedTransfer)} />
               </div>
 
-              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end', marginLeft: 'auto' }}>
                 <button
                   type="button"
                   className="btn btn-secondary"

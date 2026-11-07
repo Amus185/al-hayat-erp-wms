@@ -255,6 +255,31 @@ test('7b. one-step transfer: receiver accepts part, stock moves together; declin
   assert.equal((await t.api('POST', `/transfers/${c2}/cancel`, {}, cl.token)).status, 200, 'sender withdraws a pending request');
 });
 
+test('7c. sales representatives send to another branch and accept or decline what arrives (once-only grant)', async () => {
+  assert.equal((await t.q("SELECT COUNT(*)::int AS n FROM app_migrations WHERE name = 'sales_rep_transfers_v1'"))[0].n, 1);
+  const repCL = await t.createUser({ branchId: CL, roleId: 'role-sales-rep', role: 'sales_rep' });
+  const repHQ = await t.createUser({ branchId: HQ, roleId: 'role-sales-rep', role: 'sales_rep' });
+  const clBefore = await t.stockOf(ids.pBoth, { branchId: CL });
+  const hqBefore = await t.stockOf(ids.pBoth, { branchId: HQ });
+  const sent = await t.api('POST', '/transfers', { destinationOwnerType: 'BRANCH', destinationBranchId: HQ, lines: [{ productId: ids.pBoth, quantityRequested: 1 }] }, repCL.token);
+  assert.equal(sent.status, 201, JSON.stringify(sent.body));
+  assert.equal(sent.body.source_branch_id, CL, 'always from the sender\'s own branch');
+  assert.equal(await t.stockOf(ids.pBoth, { branchId: CL }), clBefore, 'nothing moves until the receiver accepts');
+  const ok = await t.api('POST', `/transfers/${sent.body.id}/accept`, {}, repHQ.token);
+  assert.equal(ok.status, 200, JSON.stringify(ok.body));
+  assert.equal(await t.stockOf(ids.pBoth, { branchId: CL }), clBefore - 1);
+  assert.equal(await t.stockOf(ids.pBoth, { branchId: HQ }), hqBefore + 1);
+  const d = (await t.api('POST', '/transfers', { destinationOwnerType: 'BRANCH', destinationBranchId: HQ, lines: [{ productId: ids.pBoth, quantityRequested: 1 }] }, repCL.token)).body.id;
+  assert.equal((await t.api('POST', `/transfers/${d}/reject`, { reason: 'Wrong branch' }, repHQ.token)).status, 200);
+  assert.equal(await t.stockOf(ids.pBoth, { branchId: CL }), clBefore - 1, 'declined: the stock stays with the sender');
+  // The Owner can still take the right away again: the grant is not re-applied on the next start.
+  await t.q("DELETE FROM role_permissions WHERE role_id = 'role-sales-rep' AND permission_id = '33333333-3333-3333-3333-333333333333'");
+  const { ensureSalesTransfers } = await import('../src/init-postgres');
+  await ensureSalesTransfers(t.pool);
+  assert.equal((await t.q("SELECT COUNT(*)::int AS n FROM role_permissions WHERE role_id = 'role-sales-rep' AND permission_id = '33333333-3333-3333-3333-333333333333'"))[0].n, 0);
+  await t.q("INSERT INTO role_permissions (role_id, permission_id) VALUES ('role-sales-rep', '33333333-3333-3333-3333-333333333333')");
+});
+
 test('8. a branch assignment always wins over the role label (a branch "admin" is still just that branch)', async () => {
   const hybrid = await t.createUser({ branchId: HQ, roleId: '77777777-7777-7777-7777-777777777777', role: 'admin' });
   const orders = await t.api('GET', '/sales/orders?page=1&pageSize=100', undefined, hybrid.token);
