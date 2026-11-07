@@ -35,11 +35,19 @@ Each piece is connected to the GitHub repository in Cloudflare, so a push to
 the production branch deploys it within a few minutes. No computer of yours
 is involved. The staff app (Pages) is already connected; connect the three
 Workers the same way: **Workers & Pages → the Worker → Settings → Build →
-Connect** → repository `arabayto/al-hayat-erp-wms`.
+Connect** → repository `Amus185/al-hayat-erp-wms`.
 
-Use the **repository root** as the root directory for all of them: the root
-`package-lock.json` installs every workspace (the backend has no lockfile of
-its own).
+**Staff app (Pages `al-hayat-erp`)**, Settings → Build: production branch
+`claude/friendly-noether-g968s1` (main only makes previews), **Root directory
+`web`**, Build command `npm run build`, Build output `dist`. The root must be
+`web`: from the repository root Pages finds no `dist`, no `wrangler.toml` (the
+API binding) and no `functions/` (the `/api` proxy), and the build fails with
+"Output directory not found". Changing a setting does not rebuild: retry the
+last production deployment or push again.
+
+Use the **repository root** as the root directory for the three Workers: the
+root `package-lock.json` installs every workspace (the backend has no lockfile
+of its own).
 
 | Worker | Production branch | Root directory | Build command | Deploy command | Build variables (Settings → Build → Variables) |
 |---|---|---|---|---|---|
