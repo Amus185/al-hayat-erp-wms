@@ -123,6 +123,11 @@ npm run deploy
 Check: `https://al-hayat-api.<your-subdomain>.workers.dev/api/v1/health` answers
 `{"status":"ok"}`. Logs: `npx wrangler tail`.
 
+**Placement.** `wrangler.jsonc` sets `"placement": { "mode": "smart" }`: Cloudflare runs the
+backend next to the database instead of next to each user, because one sale makes ~30
+database round trips. It takes effect after Cloudflare has seen some traffic; the Worker's
+**Settings → Runtime → Placement** shows its state. To turn it off, set `"mode": "off"`.
+
 `CORS_ORIGINS` (in `wrangler.jsonc`) only matters for browsers calling the API
 directly. Keep it to the staff app's address.
 

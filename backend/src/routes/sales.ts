@@ -1338,11 +1338,13 @@ function branchStockIssue(db: PgAdapter, productId: string, qty: number, branchI
 async function saleIssueCost(db: any, orderId: string, lines: Array<{ product_id: string; quantity: number }>, invoiceId: string, userId: string | null) {
   const perLine: Array<{ line: { product_id: string; quantity: number }; reqs: Array<{ productId: string; quantity: number }> }> = [];
   const ids = new Set<string>();
-  for (const line of lines) {
-    const reqs = await resolveLinesToInventoryRequirements(db, [{ productId: line.product_id, quantity: Number(line.quantity) }]);
-    perLine.push({ line, reqs });
-    reqs.forEach((r) => ids.add(r.productId));
-  }
+  // One read per line, all at once (the pool caps how many run together); order is kept.
+  const resolved = await Promise.all(lines.map((line) =>
+    resolveLinesToInventoryRequirements(db, [{ productId: line.product_id, quantity: Number(line.quantity) }])));
+  lines.forEach((line, i) => {
+    perLine.push({ line, reqs: resolved[i] });
+    resolved[i].forEach((r) => ids.add(r.productId));
+  });
   const planner = await levelPlanner(db, [...ids]);
   let cogs = 0;
   const stmts: any[] = [];
@@ -1475,16 +1477,32 @@ sales.post('/orders', requirePermissions(['manage_sales']), async (c) => {
 
   // Validate branch
   if (!body.branchId) return c.json({ message: 'Branch is required.' }, 400);
-  const branch = await c.env.DB.prepare('SELECT id FROM branches WHERE id = ?').bind(body.branchId).first();
-  if (!branch) return c.json({ message: 'Branch does not exist.' }, 400);
 
-  // Validate customer (optional but if provided must exist)
-  if (body.customerId) {
-    const customer = writeScope.kind === 'BRANCH'
-      ? await c.env.DB.prepare(`SELECT cu.id FROM customers cu WHERE cu.id = ? AND ${customerVisibleSql(writeScope.branchId)}`).bind(body.customerId).first()
-      : await c.env.DB.prepare('SELECT id FROM customers WHERE id = ?').bind(body.customerId).first();
-    if (!customer) return c.json({ message: 'Customer does not exist.' }, 400);
-  }
+  // The checks and reads below do not depend on each other, so they run at the same time:
+  // each one is a round trip to the database, and one after another they made the sale slow.
+  // (A request may hold up to 5 connections; this uses 5 at most.)
+  const lineProductIds: string[] = Array.from(new Set((Array.isArray(body.lines) ? body.lines : []).map((l: any) => l?.productId).filter(Boolean)));
+  const [branch, customer, webRows, pricePlanner, productRows] = await Promise.all([
+    c.env.DB.prepare('SELECT id FROM branches WHERE id = ?').bind(body.branchId).first(),
+    !body.customerId ? Promise.resolve(true)
+      : writeScope.kind === 'BRANCH'
+        ? c.env.DB.prepare(`SELECT cu.id FROM customers cu WHERE cu.id = ? AND ${customerVisibleSql(writeScope.branchId)}`).bind(body.customerId).first()
+        : c.env.DB.prepare('SELECT id FROM customers WHERE id = ?').bind(body.customerId).first(),
+    // Quoted website prices: only from a website request that is being converted right now.
+    !body.webRequestId ? Promise.resolve({ results: [] as any[] })
+      : c.env.DB.prepare(`
+      SELECT l.product_id, l.unit_price FROM storefront_request_lines l JOIN storefront_requests r ON r.id = l.request_id
+      WHERE r.id = ? AND r.status = 'PROCESSING'
+    `).bind(String(body.webRequestId)).all(),
+    // Products with price levels: the oldest level's price first (a quantity that crosses into the
+    // next level is priced at both, e.g. 5 × 100 + 3 × 120).
+    levelPlanner(c.env.DB, lineProductIds),
+    // Every product of the order in one read (it used to be one read per line).
+    !lineProductIds.length ? Promise.resolve({ results: [] as any[] })
+      : c.env.DB.prepare(`SELECT id, name, selling_price, COALESCE(is_active, 1) AS is_active FROM products WHERE id IN (${lineProductIds.map(() => '?').join(', ')})`).bind(...lineProductIds).all(),
+  ]);
+  if (!branch) return c.json({ message: 'Branch does not exist.' }, 400);
+  if (body.customerId && !customer) return c.json({ message: 'Customer does not exist.' }, 400);
 
   // Validate lines
   if (!Array.isArray(body.lines) || body.lines.length === 0) {
@@ -1492,18 +1510,9 @@ sales.post('/orders', requirePermissions(['manage_sales']), async (c) => {
   }
 
   const seenProducts = new Set<string>();
-  // Quoted website prices: only from a website request that is being converted right now.
   const webPrices = new Map<string, number>();
-  if (body.webRequestId) {
-    const { results: wl } = await c.env.DB.prepare(`
-      SELECT l.product_id, l.unit_price FROM storefront_request_lines l JOIN storefront_requests r ON r.id = l.request_id
-      WHERE r.id = ? AND r.status = 'PROCESSING'
-    `).bind(String(body.webRequestId)).all();
-    for (const r of (wl || []) as any[]) webPrices.set(r.product_id, Number(r.unit_price));
-  }
-  // Products with price levels: the oldest level's price first (a quantity that crosses into the
-  // next level is priced at both, e.g. 5 × 100 + 3 × 120).
-  const pricePlanner = await levelPlanner(c.env.DB, Array.isArray(body.lines) ? body.lines.map((l: any) => l.productId) : []);
+  for (const r of ((webRows as any)?.results || []) as any[]) webPrices.set(r.product_id, Number(r.unit_price));
+  const productsById = new Map<string, any>((((productRows as any)?.results || []) as any[]).map((r) => [r.id, r]));
   for (let i = 0; i < body.lines.length; i++) {
     const line = body.lines[i];
     if (!line.productId) return c.json({ message: `Line ${i + 1}: productId is required.` }, 400);
@@ -1515,7 +1524,7 @@ sales.post('/orders', requirePermissions(['manage_sales']), async (c) => {
     }
     seenProducts.add(line.productId);
 
-    const product = await c.env.DB.prepare('SELECT id, name, selling_price, COALESCE(is_active, 1) AS is_active FROM products WHERE id = ?').bind(line.productId).first() as any;
+    const product = productsById.get(line.productId);
     if (!product) return c.json({ message: `Line ${i + 1}: product does not exist.` }, 400);
     if (product.is_active === 0) {
       return c.json({ message: `Cannot sell inactive product "${product.name}". Please activate the product before creating new sales orders.` }, 400);

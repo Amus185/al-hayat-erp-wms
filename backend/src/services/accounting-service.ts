@@ -106,6 +106,22 @@ export async function fetchCoaMapForCodes(
  * If a caller wants to cache it, they must implement explicit invalidation
  * tied to period rollover — leave that decision to the application layer.
  */
+const fiscalPeriodMemo = new WeakMap<object, Map<string, Promise<string | null>>>();
+/** fetchOpenFiscalPeriodId, remembered for the rest of this request only (never across requests). */
+function requestFiscalPeriodId(c: any, db: any, entryDate: string): Promise<string | null> {
+  const key = c?.req?.raw ?? c;
+  if (!key || typeof key !== 'object') return fetchOpenFiscalPeriodId(db, entryDate);
+  let byDate = fiscalPeriodMemo.get(key);
+  if (!byDate) { byDate = new Map(); fiscalPeriodMemo.set(key, byDate); }
+  let found = byDate.get(entryDate);
+  if (!found) {
+    found = fetchOpenFiscalPeriodId(db, entryDate);
+    byDate.set(entryDate, found);
+    found.catch(() => byDate!.delete(entryDate)); // a refusal (closed period) is not remembered
+  }
+  return found;
+}
+
 export async function fetchOpenFiscalPeriodId(db: any, entryDate: string): Promise<string | null> {
   const dateStr = entryDate || new Date().toISOString().split('T')[0];
   // A closed/locked period covering the date locks it, even if another
@@ -199,10 +215,11 @@ export async function prepareJournalEntryPosting(
   const entryNumber = `JE-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
 
   // ── Task 1a: Use pre-fetched fiscal period if provided ─────────────────────
+  // One lookup per request and date: a sale posts several entries for the same day.
   const fiscalPeriodId =
     params.prefetchedFiscalPeriodId !== undefined
       ? params.prefetchedFiscalPeriodId
-      : await fetchOpenFiscalPeriodId(db, entryDate);
+      : await requestFiscalPeriodId(c, db, entryDate);
 
   // ── Task 1b: Resolve CoA from pre-fetched map or cache-backed lookup ────────
   const coaMap: Map<string, { id: string; normal_balance: string }> =
@@ -293,26 +310,26 @@ export async function prepareJournalEntryPosting(
   // 2. Insert Journal Entry Lines. They are the single source of truth: the
   // general ledger is a view over them, and running balances are computed
   // when the ledger is read (within the requested branch scope).
-  for (const line of resolvedLines) {
-    stmts.push(
-      db
-        .prepare(
-          `INSERT INTO journal_entry_lines (
-          id, journal_entry_id, account_id, description, debit_amount, credit_amount, branch_id, line_order
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-        )
-        .bind(
-          line.lineId,
-          entryId,
-          line.accountId,
-          line.description,
-          line.debitAmount,
-          line.creditAmount,
-          line.branchId,
-          line.lineOrder
-        )
-    );
-  }
+  // All lines of one entry go in ONE statement: each statement is a round trip
+  // to the database, and a sale posts several entries in the same transaction.
+  stmts.push(
+    db
+      .prepare(
+        `INSERT INTO journal_entry_lines (
+        id, journal_entry_id, account_id, description, debit_amount, credit_amount, branch_id, line_order
+      ) VALUES ${resolvedLines.map(() => '(?, ?, ?, ?, ?, ?, ?, ?)').join(', ')}`
+      )
+      .bind(...resolvedLines.flatMap((line) => [
+        line.lineId,
+        entryId,
+        line.accountId,
+        line.description,
+        line.debitAmount,
+        line.creditAmount,
+        line.branchId,
+        line.lineOrder,
+      ]))
+  );
 
   return { entryId, statements: stmts };
 }

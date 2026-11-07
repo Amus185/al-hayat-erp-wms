@@ -19,18 +19,24 @@ export interface Take { levelId: string | null; productId: string; quantity: num
 export async function levelPlanner(db: any, productIds: string[]) {
   const ids = Array.from(new Set(productIds.filter(Boolean)));
   const byProduct = new Map<string, LevelRow[]>();
-  if (ids.length) {
-    const { results } = await db.prepare(`
+  // Levels and fallback costs are independent: read both at once (each read is a round trip).
+  const [levelRows, fallback] = await Promise.all([
+    ids.length
+      ? db.prepare(`
       SELECT id, product_id, level_no, cost_price, selling_price, quantity_left
       FROM product_price_levels WHERE product_id IN (${ids.map(() => '?').join(', ')}) ORDER BY product_id, level_no
-    `).bind(...ids).all();
+    `).bind(...ids).all()
+      : Promise.resolve({ results: [] }),
+    unitCosts(db, ids),
+  ]);
+  if (ids.length) {
+    const results = (levelRows as any)?.results;
     for (const r of (results || []) as any[]) {
       const list = byProduct.get(r.product_id) || [];
       list.push({ ...r, cost_price: Number(r.cost_price), selling_price: Number(r.selling_price), quantity_left: Number(r.quantity_left) });
       byProduct.set(r.product_id, list);
     }
   }
-  const fallback = await unitCosts(db, ids);
   const taken: Take[] = [];
   return {
     has: (pid: string) => byProduct.has(pid),

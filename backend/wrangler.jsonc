@@ -6,6 +6,10 @@
   // node:crypto, pg, and process.env populated from vars and secrets.
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
+  // Run the Worker next to the database, not next to the user: one sale makes ~30 database
+  // round trips, and from a far-away Cloudflare location each trip costs tens of milliseconds.
+  // The staff app (Pages) and the assistant still reach it through their service bindings.
+  "placement": { "mode": "smart" },
   // bcrypt password checks at sign-in need more CPU than the Free plan's 10 ms:
   // the Worker must run on Workers Paid.
   "limits": { "cpu_ms": 30000 },
