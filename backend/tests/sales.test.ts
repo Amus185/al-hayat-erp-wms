@@ -118,3 +118,44 @@ test('a walk-in credit sale with a deposit records the deposit as an invoice pay
   const paid = await t.q('SELECT COALESCE(SUM(amount), 0)::float AS s FROM invoice_payments WHERE invoice_id = $1', [res.body.invoice_id]);
   assert.equal(paid[0].s, 100);
 });
+
+test('discounts: never negative or above the line, and every one is listed for the Owner with who gave it', async () => {
+  const p = await t.createProduct({ price: 400, cost: 200 });
+  await t.setStock(p, 20, { branchId: BRANCH_HQ });
+  const sale = (discountAmount: number, token?: string) => t.api('POST', '/sales/orders', {
+    branchId: BRANCH_HQ, fulfillmentType: 'PICKUP', isCreditSale: true, initialDeposit: 0, depositPaymentMethod: 'CASH',
+    lines: [{ productId: p, quantity: 2, unitPrice: 400, discountAmount }],
+  }, token);
+  const neg = await sale(-50);
+  assert.equal(neg.status, 400, 'a negative discount would raise the price');
+  assert.match(neg.body.message, /cannot be negative/);
+  const tooBig = await sale(801);
+  assert.equal(tooBig.status, 400, 'more than the line (2 x 400 = 800)');
+  assert.equal(await t.stockOf(p, { branchId: BRANCH_HQ }), 20, 'refused sales move no stock');
+
+  const seller = await t.createUser({ branchId: BRANCH_HQ, roleId: 'role-branch-user', role: 'branch_user' });
+  const ok = await sale(333, seller.token);
+  assert.equal(ok.status, 201, JSON.stringify(ok.body));
+
+  const report = await t.api('GET', '/sales/discounts');
+  assert.equal(report.status, 200, JSON.stringify(report.body));
+  const row = report.body.rows.find((r: any) => r.order_id === ok.body.id);
+  assert.ok(row, 'the discounted sale is listed');
+  assert.equal(row.discount, 333);
+  assert.equal(row.gross, 800);
+  assert.equal(row.net, 467);
+  assert.equal(row.discount_pct, 41.6);
+  assert.ok(row.invoice_number, 'with its invoice');
+  const sellerName = (await t.q('SELECT COALESCE(full_name, email) AS n FROM users WHERE id = $1', [seller.id]))[0].n;
+  assert.equal(row.seller, sellerName, 'and who sold it');
+  assert.ok(report.body.bySeller.some((g: any) => g.name === sellerName && g.discount >= 333));
+  assert.equal((await t.api('GET', '/sales/discounts', undefined, seller.token)).status, 403, 'a branch manager without accounting cannot open it');
+
+  const inv = (await t.q('SELECT id FROM invoices WHERE sales_order_id = $1', [ok.body.id]))[0].id;
+  const print = await t.api('GET', `/sales/invoices/${inv}/print`);
+  assert.equal(print.body.lines[0].discount_amount, 333, 'the invoice shows the line discount');
+  assert.equal(print.body.invoice.sold_by, sellerName, 'and who sold it');
+  const list = await t.api('GET', `/sales/orders?page=1&pageSize=50&id=${ok.body.id}`);
+  assert.equal(Number(list.body.items[0].lines_discount), 333);
+  assert.equal(list.body.items[0].seller_name, sellerName);
+});

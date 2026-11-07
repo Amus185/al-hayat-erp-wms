@@ -1,3 +1,4 @@
+import { DiscountsReport } from '../components/DiscountsReport';
 import { useEffect, useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import {
@@ -135,7 +136,7 @@ export function ReportsPage() {
   // branches is company-level, and the Finance reports need accounting access.
   const reportMenus = [
     { label: 'Inventory', items: [{ key: 'low-stock', label: 'Stock Risk' }, ...(canCosts ? [{ key: 'inv-valuation', label: 'Inventory Valuation' }] : [])] },
-    { label: 'Sales', items: [...(myBranch ? [] : [{ key: 'branch-perf', label: 'Branch Performance' }]), { key: 'sales-profit', label: canCosts ? 'Sales & Profit' : 'Sales Activity' }, { key: 'quote-conversion', label: 'Quote Conversion' }] },
+    { label: 'Sales', items: [...(myBranch ? [] : [{ key: 'branch-perf', label: 'Branch Performance' }]), { key: 'sales-profit', label: canCosts ? 'Sales & Profit' : 'Sales Activity' }, { key: 'quote-conversion', label: 'Quote Conversion' }, ...(canFinance ? [{ key: 'discounts', label: 'Discounts Given' }] : [])] },
     { label: 'Purchasing', items: [{ key: 'supplier-perf', label: 'Supplier Scorecards' }] },
     ...(canFinance ? [{ label: 'Finance', items: [{ key: 'receivables', label: 'Receivables & Cash Flow' }] }] : []),
   ];
@@ -801,6 +802,8 @@ export function ReportsPage() {
           {/* ========================================================================= */}
           {/* SUBVIEW 5: QUOTE CONVERSION */}
           {/* ========================================================================= */}
+          {activeTab === 'discounts' && canFinance && <DiscountsReport days={days} />}
+
           {activeTab === 'quote-conversion' && (
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '20px' }}>

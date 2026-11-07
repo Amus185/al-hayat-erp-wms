@@ -20,6 +20,7 @@ export function downloadSalesInvoice(data: any) {
       ['Invoice Date', dateOnly(inv.issued_at)],
       ['Invoice Number', inv.invoice_number],
       ['Order Number', inv.order_number],
+      ['Sold By', inv.sold_by],
       ['Customer', cust.name],
       ['Phone', cust.phone],
       ['Address', cust.address],
@@ -32,13 +33,17 @@ export function downloadSalesInvoice(data: any) {
       ...(inv.paid_at ? [['Paid On', dateOnly(inv.paid_at)] as [string, string]] : []),
     ],
     table: {
-      head: ['PRODUCT', 'SKU', 'QTY', 'UNIT PRICE', 'SUB TOTAL'],
-      rows: (data.lines || []).map((l: any) => [l.product_name, l.product_sku || '', String(l.quantity), money(l.unit_price), money(l.subtotal)]),
-      align: ['left', 'left', 'center', 'right', 'right'],
-      widths: [0, 32, 14, 28, 30],
+      head: ['PRODUCT', 'SKU', 'QTY', 'UNIT PRICE', 'DISCOUNT', 'SUB TOTAL'],
+      rows: (data.lines || []).map((l: any) => {
+        const disc = Number(l.discount_amount || 0);
+        return [l.product_name, l.product_sku || '', String(l.quantity), money(l.unit_price),
+          disc > 0.004 ? `-${money(disc)}` : money(0), money(Number(l.subtotal) - disc)];
+      }),
+      align: ['left', 'left', 'center', 'right', 'right', 'right'],
+      widths: [0, 28, 12, 25, 24, 27],
     },
     totals: [
-      { label: 'Subtotal', value: money(inv.total_amount ?? net) },
+      { label: 'Before Discount', value: money(inv.total_amount ?? net) },
       ...(Number(inv.discount_amount) > 0 ? [{ label: 'Discount', value: `-${money(inv.discount_amount)}` }] : []),
       { label: 'TOTAL', value: money(net), strong: true },
       { label: 'Amount Paid', value: money(inv.amount_paid) },

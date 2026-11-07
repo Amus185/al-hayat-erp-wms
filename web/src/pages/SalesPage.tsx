@@ -516,6 +516,21 @@ export function SalesPage() {
       ),
     },
     {
+      key: 'discount',
+      label: 'Discount',
+      render: (row: any) => {
+        const d = Number(row.invoice_id ? row.invoice_discount : row.lines_discount) || 0;
+        return d > 0.004
+          ? <strong style={{ color: '#b45309' }} title="Discount given on this sale (see Reports → Discounts Given)">−{fmt(d)}</strong>
+          : <span style={{ color: '#94a3b8' }}>—</span>;
+      },
+    },
+    {
+      key: 'seller_name',
+      label: 'Sold by',
+      render: (row: any) => row.seller_name || '—',
+    },
+    {
       key: 'status',
       sortable: true,
       sortKey: 'status',
@@ -954,6 +969,9 @@ export function SalesPage() {
             {/* Order Lines */}
             <div>
               <h4 style={{ margin: '0 0 8px', color: '#066006' }}>Order Lines</h4>
+              {selectedOrder.seller_name && (
+                <p style={{ margin: '0 0 8px', fontSize: '12px', color: '#475569' }}>Sold by <strong>{selectedOrder.seller_name}</strong></p>
+              )}
               {orderDetailsLoading ? (
                 <LoadingSpinner message="Fetching details..." />
               ) : (
@@ -964,6 +982,7 @@ export function SalesPage() {
                       <th style={{ textAlign: 'center', width: '120px' }}>Fulfillment</th>
                       <th>Quantity</th>
                       <th>Unit Price</th>
+                      <th>Discount</th>
                       <th>Subtotal</th>
                     </tr>
                   </thead>
@@ -997,7 +1016,10 @@ export function SalesPage() {
                         </td>
                         <td>{line.quantity}</td>
                         <td>${Number(line.unit_price).toLocaleString()}</td>
-                        <td><strong>${(line.quantity * line.unit_price).toLocaleString()}</strong></td>
+                        <td>{Number(line.discount_amount || 0) > 0.004
+                          ? <strong style={{ color: '#b45309' }}>−${Number(line.discount_amount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
+                          : <span style={{ color: '#94a3b8' }}>—</span>}</td>
+                        <td><strong>${(line.quantity * line.unit_price - Number(line.discount_amount || 0)).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong></td>
                       </tr>
                     ))}
                   </tbody>

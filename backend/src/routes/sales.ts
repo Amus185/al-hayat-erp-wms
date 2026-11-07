@@ -1009,6 +1009,8 @@ async function listSalesOrders(c: any, r: ListRequest, scopedBranchId: string | 
              COALESCE(pay.paid, 0) AS amount_paid,
              d.status AS delivery_status, d.id AS delivery_id, d.delivery_number, d.delivered_at, d.total_boxes,
              COALESCE(lt.total, 0) AS lines_total,
+             COALESCE(lt.discount, 0) AS lines_discount,
+             COALESCE(su.full_name, su.email) AS seller_name,
              CASE
                WHEN UPPER(COALESCE(so.fulfillment_type, 'DELIVERY')) = 'PICKUP' THEN CASE WHEN so.status = 'DRAFT' THEN 'DRAFT' ELSE 'DELIVERED' END
                WHEN d.status = 'DELIVERED' THEN 'DELIVERED'
@@ -1022,7 +1024,8 @@ async function listSalesOrders(c: any, r: ListRequest, scopedBranchId: string | 
       JOIN branches b ON b.id = so.branch_id
       LEFT JOIN invoices i ON i.sales_order_id = so.id
       LEFT JOIN LATERAL (SELECT SUM(ip.amount) AS paid FROM invoice_payments ip WHERE ip.invoice_id = i.id) pay ON TRUE
-      LEFT JOIN LATERAL (SELECT SUM(sol.line_total) AS total FROM sales_order_lines sol WHERE sol.sales_order_id = so.id) lt ON TRUE
+      LEFT JOIN LATERAL (SELECT SUM(sol.line_total) AS total, SUM(COALESCE(sol.discount_amount, 0)) AS discount FROM sales_order_lines sol WHERE sol.sales_order_id = so.id) lt ON TRUE
+      LEFT JOIN users su ON su.id = so.created_by
       LEFT JOIN LATERAL (
         SELECT dd.status, dd.id, dd.delivery_number, dd.delivered_at, dd.total_boxes
         FROM deliveries dd WHERE dd.sales_order_id = so.id AND dd.status != 'CANCELLED'
@@ -1208,9 +1211,13 @@ sales.get('/orders/:id', async (c) => {
     WHERE sol.sales_order_id = ?
   `).bind(id).all();
 
-  const delInfo = await c.env.DB.prepare(
-    "SELECT total_boxes, delivered_boxes, remaining_boxes FROM deliveries WHERE sales_order_id = ? AND status != 'CANCELLED' ORDER BY created_at DESC LIMIT 1"
-  ).bind(id).first() as any;
+  const [delInfo, seller] = await Promise.all([
+    c.env.DB.prepare(
+      "SELECT total_boxes, delivered_boxes, remaining_boxes FROM deliveries WHERE sales_order_id = ? AND status != 'CANCELLED' ORDER BY created_at DESC LIMIT 1"
+    ).bind(id).first() as Promise<any>,
+    order.created_by ? c.env.DB.prepare('SELECT COALESCE(full_name, email) AS name FROM users WHERE id = ?').bind(order.created_by).first() as Promise<any> : Promise.resolve(null),
+  ]);
+  order.seller_name = seller?.name ?? null;
   order.total_boxes = delInfo ? delInfo.total_boxes : null;
   order.delivered_boxes = delInfo ? delInfo.delivered_boxes : 0;
   order.remaining_boxes = delInfo ? delInfo.remaining_boxes : null;
@@ -1434,6 +1441,19 @@ async function resolveLinesToInventoryRequirements(
 // CREATE ORDER — with full input validation
 // ──────────────────────────────────────────────────────────────────────
 
+/**
+ * A line's discount: a sum of money off that line, 0 or more and never more than the line itself.
+ * Discounts stay allowed (Owner decision); every one is listed in the Discounts report.
+ */
+function lineDiscount(i: number, quantity: number, unitPrice: number, raw: unknown): { value: number } | { error: string } {
+  const d = raw === undefined || raw === null || raw === '' ? 0 : Number(raw);
+  if (!Number.isFinite(d)) return { error: `Line ${i + 1}: the discount must be an amount of money.` };
+  if (d < 0) return { error: `Line ${i + 1}: the discount cannot be negative.` };
+  const gross = Math.round(quantity * unitPrice * 100) / 100;
+  if (d > gross + 0.005) return { error: `Line ${i + 1}: the discount (${d.toFixed(2)}) is more than the line itself (${gross.toFixed(2)}).` };
+  return { value: Math.round(d * 100) / 100 };
+}
+
 /** Reasons a seller may give when the sold price differs from the product's price. */
 const cleanReason = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, 80) : null);
 
@@ -1540,6 +1560,9 @@ sales.post('/orders', requirePermissions(['manage_sales']), async (c) => {
       if (Number.isFinite(t.unitPrice)) { line.unitPrice = Math.round(t.unitPrice * 10000) / 10000; line.priceBreakdown = t.breakdown; }
     }
     line.listPrice = line.unitPrice;
+    const disc = lineDiscount(i, line.quantity, line.unitPrice, line.discountAmount);
+    if ('error' in disc) return c.json({ message: disc.error }, 400);
+    line.discountAmount = disc.value;
   }
 
   const isCreditSale = Boolean(body.isCreditSale);
@@ -2416,20 +2439,25 @@ sales.get('/invoices/:id/print', async (c) => {
   const invoice = await c.env.DB.prepare(`
     SELECT i.*, so.order_number, so.branch_id,
            c.name AS customer_name, c.phone AS customer_phone, c.email AS customer_email, c.address AS customer_address,
-           b.name AS branch_name, b.city AS branch_city, b.address AS branch_address, b.phone AS branch_phone
+           b.name AS branch_name, b.city AS branch_city, b.address AS branch_address, b.phone AS branch_phone,
+           COALESCE(su.full_name, su.email) AS sold_by
     FROM invoices i
     JOIN sales_orders so ON so.id = i.sales_order_id
     LEFT JOIN customers c ON c.id = so.customer_id
     JOIN branches b ON b.id = so.branch_id
+    LEFT JOIN users su ON su.id = so.created_by
     WHERE i.id = ?
   `).bind(invoiceId).first();
 
   if (!invoice) return c.json({ message: 'Invoice not found.' }, 404);
 
   const { results: lines } = await c.env.DB.prepare(`
-    SELECT il.*, p.name AS product_name, p.sku AS product_sku, p.barcode AS product_barcode
+    SELECT il.*, p.name AS product_name, p.sku AS product_sku, p.barcode AS product_barcode,
+           COALESCE(sol.discount_amount, 0) AS discount_amount
     FROM invoice_lines il
     JOIN products p ON p.id = il.product_id
+    JOIN invoices iv ON iv.id = il.invoice_id
+    LEFT JOIN sales_order_lines sol ON sol.sales_order_id = iv.sales_order_id AND sol.product_id = il.product_id
     WHERE il.invoice_id = ?
   `).bind(invoiceId).all();
 
@@ -2453,6 +2481,7 @@ sales.get('/invoices/:id/print', async (c) => {
       payment_status: summary.payment_status,
       issued_at: invoice.issued_at,
       paid_at: invoice.paid_at,
+      sold_by: (invoice as any).sold_by || null,
     },
     customer: {
       name: invoice.customer_name || 'Walk-in Customer',
@@ -2473,6 +2502,7 @@ sales.get('/invoices/:id/print', async (c) => {
       quantity: l.quantity,
       unit_price: l.unit_price,
       subtotal: (l.quantity as number) * (l.unit_price as number),
+      discount_amount: Number(l.discount_amount || 0),
     })),
   });
 });
@@ -2751,11 +2781,14 @@ sales.patch('/orders/:id', requirePermissions(['manage_sales']), async (c) => {
         if (Number.isFinite(t.unitPrice)) { l.unitPrice = Math.round(t.unitPrice * 10000) / 10000; l.priceBreakdown = t.breakdown; }
       }
       if (pr.is_active === 0) return c.json({ message: `"${pr.name}" is inactive and cannot be sold.` }, 400);
+      const disc = lineDiscount(i, l.quantity, l.unitPrice, l.discountAmount);
+      if ('error' in disc) return c.json({ message: disc.error }, 400);
+      l.discountAmount = disc.value;
     }
     stmts.push(c.env.DB.prepare('DELETE FROM sales_order_lines WHERE sales_order_id = ?').bind(orderId));
     const lineType = String(body.fulfillmentType || order.fulfillment_type || 'DELIVERY').toUpperCase() === 'PICKUP' ? 'PICKUP' : 'DELIVERY';
     for (const l of body.lines) {
-      const disc = Math.max(0, Number(l.discountAmount || 0));
+      const disc = Number(l.discountAmount || 0); // checked above
       stmts.push(c.env.DB.prepare('INSERT INTO sales_order_lines (id, sales_order_id, product_id, quantity, unit_price, discount_amount, line_total, fulfillment_type, list_price, adjustment_reason, price_breakdown) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
         .bind(uuidv4(), orderId, l.productId, l.quantity, l.unitPrice, disc, l.quantity * l.unitPrice - disc, lineType, l.unitPrice, null, l.priceBreakdown || null));
     }
@@ -2938,6 +2971,74 @@ sales.post('/orders/:id/returns', requirePermissions(['manage_sales']), async (c
 
 
 // Price adjustments: every sale line sold above or below the product's price, and who did it.
+/**
+ * Discounts report (Owner request, 7 Nov): every discount given on a sale, with who sold it,
+ * so the Owner can ask why. Nothing is left out: every non-cancelled sale line with a discount.
+ * Owner / accountants (accounting.view); a branch-assigned viewer sees their own branch only.
+ * ?from=YYYY-MM-DD&to=YYYY-MM-DD&branch_id=
+ */
+sales.get('/discounts', async (c) => {
+  const p = c.get('jwtPayload');
+  if (!has(p, 'accounting.view') && !isAdminUser(p)) return c.json({ message: "You don't have permission to see the discounts report." }, 403);
+  const scoped = await scopedSalesBranch(c);
+  const from = c.req.query('from') || '1970-01-01';
+  const to = c.req.query('to') || '2999-12-31';
+  const params: unknown[] = [from, `${to} 23:59:59`];
+  let where = "WHERE COALESCE(sol.discount_amount, 0) > 0.004 AND so.status <> 'CANCELLED' AND so.created_at >= ? AND so.created_at <= ?";
+  if (scoped) { where += ' AND so.branch_id = ?'; params.push(scoped); }
+  const { results } = await c.env.DB.prepare(`
+    SELECT so.id AS order_id, so.order_number, so.created_at, so.status AS order_status, i.invoice_number,
+           b.name AS branch_name, COALESCE(u.full_name, u.email, 'Unknown') AS seller, so.created_by AS seller_id,
+           COALESCE(cu.name, 'Walk-in customer') AS customer_name, p.name AS product_name, p.sku AS product_sku,
+           sol.quantity, sol.unit_price, (sol.quantity * sol.unit_price) AS gross, sol.discount_amount AS discount,
+           sol.line_total AS net,
+           CASE WHEN sol.quantity * sol.unit_price > 0 THEN ROUND((sol.discount_amount / (sol.quantity * sol.unit_price) * 100)::numeric, 1) ELSE 0 END AS discount_pct
+    FROM sales_order_lines sol
+    JOIN sales_orders so ON so.id = sol.sales_order_id
+    JOIN products p ON p.id = sol.product_id
+    LEFT JOIN invoices i ON i.sales_order_id = so.id
+    LEFT JOIN users u ON u.id = so.created_by
+    LEFT JOIN branches b ON b.id = so.branch_id
+    LEFT JOIN customers cu ON cu.id = so.customer_id
+    ${where}
+    ORDER BY so.created_at DESC, so.order_number
+    LIMIT 2000
+  `).bind(...params).all();
+  const rows = ((results || []) as any[]).map((r) => ({
+    ...r, quantity: Number(r.quantity), unit_price: Number(r.unit_price), gross: Number(r.gross),
+    discount: Number(r.discount), net: Number(r.net), discount_pct: Number(r.discount_pct),
+  }));
+  const group = (key: (r: any) => string) => {
+    const m = new Map<string, { name: string; lines: number; orders: Set<string>; gross: number; discount: number }>();
+    for (const r of rows) {
+      const k = key(r);
+      const g = m.get(k) || { name: k, lines: 0, orders: new Set<string>(), gross: 0, discount: 0 };
+      g.lines += 1; g.orders.add(r.order_id); g.gross += r.gross; g.discount += r.discount;
+      m.set(k, g);
+    }
+    return [...m.values()].map((g) => ({
+      name: g.name, lines: g.lines, orders: g.orders.size,
+      gross: Math.round(g.gross * 100) / 100, discount: Math.round(g.discount * 100) / 100,
+      discount_pct: g.gross > 0 ? Math.round((g.discount / g.gross) * 1000) / 10 : 0,
+    })).sort((a, b) => b.discount - a.discount);
+  };
+  const totalDiscount = rows.reduce((a, r) => a + r.discount, 0);
+  const totalGross = rows.reduce((a, r) => a + r.gross, 0);
+  return c.json({
+    rows,
+    bySeller: group((r) => r.seller),
+    byBranch: group((r) => r.branch_name || 'No branch'),
+    totals: {
+      discount: Math.round(totalDiscount * 100) / 100,
+      gross: Math.round(totalGross * 100) / 100,
+      orders: new Set(rows.map((r) => r.order_id)).size,
+      lines: rows.length,
+      discount_pct: totalGross > 0 ? Math.round((totalDiscount / totalGross) * 1000) / 10 : 0,
+    },
+    limited: rows.length >= 2000,
+  });
+});
+
 sales.get('/price-adjustments', async (c) => {
   const p = c.get('jwtPayload');
   if (!has(p, 'accounting.view') && !isAdminUser(p)) return c.json({ message: "You don't have permission to see price changes." }, 403);
