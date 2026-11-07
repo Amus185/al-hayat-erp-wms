@@ -3,8 +3,8 @@ import {
   Users, Phone, Mail, MapPin, Plus, Search, ShoppingBag, DollarSign, X,
   Edit2, Trash2, ChevronDown, ChevronUp, BookOpen, Receipt, CreditCard,
   Wallet, FileText, ArrowDownRight, ArrowUpRight, CheckCircle2,
-  Clock, AlertCircle, Calendar, Wrench, ShieldCheck, RefreshCw, Loader2
-} from 'lucide-react';
+  Clock, AlertCircle, Calendar, Wrench, ShieldCheck, RefreshCw, Loader2,
+ Building2 } from 'lucide-react';
 import { apiGet, apiPost, apiPatch, apiDelete } from '../api/client';
 import { ListToolbar } from '../components/ListToolbar';
 import { Pagination } from '../components/Pagination';
@@ -34,6 +34,8 @@ interface Customer {
   total_orders?: number;
   total_spent?: number;
   outstanding_balance?: number;
+  /** Company view only: the branches this customer belongs to (first = registered there). */
+  branch_names?: string | null;
 }
 
 interface SalesOrder {
@@ -177,7 +179,9 @@ function fmt(n: number | null | undefined) {
 
 export function CustomersPage() {
   const { addToast } = useToast();
-  const { hasPermission } = useAuth();
+  const { hasPermission, branchId: myBranch } = useAuth();
+  // Company view (no branch of one's own): show which branch each customer belongs to.
+  const showBranch = !myBranch;
 
   // Active view tab: ALL customers vs DEBTS ledger
   const [activeTab, setActiveTab] = useState<'ALL' | 'DEBTS'>('ALL');
@@ -970,6 +974,11 @@ export function CustomersPage() {
                         {customer.phone && <span style={{ fontSize: '13px', color: '#64748b', display: 'flex', alignItems: 'center', gap: '4px' }}><Phone size={12} />{customer.phone}</span>}
                         {customer.email && <span style={{ fontSize: '13px', color: '#64748b', display: 'flex', alignItems: 'center', gap: '4px' }}><Mail size={12} />{customer.email}</span>}
                         {customer.address && <span style={{ fontSize: '13px', color: '#64748b', display: 'flex', alignItems: 'center', gap: '4px' }}><MapPin size={12} />{customer.address}</span>}
+                        {showBranch && (
+                          <span title="The branch that registered this customer comes first" style={{ fontSize: '12px', fontWeight: 600, color: '#1d4ed8', background: '#eff6ff', border: '1px solid #bfdbfe', padding: '1px 8px', borderRadius: '12px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                            <Building2 size={11} />{customer.branch_names || 'Whole company'}
+                          </span>
+                        )}
                       </div>
                     </div>
 

@@ -207,6 +207,20 @@ test('6. shared customers: one record for the company, visibility per branch, no
   assert.ok(JSON.stringify(ownerLedger).includes('INV') || JSON.stringify(ownerLedger).length >= JSON.stringify(hqLedger).length, 'the Owner sees the full history');
 });
 
+test('6b. the company view shows which branch each customer belongs to; a branch never sees other branch names', async () => {
+  const find = (body: any, id: string) => (body.items || []).find((x: any) => x.id === id);
+  const all = await t.api('GET', '/sales/customers?page=1&pageSize=100', undefined);
+  assert.equal(all.status, 200);
+  const hqName = (await t.q('SELECT name FROM branches WHERE id = $1', [HQ]))[0].name;
+  const clName = (await t.q('SELECT name FROM branches WHERE id = $1', [CL]))[0].name;
+  assert.ok(String(find(all.body, ids.cHQ)?.branch_names).startsWith(hqName), 'registered at HQ');
+  assert.ok(String(find(all.body, ids.cCL)?.branch_names).startsWith(clName), 'registered at CL');
+  const mine = await t.api('GET', '/sales/customers?page=1&pageSize=100', undefined, cl.token);
+  assert.ok(find(mine.body, ids.cCL), 'the CL manager sees their own customer');
+  assert.equal(find(mine.body, ids.cCL)?.branch_names ?? null, null, 'no branch names for a branch');
+  assert.ok(!find(mine.body, ids.cHQ), 'and not HQ customers');
+});
+
 test('7. transfers between branches: both sides see them, each does its own step, stock moves once', async () => {
   const created = await t.api('POST', '/transfers', { destinationOwnerType: 'BRANCH', destinationBranchId: HQ, lines: [{ productId: ids.pBoth, quantityRequested: 2 }] }, cl.token);
   assert.equal(created.status, 201, JSON.stringify(created.body));

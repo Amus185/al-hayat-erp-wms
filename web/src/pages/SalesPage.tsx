@@ -211,8 +211,10 @@ export function SalesPage() {
     e.preventDefault();
     if (!customerForm.name) { addToast('error', 'Customer name is required'); return; }
     try {
-      await apiPost('/sales/customers', customerForm);
-      addToast('success', 'Customer registered successfully.');
+      const saved: any = await apiPost('/sales/customers', customerForm);
+      addToast('success', saved?.already_registered
+        ? `${saved.name} is already a customer (same phone). Added to your Customers.`
+        : `${customerForm.name.trim()} added. Find them under Customers.`);
       setIsCustomerOpen(false);
       setCustomerForm({ name: '', email: '', phone: '', address: '' });
       loadData();

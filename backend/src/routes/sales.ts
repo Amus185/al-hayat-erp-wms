@@ -5,7 +5,7 @@ import { authMiddleware, requirePermissions, isAdminUser } from '../middleware/a
 import { has } from '../services/privacy';
 import { costInStatements, unitCosts } from '../services/costing';
 import { levelPlanner, restoreToLevels } from '../services/price-levels';
-import { resolveBranchScope, resolveLoc, locBranch, resolveWriteBranch, branchSql, inScope, ScopeError, customerVisibleSql, type BranchScope } from '../services/branch-scope';
+import { resolveBranchScope, resolveLoc, locBranch, resolveWriteBranch, branchSql, inScope, ScopeError, customerVisibleSql, hasAllBranchAccess, type BranchScope } from '../services/branch-scope';
 import { logAudit, createAuditLogStmt } from '../services/audit';
 import { releaseReservationsStmt, returnWebQuantityStmt } from '../services/storefront';
 import { csvResponse, dateRange, likeTerm, listRequest, pagedResponse, pagedRows, type ListOptions, type ListRequest } from '../services/listing';
@@ -110,6 +110,8 @@ async function customerOr404(c: any, id: string): Promise<any | null> {
 
 async function listCustomers(c: any, r: ListRequest) {
   const scope = await resolveBranchScope(c);
+  // Branch names are shown to the company view only (the Owner, even while looking at one branch).
+  const showBranches = hasAllBranchAccess(c.get('jwtPayload'));
   const q = (k: string) => (c.req.query(k) || '').trim();
   const withSql = `
     WITH so_agg AS (
@@ -143,7 +145,12 @@ async function listCustomers(c: any, r: ListRequest) {
              COALESCE(da.unpaid_manual_balance, 0) AS unpaid_manual_balance,
              COALESCE(pa.unallocated_payments, 0) AS unallocated_payments,
              GREATEST(0, COALESCE(sa.unpaid_sales_balance, 0) + COALESCE(da.unpaid_manual_balance, 0) - COALESCE(pa.unallocated_payments, 0)) AS outstanding_balance,
-             sa.last_order_at
+             sa.last_order_at,
+             ${!showBranches
+               // A branch sees only its own customers; other branches' names stay hidden.
+               ? 'NULL::text'
+               // Company view: the branches the customer belongs to, the one that registered them first.
+               : `(SELECT string_agg(b.name, ', ' ORDER BY cb.created_at, b.name) FROM customer_branches cb JOIN branches b ON b.id = cb.branch_id WHERE cb.customer_id = cu.id)`} AS branch_names
       FROM customers cu
       LEFT JOIN so_agg sa ON sa.customer_id = cu.id
       LEFT JOIN debt_agg da ON da.customer_id = cu.id
@@ -175,6 +182,7 @@ async function listCustomers(c: any, r: ListRequest) {
       { label: 'Phone', value: (x: any) => x.phone },
       { label: 'Email', value: (x: any) => x.email },
       { label: 'Address', value: (x: any) => x.address },
+      ...(!showBranches ? [] : [{ label: 'Branch', value: (x: any) => x.branch_names || 'Whole company' }]),
       { label: 'Orders', value: (x: any) => x.total_orders },
       { label: 'Total spent', value: (x: any) => Number(x.total_spent).toFixed(2) },
       { label: 'Outstanding balance', value: (x: any) => Number(x.outstanding_balance).toFixed(2) },
