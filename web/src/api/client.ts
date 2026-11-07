@@ -294,6 +294,33 @@ export async function apiUpload(file: File): Promise<{ id: string; object_key: s
 /** Address of a stored file (served only to signed-in staff). */
 export const fileUrl = (key: string) => `${API_BASE_URL}/files/${encodeURIComponent(key)}`;
 
+/**
+ * A stored file as a local blob: address for <img> or a new tab. <img src> and plain links
+ * cannot send the CSRF header the server requires, so files are fetched like any API call.
+ * The caller revokes the address (URL.revokeObjectURL) when done.
+ */
+export async function fileBlobUrl(key: string): Promise<string> {
+  const res = await authorizedFetch(fileUrl(key), { method: 'GET' });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null) as Record<string, unknown> | null;
+    throw new ApiError(res.status, res.statusText, body);
+  }
+  return URL.createObjectURL(await res.blob());
+}
+
+/** Opens a stored file (e.g. an employment document) in a new tab. */
+export async function openFile(key: string): Promise<void> {
+  const tab = window.open('', '_blank'); // opened now, inside the click, so it is not blocked
+  try {
+    const url = await fileBlobUrl(key);
+    if (tab) tab.location.href = url; else window.location.href = url;
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  } catch (e) {
+    tab?.close();
+    throw e;
+  }
+}
+
 export function apiDelete<T = void>(path: string): Promise<T> {
   return mutate<T>('DELETE', path);
 }

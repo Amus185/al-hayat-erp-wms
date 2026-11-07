@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { FileText, Pencil, Plus, Trash2, Upload, Wallet } from 'lucide-react';
-import { apiDelete, apiGet, apiPatch, apiPost, apiUpload, fileUrl } from '../api/client';
+import { apiDelete, apiGet, apiPatch, apiPost, apiUpload, fileBlobUrl, openFile } from '../api/client';
 import { DataTable, type Column } from '../components/DataTable';
 import { ListToolbar } from '../components/ListToolbar';
 import { StatusTabs } from '../components/StatusTabs';
@@ -30,9 +30,17 @@ const METHOD: Record<string, string> = { CASH: 'Cash', BANK: 'Bank', SALARY_DEDU
 const EMPTY = { full_name: '', phone: '', email: '', position: '', branch_id: '', hire_date: '', national_id: '', address: '', salary: '', status: 'ACTIVE', notes: '', photo_key: '', document_key: '', document_name: '' };
 
 function Photo({ emp, small }: { emp: Pick<Employee, 'photo_key' | 'full_name'>; small?: boolean }) {
-  const [broken, setBroken] = useState(false);
+  const [src, setSrc] = useState<string | null>(null);
   const cls = `emp-photo${small ? ' emp-photo--sm' : ''}`;
-  if (emp.photo_key && !broken) return <img className={cls} src={fileUrl(emp.photo_key)} alt="" onError={() => setBroken(true)} />;
+  useEffect(() => {
+    setSrc(null);
+    if (!emp.photo_key) return;
+    let url: string | null = null;
+    let live = true;
+    fileBlobUrl(emp.photo_key).then((u) => { url = u; if (live) setSrc(u); else URL.revokeObjectURL(u); }).catch(() => {});
+    return () => { live = false; if (url) URL.revokeObjectURL(url); };
+  }, [emp.photo_key]);
+  if (emp.photo_key && src) return <img className={cls} src={src} alt="" onError={() => setSrc(null)} />;
   return <span className={cls} aria-hidden>{emp.full_name.trim().charAt(0).toUpperCase() || '?'}</span>;
 }
 
@@ -216,7 +224,7 @@ export function EmployeesPage() {
               <div><dt>National ID</dt><dd>{profile.national_id || '—'}</dd></div>
               <div><dt>Address</dt><dd>{profile.address || '—'}</dd></div>
               {canPay && <div><dt>Employment document</dt><dd>{profile.document_key
-                ? <a href={fileUrl(profile.document_key)} target="_blank" rel="noreferrer"><FileText size={13} style={{ verticalAlign: '-2px' }} /> {profile.document_name || 'Open document'}</a>
+                ? <a href="#" onClick={(e) => { e.preventDefault(); openFile(profile.document_key!).catch((err) => addToast('error', err?.message)); }}><FileText size={13} style={{ verticalAlign: '-2px' }} /> {profile.document_name || 'Open document'}</a>
                 : '—'}</dd></div>}
               {profile.notes && <div style={{ gridColumn: '1 / -1' }}><dt>Notes</dt><dd>{profile.notes}</dd></div>}
             </dl>
