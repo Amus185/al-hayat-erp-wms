@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Pencil, Plus, Trash2, Truck } from 'lucide-react';
+import { Pencil, Plus, Trash2 } from 'lucide-react';
 import { apiDelete, apiGet, apiPatch, apiPost } from '../api/client';
 import { DataTable, type Column } from './DataTable';
 import { Modal } from './Modal';
@@ -15,6 +15,8 @@ export interface Vehicle {
 }
 
 const TYPES = ['Truck', 'Van', 'Pickup', 'Motorbike', 'Other'];
+// A driver typed in by hand on an older vehicle (not an employee): kept as is unless changed.
+const TYPED_DRIVER = '__typed';
 const EMPTY = { plate_number: '', make: '', model: '', vehicle_type: 'Truck', capacity_note: '', default_driver_id: '', driver_name: '', driver_phone: '', branchId: '', status: 'ACTIVE', notes: '' };
 
 /**
@@ -44,14 +46,17 @@ export function VehiclesPanel() {
   const openNew = () => { setEditId(null); setForm(EMPTY); setOpen(true); };
   const openEdit = (v: Vehicle) => {
     setEditId(v.id);
-    setForm({ plate_number: v.plate_number, make: v.make ?? '', model: v.model ?? '', vehicle_type: v.vehicle_type ?? 'Truck', capacity_note: v.capacity_note ?? '', default_driver_id: v.default_driver_id ?? '', driver_name: v.driver_name ?? '', driver_phone: v.driver_phone ?? '', branchId: v.branch_id ?? '', status: v.status, notes: v.notes ?? '' });
+    // Make and model are one field in the form ("Isuzu NPR"); older records may have them apart.
+    setForm({ plate_number: v.plate_number, make: [v.make, v.model].filter(Boolean).join(' '), model: '', vehicle_type: v.vehicle_type ?? 'Truck', capacity_note: v.capacity_note ?? '', default_driver_id: v.default_driver_id ?? '', driver_name: v.driver_name ?? '', driver_phone: v.driver_phone ?? '', branchId: v.branch_id ?? '', status: v.status, notes: v.notes ?? '' });
     setOpen(true);
   };
   const set = (k: string) => ({ value: form[k] ?? '', onChange: (e: any) => setForm((p) => ({ ...p, [k]: e.target.value })) });
 
   const pickDriver = (id: string) => {
     const emp = employees.find((e) => e.id === id);
-    setForm((p) => ({ ...p, default_driver_id: id, driver_name: emp ? emp.full_name : p.driver_name, driver_phone: emp ? (emp.phone ?? '') : p.driver_phone }));
+    if (id === TYPED_DRIVER) return;
+    // The server fills the employee's name and phone; "none" clears the driver.
+    setForm((p) => ({ ...p, default_driver_id: id, driver_name: emp ? emp.full_name : '', driver_phone: emp ? (emp.phone ?? '') : '' }));
   };
 
   const save = async () => {
@@ -103,7 +108,7 @@ export function VehiclesPanel() {
       <DataTable id="vehicles-table" data={shown} columns={columns} keyExtractor={(v) => v.id} pageSize={25}
         emptyMessage="No company vehicles yet. Click 'New Vehicle' to register one; you will then pick it when scheduling deliveries." />
 
-      <Modal isOpen={open} onClose={() => !saving && setOpen(false)} title={editId ? 'Edit vehicle' : 'New company vehicle'} width="lg"
+      <Modal isOpen={open} onClose={() => !saving && setOpen(false)} title={editId ? 'Edit vehicle' : 'New company vehicle'} width="md"
         footer={<div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', width: '100%' }}>
           <button type="button" className="btn btn-secondary" onClick={() => setOpen(false)} disabled={saving}>Cancel</button>
           <button type="button" className="btn btn-primary" id="save-vehicle" onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save'}</button>
@@ -111,25 +116,19 @@ export function VehiclesPanel() {
         <div className="emp-form">
           <label className="form-field"><span className="form-field__label">Plate number *</span><input className="form-input" id="veh-plate" autoFocus {...set('plate_number')} placeholder="e.g. HG 1234" /></label>
           <label className="form-field"><span className="form-field__label">Type</span>
-            <select className="form-select" {...set('vehicle_type')}>{TYPES.map((t) => <option key={t} value={t}>{t}</option>)}</select></label>
-          <label className="form-field"><span className="form-field__label">Make</span><input className="form-input" {...set('make')} placeholder="e.g. Isuzu" /></label>
-          <label className="form-field"><span className="form-field__label">Model</span><input className="form-input" {...set('model')} placeholder="e.g. NPR" /></label>
-          <label className="form-field" style={{ gridColumn: '1 / -1' }}><span className="form-field__label">Capacity / description</span><input className="form-input" {...set('capacity_note')} placeholder="e.g. 3 tons, covered" /></label>
-          <label className="form-field"><span className="form-field__label">Usual driver (an employee)</span>
-            <select className="form-select" value={form.default_driver_id} onChange={(e) => pickDriver(e.target.value)}>
+            <select className="form-select" id="veh-type" {...set('vehicle_type')}>{TYPES.map((t) => <option key={t} value={t}>{t}</option>)}</select></label>
+          <label className="form-field"><span className="form-field__label">Make &amp; model</span><input className="form-input" id="veh-make" {...set('make')} placeholder="e.g. Isuzu NPR" /></label>
+          <label className="form-field"><span className="form-field__label">Usual driver</span>
+            <select className="form-select" id="veh-driver" value={!form.default_driver_id && form.driver_name ? TYPED_DRIVER : form.default_driver_id} onChange={(e) => pickDriver(e.target.value)}>
               <option value="">— none —</option>
+              {!form.default_driver_id && form.driver_name && <option value={TYPED_DRIVER}>{form.driver_name}</option>}
               {employees.map((e) => <option key={e.id} value={e.id}>{e.full_name}</option>)}
-            </select></label>
-          <label className="form-field"><span className="form-field__label">Driver name (if not an employee)</span><input className="form-input" {...set('driver_name')} /></label>
-          <label className="form-field"><span className="form-field__label">Driver phone</span><input className="form-input" {...set('driver_phone')} /></label>
+            </select>
+            <span className="mm-sub">A suggestion only: each delivery can pick another driver.</span></label>
           {!myBranch && !editId && (
-            <label className="form-field"><span className="form-field__label">Belongs to</span>
-              <select className="form-select" {...set('branchId')}><option value="">Whole company (every branch can use it)</option>{branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}</select></label>
+            <label className="form-field" style={{ gridColumn: '1 / -1' }}><span className="form-field__label">Belongs to</span>
+              <select className="form-select" id="veh-branch" {...set('branchId')}><option value="">Whole company (every branch can use it)</option>{branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}</select></label>
           )}
-          <label className="form-field"><span className="form-field__label">Status</span>
-            <select className="form-select" {...set('status')}><option value="ACTIVE">Active</option><option value="INACTIVE">Inactive</option></select></label>
-          <p className="mm-sub" style={{ gridColumn: '1 / -1', margin: 0 }}><Truck size={12} style={{ verticalAlign: '-2px' }} /> The usual driver is only a suggestion. When you schedule a delivery you can still choose a different driver for that trip.</p>
-          <label className="form-field" style={{ gridColumn: '1 / -1' }}><span className="form-field__label">Notes</span><textarea className="form-textarea" rows={2} {...set('notes')} /></label>
         </div>
       </Modal>
     </div>
