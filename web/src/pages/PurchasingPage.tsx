@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   PackagePlus, Plus, UserPlus, Eye, CheckCircle, Truck,
-  FileText, Printer, CreditCard, History, ChevronDown, ChevronUp,
+  FileText, CreditCard, History, ChevronDown, ChevronUp,
 } from 'lucide-react';
 import { apiGet, apiPost } from '../api/client';
 import { DataTable, type Column } from '../components/DataTable';
@@ -18,7 +18,8 @@ import { LoadingSpinner } from '../components/LoadingSpinner';
 import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
 import type { PaymentMethod, PurchaseInvoicePayment, PaymentSummary } from '../types';
-import { html, writePrintDocument } from '../utils/html';
+import { DownloadDocButton } from '../components/DownloadDocButton';
+import { downloadPurchaseInvoice } from '../utils/documents';
 import { useOpenParam, useServerList } from '../utils/serverList';
 
 // ── Local types ────────────────────────────────────────────────────
@@ -347,131 +348,11 @@ export function PurchasingPage() {
     }
   };
 
-  // ── Print purchase invoice ───────────────────────────────────────
-  const handlePrintPurchaseInvoice = async (poId: string) => {
-    try {
-      const data = await apiGet<any>(`/purchasing/orders/${poId}/print-invoice`);
-      if (!data || !data.invoice) {
-        addToast('error', 'No invoice found for this purchase order.');
-        return;
-      }
-      const w = window.open('', '_blank');
-      if (!w) { addToast('error', 'Pop-up blocked. Please allow pop-ups to print invoice.'); return; }
-
-      const inv = data.invoice;
-      const subtotal = data.lines.reduce((acc: number, l: any) => acc + (Number(l.quantity_ordered) * Number(l.unit_cost)), 0);
-      const totalDiscount = data.lines.reduce((acc: number, l: any) => acc + Number(l.discount_amount || 0), 0);
-      const grandTotal = Number(inv.net_total ?? inv.total_amount);
-      const amountPaid = Number(inv.amount_paid ?? 0);
-      const balance = Number(inv.balance ?? 0);
-
-      writePrintDocument(w, html`<!DOCTYPE html>
-<html>
-<head>
-  <title>Purchase Invoice ${inv.invoice_number}</title>
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; padding: 40px; color: #1e293b; max-width: 850px; margin: 0 auto; background: #fff; }
-    .header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 3px solid #066006; padding-bottom: 20px; margin-bottom: 24px; }
-    .company-title { color: #066006; font-size: 24px; font-weight: 800; letter-spacing: -0.5px; }
-    .doc-type { font-size: 13px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 1px; margin-top: 4px; }
-    .inv-num { font-size: 16px; font-weight: 700; color: #0f172a; margin-top: 2px; }
-    .meta-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 24px; }
-    .card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; }
-    .card-title { font-size: 11px; font-weight: 700; text-transform: uppercase; color: #64748b; margin-bottom: 8px; letter-spacing: 0.5px; }
-    .card p { font-size: 13px; margin: 3px 0; color: #334155; }
-    .card p.bold { font-weight: 700; color: #0f172a; font-size: 14px; }
-    table { width: 100%; border-collapse: collapse; margin-bottom: 24px; }
-    th { background: #066006; color: white; padding: 10px 14px; text-align: left; font-size: 11px; text-transform: uppercase; font-weight: 700; letter-spacing: 0.5px; }
-    td { padding: 12px 14px; border-bottom: 1px solid #e2e8f0; font-size: 13px; }
-    tr:nth-child(even) { background: #f8fafc; }
-    .text-right { text-align: right; }
-    .summary-box { display: flex; justify-content: flex-end; margin-bottom: 30px; }
-    .summary-table { min-width: 280px; display: grid; gap: 6px; font-size: 13px; }
-    .summary-row { display: flex; justify-content: space-between; padding: 4px 0; }
-    .grand-total { font-size: 18px; font-weight: 800; color: #066006; border-top: 2px solid #066006; padding-top: 10px; margin-top: 4px; }
-    .paid-row { color: #0b8f08; }
-    .balance-row { color: #b45309; font-weight: 700; font-size: 15px; border-top: 1px solid #e2e8f0; padding-top: 8px; margin-top: 4px; }
-    .footer { text-align: center; padding-top: 20px; border-top: 1px solid #e2e8f0; color: #94a3b8; font-size: 11px; margin-top: 30px; }
-    .badge { display: inline-block; padding: 4px 10px; border-radius: 4px; font-size: 11px; font-weight: 700; text-transform: uppercase; }
-    .badge.paid { background: #dcfce7; color: #166534; }
-    .badge.partial { background: #fef3c7; color: #92400e; }
-    .badge.unpaid { background: #fee2e2; color: #991b1b; }
-    .btn-print { position: fixed; top: 20px; right: 20px; padding: 10px 20px; background: #066006; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 700; font-size: 13px; box-shadow: 0 4px 12px rgba(6,96,6,0.3); }
-    @media print { body { padding: 20px; } .no-print { display: none !important; } }
-  </style>
-</head>
-<body>
-  <button class="btn-print no-print" data-action="print">Print / Save as PDF</button>
-  <div class="header">
-    <div>
-      <div class="company-title">AL-HAYAT ERP</div>
-      <div class="doc-type">OFFICIAL PURCHASE INVOICE</div>
-    </div>
-    <div style="text-align: right;">
-      <div class="inv-num">${inv.invoice_number}</div>
-      <p style="font-size: 12px; color: #64748b; margin-top: 2px;">PO Ref: <strong>${data.po.po_number}</strong></p>
-      <p style="font-size: 12px; color: #64748b;">Date: <strong>${new Date(inv.issued_at).toLocaleDateString()}</strong></p>
-    </div>
-  </div>
-  <div class="meta-grid">
-    <div class="card">
-      <div class="card-title">Vendor / Supplier</div>
-      <p class="bold">${data.supplier.name}</p>
-      ${data.supplier.contactName ? html`<p>Contact: ${data.supplier.contactName}</p>` : ''}
-      ${data.supplier.phone ? html`<p>Tel: ${data.supplier.phone}</p>` : ''}
-      ${data.supplier.email ? html`<p>Email: ${data.supplier.email}</p>` : ''}
-      ${data.supplier.address ? html`<p>${data.supplier.address}</p>` : ''}
-    </div>
-    <div class="card">
-      <div class="card-title">Receiving Location &amp; Status</div>
-      <p class="bold">Destination: ${data.warehouse.name}</p>
-      ${data.warehouse.address ? html`<p>${data.warehouse.address}</p>` : ''}
-      <p style="margin-top: 8px;">Status: <span class="badge ${inv.payment_status === 'PAID' ? 'paid' : inv.payment_status === 'PARTIALLY_PAID' ? 'partial' : 'unpaid'}">${(inv.payment_status || inv.status || 'UNPAID').replace('_', ' ')}</span></p>
-    </div>
-  </div>
-  <table>
-    <thead>
-      <tr>
-        <th style="width: 50%;">Product Description</th>
-        <th>SKU</th>
-        <th class="text-right">Qty</th>
-        <th class="text-right">Unit Cost</th>
-        <th class="text-right">Discount</th>
-        <th class="text-right">Line Total</th>
-      </tr>
-    </thead>
-    <tbody>
-      ${data.lines.map((l: any) => html`
-        <tr>
-          <td><strong>${l.product_name}</strong></td>
-          <td style="color: #64748b; font-family: monospace;">${l.variant_sku}</td>
-          <td class="text-right">${l.quantity_ordered}</td>
-          <td class="text-right">$${Number(l.unit_cost).toFixed(2)}</td>
-          <td class="text-right" style="color: #b45309;">-${Number(l.discount_amount || 0).toFixed(2)}</td>
-          <td class="text-right" style="font-weight: 700;">$${Number(l.line_total || ((l.quantity_ordered * l.unit_cost) - Number(l.discount_amount || 0))).toFixed(2)}</td>
-        </tr>
-      `)}
-    </tbody>
-  </table>
-  <div class="summary-box">
-    <div class="summary-table">
-      <div class="summary-row"><span>Subtotal:</span><span>$${subtotal.toFixed(2)}</span></div>
-      ${totalDiscount > 0 ? html`<div class="summary-row" style="color:#b45309"><span>Total Discount:</span><span>-$${totalDiscount.toFixed(2)}</span></div>` : ''}
-      <div class="summary-row grand-total"><span>Grand Total:</span><span>$${grandTotal.toFixed(2)}</span></div>
-      <div class="summary-row paid-row"><span>Paid to Supplier:</span><span>$${amountPaid.toFixed(2)}</span></div>
-      ${balance > 0 ? html`<div class="summary-row balance-row"><span>Remaining Payable:</span><span>$${balance.toFixed(2)}</span></div>` : ''}
-    </div>
-  </div>
-  <div class="footer">
-    <p>This is an official Purchase Invoice sheet generated by Al-Hayat ERP. Goods received into stock.</p>
-    <p>Generated on ${new Date().toLocaleString()}</p>
-  </div>
-</body>
-</html>`);
-    } catch (err: any) {
-      addToast('error', err?.message || 'Failed to generate printable purchase invoice.');
-    }
+  // ── Download purchase invoice ────────────────────────────────────
+  const downloadPoInvoice = async (poId: string) => {
+    const data = await apiGet<any>(`/purchasing/orders/${poId}/print-invoice`);
+    if (!data?.invoice) throw new Error('This purchase order has no invoice yet.');
+    await downloadPurchaseInvoice(data);
   };
 
   // ── View PO details ──────────────────────────────────────────────
@@ -612,14 +493,7 @@ export function PurchasingPage() {
             </button>
           )}
           {canCosts && (row.status === 'RECEIVED' || row.status === 'FULLY_RECEIVED') && (
-            <button
-              type="button"
-              className="btn btn-secondary btn-sm"
-              title="Print Purchase Invoice"
-              onClick={(e) => { e.stopPropagation(); handlePrintPurchaseInvoice(row.id); }}
-            >
-              <Printer size={14} style={{ inlineSize: 'auto' }} />
-            </button>
+            <DownloadDocButton iconOnly label="Download invoice" make={() => downloadPoInvoice(row.id)} />
           )}
         </div>
       ),
@@ -1053,11 +927,7 @@ export function PurchasingPage() {
                 <button type="button" className="btn btn-secondary" onClick={closePoDetails}>Close</button>
 
                 {poInvoice && (
-                  <button type="button" className="btn btn-secondary"
-                    onClick={() => handlePrintPurchaseInvoice(selectedPO.id)}
-                    style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                    <Printer size={14} /> Print Invoice
-                  </button>
+                  <DownloadDocButton id="download-po-invoice" label="Download invoice" make={() => downloadPoInvoice(selectedPO.id)} />
                 )}
 
                 {invoiceSummary?.summary.payment_status === 'PAID' && (
