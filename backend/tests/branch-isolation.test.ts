@@ -221,6 +221,22 @@ test('6b. the company view shows which branch each customer belongs to; a branch
   assert.ok(!find(mine.body, ids.cHQ), 'and not HQ customers');
 });
 
+test('6c. the notification bell follows branch isolation (open deliveries and transfers)', async () => {
+  const delOf = (body: any[]) => body.filter((n: any) => n.type === 'DELIVERY').map((n: any) => String(n.id).slice(4));
+  const hqN = (await t.api('GET', '/notifications', undefined, hq.token)).body;
+  const clN = (await t.api('GET', '/notifications', undefined, cl.token)).body;
+  const ownerN = (await t.api('GET', '/notifications')).body;
+  assert.ok(delOf(hqN).includes(ids.dHQ) && !delOf(hqN).includes(ids.dCL), 'HQ sees only its own deliveries');
+  assert.ok(delOf(clN).includes(ids.dCL) && !delOf(clN).includes(ids.dHQ), 'CL sees only its own deliveries');
+  assert.ok(delOf(ownerN).includes(ids.dHQ) && delOf(ownerN).includes(ids.dCL), 'the Owner sees both');
+  // A transfer waiting between HQ and CL shows for both sides, not for a third party.
+  const tr = (await t.api('POST', '/transfers', { destinationOwnerType: 'BRANCH', destinationBranchId: HQ, lines: [{ productId: ids.pBoth, quantityRequested: 1 }] }, cl.token)).body.id;
+  const trOf = (body: any[]) => body.filter((n: any) => n.type === 'TRANSFER').map((n: any) => String(n.id).slice(4));
+  assert.ok(trOf((await t.api('GET', '/notifications', undefined, hq.token)).body).includes(tr), 'the receiver is told about a waiting transfer');
+  assert.ok(trOf((await t.api('GET', '/notifications', undefined, cl.token)).body).includes(tr), 'and the sender');
+  await t.api('POST', `/transfers/${tr}/cancel`, {}, cl.token);
+});
+
 test('7. transfers between branches: both sides see them, each does its own step, stock moves once', async () => {
   const created = await t.api('POST', '/transfers', { destinationOwnerType: 'BRANCH', destinationBranchId: HQ, lines: [{ productId: ids.pBoth, quantityRequested: 2 }] }, cl.token);
   assert.equal(created.status, 201, JSON.stringify(created.body));

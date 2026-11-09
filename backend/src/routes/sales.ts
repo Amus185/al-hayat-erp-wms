@@ -324,7 +324,9 @@ sales.delete('/customers/:id', requirePermissions(['manage_sales']), async (c) =
 // ──────────────────────────────────────────────────────────────────────
 sales.get('/debts/summary', async (c) => {
   const scope = await resolveBranchScope(c);
-  const invoiceRes = await c.env.DB.prepare(`
+  // Four independent totals: read them all at once (each read is a round trip to the database).
+  const [invoiceRes, manualRes, acctRes, totalCollectedRes] = await Promise.all([
+  c.env.DB.prepare(`
     SELECT 
       so.customer_id,
       COALESCE(SUM(
@@ -336,23 +338,23 @@ sales.get('/debts/summary', async (c) => {
     JOIN invoices i ON i.sales_order_id = so.id
     WHERE so.status != 'CANCELLED' AND i.status != 'CANCELLED' AND so.customer_id IS NOT NULL ${branchSql(scope, 'so.branch_id')}
     GROUP BY so.customer_id
-  `).all();
+  `).all(),
 
-  const manualRes = await c.env.DB.prepare(`
+  c.env.DB.prepare(`
     SELECT customer_id, COALESCE(SUM(remaining_balance), 0) AS unpaid_manual
     FROM customer_debts
     WHERE status != 'CANCELLED' ${branchSql(scope, 'branch_id')}
     GROUP BY customer_id
-  `).all().catch(() => ({ results: [] }));
+  `).all().catch(() => ({ results: [] })),
 
-  const acctRes = await c.env.DB.prepare(`
+  c.env.DB.prepare(`
     SELECT customer_id, COALESCE(SUM(amount), 0) AS unallocated
     FROM customer_payments
     WHERE allocation_type = 'ACCOUNT' ${branchSql(scope, 'branch_id')}
     GROUP BY customer_id
-  `).all().catch(() => ({ results: [] }));
+  `).all().catch(() => ({ results: [] })),
 
-  const totalCollectedRes = await c.env.DB.prepare(`
+  c.env.DB.prepare(`
     SELECT COALESCE(SUM(amount), 0) AS total_collected
     FROM customer_payments
     WHERE (notes IS NULL 
@@ -361,7 +363,8 @@ sales.get('/debts/summary', async (c) => {
          AND notes NOT LIKE '%Deposit / Partial payment via Complete Sale%' 
          AND notes NOT LIKE '%Upfront Deposit at Checkout%'
        )) ${branchSql(scope, 'branch_id')}
-  `).first().catch(() => ({ total_collected: 0 }));
+  `).first().catch(() => ({ total_collected: 0 })),
+  ]) as any[];
 
   const customerBalances = new Map<string, number>();
 

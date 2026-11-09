@@ -76,7 +76,16 @@ function createAuth(pool: Pool) {
         verify: ({ hash, password }) => bcrypt.compare(password, hash),
       },
     },
-    session: { expiresIn: SESSION_TTL_S, updateAge: 24 * 3600 },
+    session: {
+      expiresIn: SESSION_TTL_S,
+      updateAge: 24 * 3600,
+      // Speed: Better Auth reads the session from a short-lived signed cookie instead of two
+      // database reads on every request. Safe because the ERP middleware still checks the
+      // session row (exists, not expired, absolute limit), the user (active, not banned) and the
+      // inactivity rule in the database on EVERY request, so sign-out, revocation, password
+      // change and deactivation still take effect at once (tests/auth.test.ts).
+      cookieCache: { enabled: true, maxAge: 5 * 60 },
+    },
     advanced: {
       defaultCookieAttributes: { sameSite: 'strict' },
       ipAddress: { ipAddressHeaders: ['x-real-ip', 'x-forwarded-for'] },

@@ -599,31 +599,46 @@ purchasing.post('/receipts', requirePermissions(['manage_purchasing']), async (c
 
   // Cost before this receipt, for the Owner's alert. (Prices are changed only in Products.)
   const productInfo = new Map<string, any>();
-  for (const line of body.lines) {
-    const info = await c.env.DB.prepare(`
+  // Pre-flight: existing stock rows
+  const stockLookups = new Map<string, string | null>();
+  const receiptId = uuidv4();
+  const receiptNumber = `GR-${Date.now()}`;
+  // Product details, stock rows and the journal entry don't depend on each other: prepare them
+  // all at once (each read is a round trip; one after another they made receiving slow).
+  const [, , preparedJournal] = await Promise.all([
+    Promise.all(body.lines.map(async (line: any) => {
+      const info = await c.env.DB.prepare(`
       SELECT p.id, p.name, COALESCE(p.cost_price, 0) AS cost, COALESCE(p.selling_price, 0) AS price,
              (SELECT COALESCE(SUM(GREATEST(s.quantity_on_hand, 0)), 0) FROM inventory_stock s WHERE s.product_id = p.id) AS on_hand,
              EXISTS (SELECT 1 FROM product_price_levels l WHERE l.product_id = p.id) AS has_levels,
              (SELECT selling_price FROM product_price_levels l WHERE l.product_id = p.id ORDER BY level_no DESC LIMIT 1) AS newest_price
       FROM products p WHERE p.id = ?`).bind(line.productId).first() as any;
-    productInfo.set(line.productId, info);
-  }
-
-  // Pre-flight: gather existing stock rows
-  const stockLookups = new Map<string, string | null>();
-  await Promise.all(
-    body.lines.map(async (line: any) => {
+      productInfo.set(line.productId, info);
+    })),
+    Promise.all(body.lines.map(async (line: any) => {
       const existing = await c.env.DB.prepare(`
         SELECT id FROM inventory_stock
         WHERE product_id = ? AND owner_type = 'WAREHOUSE' AND warehouse_id = ? AND branch_id IS NULL
       `).bind(line.productId, warehouseId).first();
       stockLookups.set(line.productId, (existing?.id as string) || null);
-    })
-  );
+    })),
+    // The receipt, physical stock and inventory accounting must commit together.
+    // Receipt ID (not PO ID) is the idempotency key because a PO can be received
+    // in multiple batches.
+    batchValue > 0 ? prepareJournalEntryPosting(c, {
+      description: `Purchase Goods Received #${receiptNumber}`,
+      referenceType: 'PURCHASE',
+      referenceId: receiptId,
+      branchId: po.branch_id || null,
+      userId,
+      lines: [
+        { accountCode: '1030', debitAmount: batchValue, creditAmount: 0 },
+        { accountCode: '2010', debitAmount: 0, creditAmount: batchValue },
+      ],
+    }) : Promise.resolve(null),
+  ]);
 
   // Build atomic batch
-  const receiptId = uuidv4();
-  const receiptNumber = `GR-${Date.now()}`;
   const stmts: any[] = [];
 
   // 1. Goods Receipt header
@@ -736,23 +751,7 @@ purchasing.post('/receipts', requirePermissions(['manage_purchasing']), async (c
     batchValue
   }));
 
-  // The receipt, physical stock and inventory accounting must commit together.
-  // Receipt ID (not PO ID) is the idempotency key because a PO can be received
-  // in multiple batches.
-  if (batchValue > 0) {
-    const preparedJournal = await prepareJournalEntryPosting(c, {
-      description: `Purchase Goods Received #${receiptNumber}`,
-      referenceType: 'PURCHASE',
-      referenceId: receiptId,
-      branchId: po.branch_id || null,
-      userId,
-      lines: [
-        { accountCode: '1030', debitAmount: batchValue, creditAmount: 0 },
-        { accountCode: '2010', debitAmount: 0, creditAmount: batchValue },
-      ],
-    });
-    stmts.push(...preparedJournal.statements);
-  }
+  if (preparedJournal) stmts.push(...preparedJournal.statements);
 
   await c.env.DB.batch(stmts);
 

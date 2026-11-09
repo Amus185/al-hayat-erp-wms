@@ -364,3 +364,26 @@ test('inactivity sign-out: mobile sessions are not affected, and SESSION_IDLE_MI
   }
   assert.equal((await me(cookie)).status, 401, 'back on: the 3-hour-old session ends');
 });
+
+test('session cookie cache: with every browser cookie sent, revocation and deactivation still take effect at once', async () => {
+  const u = await makeUser();
+  const res = await signIn(u.email, u.password);
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  // Everything the browser stores: the session token AND Better Auth's cached session data.
+  const jar = res.headers.getSetCookie().map((c: string) => c.split(';')[0]).filter((c: string) => !c.endsWith('='));
+  assert.ok(jar.some((c: string) => c.includes('session_data')), `the cache cookie is set: ${jar.join(' | ')}`);
+  const all = { ...BROWSER, Cookie: jar.join('; ') };
+  assert.equal((await raw('GET', '/api/v1/auth/me', { headers: all })).status, 200);
+
+  // The session row is removed (signed out elsewhere / revoked): refused although the cache cookie is still valid.
+  await t.q('DELETE FROM "session" WHERE "userId" = $1', [u.id]);
+  assert.equal((await raw('GET', '/api/v1/auth/me', { headers: all })).status, 401, 'revoked session refused at once');
+
+  // Deactivated: refused at once too.
+  const again = await signIn(u.email, u.password);
+  const jar2 = again.headers.getSetCookie().map((c: string) => c.split(';')[0]).filter((c: string) => !c.endsWith('='));
+  const all2 = { ...BROWSER, Cookie: jar2.join('; ') };
+  assert.equal((await raw('GET', '/api/v1/auth/me', { headers: all2 })).status, 200);
+  await t.q('UPDATE users SET is_active = 0 WHERE id = $1', [u.id]);
+  assert.equal((await raw('GET', '/api/v1/auth/me', { headers: all2 })).status, 401, 'deactivated user refused at once');
+});

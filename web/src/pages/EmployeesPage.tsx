@@ -1,3 +1,4 @@
+import { refreshAfterSave } from '../utils/afterSave';
 import { useEffect, useRef, useState } from 'react';
 import { FileText, Pencil, Plus, Trash2, Upload, Wallet } from 'lucide-react';
 import { apiDelete, apiGet, apiPatch, apiPost, apiUpload, fileBlobUrl, openFile } from '../api/client';
@@ -132,8 +133,8 @@ export function EmployeesPage() {
       await apiPost(`/employees/${profile.id}/advances`, { ...adv, amount });
       addToast('success', `${adv.kind === 'ADVANCE' ? 'Advance' : 'Repayment'} of ${money(amount)} recorded`);
       setAdv((p) => ({ ...p, amount: '', notes: '' }));
-      await loadProfile(profile.id);
-      list.refresh();
+      const pid = profile.id;
+      refreshAfterSave(addToast, () => loadProfile(pid), () => list.refresh());
     } catch (err: any) {
       addToast('error', err?.message || 'Could not record');
     } finally {
@@ -142,7 +143,10 @@ export function EmployeesPage() {
   };
   const deleteAdvance = async (a: Advance) => {
     if (!profile || !(await confirmAction('Delete this entry?', `${a.kind === 'ADVANCE' ? 'Advance' : 'Repayment'} of ${money(a.amount)} on ${day(a.entry_date)}. Its accounting entry is reversed.`))) return;
-    try { await apiDelete(`/employees/${profile.id}/advances/${a.id}`); await loadProfile(profile.id); list.refresh(); } catch (err: any) { addToast('error', err?.message || 'Could not delete'); }
+    const pid = profile.id;
+    try { await apiDelete(`/employees/${pid}/advances/${a.id}`); } catch (err: any) { addToast('error', err?.message || 'Could not delete'); return; }
+    addToast('success', 'Entry deleted; its accounting entry was reversed.');
+    refreshAfterSave(addToast, () => loadProfile(pid), () => list.refresh());
   };
   const deleteEmployee = async (e: Employee) => {
     if (!(await confirmAction(`Delete ${e.full_name}?`, 'Employees with advance history cannot be deleted; mark them Inactive instead.'))) return;

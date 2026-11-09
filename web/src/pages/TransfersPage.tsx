@@ -174,7 +174,7 @@ export function TransfersPage() {
       addToast('success', 'Transfer dispatched — stock deducted from origin');
       loadData();
       if (stayOpen && selectedTransfer?.id === id) {
-        await refreshSelectedTransfer(id);
+        void refreshSelectedTransfer(id);
       } else if (!stayOpen) {
         setSelectedTransfer(null);
       }
@@ -199,7 +199,7 @@ export function TransfersPage() {
       addToast('success', 'Transfer received — stock deposited at destination');
       loadData();
       if (stayOpen && selectedTransfer?.id === id) {
-        await refreshSelectedTransfer(id);
+        void refreshSelectedTransfer(id);
       } else if (!stayOpen) {
         setSelectedTransfer(null);
       }
@@ -236,7 +236,7 @@ export function TransfersPage() {
       await apiPost(`/transfers/${t.id}/accept`, { lines });
       addToast('success', 'Transfer accepted: the stock has moved to you');
       loadData();
-      await refreshSelectedTransfer(t.id);
+      void refreshSelectedTransfer(t.id);
     } catch (err: any) {
       addToast('error', err?.message || 'Could not accept the transfer');
     } finally {
@@ -251,7 +251,7 @@ export function TransfersPage() {
       addToast('success', 'Transfer declined: no stock was moved');
       loadData();
       if (selectedTransfer?.id === id) {
-        await refreshSelectedTransfer(id);
+        void refreshSelectedTransfer(id);
       } else {
         setSelectedTransfer(null);
       }
@@ -271,7 +271,7 @@ export function TransfersPage() {
       addToast('success', 'Transfer withdrawn: nothing was moved');
       loadData();
       if (selectedTransfer?.id === id) {
-        await refreshSelectedTransfer(id);
+        void refreshSelectedTransfer(id);
       } else {
         setSelectedTransfer(null);
       }

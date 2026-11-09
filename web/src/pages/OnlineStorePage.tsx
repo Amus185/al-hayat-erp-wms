@@ -5,6 +5,7 @@
 //   Products  every product with its shop state, photos and web stock; publish, photos
 //   Orders    the web orders inbox (confirm, convert to a sales order, cancel)
 //   Settings  which branch the shop sells from, buffer, quantities, categories (administrators)
+import { refreshAfterSave } from '../utils/afterSave';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { AlertTriangle, ExternalLink, Globe, ImageIcon, Package, ShoppingBag, Store } from 'lucide-react';
@@ -148,7 +149,7 @@ function StoreProducts() {
     try {
       await saveProductWeb(p.id, { isPublished: !p.isPublished });
       addToast('success', p.isPublished ? `${p.name} removed from the shop` : `${p.name} is now on the shop`);
-      await load();
+      refreshAfterSave(addToast, () => load());
     } catch (err: any) {
       addToast('error', err?.message || 'Could not change this product');
     } finally {

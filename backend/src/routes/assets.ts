@@ -742,17 +742,17 @@ assets.delete('/livestock-expenses/:id', requirePermissions(['manage_purchasing'
 
 assets.get('/dashboard', requirePermissions(['view_reports']), async (c) => {
   try {
-    const propertyValue = await c.env.DB.prepare("SELECT COALESCE(SUM(current_value), 0) as val FROM properties WHERE status != 'SOLD'").first() as any;
-    const livestockValue = await c.env.DB.prepare("SELECT COALESCE(SUM(total_value), 0) as val FROM livestock WHERE status = 'ACTIVE'").first() as any;
-    
-    const rentExpected = await c.env.DB.prepare("SELECT COALESCE(SUM(monthly_rent), 0) as val FROM lease_agreements WHERE status = 'ACTIVE'").first() as any;
-    
     const month = new Date().getMonth() + 1;
     const year = new Date().getFullYear();
-    const rentCollected = await c.env.DB.prepare("SELECT COALESCE(SUM(amount), 0) as val FROM rental_payments WHERE period_month = ? AND period_year = ?").bind(month, year).first() as any;
-
-    const lsRevenue = await c.env.DB.prepare("SELECT COALESCE(SUM(total_amount), 0) as val FROM livestock_transactions WHERE transaction_type = 'SALE' AND transaction_date LIKE ?").bind(`${year}-%`).first() as any;
-    const lsExpenses = await c.env.DB.prepare("SELECT COALESCE(SUM(amount), 0) as val FROM livestock_expenses WHERE expense_date LIKE ?").bind(`${year}-%`).first() as any;
+    // Independent totals: read them all at once (each read is a round trip to the database).
+    const [propertyValue, livestockValue, rentExpected, rentCollected, lsRevenue, lsExpenses] = await Promise.all([
+      c.env.DB.prepare("SELECT COALESCE(SUM(current_value), 0) as val FROM properties WHERE status != 'SOLD'").first(),
+      c.env.DB.prepare("SELECT COALESCE(SUM(total_value), 0) as val FROM livestock WHERE status = 'ACTIVE'").first(),
+      c.env.DB.prepare("SELECT COALESCE(SUM(monthly_rent), 0) as val FROM lease_agreements WHERE status = 'ACTIVE'").first(),
+      c.env.DB.prepare("SELECT COALESCE(SUM(amount), 0) as val FROM rental_payments WHERE period_month = ? AND period_year = ?").bind(month, year).first(),
+      c.env.DB.prepare("SELECT COALESCE(SUM(total_amount), 0) as val FROM livestock_transactions WHERE transaction_type = 'SALE' AND transaction_date LIKE ?").bind(`${year}-%`).first(),
+      c.env.DB.prepare("SELECT COALESCE(SUM(amount), 0) as val FROM livestock_expenses WHERE expense_date LIKE ?").bind(`${year}-%`).first(),
+    ]) as any[];
 
     return c.json({
       total_property_value: propertyValue?.val || 0,

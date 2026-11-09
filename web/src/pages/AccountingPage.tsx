@@ -1,3 +1,4 @@
+import { refreshAfterSave } from '../utils/afterSave';
 import { MoneyAccountsPanel } from '../components/MoneyAccountsPanel';
 import { useEffect, useState, useCallback } from 'react';
 import {
@@ -566,7 +567,7 @@ export function AccountingPage() {
       addToast('success', `Opening balances posted for ${r.branch_name}`);
       setOpeningCash((prev) => ({ ...prev, [r.branch_id]: '' }));
       invalidateApiCache('/accounting');
-      await loadTabData('opening', selectedPeriod);
+      refreshAfterSave(addToast, () => loadTabData('opening', selectedPeriod));
     } catch (e: any) {
       addToast('error', e?.message || 'Failed to post opening balances');
     } finally {

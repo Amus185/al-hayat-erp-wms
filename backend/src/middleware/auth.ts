@@ -135,14 +135,18 @@ export const authMiddleware = async (c: Context<{ Bindings: Env }>, next: Next) 
   // A sliding expiry renews the cookie now and then; pass it on.
   for (const cookie of result.headers?.getSetCookie?.() ?? []) c.header('Set-Cookie', cookie, { append: true });
 
-  const user = await loadAuthState(c.env.DB, found.user.id, found.session.id);
+  // The ERP checks and the inactivity rule don't depend on each other: one round trip, not two.
+  const [user, notIdle] = await Promise.all([
+    loadAuthState(c.env.DB, found.user.id, found.session.id),
+    bearer ? Promise.resolve(true) : touchBrowserSession(c, found.session.id),
+  ]);
   if (!user || Number(user.is_active) !== 1 || user.banned) {
     return c.json({ message: 'User not found or deactivated' }, 401);
   }
   if (!user.session_live) {
     return c.json({ message: 'Session ended. Please sign in again.' }, 401);
   }
-  if (!bearer && !(await touchBrowserSession(c, found.session.id))) {
+  if (!notIdle) {
     return c.json({ message: 'Signed out after a period of inactivity. Please sign in again.', reason: 'idle' }, 401);
   }
 
@@ -167,7 +171,10 @@ async function touchBrowserSession(c: Context<{ Bindings: Env }>, sessionId: str
     WITH prev AS (
       SELECT last_active_at FROM erp_session_activity WHERE session_id = ?
     ), touched AS (
-      INSERT INTO erp_session_activity (session_id, last_active_at) VALUES (?, CURRENT_TIMESTAMP)
+      -- Only for a session that still exists (this runs alongside the session check, so a revoked
+      -- session must be skipped here, not fail on the foreign key).
+      INSERT INTO erp_session_activity (session_id, last_active_at)
+      SELECT ?, CURRENT_TIMESTAMP WHERE EXISTS (SELECT 1 FROM "session" WHERE id = ?)
       ON CONFLICT (session_id) DO UPDATE SET last_active_at = CURRENT_TIMESTAMP
       WHERE ? = 1
         AND erp_session_activity.last_active_at < CURRENT_TIMESTAMP - INTERVAL '1 minute'
@@ -176,7 +183,7 @@ async function touchBrowserSession(c: Context<{ Bindings: Env }>, sessionId: str
     )
     SELECT COALESCE((SELECT last_active_at > CURRENT_TIMESTAMP - make_interval(mins => ?) FROM prev), TRUE) AS fresh,
            (SELECT COUNT(*) FROM touched) AS n
-  `).bind(sessionId, sessionId, active, limit, limit).first() as any;
+  `).bind(sessionId, sessionId, sessionId, active, limit, limit).first() as any;
   if (row?.fresh === false || row?.fresh === 'f') {
     await c.env.DB.prepare('DELETE FROM "session" WHERE id = ?').bind(sessionId).run();
     return false;

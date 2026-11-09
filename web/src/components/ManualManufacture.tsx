@@ -1,3 +1,4 @@
+import { refreshAfterSave } from '../utils/afterSave';
 import { useEffect, useRef, useState } from 'react';
 import { Layers, Pencil, Plus, Trash2, X, CheckCheck } from 'lucide-react';
 import { apiDelete, apiGet, apiPost, apiPut } from '../api/client';
@@ -189,7 +190,7 @@ export function ManualManufacturePanel({ enabled, command }: { enabled: boolean;
       addToast('success', `Group “${body.name}” saved`);
       setGroupEdit(null);
       setGroupCache({});
-      setGroups(await apiGet<Group[]>('/manufacturing/item-groups'));
+      refreshAfterSave(addToast, () => apiGet<Group[]>('/manufacturing/item-groups').then(setGroups));
     } catch (err: any) {
       addToast('error', err?.message || 'Could not save the group');
     } finally {

@@ -38,13 +38,16 @@ manufacturing.get('/stats', async (c) => {
   const db = c.env.DB;
   const sc = await woScope(c);
 
-  const activeWorkOrders = await db.prepare(`SELECT COUNT(*) AS count FROM work_orders wo WHERE wo.status = 'IN_PROGRESS' ${sc}`).first();
-  const inProductionUnits = await db.prepare(`SELECT COALESCE(SUM(wo.target_quantity - wo.completed_quantity), 0) AS units FROM work_orders wo WHERE wo.status = 'IN_PROGRESS' ${sc}`).first();
-  const completedThisMonth = await db.prepare(`
+  // Independent counts: read them all at once (each read is a round trip to the database).
+  const [activeWorkOrders, inProductionUnits, completedThisMonth, totalBoms] = await Promise.all([
+    db.prepare(`SELECT COUNT(*) AS count FROM work_orders wo WHERE wo.status = 'IN_PROGRESS' ${sc}`).first(),
+    db.prepare(`SELECT COALESCE(SUM(wo.target_quantity - wo.completed_quantity), 0) AS units FROM work_orders wo WHERE wo.status = 'IN_PROGRESS' ${sc}`).first(),
+    db.prepare(`
     SELECT COALESCE(SUM(wo.completed_quantity), 0) AS units FROM work_orders wo
     WHERE wo.status = 'COMPLETED' AND date_trunc('month', wo.completed_at) = date_trunc('month', CURRENT_DATE) ${sc}
-  `).first();
-  const totalBoms = await db.prepare('SELECT COUNT(*) AS count FROM bill_of_materials WHERE is_active = 1').first();
+  `).first(),
+    db.prepare('SELECT COUNT(*) AS count FROM bill_of_materials WHERE is_active = 1').first(),
+  ]) as any[];
 
   return c.json({
     activeWorkOrders: Number(activeWorkOrders?.count || 0),

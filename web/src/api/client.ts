@@ -25,7 +25,11 @@ export function onSessionExpired(handler: () => void) {
 
 /** The signed-in user's ERP profile, or null when there is no live session. */
 export async function fetchProfile<U>(): Promise<U | null> {
-  const res = await fetch(`${API_BASE_URL}/auth/me`, { credentials: 'same-origin', headers: buildHeaders() });
+  // Never leave the app on its loading screen: give up after 30 s (the sign-in page shows then).
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 30_000);
+  const res = await fetch(`${API_BASE_URL}/auth/me`, { credentials: 'same-origin', headers: buildHeaders(), signal: ctrl.signal })
+    .finally(() => clearTimeout(timer));
   if (!res.ok) return null;
   const body = await res.json() as { user: U };
   return body.user;
@@ -100,11 +104,25 @@ function authorizedFetch(url: string, init: RequestInit, retryOnNetworkError = 0
   return tracked(() => authorizedFetchOnce(url, init, retryOnNetworkError));
 }
 
+// No request may leave a page or a button "Processing…" forever. Reads give up after 30 s.
+// Saves get longer and are never called failed: the server may have finished the save after the
+// connection was lost, so the message says to check before trying again (no double payments).
+const READ_TIMEOUT_MS = 30_000;
+const WRITE_TIMEOUT_MS = 45_000;
+const READ_TIMEOUT_MSG = 'The server took too long to answer. Please check your connection and try again.';
+const WRITE_TIMEOUT_MSG = 'No answer from the server after 45 seconds. The save may still have gone through: reload the page and check before trying again.';
+const WRITE_NETWORK_MSG = 'The connection dropped while saving. The save may have gone through: reload the page and check before trying again.';
+
 async function authorizedFetchOnce(url: string, init: RequestInit, retryOnNetworkError = 0): Promise<Response> {
   let lastError: unknown;
+  const method = String(init.method || 'GET').toUpperCase();
+  const isWrite = method !== 'GET' && method !== 'HEAD';
+  let timedOut = false;
   for (let i = 0; i <= retryOnNetworkError; i += 1) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => { timedOut = true; ctrl.abort(); }, isWrite ? WRITE_TIMEOUT_MS : READ_TIMEOUT_MS);
     try {
-      const res = await fetch(url, { ...init, credentials: 'same-origin', headers: buildHeaders(init.headers as Record<string, string>) });
+      const res = await fetch(url, { ...init, signal: ctrl.signal, credentials: 'same-origin', headers: buildHeaders(init.headers as Record<string, string>) });
       if (res.status === 401) {
         // Say why on the sign-in page when it was the inactivity rule.
         res.clone().json().then((b: any) => {
@@ -114,10 +132,15 @@ async function authorizedFetchOnce(url: string, init: RequestInit, retryOnNetwor
       return res;
     } catch (error) {
       lastError = error;
+      if (timedOut) break; // waiting longer would not help
       if (i < retryOnNetworkError) await new Promise((resolve) => setTimeout(resolve, 250 * (i + 1)));
+    } finally {
+      clearTimeout(timer);
     }
   }
-  throw new ApiError(0, 'Network error', null);
+  void lastError;
+  if (timedOut) throw new ApiError(0, 'Timeout', { message: isWrite ? WRITE_TIMEOUT_MSG : READ_TIMEOUT_MSG });
+  throw new ApiError(0, 'Network error', isWrite ? { message: WRITE_NETWORK_MSG } : null);
 }
 
 async function fetchGetWithRetry(url: string, attempts = 2): Promise<Response> {

@@ -1,3 +1,4 @@
+import { refreshAfterSave } from '../utils/afterSave';
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -274,7 +275,15 @@ export function SalesPage() {
         await apiPost(`/sales/orders/${order.id}/confirm`, {});
       }
       await apiPost(`/sales/orders/${order.id}/invoice`, {});
-      const details = await apiGet<any>(`/sales/orders/${order.id}`);
+      // The invoice exists now. If reloading the sale fails, say so plainly (not "failed to create invoice").
+      let details: any;
+      try {
+        details = await apiGet<any>(`/sales/orders/${order.id}`);
+      } catch {
+        addToast('warning', 'Invoice created. The sale could not be reloaded to take the deposit; open the sale again and choose Record Payment.');
+        loadData();
+        return;
+      }
       setSelectedOrder(details);
       setPaymentForm({
         amount: '',
@@ -364,10 +373,11 @@ export function SalesPage() {
       });
       addToast('success', `Payment of ${fmt(amount)} recorded successfully.`);
       setIsPaymentOpen(false);
-      // Refresh the order details
-      const details = await apiGet<any>(`/sales/orders/${selectedOrder.id}`);
-      setSelectedOrder(details);
-      loadData();
+      // Refresh the order details in the background: the payment is already saved.
+      const orderId = selectedOrder.id;
+      refreshAfterSave(addToast,
+        () => apiGet<any>(`/sales/orders/${orderId}`).then((details) => setSelectedOrder((cur: any) => (cur?.id === orderId ? details : cur))),
+        () => loadData());
     } catch (err: any) {
       addToast('error', err?.message || 'Failed to record payment');
     } finally {
@@ -387,9 +397,9 @@ export function SalesPage() {
       setActionProcessing('payout');
       await apiPost(`/sales/orders/${orderId}/installation-payout`, { installer_name: installerName });
       addToast('success', 'Installation fee payout recorded and posted to GL.');
-      const updated = await apiGet<any>(`/sales/orders/${orderId}`);
-      setSelectedOrder(updated);
-      loadData();
+      refreshAfterSave(addToast,
+        () => apiGet<any>(`/sales/orders/${orderId}`).then((updated) => setSelectedOrder((cur: any) => (cur?.id === orderId ? updated : cur))),
+        () => loadData());
     } catch (err: any) {
       addToast('error', err?.message || 'Failed to disburse installation fee');
     } finally {

@@ -29,13 +29,15 @@ deliveries.get('/stats', async (c) => {
   const scope = locSql(await resolveLoc(c), SCOPE_COLS);
   const from = 'FROM deliveries d LEFT JOIN sales_orders so ON so.id = d.sales_order_id';
 
-  const total = await db.prepare(`SELECT COUNT(*) AS count ${from} WHERE 1=1 ${scope}`).first();
-  const pending = await db.prepare(`SELECT COUNT(*) AS count ${from} WHERE d.status IN ('PENDING', 'SCHEDULED') ${scope}`).first();
-  const dispatched = await db.prepare(`SELECT COUNT(*) AS count ${from} WHERE d.status = 'DISPATCHED' ${scope}`).first();
-  const deliveredToday = await db.prepare(`
-    SELECT COUNT(*) AS count ${from}
-    WHERE d.status = 'DELIVERED' AND date(d.delivered_at) = CURRENT_DATE ${scope}
-  `).first();
+  // One read for all four counts (it used to be four round trips, one after another).
+  const counts = await db.prepare(`
+    SELECT COUNT(*) AS total,
+           COUNT(*) FILTER (WHERE d.status IN ('PENDING', 'SCHEDULED')) AS pending,
+           COUNT(*) FILTER (WHERE d.status = 'DISPATCHED') AS dispatched,
+           COUNT(*) FILTER (WHERE d.status = 'DELIVERED' AND date(d.delivered_at) = CURRENT_DATE) AS delivered_today
+    ${from} WHERE 1=1 ${scope}
+  `).first() as any;
+  const total = { count: counts?.total }, pending = { count: counts?.pending }, dispatched = { count: counts?.dispatched }, deliveredToday = { count: counts?.delivered_today };
 
   return c.json({
     total: Number(total?.count || 0),

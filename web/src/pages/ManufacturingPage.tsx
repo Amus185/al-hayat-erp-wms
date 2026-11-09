@@ -1,3 +1,4 @@
+import { refreshAfterSave } from '../utils/afterSave';
 import { useEffect, useState } from 'react';
 import {
   Factory, Plus, Search, CheckCircle2, Clock, Play, CheckCheck,
@@ -321,11 +322,11 @@ export function ManufacturingPage() {
       setActionProcessing(`start_${wo.id}`);
       await apiPost(`/manufacturing/work-orders/${wo.id}/start`, {});
       addToast('success', `Work Order #${wo.wo_number} is now IN PROGRESS!`);
-      if (isDetailsOpen && selectedWo?.id === wo.id) {
-        const full = await apiGet<WorkOrder>(`/manufacturing/work-orders/${wo.id}`);
-        setSelectedWo(full);
-      }
-      loadData();
+      // Refresh in the background: the change is already saved.
+      const woId = wo.id;
+      refreshAfterSave(addToast,
+        () => (isDetailsOpen && selectedWo?.id === wo.id) ? apiGet<WorkOrder>(`/manufacturing/work-orders/${woId}`).then((full) => { if (full) setSelectedWo((cur) => (cur && cur.id === woId ? full : cur)); }) : undefined,
+        () => loadData());
     } catch (err: any) {
       addToast('error', err?.message || 'Failed to start work order');
     } finally {
@@ -345,11 +346,11 @@ export function ManufacturingPage() {
         notes: `Advanced to ${nextStage}`,
       });
       addToast('success', `Moved to stage: ${nextStage}`);
-      if (isDetailsOpen && selectedWo?.id === wo.id) {
-        const full = await apiGet<WorkOrder>(`/manufacturing/work-orders/${wo.id}`);
-        setSelectedWo(full);
-      }
-      loadData();
+      // Refresh in the background: the change is already saved.
+      const woId = wo.id;
+      refreshAfterSave(addToast,
+        () => (isDetailsOpen && selectedWo?.id === wo.id) ? apiGet<WorkOrder>(`/manufacturing/work-orders/${woId}`).then((full) => { if (full) setSelectedWo((cur) => (cur && cur.id === woId ? full : cur)); }) : undefined,
+        () => loadData());
     } catch (err: any) {
       addToast('error', err?.message || 'Failed to advance stage');
     } finally {
@@ -374,11 +375,11 @@ export function ManufacturingPage() {
         notes: 'Full production run completed and verified.',
       });
       addToast('success', `Production complete! ${wo.target_quantity} units deposited to inventory.`);
-      if (isDetailsOpen && selectedWo?.id === wo.id) {
-        const full = await apiGet<WorkOrder>(`/manufacturing/work-orders/${wo.id}`);
-        if (full) setSelectedWo(full);
-      }
-      loadData();
+      // Refresh in the background: the change is already saved.
+      const woId = wo.id;
+      refreshAfterSave(addToast,
+        () => (isDetailsOpen && selectedWo?.id === wo.id) ? apiGet<WorkOrder>(`/manufacturing/work-orders/${woId}`).then((full) => { if (full) setSelectedWo((cur) => (cur && cur.id === woId ? full : cur)); }) : undefined,
+        () => loadData());
     } catch (err: any) {
       addToast('error', err?.message || 'Failed to complete work order');
     } finally {
@@ -410,11 +411,11 @@ export function ManufacturingPage() {
       await apiPost(`/manufacturing/work-orders/${selectedWo.id}/complete`, completeForm);
       addToast('success', `Production complete! ${completeForm.completedQuantity} finished goods deposited to inventory.`);
       setIsCompleteOpen(false);
-      if (isDetailsOpen) {
-        const full = await apiGet<WorkOrder>(`/manufacturing/work-orders/${selectedWo.id}`);
-        setSelectedWo(full);
-      }
-      loadData();
+      // Refresh in the background: the change is already saved.
+      const woId = selectedWo.id;
+      refreshAfterSave(addToast,
+        () => (isDetailsOpen) ? apiGet<WorkOrder>(`/manufacturing/work-orders/${woId}`).then((full) => { if (full) setSelectedWo((cur) => (cur && cur.id === woId ? full : cur)); }) : undefined,
+        () => loadData());
     } catch (err: any) {
       addToast('error', err?.message || 'Failed to complete work order');
     } finally {

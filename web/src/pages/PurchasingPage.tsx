@@ -1,3 +1,4 @@
+import { refreshAfterSave } from '../utils/afterSave';
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -249,8 +250,7 @@ export function PurchasingPage() {
       setPoDetailsLoading(true);
       await apiPost<any>(`/purchasing/orders/${poId}/approve`, {});
       addToast('success', 'PO approved successfully.');
-      await viewPoDetails({ id: poId } as any, true);
-      loadData();
+      refreshAfterSave(addToast, () => viewPoDetails({ id: poId } as any, true), () => loadData());
     } catch (err: any) {
       addToast('error', err?.message || 'Failed to approve PO');
     } finally {
@@ -287,8 +287,8 @@ export function PurchasingPage() {
       });
       const totalUnits = linesToReceive.reduce((sum: number, l: any) => sum + l.quantityReceived, 0);
       addToast('success', `Goods receipt recorded. Received ${totalUnits} items.`);
-      await viewPoDetails({ id: selectedPO.id } as any, true);
-      loadData();
+      const poId = selectedPO.id;
+      refreshAfterSave(addToast, () => viewPoDetails({ id: poId } as any, true), () => loadData());
     } catch (err: any) {
       addToast('error', err?.message || 'Failed to record Goods Receipt');
     } finally {
@@ -332,15 +332,11 @@ export function PurchasingPage() {
       setIsPaymentOpen(false);
       setPaymentTargetPO(null);
 
-      // Refresh PO details if modal is open
+      // Refresh PO details if the window is open (in the background: the payment is already saved)
       const refreshPoId = target?.id || selectedPO?.id;
-      if (refreshPoId) {
-        const details = await apiGet<any>(`/purchasing/orders/${refreshPoId}`);
-        if (selectedPO?.id === refreshPoId) {
-          setSelectedPO(details);
-        }
-      }
-      loadData();
+      refreshAfterSave(addToast,
+        () => refreshPoId ? apiGet<any>(`/purchasing/orders/${refreshPoId}`).then((details) => setSelectedPO((cur: any) => (cur?.id === refreshPoId ? details : cur))) : undefined,
+        () => loadData());
     } catch (err: any) {
       addToast('error', err?.message || 'Failed to record payment');
     } finally {
@@ -359,7 +355,7 @@ export function PurchasingPage() {
   /** Opens a purchase order (the window shows at once), or reloads the open one (refresh). */
   const viewPoDetails = async (po: PurchaseOrder, refresh = false) => {
     const isCurrent = poRequest.start();
-    setPoDetailsLoading(true);
+    if (!refresh) setPoDetailsLoading(true);
     if (!refresh) {
       setShowHistory(false);
       setSelectedPO(null);
@@ -379,9 +375,10 @@ export function PurchasingPage() {
         setSelectedPO(po);
       }
     } catch (err: any) {
+      if (refresh) throw err; // refreshAfterSave says "Saved, the screen could not refresh"
       if (isCurrent()) addToast('error', err?.message || 'Failed to fetch PO lines');
     } finally {
-      if (isCurrent()) {
+      if (isCurrent() && !refresh) {
         setPoDetailsLoading(false);
         setOpeningPO(null);
       }

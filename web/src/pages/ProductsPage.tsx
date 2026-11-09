@@ -1,3 +1,4 @@
+import { refreshAfterSave } from '../utils/afterSave';
 import { useEffect, useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { PackageSearch, Plus, Trash2, List, Settings, PlusCircle, Loader2, Upload, Download, FileSpreadsheet, CheckCircle, AlertCircle, X, RefreshCw } from 'lucide-react';
@@ -285,8 +286,8 @@ export function ProductsPage() {
       addToast('success', `Category "${created.name}" created`);
       setInlineCategoryName('');
       setIsInlineCategoryOpen(false);
-      await fetchFilters();
       setNewProduct(prev => ({ ...prev, categoryId: created.id }));
+      refreshAfterSave(addToast, () => fetchFilters());
     } catch (err: any) {
       addToast('error', err?.message || 'Failed to create category');
     } finally {
