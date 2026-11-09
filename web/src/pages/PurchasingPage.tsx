@@ -310,6 +310,7 @@ export function PurchasingPage() {
       notes: '',
     });
     setShowHistory(false);
+    setPayFromId(''); // the Owner chooses the account for every payment
     setIsPaymentOpen(true);
   };
 
@@ -321,6 +322,7 @@ export function PurchasingPage() {
 
     const amount = Number(paymentForm.amount);
     if (!amount || amount <= 0) { addToast('error', 'Enter a valid payment amount.'); return; }
+    if (!payFromId) { addToast('error', 'Choose the account you are paying from (e.g. Dahabshiil or Darasalaam Bank).'); return; }
 
     try {
       setPaymentSubmitting(true);
@@ -959,7 +961,7 @@ export function PurchasingPage() {
               onChange={(val) => setPaymentForm(prev => ({ ...prev, amount: val }))}
               required
             />
-            <MoneyAccountSelect id="poPayFrom" label="Paid from" value={payFromId} onChange={setPayFromId}
+            <MoneyAccountSelect id="poPayFrom" label="Paid from" value={payFromId} onChange={setPayFromId} mustChoose
               branchId={(paymentTargetPO || selectedPO)?.branch_id ?? null} amount={Number(paymentForm.amount) || 0} />
             <InputField
               label="Payment Date"

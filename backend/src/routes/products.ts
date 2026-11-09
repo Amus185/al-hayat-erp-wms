@@ -1,4 +1,4 @@
-import { resolveCashAccount } from '../services/money';
+import { resolveCashAccount, requireChosenAccount } from '../services/money';
 import { Hono } from 'hono';
 import { Env, uuidv4 } from '../db';
 import { authMiddleware, requirePermissions, isAdminUser, requireAdmin } from '../middleware/auth';
@@ -715,7 +715,8 @@ products.post('/:id/price-levels', requireAdmin, async (c) => {
     return c.json({ message: 'That warehouse or branch does not exist.' }, 400);
   }
   const paid = body.payment === 'OWED' ? false : true;
-  // "Paid from": the Bank & Cash account (Main Cash when none was chosen); the books of the branch receiving the goods.
+  // "Paid from": the Bank & Cash account, chosen on purpose when the goods are paid now; the books of the branch receiving the goods.
+  if (paid) requireChosenAccount(body.moneyAccountId ?? body.money_account_id, 'for these goods');
   const cash = await resolveCashAccount(c.env.DB, paid ? (body.moneyAccountId ?? body.money_account_id) : undefined, ownerType === 'BRANCH' ? locId : null);
   const note = typeof body.note === 'string' && body.note.trim() ? body.note.trim().slice(0, 200) : null;
   const userId = actor?.sub ?? null;

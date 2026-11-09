@@ -66,17 +66,17 @@ test('purchase receipt increases stock and payables; partial payments settle the
   assert.equal(await t.accountBalance('2010') - ap0, -200);
 
   const invoiceId = `pi-${poId}`;
-  assert.equal((await t.api('POST', `/purchasing/invoices/${invoiceId}/payments`, { amount: 120 })).status, 201);
-  assert.equal((await t.api('POST', `/purchasing/invoices/${invoiceId}/payments`, { amount: 80 })).status, 201);
+  assert.equal((await t.api('POST', `/purchasing/invoices/${invoiceId}/payments`, { amount: 120, moneyAccountId: 'money-main-cash' })).status, 201);
+  assert.equal((await t.api('POST', `/purchasing/invoices/${invoiceId}/payments`, { amount: 80, moneyAccountId: 'money-main-cash' })).status, 201);
   assert.equal(await t.accountBalance('2010') - ap0, 0, 'second partial payment missing from the ledger');
-  const over = await t.api('POST', `/purchasing/invoices/${invoiceId}/payments`, { amount: 1 });
+  const over = await t.api('POST', `/purchasing/invoices/${invoiceId}/payments`, { amount: 1, moneyAccountId: 'money-main-cash' });
   assert.equal(over.status, 400);
 });
 
 test('a double-submitted supplier payment is recorded once', async () => {
   const p = await t.createProduct();
   const poId = await purchaseOrder(p, 5, 20);
-  const results = await Promise.all([1, 2].map(() => t.api('POST', `/purchasing/invoices/pi-${poId}/payments`, { amount: 100 })));
+  const results = await Promise.all([1, 2].map(() => t.api('POST', `/purchasing/invoices/pi-${poId}/payments`, { amount: 100, moneyAccountId: 'money-main-cash' })));
   assert.equal(results.filter((r) => r.status === 201).length, 1, JSON.stringify(results.map((r) => r.body)));
   const paid = await t.q('SELECT COALESCE(SUM(amount), 0)::float AS s FROM purchase_invoice_payments WHERE purchase_invoice_id = $1', [`pi-${poId}`]);
   assert.equal(paid[0].s, 100);

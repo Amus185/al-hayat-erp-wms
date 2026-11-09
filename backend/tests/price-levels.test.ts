@@ -25,7 +25,7 @@ test('price levels: old stock sells at the old price first, then the new price s
 
   const seller = await t.createUser({ branchId: BRANCH_HQ, roleId: 'role-branch-user', role: 'branch_user', grants: ['manage_inventory'] });
   assert.equal((await t.api('POST', `/products/${p}/price-levels`, { costPrice: 149, sellingPrice: 230, quantity: 10, ownerType: 'BRANCH', branchId: BRANCH_HQ }, seller.token)).status, 403, 'only the Owner');
-  const add = await t.api('POST', `/products/${p}/price-levels`, { costPrice: 149, sellingPrice: 230, quantity: 10, ownerType: 'BRANCH', branchId: BRANCH_HQ, payment: 'PAID' });
+  const add = await t.api('POST', `/products/${p}/price-levels`, { costPrice: 149, sellingPrice: 230, quantity: 10, ownerType: 'BRANCH', branchId: BRANCH_HQ, payment: 'PAID', moneyAccountId: 'money-main-cash' });
   assert.equal(add.status, 201, JSON.stringify(add.body));
   let lv = await levels(p);
   assert.deepEqual(lv.map((l) => [l.level_no, Number(l.cost_price), Number(l.selling_price), l.quantity_left, l.status]),

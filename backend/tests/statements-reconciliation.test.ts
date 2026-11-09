@@ -73,7 +73,7 @@ test('setup: realistic activity in two branches and at company level', async () 
   const sup = await t.api('POST', '/purchasing/suppliers', { name: 'Supplier' });
   const po = await t.api('POST', '/purchasing/orders', { supplierId: sup.body.id, warehouseId: WH_MAIN, lines: [{ productId: pW, quantity: 10, unitCost: 20 }] });
   assert.equal((await t.api('POST', '/purchasing/receipts', { purchaseOrderId: po.body.id, lines: [{ productId: pW, quantityReceived: 10 }] })).status, 201);
-  assert.equal((await t.api('POST', `/purchasing/invoices/pi-${po.body.id}/payments`, { amount: 120 })).status, 201);
+  assert.equal((await t.api('POST', `/purchasing/invoices/pi-${po.body.id}/payments`, { amount: 120, moneyAccountId: 'money-main-cash' })).status, 201);
   const tr = await t.api('POST', '/transfers', { sourceOwnerType: 'WAREHOUSE', sourceWarehouseId: WH_MAIN, destinationOwnerType: 'BRANCH', destinationBranchId: A, lines: [{ productId: pW, quantityRequested: 4 }] });
   assert.equal((await t.api('POST', `/transfers/${tr.body.id}/dispatch`)).status, 200);
   assert.equal((await t.api('POST', `/transfers/${tr.body.id}/receive`)).status, 200);

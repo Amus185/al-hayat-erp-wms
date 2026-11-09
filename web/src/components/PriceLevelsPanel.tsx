@@ -47,6 +47,7 @@ export function PriceLevelsPanel({ productId, isOwner, canCosts, warehouses, bra
     if (!(Number(form.sellingPrice) > 0)) { addToast('error', 'Enter the new selling price.'); return; }
     if (!Number.isInteger(Number(form.quantity)) || Number(form.quantity) <= 0) { addToast('error', 'Enter the quantity received.'); return; }
     if (!id) { addToast('error', 'Choose where the goods are kept.'); return; }
+    if (form.payment === 'PAID' && !paidFrom) { addToast('error', 'Choose the account you paid from (e.g. Dahabshiil or Darasalaam Bank).'); return; }
     setSaving(true);
     try {
       await apiPost(`/products/${productId}/price-levels`, {
@@ -79,7 +80,7 @@ export function PriceLevelsPanel({ productId, isOwner, canCosts, warehouses, bra
           </div>
         </div>
         {isOwner && !adding && (
-          <button type="button" id="add-price-level" className="btn btn-secondary btn-sm" style={{ width: 'auto' }} onClick={() => setAdding(true)}>
+          <button type="button" id="add-price-level" className="btn btn-secondary btn-sm" style={{ width: 'auto' }} onClick={() => { setPaidFrom(''); setAdding(true); }}>
             <Plus size={14} /> Add New Price Level
           </button>
         )}
@@ -144,8 +145,8 @@ export function PriceLevelsPanel({ productId, isOwner, canCosts, warehouses, bra
               <option value="PAID">Paid now</option><option value="OWED">Not paid yet (owed)</option>
             </select></label>
           {form.payment === 'PAID' && (
-            <div>
-              <MoneyAccountSelect id="level-paid-from" label="Paid from" value={paidFrom} onChange={setPaidFrom}
+            <div style={{ gridColumn: '1 / -1', maxWidth: 420 }}>
+              <MoneyAccountSelect id="level-paid-from" label="Paid from" value={paidFrom} onChange={setPaidFrom} mustChoose
                 branchId={form.where.startsWith('B:') ? form.where.slice(2) : null}
                 amount={(Number(form.costPrice) || 0) * (Number(form.quantity) || 0)} />
             </div>

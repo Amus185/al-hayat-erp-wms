@@ -1,4 +1,4 @@
-import { resolveCashAccount, methodFor } from '../services/money';
+import { resolveCashAccount, methodFor, requireChosenAccount } from '../services/money';
 import { Hono } from 'hono';
 import { Env, uuidv4 } from '../db';
 import { PgAdapter } from '../pg-client';
@@ -823,7 +823,8 @@ purchasing.post('/invoices/:id/payments', requirePermissions(['manage_purchasing
   }
 
   const paymentId = uuidv4();
-  // "Paid from": the Bank & Cash account the money leaves (Main Cash when none was chosen).
+  // "Paid from": the Bank & Cash account the money leaves. The Owner must choose it (never assumed).
+  requireChosenAccount(body.moneyAccountId ?? body.money_account_id, 'this supplier');
   const cash = await resolveCashAccount(c.env.DB, body.moneyAccountId ?? body.money_account_id, invoice.branch_id || null);
   paymentMethod = methodFor(cash, paymentMethod);
   const isFullyPaid = Math.abs(amount - summary.balance) < 0.01;

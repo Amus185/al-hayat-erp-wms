@@ -28,12 +28,14 @@ export const forgetMoneyAccountOptions = () => cache.clear();
  * accounts that fit the payment's branch (Main Cash first), grouped by kind, with balances for
  * people who can see them. Remembers the last account used on this device.
  */
-export function MoneyAccountSelect({ value, onChange, label = 'Paid from', branchId, id, required = true, amount, defaultTo = 'remembered' }: {
+export function MoneyAccountSelect({ value, onChange, label = 'Paid from', branchId, id, required = true, amount, defaultTo = 'remembered', mustChoose = false }: {
   value: string;
   /** `auto` = picked by the dropdown itself (not by the person) */
   onChange: (id: string, auto?: boolean) => void;
   /** with no value yet: the last account used on this device, or Main Cash (use 'main' when editing an old record) */
   defaultTo?: 'remembered' | 'main';
+  /** the person must pick the account themselves (no automatic choice): paying a supplier, a paid price level */
+  mustChoose?: boolean;
   label?: string;
   branchId?: string | null;
   id?: string;
@@ -51,7 +53,9 @@ export function MoneyAccountSelect({ value, onChange, label = 'Paid from', branc
       if (!live) return;
       setOpts(list);
       // Keep a valid choice: the current one, else the last used here, else Main Cash.
-      if (!list.some((o) => o.id === value)) {
+      if (mustChoose) {
+        if (value && !list.some((o) => o.id === value)) onChange('', true);
+      } else if (!list.some((o) => o.id === value)) {
         let last = '';
         if (defaultTo === 'remembered') { try { last = localStorage.getItem(REMEMBER) || ''; } catch { /* ignore */ } }
         const pick = list.find((o) => o.id === last) || list.find((o) => o.is_main_cash) || list[0];
@@ -74,6 +78,7 @@ export function MoneyAccountSelect({ value, onChange, label = 'Paid from', branc
       <span className="form-field__label">{label}{required ? ' *' : ''}</span>
       <select className="form-select" id={id} value={value} onChange={(e) => choose(e.target.value)} disabled={!opts} required={required}>
         {!opts && <option value="">{failed ? 'Could not load accounts — reload the page' : 'Loading accounts…'}</option>}
+        {opts && mustChoose && <option value="">— choose the account —</option>}
         {opts && (['CASH', 'BANK', 'MOBILE_MONEY'] as const).map((k) => {
           const group = opts.filter((o) => o.kind === k);
           if (!group.length) return null;
@@ -88,6 +93,8 @@ export function MoneyAccountSelect({ value, onChange, label = 'Paid from', branc
           );
         })}
       </select>
+      {mustChoose && opts && !value && <span className="mm-sub" style={{ display: 'block' }}>Which account is this money paid from? (e.g. Dahabshiil, Darasalaam Bank, Main Cash)</span>}
+      {opts && opts.length <= 1 && mustChoose && <span className="mm-sub" style={{ display: 'block' }}>Only Main Cash is registered. Add your banks and Dahabshiil under Accounting → Bank &amp; Cash.</span>}
       {short && <span className="mm-sub" style={{ display: 'block', color: '#b45309' }}>{chosen!.name} holds {money(chosen!.balance!)}, less than this payment.</span>}
     </label>
   );

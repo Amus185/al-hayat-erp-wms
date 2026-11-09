@@ -47,6 +47,16 @@ export function assertCashAccountBranch(acc: CashAccount, branchId: string | nul
   }
 }
 
+/**
+ * For payments the Owner decides on (paying a supplier, paying for a new price level): the account
+ * must be chosen on purpose, never assumed. Main Cash is fine when it is chosen.
+ */
+export function requireChosenAccount(moneyAccountId: unknown, what: string) {
+  if (typeof moneyAccountId !== 'string' || !moneyAccountId.trim()) {
+    throw new ScopeError(400, `Choose the account you are paying ${what} from (for example Dahabshiil, Darasalaam Bank or Main Cash).`);
+  }
+}
+
 /** Ledger code of an account stored on an existing record (for re-posting); Main Cash when none. */
 export async function cashCodeOf(db: any, moneyAccountId: string | null | undefined): Promise<string> {
   if (!moneyAccountId) return MAIN_CASH_CODE;

@@ -163,3 +163,21 @@ test('"Paid from" / "Received into": every kind of payment moves the chosen acco
   assert.ok(!opts.some((o) => o.name === 'ZAAD HQ'), 'never another branch');
   assert.ok(opts.every((o) => o.balance === undefined), 'no balances without accounting access');
 });
+
+test('paying a supplier or paying for a new price level needs the account chosen on purpose', async () => {
+  const { WH_MAIN } = await import('./helpers');
+  const product = await t.createProduct({ cost: 10, price: 30 });
+  const sup = await t.api('POST', '/purchasing/suppliers', { name: 'Must Choose Supplier', phone: '0639990001' });
+  const po = await t.api('POST', '/purchasing/orders', { supplierId: sup.body.id, warehouseId: WH_MAIN, lines: [{ productId: product, quantity: 2, unitCost: 10 }] });
+  await t.api('POST', '/purchasing/receipts', { purchaseOrderId: po.body.id, warehouseId: WH_MAIN, lines: [{ productId: product, quantityReceived: 2 }] });
+  const none = await t.api('POST', `/purchasing/invoices/pi-${po.body.id}/payments`, { amount: 5 });
+  assert.equal(none.status, 400);
+  assert.match(none.body.message, /Choose the account you are paying/);
+  assert.equal((await t.q(`SELECT COUNT(*)::int AS n FROM purchase_invoice_payments WHERE purchase_invoice_id = $1`, [`pi-${po.body.id}`]))[0].n, 0, 'nothing paid');
+  assert.equal((await t.api('POST', `/purchasing/invoices/pi-${po.body.id}/payments`, { amount: 5, moneyAccountId: 'money-main-cash' })).status, 201, 'Main Cash chosen on purpose is fine');
+
+  const lvl = await t.api('POST', `/products/${product}/price-levels`, { costPrice: 11, sellingPrice: 33, quantity: 3, ownerType: 'BRANCH', branchId: BRANCH_HQ, payment: 'PAID' });
+  assert.equal(lvl.status, 400);
+  assert.match(lvl.body.message, /Choose the account/);
+  assert.equal((await t.api('POST', `/products/${product}/price-levels`, { costPrice: 11, sellingPrice: 33, quantity: 3, ownerType: 'BRANCH', branchId: BRANCH_HQ, payment: 'OWED' })).status, 201, 'goods owed to the supplier need no account');
+});

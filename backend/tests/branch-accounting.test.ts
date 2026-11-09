@@ -43,7 +43,7 @@ before(async () => {
   const supplier = await t.api('POST', '/purchasing/suppliers', { name: 'Supplier X' });
   const po = await t.api('POST', '/purchasing/orders', { supplierId: supplier.body.id, warehouseId: WH_MAIN, lines: [{ productId: product, quantity: 5, unitCost: 10 }] });
   assert.equal((await t.api('POST', '/purchasing/receipts', { purchaseOrderId: po.body.id, lines: [{ productId: product, quantityReceived: 5 }] })).status, 201);
-  assert.equal((await t.api('POST', `/purchasing/invoices/pi-${po.body.id}/payments`, { amount: 20 })).status, 201);
+  assert.equal((await t.api('POST', `/purchasing/invoices/pi-${po.body.id}/payments`, { amount: 20, moneyAccountId: 'money-main-cash' })).status, 201);
 });
 after(async () => { await t?.teardown(); });
 
