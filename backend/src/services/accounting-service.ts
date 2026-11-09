@@ -12,7 +12,7 @@ export interface JournalLineInput {
 
 export interface PostJournalParams {
   description: string;
-  referenceType: 'PURCHASE' | 'SALE' | 'TRANSFER' | 'EXPENSE' | 'DEPRECIATION' | 'CLOSING' | 'INVENTORY_ADJUSTMENT' | 'MANUAL' | 'MANUFACTURING' | 'OPENING' | 'PAYROLL';
+  referenceType: 'PURCHASE' | 'SALE' | 'TRANSFER' | 'EXPENSE' | 'DEPRECIATION' | 'CLOSING' | 'INVENTORY_ADJUSTMENT' | 'MANUAL' | 'MANUFACTURING' | 'OPENING' | 'PAYROLL' | 'MONEY_TRANSFER';
   referenceId?: string | null;
   branchId?: string | null;
   entryDate?: string;
@@ -222,8 +222,14 @@ export async function prepareJournalEntryPosting(
       : await requestFiscalPeriodId(c, db, entryDate);
 
   // ── Task 1b: Resolve CoA from pre-fetched map or cache-backed lookup ────────
-  const coaMap: Map<string, { id: string; normal_balance: string }> =
+  let coaMap: Map<string, { id: string; normal_balance: string }> =
     params.prefetchedCoaMap ?? (await fetchFullCoaMap(db));
+  // An account created moments ago (e.g. a new Bank & Cash account) may be missing from a cached
+  // chart of accounts on this server instance: reload it once instead of dropping the line.
+  if (params.lines.some((l) => !coaMap.get(l.accountCode) && !coaMap.get(`coa-${l.accountCode}`))) {
+    invalidateCoaCache();
+    coaMap = await fetchFullCoaMap(db);
+  }
 
   let totalDebit = 0;
   let totalCredit = 0;

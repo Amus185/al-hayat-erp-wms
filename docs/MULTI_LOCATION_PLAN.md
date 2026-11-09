@@ -379,3 +379,11 @@ Owner only until a branch sells, stocks or registers them.
 - Cost of each sale = cost of the levels it took (`product_price_level_moves`). Cancels and returns put units back into the level they came from. Purchase receipts and production of such a product become new levels; stock counts take from the oldest level / add to the one selling now.
 - Discount stays allowed (Owner decision, 7 Nov) and is fully visible: a line discount must be 0 or more and no more than the line; every discount is listed in Reports → Sales → **Discounts Given** (`GET /sales/discounts`: who sold it, branch, customer, product, amount, %, totals by seller and branch; Owner/accountants). The Sales list, the sale window and the invoice PDF show each line's discount and who sold it.
 - Tables: product_price_levels, product_price_level_moves (`services/price-levels.ts`).
+
+## 16. Bank & Cash accounts (Owner request, 9 Nov)
+
+- Accounting → **Bank & Cash**: register each place money is kept, like Odoo's Bank / Cash journals. Type (Bank, Mobile money / transfer, Cash) → provider from a Hargeisa list (banks: Dahabshil Bank International, Premier, Amal, Darasalaam, Wadaag, Bank of Somaliland; mobile money / transfer: ZAAD, eDahab, Dahabshiil, Amal Express; or "Other") → account / phone number, holder, branch (or whole company).
+- Each account is its own ledger account under Cash, coded `1010-NN`; the original `1010` is **Main Cash** (created once, `app_migrations: money_accounts_v1`), so all history keeps its balance. Balances are never stored: they are the sum of the account's posted journal lines.
+- Opening balance of a new account: moved out of Main Cash (Dr new / Cr 1010) or new money not yet in the books (Dr new / Cr 3010). **Move money** between accounts: Dr receiving / Cr paying, refused beyond the paying account's balance; accounts of two different branches can't be joined directly.
+- Reports count every `1010…` account as cash (cash flow, balance sheet overdraft per account, branch summary, audit flow); moves between our own accounts are not cash in or out. Owner / accountants only (`/api/v1/accounting/money-accounts`).
+- Next step: choose the account ("Paid from" / "Received into") on purchases, expenses, salary advances, sales and customer payments (today they all post to Main Cash), then salary payments.

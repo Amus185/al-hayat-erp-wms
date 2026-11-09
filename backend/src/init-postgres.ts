@@ -734,6 +734,7 @@ export async function ensurePostgresInit(pool: Pool) {
   await ensurePerformanceIndexes(pool);
   await ensureRoleSeparation(pool);
   await ensureSalesTransfers(pool);
+  await ensureMoneyAccounts(pool);
 }
 
 /**
@@ -1606,6 +1607,58 @@ export async function ensureSalesTransfers(pool: Pool) {
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
     console.error('❌ Sales transfer rights migration failed (no data changed):', err);
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Bank & Cash accounts (Owner request, 9 Nov), like Odoo's Bank and Cash journals: each money
+ * account (a bank, ZAAD/eDahab, a cash drawer) is its own ledger account under Cash, coded
+ * 1010-NN, and its balance is read from the ledger, never stored. Additive only. ONCE
+ * (app_migrations: money_accounts_v1): today's 1010 becomes the "Main Cash" account, so all
+ * existing history keeps its balance and nothing is re-posted.
+ */
+export async function ensureMoneyAccounts(pool: Pool) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS money_accounts (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('CASH', 'BANK', 'MOBILE_MONEY')),
+        provider TEXT,
+        account_number TEXT,
+        account_holder TEXT,
+        currency TEXT NOT NULL DEFAULT 'USD',
+        coa_account_id TEXT NOT NULL UNIQUE REFERENCES chart_of_accounts(id),
+        branch_id TEXT REFERENCES branches(id),
+        is_active INTEGER NOT NULL DEFAULT 1,
+        notes TEXT,
+        created_by TEXT,
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS money_accounts_name_uq ON money_accounts (lower(name));
+      CREATE INDEX IF NOT EXISTS idx_money_accounts_branch ON money_accounts (branch_id);
+    `);
+    await client.query('CREATE TABLE IF NOT EXISTS app_migrations (name TEXT PRIMARY KEY, ran_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP)');
+    const done = await client.query("SELECT 1 FROM app_migrations WHERE name = 'money_accounts_v1'");
+    if (!done.rowCount) {
+      await client.query(`
+        INSERT INTO money_accounts (id, name, kind, provider, coa_account_id, notes)
+        SELECT 'money-main-cash', 'Main Cash', 'CASH', 'Cash (drawer / safe)', 'coa-1010',
+               'All money recorded before Bank & Cash accounts existed.'
+        WHERE EXISTS (SELECT 1 FROM chart_of_accounts WHERE id = 'coa-1010')
+          AND NOT EXISTS (SELECT 1 FROM money_accounts WHERE coa_account_id = 'coa-1010')
+      `);
+      await client.query("INSERT INTO app_migrations (name) VALUES ('money_accounts_v1')");
+    }
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('❌ Bank & Cash accounts migration failed (no data changed):', err);
   } finally {
     client.release();
   }

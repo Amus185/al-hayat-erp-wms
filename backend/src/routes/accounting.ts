@@ -4,6 +4,7 @@ import { authMiddleware, requirePermissions } from '../middleware/auth';
 import { createAuditLogStmt } from '../services/audit';
 import { prepareJournalReversal, prepareJournalEntryPosting, prepareOpeningStock, fetchOpenFiscalPeriodId, reconcileMissingReceiptJournalEntries, reconcileMissingSalesJournalEntries } from '../services/accounting-service';
 import { resolveBranchScope, branchSql, inScope, assertAllBranchAccess, resolveWriteBranch, ScopeError, accountingPayload, type BranchScope } from '../services/branch-scope';
+import { registerMoneyAccounts } from './money-accounts';
 import { csvResponse, dateRange, likeTerm, listRequest, pagedResponse, pagedRows, type ListOptions } from '../services/listing';
 
 // Every report below is computed from journal lines restricted to the caller's
@@ -34,6 +35,13 @@ accounting.use('/*', async (c, next) => {
   (c as any).set('jwtPayload', accountingPayload(p));
   await next();
 });
+
+// Bank & Cash accounts (cash drawers, banks, ZAAD / eDahab / Dahabshiil): routes/money-accounts.ts
+registerMoneyAccounts(accounting);
+
+/** Every Bank & Cash account is cash: the original 1010 (Main Cash) and its 1010-NN siblings. */
+const CASH_CODE_SQL = (alias: string) => `(${alias}.code = '1010' OR ${alias}.code LIKE '1010-%')`;
+const isCashCode = (code: string) => code === '1010' || code.startsWith('1010-');
 
 // ══════════════════════════════════════════════════════════
 // HELPER UTILITIES
@@ -786,12 +794,13 @@ accounting.get('/balance-sheet', requirePermissions(['view_reports']), async (c)
   // Negative cash is not an asset: present it as an overdraft liability
   // (totals still balance) and flag it, instead of showing negative assets.
   const warnings: string[] = [];
-  const cashRow: any = assets.find((a: any) => a.code === '1010');
-  if (cashRow && Number(cashRow.balance) < -0.005) {
+  // Each Bank & Cash account on its own: one account below zero is an overdraft even if others hold money.
+  for (const cashRow of assets.filter((a: any) => isCashCode(String(a.code))) as any[]) {
+    if (Number(cashRow.balance) >= -0.005) continue;
     const overdraft = -Number(cashRow.balance);
     cashRow.balance = 0;
-    liabilities.push({ id: 'cash-overdraft', code: 'OVERDRAFT', account_name: 'Cash overdraft (payments exceed recorded cash)', account_type: 'LIABILITY', normal_balance: 'CREDIT', total_debit: 0, total_credit: overdraft, balance: overdraft } as any);
-    warnings.push(`Cash is negative by ${overdraft.toFixed(2)}: more cash was paid out than was recorded coming in. Record opening cash / owner funding (Accounting → Opening Balances) or enter the missing receipts.`);
+    liabilities.push({ id: `cash-overdraft-${cashRow.code}`, code: 'OVERDRAFT', account_name: `${cashRow.account_name || 'Cash'} overdraft (payments exceed recorded money)`, account_type: 'LIABILITY', normal_balance: 'CREDIT', total_debit: 0, total_credit: overdraft, balance: overdraft } as any);
+    warnings.push(`${cashRow.account_name || 'Cash'} is negative by ${overdraft.toFixed(2)}: more was paid out of it than was recorded coming in. Record opening cash / owner funding (Accounting → Opening Balances), move money into it, or enter the missing receipts.`);
   }
   const tbCheck = await c.env.DB.prepare(`
     SELECT COALESCE(SUM(jel.debit_amount), 0) AS d, COALESCE(SUM(jel.credit_amount), 0) AS cr
@@ -860,8 +869,9 @@ accounting.get('/cash-flow', requirePermissions(['view_reports']), async (c) => 
       COALESCE(SUM(jel.credit_amount), 0) AS cash_out
     FROM journal_entry_lines jel
     JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status IN ('POSTED', 'REVERSED') ${window}
-    JOIN chart_of_accounts coa ON coa.id = jel.account_id AND coa.code = '1010'
-    WHERE 1=1 ${bf}
+    JOIN chart_of_accounts coa ON coa.id = jel.account_id AND ${CASH_CODE_SQL('coa')}
+    -- Money moved between two of our own accounts is neither cash in nor cash out.
+    WHERE 1=1 ${bf} AND ${contra(`NOT ${CASH_CODE_SQL('oc')}`)}
     GROUP BY 1, 2
     ORDER BY 1, 2
   `).bind(...(period ? [start, end] : [])).all() as { results: any[] };
@@ -870,14 +880,14 @@ accounting.get('/cash-flow', requirePermissions(['view_reports']), async (c) => 
     SELECT COALESCE(SUM(jel.debit_amount - jel.credit_amount), 0) AS bal
     FROM journal_entry_lines jel
     JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status IN ('POSTED', 'REVERSED') AND je.entry_date < ?
-    JOIN chart_of_accounts coa ON coa.id = jel.account_id AND coa.code = '1010'
+    JOIN chart_of_accounts coa ON coa.id = jel.account_id AND ${CASH_CODE_SQL('coa')}
     WHERE 1=1 ${bf}
   `).bind(start).first() as any : null;
   const endRes = await c.env.DB.prepare(`
     SELECT COALESCE(SUM(jel.debit_amount - jel.credit_amount), 0) AS bal
     FROM journal_entry_lines jel
     JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status IN ('POSTED', 'REVERSED') ${period ? 'AND je.entry_date <= ?' : ''}
-    JOIN chart_of_accounts coa ON coa.id = jel.account_id AND coa.code = '1010'
+    JOIN chart_of_accounts coa ON coa.id = jel.account_id AND ${CASH_CODE_SQL('coa')}
     WHERE 1=1 ${bf}
   `).bind(...(period ? [end] : [])).first() as any;
 
@@ -1275,7 +1285,7 @@ accounting.get('/audit/transaction-flow', requirePermissions(['view_reports']), 
         JOIN journal_entry_lines jel ON jel.journal_entry_id = je.id ${bf}
         JOIN chart_of_accounts coa ON coa.id = jel.account_id
         WHERE je.status IN ('POSTED', 'REVERSED')
-          AND (coa.code IN ('1010', '1020', '1030', '4010', '5010') OR coa.account_type = 'EXPENSE')
+          AND (coa.code IN ('1010', '1020', '1030', '4010', '5010') OR ${CASH_CODE_SQL('coa')} OR coa.account_type = 'EXPENSE')
       )
       SELECT je.id AS journal_entry_id, je.entry_number, je.entry_date, je.description,
              je.reference_type, je.reference_id, je.total_debit, je.total_credit,
@@ -1298,7 +1308,7 @@ accounting.get('/audit/transaction-flow', requirePermissions(['view_reports']), 
       FROM chart_of_accounts coa
       LEFT JOIN journal_entry_lines jel ON jel.account_id = coa.id ${bf}
       LEFT JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.status IN ('POSTED', 'REVERSED')
-      WHERE coa.code IN ('1010', '1020', '1030', '4010', '5010') OR coa.account_type = 'EXPENSE'
+      WHERE coa.code IN ('1010', '1020', '1030', '4010', '5010') OR ${CASH_CODE_SQL('coa')} OR coa.account_type = 'EXPENSE'
       GROUP BY coa.id, coa.code, coa.name, coa.normal_balance
       ORDER BY coa.code
     `).all(),
@@ -1455,7 +1465,7 @@ accounting.get('/branch-summary', requirePermissions(['view_reports']), async (c
   // Balances to date
   const { results: bal } = await c.env.DB.prepare(`
     SELECT jel.branch_id,
-      COALESCE(SUM(CASE WHEN coa.code = '1010' THEN jel.debit_amount - jel.credit_amount ELSE 0 END), 0) AS cash,
+      COALESCE(SUM(CASE WHEN ${CASH_CODE_SQL('coa')} THEN jel.debit_amount - jel.credit_amount ELSE 0 END), 0) AS cash,
       COALESCE(SUM(CASE WHEN coa.code = '1020' THEN jel.debit_amount - jel.credit_amount ELSE 0 END), 0) AS receivables,
       COALESCE(SUM(CASE WHEN coa.code = '1030' THEN jel.debit_amount - jel.credit_amount ELSE 0 END), 0) AS inventory,
       COALESCE(SUM(CASE WHEN coa.code = '2010' THEN jel.credit_amount - jel.debit_amount ELSE 0 END), 0) AS payables
@@ -1532,7 +1542,7 @@ accounting.get('/opening-balances', requirePermissions(['view_reports']), async 
   const { results: branchRows } = await c.env.DB.prepare('SELECT id, name FROM branches ORDER BY name').all() as { results: any[] };
   const { results: posted } = await c.env.DB.prepare(`
     SELECT je.branch_id,
-      COALESCE(SUM(CASE WHEN coa.code = '1010' THEN jel.debit_amount - jel.credit_amount ELSE 0 END), 0) AS opening_cash,
+      COALESCE(SUM(CASE WHEN ${CASH_CODE_SQL('coa')} THEN jel.debit_amount - jel.credit_amount ELSE 0 END), 0) AS opening_cash,
       COALESCE(SUM(CASE WHEN coa.code = '1030' THEN jel.debit_amount - jel.credit_amount ELSE 0 END), 0) AS opening_stock
     FROM journal_entries je
     JOIN journal_entry_lines jel ON jel.journal_entry_id = je.id
