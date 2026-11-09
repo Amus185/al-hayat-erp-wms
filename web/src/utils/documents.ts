@@ -126,6 +126,7 @@ export function downloadPaymentReceipt(r: any) {
     ],
     right: [
       ['Payment Method', method(r.payment_method)],
+      ...(r.money_account_name ? [['Received Into', r.money_account_name] as [string, string]] : []),
       ['Amount Paid', money(r.amount)],
       ['Previous Balance', money(r.previous_balance)],
       ['Remaining Balance', money(r.remaining_balance)],

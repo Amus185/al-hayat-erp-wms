@@ -1,3 +1,4 @@
+import { resolveCashAccount, methodFor, cashCodeOf } from '../services/money';
 import { Hono } from 'hono';
 import { Env, uuidv4 } from '../db';
 import { authMiddleware, requirePermissions } from '../middleware/auth';
@@ -22,8 +23,9 @@ expenses.get('/', requirePermissions(['view_reports']), async (c) => {
   const scope = await resolveBranchScope(c);
 
   let query = `
-    SELECT e.*, b.name AS branch_name, u.full_name AS recorded_by_name
+    SELECT e.*, b.name AS branch_name, u.full_name AS recorded_by_name, COALESCE(ma.name, 'Main Cash') AS money_account_name
     FROM expenses e
+    LEFT JOIN money_accounts ma ON ma.id = e.money_account_id
     LEFT JOIN branches b ON b.id = e.branch_id
     LEFT JOIN users u ON u.id = e.recorded_by
     WHERE 1=1
@@ -123,6 +125,8 @@ expenses.post('/', requirePermissions(['expenses.manage']), async (c) => {
     branch_id?: string;
     payment_method?: string;
     notes?: string;
+    moneyAccountId?: string;
+    money_account_id?: string;
   }>();
 
   if (!body.title?.trim()) return c.json({ message: 'Title is required.' }, 400);
@@ -136,20 +140,25 @@ expenses.post('/', requirePermissions(['expenses.manage']), async (c) => {
   const branchId = await resolveWriteBranch(c, body.branch_id);
 
   const id = uuidv4();
+  // "Paid from": the Bank & Cash account of this branch (Main Cash when none was chosen).
+  // An expense recorded as owed (payment_method CREDIT…) is not paid from any account.
+  const owed = ['CREDIT', 'ON_ACCOUNT', 'UNPAID', 'PAYABLE'].includes(String(body.payment_method || '').toUpperCase());
+  const cash = await resolveCashAccount(c.env.DB, owed ? undefined : (body.moneyAccountId ?? body.money_account_id), branchId ?? null);
+  const method = owed ? String(body.payment_method).toUpperCase() : methodFor(cash, body.payment_method || 'CASH');
 
   const preparedJournal = await prepareExpenseJournal(c, {
     id, title: body.title.trim(), amount: body.amount, category: body.category.trim(),
-    expense_date: body.expense_date, branch_id: branchId, payment_method: body.payment_method,
+    expense_date: body.expense_date, branch_id: branchId, payment_method: method, cash_code: cash.code,
   }, userId);
 
   await c.env.DB.batch([
     c.env.DB.prepare(`
-      INSERT INTO expenses (id, title, amount, category, expense_date, branch_id, payment_method, notes, recorded_by)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO expenses (id, title, amount, category, expense_date, branch_id, payment_method, notes, recorded_by, money_account_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
       id, body.title.trim(), body.amount, body.category.trim(),
       body.expense_date, branchId,
-      body.payment_method || 'CASH', body.notes || null, userId
+      method, body.notes || null, userId, cash.id
     ),
     createAuditLogStmt(c, 'EXPENSE_CREATE', 'expenses', id, null, {
       title: body.title, amount: body.amount, category: body.category, branch_id: branchId
@@ -167,7 +176,7 @@ expenses.patch('/:id', requirePermissions(['expenses.manage']), async (c) => {
   const body = await c.req.json<Partial<{
     title: string; amount: number; category: string;
     expense_date: string; branch_id: string;
-    payment_method: string; notes: string;
+    payment_method: string; notes: string; moneyAccountId: string | null; money_account_id: string | null;
   }>>();
 
   const existing = await c.env.DB.prepare('SELECT * FROM expenses WHERE id = ?').bind(id).first();
@@ -182,6 +191,18 @@ expenses.patch('/:id', requirePermissions(['expenses.manage']), async (c) => {
   if (body.expense_date !== undefined) { fields.push('expense_date = ?'); vals.push(body.expense_date); }
   if (body.branch_id !== undefined) { body.branch_id = (await resolveWriteBranch(c, body.branch_id)) as any; fields.push('branch_id = ?'); vals.push(body.branch_id); }
   if (body.payment_method !== undefined) { fields.push('payment_method = ?'); vals.push(body.payment_method); }
+  // Changing the "Paid from" account (checked against the expense's branch).
+  const newAccount = body.moneyAccountId !== undefined ? body.moneyAccountId : body.money_account_id;
+  if (newAccount !== undefined) {
+    const branchForCheck = body.branch_id !== undefined ? body.branch_id : (existing as any).branch_id;
+    const acc = await resolveCashAccount(c.env.DB, newAccount || undefined, branchForCheck ?? null);
+    (body as any).money_account_id = acc.id;
+    fields.push('money_account_id = ?'); vals.push(acc.id);
+    if (acc.id && body.payment_method === undefined) { fields.push('payment_method = ?'); vals.push(methodFor(acc, 'CASH')); (body as any).payment_method = methodFor(acc, 'CASH'); }
+  } else if (body.branch_id !== undefined && (existing as any).money_account_id) {
+    // Moving the expense to another branch: its account must still fit.
+    await resolveCashAccount(c.env.DB, (existing as any).money_account_id, body.branch_id ?? null);
+  }
   if (body.notes !== undefined) { fields.push('notes = ?'); vals.push(body.notes); }
 
   if (!fields.length) return c.json({ message: 'No fields to update.' }, 400);
@@ -195,7 +216,7 @@ expenses.patch('/:id', requirePermissions(['expenses.manage']), async (c) => {
   // Financial fields changed: reverse the posted journal and post the new one.
   const ex = existing as any;
   const updated = { ...ex, ...body };
-  const financialChange = ['amount', 'category', 'expense_date', 'branch_id', 'payment_method']
+  const financialChange = ['amount', 'category', 'expense_date', 'branch_id', 'payment_method', 'money_account_id']
     .some((k) => (body as any)[k] !== undefined && String((body as any)[k]) !== String(ex[k]));
   if (financialChange) {
     const userId = c.get('jwtPayload').sub;
@@ -206,6 +227,7 @@ expenses.patch('/:id', requirePermissions(['expenses.manage']), async (c) => {
     const repost = await prepareExpenseJournal(c, {
       id, title: updated.title, amount: Number(updated.amount), category: updated.category,
       expense_date: updated.expense_date, branch_id: updated.branch_id, payment_method: updated.payment_method,
+      cash_code: await cashCodeOf(c.env.DB, updated.money_account_id ?? null),
     }, userId, true);
     stmts.push(...repost.statements);
   }

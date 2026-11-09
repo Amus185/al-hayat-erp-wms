@@ -1,3 +1,4 @@
+import { MoneyAccountSelect } from '../components/MoneyAccountSelect';
 import { refreshAfterSave } from '../utils/afterSave';
 import { useEffect, useRef, useState } from 'react';
 import { FileText, Pencil, Plus, Trash2, Upload, Wallet } from 'lucide-react';
@@ -69,6 +70,7 @@ export function EmployeesPage() {
   // Profile
   const [profileId, setProfileId] = useState<string | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
+  const [advAccount, setAdvAccount] = useState('');
   const [adv, setAdv] = useState({ kind: 'ADVANCE', amount: '', method: 'CASH', entry_date: today(), notes: '' });
   const [advSaving, setAdvSaving] = useState(false);
 
@@ -130,7 +132,7 @@ export function EmployeesPage() {
     if (!(amount > 0)) { addToast('error', 'Enter an amount greater than zero'); return; }
     setAdvSaving(true);
     try {
-      await apiPost(`/employees/${profile.id}/advances`, { ...adv, amount });
+      await apiPost(`/employees/${profile.id}/advances`, { ...adv, amount, moneyAccountId: adv.method === 'SALARY_DEDUCTION' ? undefined : (advAccount || undefined) });
       addToast('success', `${adv.kind === 'ADVANCE' ? 'Advance' : 'Repayment'} of ${money(amount)} recorded`);
       setAdv((p) => ({ ...p, amount: '', notes: '' }));
       const pid = profile.id;
@@ -243,12 +245,19 @@ export function EmployeesPage() {
                   </select></label>
                 <label className="form-field"><span className="form-field__label">Amount</span>
                   <input className="form-input" id="adv-amount" type="number" min="0" step="0.01" inputMode="decimal" value={adv.amount} onChange={(e) => setAdv({ ...adv, amount: e.target.value })} placeholder="0.00" /></label>
-                <label className="form-field"><span className="form-field__label">Paid by</span>
-                  <select className="form-select" value={adv.method} onChange={(e) => setAdv({ ...adv, method: e.target.value })}>
-                    <option value="CASH">Cash</option>
-                    <option value="BANK">Bank</option>
-                    {adv.kind === 'REPAYMENT' && <option value="SALARY_DEDUCTION">Deducted from salary</option>}
-                  </select></label>
+                {adv.kind === 'REPAYMENT' && (
+                  <label className="form-field"><span className="form-field__label">How</span>
+                    <select className="form-select" value={adv.method === 'SALARY_DEDUCTION' ? 'SALARY_DEDUCTION' : 'PAID'} onChange={(e) => setAdv({ ...adv, method: e.target.value === 'SALARY_DEDUCTION' ? 'SALARY_DEDUCTION' : 'CASH' })}>
+                      <option value="SALARY_DEDUCTION">Deducted from salary</option>
+                      <option value="PAID">Paid back in money</option>
+                    </select></label>
+                )}
+                {(adv.kind === 'ADVANCE' || adv.method !== 'SALARY_DEDUCTION') && (
+                  <div style={{ minWidth: 200 }}>
+                    <MoneyAccountSelect id="adv-account" label={adv.kind === 'ADVANCE' ? 'Paid from' : 'Received into'} value={advAccount} onChange={setAdvAccount}
+                      branchId={profile?.branch_id ?? null} amount={adv.kind === 'ADVANCE' ? Number(adv.amount) || 0 : undefined} />
+                  </div>
+                )}
                 <label className="form-field"><span className="form-field__label">Date</span>
                   <input className="form-input" type="date" value={adv.entry_date} onChange={(e) => setAdv({ ...adv, entry_date: e.target.value })} /></label>
                 <label className="form-field" style={{ flex: 1, minWidth: 140 }}><span className="form-field__label">Note</span>

@@ -1,3 +1,4 @@
+import { MoneyAccountSelect } from '../components/MoneyAccountSelect';
 import { refreshAfterSave } from '../utils/afterSave';
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -95,7 +96,7 @@ function PaymentHistoryTable({ payments }: { payments: InvoicePayment[] }) {
         <tr style={{ background: '#f0f7f0' }}>
           <th style={{ padding: '6px 10px', textAlign: 'left', fontWeight: 600, color: '#066006' }}>Date</th>
           <th style={{ padding: '6px 10px', textAlign: 'left', fontWeight: 600, color: '#066006' }}>Amount</th>
-          <th style={{ padding: '6px 10px', textAlign: 'left', fontWeight: 600, color: '#066006' }}>Method</th>
+          <th style={{ padding: '6px 10px', textAlign: 'left', fontWeight: 600, color: '#066006' }}>Received into</th>
           <th style={{ padding: '6px 10px', textAlign: 'left', fontWeight: 600, color: '#066006' }}>Recorded By</th>
           <th style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 600, color: '#066006' }}>Balance After</th>
         </tr>
@@ -105,7 +106,7 @@ function PaymentHistoryTable({ payments }: { payments: InvoicePayment[] }) {
           <tr key={p.id} style={{ borderBottom: '1px solid #edf1ed' }}>
             <td style={{ padding: '6px 10px' }}>{p.payment_date}</td>
             <td style={{ padding: '6px 10px', fontWeight: 600, color: '#0b8f08' }}>{fmt(p.amount)}</td>
-            <td style={{ padding: '6px 10px' }}>{p.payment_method.replace('_', ' ')}</td>
+            <td style={{ padding: '6px 10px' }}>{p.money_account_name || p.payment_method.replace('_', ' ')}</td>
             <td style={{ padding: '6px 10px', color: '#667066' }}>{p.recorded_by_name || '—'}</td>
             <td style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 600, color: Number(p.running_balance) > 0 ? '#b45309' : '#0b8f08' }}>
               {fmt(p.running_balance)}
@@ -185,6 +186,8 @@ export function SalesPage() {
 
   // Payment Modal
   const [isPaymentOpen, setIsPaymentOpen] = useState(false);
+  const [payIntoId, setPayIntoId] = useState('');
+  const [payoutFromId, setPayoutFromId] = useState('');
   const [paymentForm, setPaymentForm] = useState({
     amount: '',
     paymentMethod: 'CASH' as PaymentMethod,
@@ -254,7 +257,7 @@ export function SalesPage() {
     try {
       setActionProcessing('complete');
       setOrderDetailsLoading(true);
-      await apiPost(`/sales/orders/${id}/complete`, {});
+      await apiPost(`/sales/orders/${id}/complete`, { moneyAccountId: payIntoId || undefined });
       addToast('success', 'Sale completed. Invoice issued and payment recorded.');
       setSelectedOrder(null);
       loadData();
@@ -306,7 +309,7 @@ export function SalesPage() {
     try {
       setActionProcessing('pay');
       setOrderDetailsLoading(true);
-      await apiPost(`/sales/orders/${orderId}/pay`, {});
+      await apiPost(`/sales/orders/${orderId}/pay`, { moneyAccountId: payIntoId || undefined });
       addToast('success', 'Payment recorded successfully');
       setSelectedOrder(null);
       loadData();
@@ -368,6 +371,7 @@ export function SalesPage() {
       await apiPost(`/sales/invoices/${selectedOrder.invoice_id}/payments`, {
         amount,
         paymentMethod: paymentForm.paymentMethod,
+        moneyAccountId: payIntoId || undefined,
         paymentDate: paymentForm.paymentDate,
         notes: paymentForm.notes || undefined,
       });
@@ -395,7 +399,7 @@ export function SalesPage() {
     if (!confirmed) return;
     try {
       setActionProcessing('payout');
-      await apiPost(`/sales/orders/${orderId}/installation-payout`, { installer_name: installerName });
+      await apiPost(`/sales/orders/${orderId}/installation-payout`, { installer_name: installerName, moneyAccountId: payoutFromId || undefined });
       addToast('success', 'Installation fee payout recorded and posted to GL.');
       refreshAfterSave(addToast,
         () => apiGet<any>(`/sales/orders/${orderId}`).then((updated) => setSelectedOrder((cur: any) => (cur?.id === orderId ? updated : cur))),
@@ -944,6 +948,12 @@ export function SalesPage() {
                   </div>
 
                   {selectedOrder.installation_status !== 'PAID_OUT' && hasPermission('manage_sales') && (
+                    <div style={{ minWidth: 220 }}>
+                      <MoneyAccountSelect id="payoutFrom" label="Pay the technician from" value={payoutFromId} onChange={setPayoutFromId}
+                        branchId={selectedOrder.branch_id ?? null} amount={Number(selectedOrder.installation_fee || 0)} />
+                    </div>
+                  )}
+                  {selectedOrder.installation_status !== 'PAID_OUT' && hasPermission('manage_sales') && (
                     <button
                       type="button"
                       className="btn btn-sm"
@@ -1102,6 +1112,14 @@ export function SalesPage() {
                 </button>
               ) : null}
 
+              {/* Where the money from "Complete Sale" / "Mark as Paid" goes */}
+              {(selectedOrder.status === 'DRAFT' || selectedOrder.status === 'CONFIRMED' || selectedOrder.status === 'INVOICED') && hasPermission('manage_sales') && (
+                <div style={{ flexBasis: '100%', maxWidth: 420 }}>
+                  <MoneyAccountSelect id="saleSettleInto" label="Money received into" value={payIntoId} onChange={setPayIntoId}
+                    branchId={selectedOrder.branch_id ?? null} />
+                </div>
+              )}
+
               {/* Download — available once the invoice exists */}
               {selectedOrder.invoice_id && (
                 <DownloadDocButton id="download-invoice" label="Download invoice" make={() => downloadInvoice(selectedOrder.id)} />
@@ -1222,16 +1240,8 @@ export function SalesPage() {
               onChange={(val) => setPaymentForm(prev => ({ ...prev, amount: val }))}
               required
             />
-            <div className="form-field">
-              <label className="form-field__label">Payment Method</label>
-              <select
-                className="form-select"
-                value={paymentForm.paymentMethod}
-                onChange={(e) => setPaymentForm(prev => ({ ...prev, paymentMethod: e.target.value as PaymentMethod }))}
-              >
-                {PAYMENT_METHODS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
-              </select>
-            </div>
+            <MoneyAccountSelect id="salePayInto" label="Received into" value={payIntoId} onChange={setPayIntoId}
+              branchId={selectedOrder?.branch_id ?? null} />
             <InputField
               label="Payment Date"
               id="payDate"

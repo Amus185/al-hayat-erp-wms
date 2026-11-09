@@ -1,3 +1,4 @@
+import { resolveCashAccount } from '../services/money';
 import { Hono } from 'hono';
 import { Env, uuidv4 } from '../db';
 import { authMiddleware, requirePermissions, isAdminUser, requireAdmin } from '../middleware/auth';
@@ -714,6 +715,8 @@ products.post('/:id/price-levels', requireAdmin, async (c) => {
     return c.json({ message: 'That warehouse or branch does not exist.' }, 400);
   }
   const paid = body.payment === 'OWED' ? false : true;
+  // "Paid from": the Bank & Cash account (Main Cash when none was chosen); the books of the branch receiving the goods.
+  const cash = await resolveCashAccount(c.env.DB, paid ? (body.moneyAccountId ?? body.money_account_id) : undefined, ownerType === 'BRANCH' ? locId : null);
   const note = typeof body.note === 'string' && body.note.trim() ? body.note.trim().slice(0, 200) : null;
   const userId = actor?.sub ?? null;
   const levelId = uuidv4();
@@ -742,11 +745,11 @@ products.post('/:id/price-levels', requireAdmin, async (c) => {
       branchId: ownerType === 'BRANCH' ? locId : null, userId,
       lines: [
         { accountCode: '1030', debitAmount: value, creditAmount: 0 },
-        { accountCode: paid ? '1010' : '2010', debitAmount: 0, creditAmount: value },
+        { accountCode: paid ? cash.code : '2010', debitAmount: 0, creditAmount: value },
       ],
     })).statements);
   }
-  stmts.push(createAuditLogStmt(c, 'PRICE_LEVEL_ADD', 'products', id, null, { levelId, cost, price, qty, ownerType, locId, paid }));
+  stmts.push(createAuditLogStmt(c, 'PRICE_LEVEL_ADD', 'products', id, null, { levelId, cost, price, qty, ownerType, locId, paid, paidFrom: paid ? cash.name : null }));
   await c.env.DB.batch(stmts);
   const levels = await c.env.DB.prepare('SELECT * FROM product_price_levels WHERE product_id = ? ORDER BY level_no').bind(id).all();
   return c.json({ success: true, levels: levels.results }, 201);

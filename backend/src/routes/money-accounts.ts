@@ -257,3 +257,34 @@ export function registerMoneyAccounts(app: any) {
     return c.json({ ok: true, entryId: posting.entryId, amount, from: from.name, to: to.name }, 201);
   });
 }
+
+/**
+ * The accounts a person may choose on a payment ("Paid from" / "Received into"), outside the
+ * Accounting module: open accounts of their branch plus company-wide ones. The company view may
+ * pass ?branch_id= (the payment's branch) to get the accounts that fit it. Balances only for people
+ * with accounting access. Mounted at /api/v1/money-accounts (signed in).
+ */
+export function registerMoneyAccountOptions(app: any) {
+  app.get('/options', async (c: any) => {
+    const p = c.get('jwtPayload') as any;
+    const own: string | null = p?.branch_id ?? null;
+    const asked = (c.req.query('branch_id') || '').trim();
+    const branchId = own || (asked && asked !== 'ALL' ? asked : null);
+    const showBalance = !!(p?.permissions?.includes('accounting.view') || p?.permissions?.includes('*'));
+    const { results } = await c.env.DB.prepare(`
+      SELECT ma.id, ma.name, ma.kind, ma.provider, ma.account_number, ma.branch_id, b.name AS branch_name, coa.code AS account_code,
+             (SELECT COALESCE(SUM(gl.debit_amount - gl.credit_amount), 0) FROM general_ledger gl WHERE gl.account_id = ma.coa_account_id) AS balance
+      FROM money_accounts ma
+      JOIN chart_of_accounts coa ON coa.id = ma.coa_account_id
+      LEFT JOIN branches b ON b.id = ma.branch_id
+      WHERE ma.is_active = 1 ${branchId ? 'AND (ma.branch_id IS NULL OR ma.branch_id = ?)' : ''}
+      ORDER BY (coa.code = '1010') DESC, ma.kind, ma.name
+    `).bind(...(branchId ? [branchId] : [])).all();
+    const rows = ((results || []) as any[]).map((r) => ({
+      id: r.id, name: r.name, kind: r.kind, provider: r.provider, account_number: r.account_number,
+      branch_id: r.branch_id, branch_name: r.branch_name, is_main_cash: r.account_code === '1010',
+      ...(showBalance ? { balance: round2(Number(r.balance || 0)) } : {}),
+    }));
+    return c.json(rows);
+  });
+}

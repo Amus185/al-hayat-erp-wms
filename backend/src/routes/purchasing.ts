@@ -1,3 +1,4 @@
+import { resolveCashAccount, methodFor } from '../services/money';
 import { Hono } from 'hono';
 import { Env, uuidv4 } from '../db';
 import { PgAdapter } from '../pg-client';
@@ -332,9 +333,10 @@ purchasing.get('/orders/:id', async (c) => {
       Number((invoice as any).discount_amount || 0)
     );
     const { results: payments } = await c.env.DB.prepare(`
-      SELECT pip.*, u.full_name AS recorded_by_name
+      SELECT pip.*, u.full_name AS recorded_by_name, COALESCE(ma.name, 'Main Cash') AS money_account_name
       FROM purchase_invoice_payments pip
       LEFT JOIN users u ON u.id = pip.recorded_by
+      LEFT JOIN money_accounts ma ON ma.id = pip.money_account_id
       WHERE pip.purchase_invoice_id = ?
       ORDER BY pip.created_at DESC
     `).bind(invoice.id).all();
@@ -773,8 +775,8 @@ purchasing.post('/invoices/:id/payments', requirePermissions(['manage_purchasing
     return c.json({ message: 'Payment amount must be a positive number.' }, 400);
   }
 
-  const paymentMethod = body.paymentMethod || 'CASH';
-  const validMethods = ['CASH', 'CARD', 'BANK_TRANSFER', 'CHEQUE', 'WIRE'];
+  let paymentMethod = body.paymentMethod || 'CASH';
+  const validMethods = ['CASH', 'CARD', 'BANK_TRANSFER', 'CHEQUE', 'WIRE', 'MOBILE_MONEY'];
   if (!validMethods.includes(paymentMethod)) {
     return c.json({ message: `Invalid payment method. Must be one of: ${validMethods.join(', ')}.` }, 400);
   }
@@ -821,6 +823,9 @@ purchasing.post('/invoices/:id/payments', requirePermissions(['manage_purchasing
   }
 
   const paymentId = uuidv4();
+  // "Paid from": the Bank & Cash account the money leaves (Main Cash when none was chosen).
+  const cash = await resolveCashAccount(c.env.DB, body.moneyAccountId ?? body.money_account_id, invoice.branch_id || null);
+  paymentMethod = methodFor(cash, paymentMethod);
   const isFullyPaid = Math.abs(amount - summary.balance) < 0.01;
 
   const stmts: any[] = [
@@ -833,9 +838,9 @@ purchasing.post('/invoices/:id/payments', requirePermissions(['manage_purchasing
         - (SELECT COALESCE(SUM(amount), 0) FROM purchase_invoice_payments WHERE purchase_invoice_id = pi.id) >= ? - 0.001
     `).bind(realInvoiceId, amount).mustAffect('Payment exceeds the remaining balance (another payment was just recorded). Please refresh.'),
     c.env.DB.prepare(`
-      INSERT INTO purchase_invoice_payments (id, purchase_invoice_id, amount, payment_method, payment_date, notes, recorded_by)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).bind(paymentId, realInvoiceId, amount, paymentMethod, paymentDate, body.notes || null, userId),
+      INSERT INTO purchase_invoice_payments (id, purchase_invoice_id, amount, payment_method, payment_date, notes, recorded_by, money_account_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(paymentId, realInvoiceId, amount, paymentMethod, paymentDate, body.notes || null, userId, cash.id),
   ];
 
   // Update invoice payment status (PAID or PARTIALLY_PAID)
@@ -845,7 +850,7 @@ purchasing.post('/invoices/:id/payments', requirePermissions(['manage_purchasing
   ).bind(newStatus, realInvoiceId));
 
   stmts.push(createAuditLogStmt(c, 'PURCHASE_INVOICE_PAYMENT', 'purchase_invoices', realInvoiceId, null, {
-    amount, paymentMethod, paymentDate, isFullyPaid
+    amount, paymentMethod, paymentDate, isFullyPaid, paidFrom: cash.name,
   }));
 
   const paymentJournal = await prepareJournalEntryPosting(c, {
@@ -857,7 +862,7 @@ purchasing.post('/invoices/:id/payments', requirePermissions(['manage_purchasing
     userId,
     lines: [
       { accountCode: '2010', debitAmount: amount, creditAmount: 0 },
-      { accountCode: '1010', debitAmount: 0, creditAmount: amount },
+      { accountCode: cash.code, debitAmount: 0, creditAmount: amount },
     ],
   });
   stmts.push(...paymentJournal.statements);
@@ -888,9 +893,10 @@ purchasing.get('/invoices/:id/payments', async (c) => {
   if (!invoice) return c.json({ message: 'Purchase invoice not found.' }, 404);
 
   const { results: payments } = await c.env.DB.prepare(`
-    SELECT pip.*, u.full_name AS recorded_by_name
+    SELECT pip.*, u.full_name AS recorded_by_name, COALESCE(ma.name, 'Main Cash') AS money_account_name
     FROM purchase_invoice_payments pip
     LEFT JOIN users u ON u.id = pip.recorded_by
+    LEFT JOIN money_accounts ma ON ma.id = pip.money_account_id
     WHERE pip.purchase_invoice_id = ?
     ORDER BY pip.created_at ASC
   `).bind(purchaseInvoiceId).all();

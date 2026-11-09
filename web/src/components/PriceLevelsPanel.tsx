@@ -1,3 +1,4 @@
+import { MoneyAccountSelect } from './MoneyAccountSelect';
 import { useEffect, useState } from 'react';
 import { Plus } from 'lucide-react';
 import { apiGet, apiPatch, apiPost } from '../api/client';
@@ -39,6 +40,7 @@ export function PriceLevelsPanel({ productId, isOwner, canCosts, warehouses, bra
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { load(); }, [productId]);
 
+  const [paidFrom, setPaidFrom] = useState('');
   const add = async () => {
     const [kind, id] = form.where.split(':');
     if (!(Number(form.costPrice) >= 0) || form.costPrice === '') { addToast('error', 'Enter the new cost price.'); return; }
@@ -51,6 +53,7 @@ export function PriceLevelsPanel({ productId, isOwner, canCosts, warehouses, bra
         costPrice: Number(form.costPrice), sellingPrice: Number(form.sellingPrice), quantity: Number(form.quantity),
         ownerType: kind === 'B' ? 'BRANCH' : 'WAREHOUSE', branchId: kind === 'B' ? id : undefined, warehouseId: kind === 'W' ? id : undefined,
         payment: form.payment, note: form.note || undefined,
+        moneyAccountId: form.payment === 'PAID' ? (paidFrom || undefined) : undefined,
       });
       addToast('success', `New price level added: ${form.quantity} at $${Number(form.sellingPrice).toFixed(2)}. The current stock sells first.`);
       setAdding(false); setForm({ costPrice: '', sellingPrice: '', quantity: '', where: '', payment: 'PAID', note: '' });
@@ -138,8 +141,15 @@ export function PriceLevelsPanel({ productId, isOwner, canCosts, warehouses, bra
             </select></label>
           <label className="form-field"><span className="form-field__label">Supplier</span>
             <select className="form-select" id="level-payment" value={form.payment} onChange={(e) => setForm((f) => ({ ...f, payment: e.target.value }))}>
-              <option value="PAID">Paid (cash)</option><option value="OWED">Not paid yet (owed)</option>
+              <option value="PAID">Paid now</option><option value="OWED">Not paid yet (owed)</option>
             </select></label>
+          {form.payment === 'PAID' && (
+            <div>
+              <MoneyAccountSelect id="level-paid-from" label="Paid from" value={paidFrom} onChange={setPaidFrom}
+                branchId={form.where.startsWith('B:') ? form.where.slice(2) : null}
+                amount={(Number(form.costPrice) || 0) * (Number(form.quantity) || 0)} />
+            </div>
+          )}
           <label className="form-field" style={{ gridColumn: '1 / -1' }}><span className="form-field__label">Note (optional)</span>
             <input className="form-input" value={form.note} onChange={(e) => setForm((f) => ({ ...f, note: e.target.value }))} placeholder="e.g. supplier, invoice number" /></label>
           <div style={{ gridColumn: '1 / -1', display: 'flex', gap: 8, justifyContent: 'flex-end' }}>

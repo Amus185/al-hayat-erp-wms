@@ -90,3 +90,76 @@ test('only the Owner or accountants manage Bank & Cash; a branch manager cannot'
   assert.equal((await t.api('GET', '/accounting/money-accounts', undefined, mgr.token)).status, 403);
   assert.equal((await t.api('POST', '/accounting/money-accounts', { kind: 'CASH', provider: 'Safe' }, mgr.token)).status, 403);
 });
+
+test('"Paid from" / "Received into": every kind of payment moves the chosen account; wrong or closed accounts are refused', async () => {
+  const { BRANCH_CL, WH_MAIN } = await import('./helpers');
+  const bal = async (id: string) => (await accounts()).accounts.find((a: any) => a.id === id).balance;
+  const mk = async (body: any) => { const r = await t.api('POST', '/accounting/money-accounts', body); assert.equal(r.status, 201, JSON.stringify(r.body)); return r.body.id as string; };
+  const zaad = await mk({ kind: 'MOBILE_MONEY', provider: 'ZAAD (Telesom)', name: 'ZAAD HQ', branchId: BRANCH_HQ, opening: { amount: 5000, source: 'NEW_MONEY' } });
+  const bank = await mk({ kind: 'BANK', provider: 'Dahabshil Bank International', name: 'DBI Company', opening: { amount: 5000, source: 'NEW_MONEY' } });
+  const clCash = await mk({ kind: 'CASH', provider: 'Cash drawer', name: 'CL Drawer', branchId: BRANCH_CL });
+
+  // Supplier payment from the company bank account.
+  const product = await t.createProduct({ cost: 10, price: 30 });
+  const sup = await t.api('POST', '/purchasing/suppliers', { name: 'Money Supplier', phone: '0631231231' });
+  const po = await t.api('POST', '/purchasing/orders', { supplierId: sup.body.id, warehouseId: WH_MAIN, lines: [{ productId: product, quantity: 10, unitCost: 10 }] });
+  assert.equal((await t.api('POST', '/purchasing/receipts', { purchaseOrderId: po.body.id, warehouseId: WH_MAIN, lines: [{ productId: product, quantityReceived: 10 }] })).status, 201);
+  const b0 = await bal(bank);
+  const sp = await t.api('POST', `/purchasing/invoices/pi-${po.body.id}/payments`, { amount: 60, moneyAccountId: bank });
+  assert.equal(sp.status, 201, JSON.stringify(sp.body));
+  assert.equal(await bal(bank), b0 - 60, 'the bank account paid the supplier');
+  const pip = (await t.q('SELECT money_account_id, payment_method FROM purchase_invoice_payments WHERE purchase_invoice_id = $1', [`pi-${po.body.id}`]))[0];
+  assert.equal(pip.money_account_id, bank); assert.equal(pip.payment_method, 'BANK_TRANSFER');
+
+  // A sale with a deposit received into ZAAD (HQ), then a customer payment into ZAAD.
+  await t.setStock(product, 5, { branchId: BRANCH_HQ });
+  const cust = await t.api('POST', '/sales/customers', { name: 'Money Customer', phone: '0637778899' });
+  const z0 = await bal(zaad);
+  const sale = await t.api('POST', '/sales/orders', { branchId: BRANCH_HQ, customerId: cust.body.id, fulfillmentType: 'PICKUP', isCreditSale: true, initialDeposit: 20, moneyAccountId: zaad, lines: [{ productId: product, quantity: 2, unitPrice: 30 }] });
+  assert.equal(sale.status, 201, JSON.stringify(sale.body));
+  assert.equal(await bal(zaad), z0 + 20, 'the deposit went into ZAAD');
+  const inv = (await t.q('SELECT id FROM invoices WHERE sales_order_id = $1', [sale.body.id]))[0].id;
+  const cp = await t.api('POST', '/sales/payments', { customerId: cust.body.id, allocationType: 'INVOICE', invoiceId: inv, amount: 15, moneyAccountId: zaad });
+  assert.equal(cp.status, 201, JSON.stringify(cp.body));
+  assert.equal(cp.body.receipt.payment_method, 'MOBILE_MONEY');
+  assert.equal(await bal(zaad), z0 + 35);
+
+  // The CL drawer can't take an HQ payment; a closed account is refused; an unknown one too.
+  const wrong = await t.api('POST', '/sales/payments', { customerId: cust.body.id, allocationType: 'INVOICE', invoiceId: inv, amount: 5, moneyAccountId: clCash });
+  assert.equal(wrong.status, 400); assert.match(wrong.body.message, /another branch/);
+  assert.equal(await bal(zaad), z0 + 35, 'a refused payment moves nothing');
+  assert.equal((await t.api('POST', '/sales/payments', { customerId: cust.body.id, allocationType: 'INVOICE', invoiceId: inv, amount: 5, moneyAccountId: 'nope' })).status, 400);
+
+  // Expense paid from ZAAD (HQ), salary advance from the company bank.
+  const ex = await t.api('POST', '/expenses', { title: 'Fuel', amount: 12, category: 'Transport', expense_date: new Date().toISOString().slice(0, 10), branch_id: BRANCH_HQ, moneyAccountId: zaad });
+  assert.equal(ex.status, 201, JSON.stringify(ex.body));
+  assert.equal(await bal(zaad), z0 + 23);
+  const emp = await t.api('POST', '/employees', { full_name: 'Money Worker', branch_id: BRANCH_HQ, salary: 300 });
+  const b1 = await bal(bank);
+  const adv = await t.api('POST', `/employees/${emp.body.id}/advances`, { kind: 'ADVANCE', amount: 40, moneyAccountId: bank });
+  assert.equal(adv.status, 201, JSON.stringify(adv.body));
+  assert.equal(await bal(bank), b1 - 40);
+  assert.equal(adv.body.method, 'BANK');
+
+  // Close ZAAD after emptying it: then it is refused.
+  await t.api('POST', '/accounting/money-accounts/transfer', { fromId: zaad, toId: (await accounts()).accounts.find((a: any) => a.name === 'Main Cash').id, amount: await bal(zaad), branchId: BRANCH_HQ });
+  assert.equal((await t.api('PATCH', `/accounting/money-accounts/${zaad}`, { is_active: false })).status, 200);
+  const closed = await t.api('POST', '/expenses', { title: 'Fuel 2', amount: 1, category: 'Transport', expense_date: new Date().toISOString().slice(0, 10), branch_id: BRANCH_HQ, moneyAccountId: zaad });
+  assert.equal(closed.status, 400); assert.match(closed.body.message, /closed/);
+
+  // Nothing chosen = Main Cash, as before.
+  const plain = await t.api('POST', '/expenses', { title: 'Tea', amount: 3, category: 'Other', expense_date: new Date().toISOString().slice(0, 10), branch_id: BRANCH_HQ });
+  assert.equal(plain.status, 201);
+  assert.equal((await t.q('SELECT money_account_id FROM expenses WHERE id = $1', [plain.body.id]))[0].money_account_id, null);
+
+  // The books still balance.
+  assert.equal((await t.api('GET', '/accounting/trial-balance')).body.totals.is_balanced, true);
+  assert.equal((await t.api('GET', '/accounting/balance-sheet')).body.totals.is_balanced, true);
+
+  // What a CL person may choose: CL's own and company-wide accounts, never HQ's, no balances.
+  const clUser = await t.createUser({ branchId: BRANCH_CL, roleId: 'role-branch-user', role: 'branch_user' });
+  const opts = (await t.api('GET', '/money-accounts/options', undefined, clUser.token)).body as any[];
+  assert.ok(opts.some((o) => o.id === clCash) && opts.some((o) => o.id === bank), 'own + company-wide');
+  assert.ok(!opts.some((o) => o.name === 'ZAAD HQ'), 'never another branch');
+  assert.ok(opts.every((o) => o.balance === undefined), 'no balances without accounting access');
+});

@@ -1,3 +1,4 @@
+import { MoneyAccountSelect } from '../components/MoneyAccountSelect';
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -120,7 +121,8 @@ export function CreateSalesOrderPage() {
   // Sale Type: CASH_SALE vs DEBT_SALE
   const [saleType, setSaleType] = useState<'CASH' | 'DEBT'>('CASH');
   const [initialDeposit, setInitialDeposit] = useState<number>(0);
-  const [depositPaymentMethod, setDepositPaymentMethod] = useState<'CASH' | 'CARD' | 'BANK_TRANSFER'>('CASH');
+  const [depositPaymentMethod] = useState<'CASH' | 'CARD' | 'BANK_TRANSFER'>('CASH');
+  const [intoId, setIntoId] = useState('');
 
   // Service Installation Fee states
   const [hasInstallationFee, setHasInstallationFee] = useState(false);
@@ -405,6 +407,7 @@ export function CreateSalesOrderPage() {
       isCreditSale: isCredit,
       initialDeposit: isCredit ? effectiveDeposit : 0,
       depositPaymentMethod,
+      moneyAccountId: intoId || undefined,
       lines: lines.map((l) => ({
         productId: l.productId,
         quantity: Number(l.quantity),
@@ -434,7 +437,7 @@ export function CreateSalesOrderPage() {
       // Cash sale: create and complete in full
       const order = await apiPost<any>('/sales/orders', payload);
       try {
-        await apiPost(`/sales/orders/${order.id}/complete`, { isCreditSale: false });
+        await apiPost(`/sales/orders/${order.id}/complete`, { isCreditSale: false, moneyAccountId: intoId || undefined });
         addToast('success', 'Sale completed in full. Inventory deducted and payment recorded.');
         navigate('/sales');
       } catch (completeErr: any) {
@@ -946,6 +949,13 @@ export function CreateSalesOrderPage() {
               />
             </div>
           )}
+        </div>
+
+        {/* Where the money goes (cash sale, or the deposit of a sale on credit) */}
+        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+          <div style={{ width: '100%', maxWidth: 420 }}>
+            <MoneyAccountSelect id="pageSaleInto" label={saleType === 'DEBT' ? 'Deposit received into' : 'Money received into'} value={intoId} onChange={setIntoId} branchId={branchId || null} />
+          </div>
         </div>
 
         {/* Action Buttons */}

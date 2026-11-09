@@ -1,3 +1,4 @@
+import { resolveCashAccount, assertCashAccountBranch, methodFor } from '../services/money';
 import { Hono } from 'hono';
 import { Env, uuidv4 } from '../db';
 import { PgAdapter } from '../pg-client';
@@ -757,6 +758,10 @@ sales.post('/payments', requirePermissions(['manage_sales']), async (c) => {
 
   const customer = await customerOr404(c, customerId as string);
   if (!customer) return c.json({ message: 'Customer not found.' }, 404);
+  // "Received into": the Bank & Cash account (Main Cash when none was chosen). Its branch is checked
+  // below, once the payment's branch is known.
+  const cash = await resolveCashAccount(c.env.DB, body.moneyAccountId ?? body.money_account_id, undefined);
+  const method = methodFor(cash, paymentMethod || 'CASH');
 
   // Branch scope: a payment settles a document of the caller's branch and is
   // booked in the branch of that document (never the cashier's by default).
@@ -813,9 +818,9 @@ sales.post('/payments', requirePermissions(['manage_sales']), async (c) => {
 
     const ipId = uuidv4();
     stmts.push(c.env.DB.prepare(`
-      INSERT INTO invoice_payments (id, invoice_id, amount, payment_method, payment_date, notes, recorded_by, receipt_number, previous_balance, running_balance)
-      VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?, ?, ?, ?)
-    `).bind(ipId, invoiceId, payAmount, paymentMethod || 'CASH', notes?.trim() || 'Invoice Payment', userId, receiptNumber, curBalance, remainingItemBalance));
+      INSERT INTO invoice_payments (id, invoice_id, amount, payment_method, payment_date, notes, recorded_by, receipt_number, previous_balance, running_balance, money_account_id)
+      VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?, ?, ?, ?, ?)
+    `).bind(ipId, invoiceId, payAmount, method, notes?.trim() || 'Invoice Payment', userId, receiptNumber, curBalance, remainingItemBalance, cash.id));
 
     const newStatus = remainingItemBalance <= 0 ? 'PAID' : 'PARTIALLY_PAID';
     const paidAtClause = newStatus === 'PAID' ? ', paid_at = CURRENT_TIMESTAMP' : '';
@@ -828,9 +833,9 @@ sales.post('/payments', requirePermissions(['manage_sales']), async (c) => {
     }
 
     stmts.push(c.env.DB.prepare(`
-      INSERT INTO customer_payments (id, receipt_number, customer_id, allocation_type, invoice_id, amount, payment_method, payment_date, previous_balance, remaining_balance, notes, recorded_by, branch_id)
-      VALUES (?, ?, ?, 'INVOICE', ?, ?, ?, CURRENT_TIMESTAMP, ?, ?, ?, ?, ?)
-    `).bind(paymentId, receiptNumber, customerId, invoiceId, payAmount, paymentMethod || 'CASH', previousBalance, Math.max(0, previousBalance - payAmount), notes?.trim() || null, userId, paymentBranch));
+      INSERT INTO customer_payments (id, receipt_number, customer_id, allocation_type, invoice_id, amount, payment_method, payment_date, previous_balance, remaining_balance, notes, recorded_by, branch_id, money_account_id)
+      VALUES (?, ?, ?, 'INVOICE', ?, ?, ?, CURRENT_TIMESTAMP, ?, ?, ?, ?, ?, ?)
+    `).bind(paymentId, receiptNumber, customerId, invoiceId, payAmount, method, previousBalance, Math.max(0, previousBalance - payAmount), notes?.trim() || null, userId, paymentBranch, cash.id));
 
   } else if (allocationType === 'MANUAL_DEBT') {
     if (!manualDebtId) return c.json({ message: 'Manual debt ID is required.' }, 400);
@@ -859,18 +864,18 @@ sales.post('/payments', requirePermissions(['manage_sales']), async (c) => {
     `).bind(payAmount, payAmount, manualDebtId, payAmount).mustAffect('Payment exceeds the remaining charge (another payment was just recorded). Please refresh.'));
 
     stmts.push(c.env.DB.prepare(`
-      INSERT INTO customer_payments (id, receipt_number, customer_id, allocation_type, manual_debt_id, amount, payment_method, payment_date, previous_balance, remaining_balance, notes, recorded_by, branch_id)
-      VALUES (?, ?, ?, 'MANUAL_DEBT', ?, ?, ?, CURRENT_TIMESTAMP, ?, ?, ?, ?, ?)
-    `).bind(paymentId, receiptNumber, customerId, manualDebtId, payAmount, paymentMethod || 'CASH', previousBalance, Math.max(0, previousBalance - payAmount), notes?.trim() || null, userId, paymentBranch));
+      INSERT INTO customer_payments (id, receipt_number, customer_id, allocation_type, manual_debt_id, amount, payment_method, payment_date, previous_balance, remaining_balance, notes, recorded_by, branch_id, money_account_id)
+      VALUES (?, ?, ?, 'MANUAL_DEBT', ?, ?, ?, CURRENT_TIMESTAMP, ?, ?, ?, ?, ?, ?)
+    `).bind(paymentId, receiptNumber, customerId, manualDebtId, payAmount, method, previousBalance, Math.max(0, previousBalance - payAmount), notes?.trim() || null, userId, paymentBranch, cash.id));
 
   } else {
     // General account payment: no document to follow, so it belongs to the
     // receiving branch (branch users: their own; admins: chosen or company-level).
     paymentBranch = await resolveWriteBranch(c, body.branchId);
     stmts.push(c.env.DB.prepare(`
-      INSERT INTO customer_payments (id, receipt_number, customer_id, allocation_type, amount, payment_method, payment_date, previous_balance, remaining_balance, notes, recorded_by, branch_id)
-      VALUES (?, ?, ?, 'ACCOUNT', ?, ?, CURRENT_TIMESTAMP, ?, ?, ?, ?, ?)
-    `).bind(paymentId, receiptNumber, customerId, payAmount, paymentMethod || 'CASH', previousBalance, Math.max(0, previousBalance - payAmount), notes?.trim() || 'General Customer Account Payment', userId, paymentBranch));
+      INSERT INTO customer_payments (id, receipt_number, customer_id, allocation_type, amount, payment_method, payment_date, previous_balance, remaining_balance, notes, recorded_by, branch_id, money_account_id)
+      VALUES (?, ?, ?, 'ACCOUNT', ?, ?, CURRENT_TIMESTAMP, ?, ?, ?, ?, ?, ?)
+    `).bind(paymentId, receiptNumber, customerId, payAmount, method, previousBalance, Math.max(0, previousBalance - payAmount), notes?.trim() || 'General Customer Account Payment', userId, paymentBranch, cash.id));
   }
 
   stmts.push(createAuditLogStmt(c, 'CUSTOMER_PAYMENT_RECORD', 'customer_payments', paymentId, null, {
@@ -881,12 +886,14 @@ sales.post('/payments', requirePermissions(['manage_sales']), async (c) => {
     paymentMethod,
   }));
 
-  // GL: DR Cash, CR Accounts Receivable — committed with the payment itself.
+  // The chosen account must belong to the payment's branch (or be company-wide).
+  assertCashAccountBranch(cash, paymentBranch);
+  // GL: DR the chosen Bank & Cash account, CR Accounts Receivable — committed with the payment itself.
   const paymentJournal = await prepareCustomerPaymentJournalEntry(
     c,
     { id: paymentId, amount: payAmount, paymentDate: new Date().toISOString().split('T')[0] },
     { id: customerId, order_number: billNumber || `CUST-${customerId.slice(0, 6)}`, branch_id: paymentBranch },
-    userId
+    userId, undefined, undefined, cash.code,
   );
   stmts.push(...paymentJournal.statements);
 
@@ -904,7 +911,8 @@ sales.post('/payments', requirePermissions(['manage_sales']), async (c) => {
       customer_phone: customer.phone,
       customer_email: customer.email,
       customer_address: customer.address,
-      payment_method: paymentMethod || 'CASH',
+      payment_method: method,
+      money_account_name: cash.name,
       payment_date: new Date().toISOString(),
       amount: payAmount,
       previous_balance: previousBalance,
@@ -922,10 +930,11 @@ sales.get('/payments/:receiptNumber/receipt', async (c) => {
   const receiptNumber = c.req.param('receiptNumber');
   const payment = await c.env.DB.prepare(`
     SELECT cp.*, c.name AS customer_name, c.phone AS customer_phone, c.email AS customer_email, c.address AS customer_address,
-           u.full_name AS recorded_by_name
+           u.full_name AS recorded_by_name, COALESCE(ma.name, 'Main Cash') AS money_account_name
     FROM customer_payments cp
     JOIN customers c ON c.id = cp.customer_id
     LEFT JOIN users u ON u.id = cp.recorded_by
+    LEFT JOIN money_accounts ma ON ma.id = cp.money_account_id
     WHERE cp.receipt_number = ? ${branchSql(scope, 'cp.branch_id')}
   `).bind(receiptNumber).first() as any;
 
@@ -1235,9 +1244,10 @@ sales.get('/orders/:id', async (c) => {
       Number(order.invoice_discount || 0)
     );
     const { results: pmts } = await c.env.DB.prepare(`
-      SELECT ip.*, u.full_name AS recorded_by_name
+      SELECT ip.*, u.full_name AS recorded_by_name, COALESCE(ma.name, 'Main Cash') AS money_account_name
       FROM invoice_payments ip
       LEFT JOIN users u ON u.id = ip.recorded_by
+      LEFT JOIN money_accounts ma ON ma.id = ip.money_account_id
       WHERE ip.invoice_id = ?
       ORDER BY ip.created_at DESC
     `).bind(order.invoice_id).all();
@@ -1298,7 +1308,7 @@ async function assertInvoiceInScope(c: any, invoiceId: string | undefined) {
 // included): payment row + its ledger entry + PAID statuses, in one batch.
 // The order status change is guarded on `fromStatus`, so a double-submit
 // rolls back instead of paying twice.
-async function prepareInvoiceSettlement(c: any, orderId: string, fromStatus: string, userId: string, note: string) {
+async function prepareInvoiceSettlement(c: any, orderId: string, fromStatus: string, userId: string, note: string, moneyAccountId?: unknown) {
   const invoice = await c.env.DB.prepare(`
     SELECT i.id, i.total_amount, i.discount_amount, so.order_number, so.branch_id, COALESCE(so.installation_fee, 0) AS installation_fee,
            (SELECT COALESCE(SUM(amount), 0) FROM invoice_payments WHERE invoice_id = i.id) AS paid
@@ -1317,13 +1327,16 @@ async function prepareInvoiceSettlement(c: any, orderId: string, fromStatus: str
   ];
   if (remaining > 0) {
     const paymentId = uuidv4();
+    // "Received into": the chosen Bank & Cash account of this branch (Main Cash when none).
+    const cash = await resolveCashAccount(c.env.DB, moneyAccountId, invoice.branch_id ?? null);
     statements.push(c.env.DB.prepare(`
-      INSERT INTO invoice_payments (id, invoice_id, amount, payment_method, payment_date, notes, recorded_by)
-      VALUES (?, ?, ?, 'CASH', CURRENT_TIMESTAMP, ?, ?)
-    `).bind(paymentId, invoice.id, remaining, note, userId));
+      INSERT INTO invoice_payments (id, invoice_id, amount, payment_method, payment_date, notes, recorded_by, money_account_id)
+      VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?, ?)
+    `).bind(paymentId, invoice.id, remaining, methodFor(cash, 'CASH'), note, userId, cash.id));
     const journal = await prepareCustomerPaymentJournalEntry(
       c, { id: paymentId, amount: remaining },
       { id: orderId, order_number: String(invoice.order_number || orderId), branch_id: invoice.branch_id }, userId,
+      undefined, undefined, cash.code,
     );
     statements.push(...journal.statements);
   }
@@ -1570,7 +1583,11 @@ sales.post('/orders', requirePermissions(['manage_sales']), async (c) => {
 
   const isCreditSale = Boolean(body.isCreditSale);
   const initialDeposit = Math.max(0, Number(body.initialDeposit || 0));
-  const depositMethod = body.depositPaymentMethod || 'CASH';
+  // "Received into": the Bank & Cash account the deposit goes to (Main Cash when none was chosen).
+  const depositCash = Number(body.initialDeposit || 0) > 0
+    ? await resolveCashAccount(c.env.DB, body.moneyAccountId ?? body.money_account_id, body.branchId ?? null)
+    : await resolveCashAccount(c.env.DB, undefined, null);
+  const depositMethod = methodFor(depositCash, body.depositPaymentMethod || 'CASH');
 
   let invReqs: Array<{ productId: string; quantity: number; productName: string }> = [];
   // If credit sale, do immediate stock check so inventory can be deducted at creation
@@ -1682,15 +1699,15 @@ sales.post('/orders', requirePermissions(['manage_sales']), async (c) => {
       const paymentId = uuidv4();
 
       stmts.push(c.env.DB.prepare(`
-        INSERT INTO invoice_payments (id, invoice_id, amount, payment_method, payment_date, notes, recorded_by, receipt_number, previous_balance, running_balance)
-        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, 'Upfront Deposit at Checkout', ?, ?, ?, ?)
-      `).bind(uuidv4(), invoiceId, deposit, depositMethod, userId, receiptNumber, grandTotal, remaining));
+        INSERT INTO invoice_payments (id, invoice_id, amount, payment_method, payment_date, notes, recorded_by, receipt_number, previous_balance, running_balance, money_account_id)
+        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, 'Upfront Deposit at Checkout', ?, ?, ?, ?, ?)
+      `).bind(uuidv4(), invoiceId, deposit, depositMethod, userId, receiptNumber, grandTotal, remaining, depositCash.id));
 
       if (body.customerId) {
         stmts.push(c.env.DB.prepare(`
-          INSERT INTO customer_payments (id, receipt_number, customer_id, allocation_type, invoice_id, amount, payment_method, payment_date, previous_balance, remaining_balance, notes, recorded_by, branch_id)
-          VALUES (?, ?, ?, 'INVOICE', ?, ?, ?, CURRENT_TIMESTAMP, ?, ?, 'Upfront Deposit at Checkout', ?, ?)
-        `).bind(paymentId, receiptNumber, body.customerId, invoiceId, deposit, depositMethod, grandTotal, remaining, userId, body.branchId));
+          INSERT INTO customer_payments (id, receipt_number, customer_id, allocation_type, invoice_id, amount, payment_method, payment_date, previous_balance, remaining_balance, notes, recorded_by, branch_id, money_account_id)
+          VALUES (?, ?, ?, 'INVOICE', ?, ?, ?, CURRENT_TIMESTAMP, ?, ?, 'Upfront Deposit at Checkout', ?, ?, ?)
+        `).bind(paymentId, receiptNumber, body.customerId, invoiceId, deposit, depositMethod, grandTotal, remaining, userId, body.branchId, depositCash.id));
       }
     }
 
@@ -1701,7 +1718,7 @@ sales.post('/orders', requirePermissions(['manage_sales']), async (c) => {
     stmts.push(...issue.stmts);
     stmts.push(...(await prepareSaleJournalEntry(c, orderRef, netTotal, cogsAmount, userId, undefined, undefined, installFee)).statements);
     if (deposit > 0) {
-      stmts.push(...(await prepareCustomerPaymentJournalEntry(c, { id: invoiceId, amount: deposit }, orderRef, userId)).statements);
+      stmts.push(...(await prepareCustomerPaymentJournalEntry(c, { id: invoiceId, amount: deposit }, orderRef, userId, undefined, undefined, depositCash.code)).statements);
     }
   }
 
@@ -1960,7 +1977,8 @@ sales.post('/orders/:id/pay', requirePermissions(['manage_sales']), async (c) =>
   }
 
   try {
-    const settle = await prepareInvoiceSettlement(c, orderId as string, 'PAYING', userId, 'Full payment via Mark as Paid');
+    const payBody = await c.req.json().catch(() => ({})) as any;
+    const settle = await prepareInvoiceSettlement(c, orderId as string, 'PAYING', userId, 'Full payment via Mark as Paid', payBody.moneyAccountId ?? payBody.money_account_id);
     if (!settle) {
       await c.env.DB.prepare("UPDATE sales_orders SET status = 'INVOICED' WHERE id = ?").bind(orderId).run();
       return c.json({ message: 'No invoice found for this order.' }, 400);
@@ -1972,6 +1990,7 @@ sales.post('/orders/:id/pay', requirePermissions(['manage_sales']), async (c) =>
       await c.env.DB.prepare("UPDATE sales_orders SET status = 'INVOICED' WHERE id = ?").bind(orderId).run();
     } catch (_) {}
     if (err?.name === 'ConflictError') return c.json({ message: err.message }, 409);
+    if (err?.name === 'ScopeError') return c.json({ message: err.message }, err.status === 400 ? 400 : 403); // e.g. the chosen account is closed
     return c.json({ message: 'Payment processing failed. Order rolled back to INVOICED.', error: err?.message }, 500);
   }
 });
@@ -2000,7 +2019,8 @@ sales.post('/orders/:id/complete', requirePermissions(['manage_sales']), async (
       await c.env.DB.prepare("UPDATE sales_orders SET status = 'PAID' WHERE id = ?").bind(orderId).run();
       return c.json({ success: true, message: 'Payment recorded.' });
     }
-    const settle = await prepareInvoiceSettlement(c, orderId as string, 'INVOICED', userId, 'Full payment via Complete Sale');
+    const settleBody = await c.req.json().catch(() => ({})) as any;
+    const settle = await prepareInvoiceSettlement(c, orderId as string, 'INVOICED', userId, 'Full payment via Complete Sale', settleBody.moneyAccountId ?? settleBody.money_account_id);
     if (!settle) return c.json({ message: 'Order is INVOICED but no invoice found.' }, 500);
     await c.env.DB.batch(settle.statements);
     return c.json({ success: true, invoiceId: settle.invoiceId });
@@ -2122,7 +2142,9 @@ sales.post('/orders/:id/complete', requirePermissions(['manage_sales']), async (
     const body = await c.req.json().catch(() => ({}));
     const isCreditSale = Boolean(body.isCreditSale);
     const amountPaid = body.amountPaid !== undefined ? Math.min(grandTotal, Math.max(0, Number(body.amountPaid))) : grandTotal;
-    const paymentMethod = body.paymentMethod || 'CASH';
+    // "Received into": the Bank & Cash account of the sale's branch (Main Cash when none was chosen).
+    const cash = await resolveCashAccount(c.env.DB, body.moneyAccountId ?? body.money_account_id, (order as any).branch_id ?? null);
+    const paymentMethod = methodFor(cash, body.paymentMethod || 'CASH');
     const isFullPay = amountPaid >= grandTotal;
     const invoiceStatus = isFullPay ? 'PAID' : (amountPaid > 0 ? 'PARTIALLY_PAID' : 'UNPAID');
     const orderFinalStatus = isFullPay ? 'PAID' : 'CONFIRMED';
@@ -2138,15 +2160,15 @@ sales.post('/orders/:id/complete', requirePermissions(['manage_sales']), async (
     // Insert payment record if amountPaid > 0
     if (amountPaid > 0) {
       stmts.push(c.env.DB.prepare(`
-        INSERT INTO invoice_payments (id, invoice_id, amount, payment_method, payment_date, notes, recorded_by, receipt_number, previous_balance, running_balance)
-        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?, ?, ?, ?)
-      `).bind(uuidv4(), invoiceId, amountPaid, paymentMethod, isFullPay ? 'Full payment via Complete Sale' : 'Deposit / Partial payment via Complete Sale', userId, receiptNumber, grandTotal, remainingBalance));
+        INSERT INTO invoice_payments (id, invoice_id, amount, payment_method, payment_date, notes, recorded_by, receipt_number, previous_balance, running_balance, money_account_id)
+        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?, ?, ?, ?, ?)
+      `).bind(uuidv4(), invoiceId, amountPaid, paymentMethod, isFullPay ? 'Full payment via Complete Sale' : 'Deposit / Partial payment via Complete Sale', userId, receiptNumber, grandTotal, remainingBalance, cash.id));
 
       if ((order as any).customer_id) {
         stmts.push(c.env.DB.prepare(`
-          INSERT INTO customer_payments (id, receipt_number, customer_id, allocation_type, invoice_id, amount, payment_method, payment_date, previous_balance, remaining_balance, notes, recorded_by, branch_id)
-          VALUES (?, ?, ?, 'INVOICE', ?, ?, ?, CURRENT_TIMESTAMP, ?, ?, ?, ?, ?)
-        `).bind(uuidv4(), receiptNumber, (order as any).customer_id, invoiceId, amountPaid, paymentMethod, grandTotal, remainingBalance, isFullPay ? 'Full payment via Complete Sale' : 'Deposit / Partial payment via Complete Sale', userId, (order as any).branch_id || null));
+          INSERT INTO customer_payments (id, receipt_number, customer_id, allocation_type, invoice_id, amount, payment_method, payment_date, previous_balance, remaining_balance, notes, recorded_by, branch_id, money_account_id)
+          VALUES (?, ?, ?, 'INVOICE', ?, ?, ?, CURRENT_TIMESTAMP, ?, ?, ?, ?, ?, ?)
+        `).bind(uuidv4(), receiptNumber, (order as any).customer_id, invoiceId, amountPaid, paymentMethod, grandTotal, remainingBalance, isFullPay ? 'Full payment via Complete Sale' : 'Deposit / Partial payment via Complete Sale', userId, (order as any).branch_id || null, cash.id));
       }
     }
 
@@ -2215,7 +2237,7 @@ sales.post('/orders/:id/complete', requirePermissions(['manage_sales']), async (
         prefetchedFiscalPeriodId: sharedFiscalPeriodId || undefined,
         prefetchedCoaMap: sharedCoaMap,
         lines: [
-          { accountCode: '1010', debitAmount: amountPaid, creditAmount: 0 },
+          { accountCode: cash.code, debitAmount: amountPaid, creditAmount: 0 },
           { accountCode: '1020', debitAmount: 0, creditAmount: amountPaid },
         ],
       });
@@ -2235,6 +2257,7 @@ sales.post('/orders/:id/complete', requirePermissions(['manage_sales']), async (
     } catch (_) {}
     console.error('Order completion failed:', err);
     if (err?.name === 'ConflictError') return c.json({ message: err.message }, 409);
+    if (err?.name === 'ScopeError') return c.json({ message: err.message }, err.status === 400 ? 400 : 403); // e.g. the chosen account is closed
     return c.json({ message: 'Order completion failed. Rolled back.', error: err?.message }, 500);
   }
 });
@@ -2255,8 +2278,8 @@ sales.post('/invoices/:id/payments', requirePermissions(['manage_sales']), async
     return c.json({ message: 'Payment amount must be a positive number.' }, 400);
   }
 
-  const paymentMethod = body.paymentMethod || 'CASH';
-  const validMethods = ['CASH', 'CARD', 'BANK_TRANSFER', 'CHEQUE', 'WIRE'];
+  let paymentMethod = body.paymentMethod || 'CASH';
+  const validMethods = ['CASH', 'CARD', 'BANK_TRANSFER', 'CHEQUE', 'WIRE', 'MOBILE_MONEY'];
   if (!validMethods.includes(paymentMethod)) {
     return c.json({ message: `Invalid payment method. Must be one of: ${validMethods.join(', ')}.` }, 400);
   }
@@ -2287,13 +2310,16 @@ sales.post('/invoices/:id/payments', requirePermissions(['manage_sales']), async
   }
 
   const paymentId = uuidv4();
+  // "Received into": the Bank & Cash account of the sale's branch (Main Cash when none was chosen).
+  const cash = await resolveCashAccount(c.env.DB, body.moneyAccountId ?? body.money_account_id, (invoice as any).branch_id ?? null);
+  paymentMethod = methodFor(cash, paymentMethod);
   const isFullyPaid = Math.abs(amount - summary.balance) < 0.01;
 
   const stmts: any[] = [
     c.env.DB.prepare(`
-      INSERT INTO invoice_payments (id, invoice_id, amount, payment_method, payment_date, notes, recorded_by)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).bind(paymentId, invoiceId, amount, paymentMethod, paymentDate, body.notes || null, userId),
+      INSERT INTO invoice_payments (id, invoice_id, amount, payment_method, payment_date, notes, recorded_by, money_account_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(paymentId, invoiceId, amount, paymentMethod, paymentDate, body.notes || null, userId, cash.id),
   ];
 
   // Auto-close invoice and order if fully paid
@@ -2307,7 +2333,7 @@ sales.post('/invoices/:id/payments', requirePermissions(['manage_sales']), async
   }
 
   stmts.push(createAuditLogStmt(c, 'INVOICE_PAYMENT_RECORD', 'invoices', invoiceId, null, {
-    amount, paymentMethod, paymentDate, isFullyPaid
+    amount, paymentMethod, paymentDate, isFullyPaid, receivedInto: cash.name
   }));
 
   const paymentJournal = await prepareJournalEntryPosting(c, {
@@ -2318,7 +2344,7 @@ sales.post('/invoices/:id/payments', requirePermissions(['manage_sales']), async
     branchId: (invoice as any).branch_id || null,
     userId,
     lines: [
-      { accountCode: '1010', debitAmount: amount, creditAmount: 0 },
+      { accountCode: cash.code, debitAmount: amount, creditAmount: 0 },
       { accountCode: '1020', debitAmount: 0, creditAmount: amount },
     ],
   });
@@ -2350,9 +2376,10 @@ sales.get('/invoices/:id/payments', async (c) => {
   if (!invoice) return c.json({ message: 'Invoice not found.' }, 404);
 
   const { results: payments } = await c.env.DB.prepare(`
-    SELECT ip.*, u.full_name AS recorded_by_name
+    SELECT ip.*, u.full_name AS recorded_by_name, COALESCE(ma.name, 'Main Cash') AS money_account_name
     FROM invoice_payments ip
     LEFT JOIN users u ON u.id = ip.recorded_by
+    LEFT JOIN money_accounts ma ON ma.id = ip.money_account_id
     WHERE ip.invoice_id = ?
     ORDER BY ip.created_at ASC
   `).bind(invoiceId).all();
@@ -2535,21 +2562,25 @@ sales.post('/orders/:id/installation-payout', requirePermissions(['manage_sales'
   const installerName = body.installer_name || (order as any).installer_name || 'Technician';
   const payoutNotes = body.notes || `Paid out to ${installerName} on ${new Date().toLocaleDateString()}`;
 
-  // Post Double-Entry Journal: DR 2050 (Installation Payable), CR 1010 (Cash)
+  // "Paid from": the Bank & Cash account of the sale's branch (Main Cash when none was chosen).
+  const cash = await resolveCashAccount(c.env.DB, (body as any).moneyAccountId ?? (body as any).money_account_id, (order as any).branch_id ?? null);
+  // Post Double-Entry Journal: DR 2050 (Installation Payable), CR the chosen account
   await postInstallationPayoutJournalEntry(
     c,
     { id: (order as any).id, order_number: (order as any).order_number, branch_id: (order as any).branch_id },
     fee,
-    userId
+    userId,
+    cash.code,
   );
 
   await c.env.DB.prepare(`
     UPDATE sales_orders
     SET installation_status = 'PAID_OUT',
         installer_name = ?,
-        installer_notes = ?
+        installer_notes = ?,
+        installation_money_account_id = ?
     WHERE id = ?
-  `).bind(installerName, payoutNotes, orderId).run();
+  `).bind(installerName, payoutNotes, cash.id, orderId).run();
 
   await logAudit(c, 'INSTALLATION_FEE_PAYOUT', 'sales_orders', orderId, { status: (order as any).installation_status }, { status: 'PAID_OUT', fee, installerName });
 
@@ -2879,15 +2910,19 @@ sales.post('/orders/:id/returns', requirePermissions(['manage_sales']), async (c
   const paidRow = await c.env.DB.prepare('SELECT COALESCE(SUM(amount), 0) AS paid FROM invoice_payments WHERE invoice_id = ?').bind(invoice.id).first() as any;
   const paid = Number(paidRow?.paid || 0);
   const refund = Math.max(0, Math.round((paid - Number(invoice.refunded_amount || 0) - Math.max(0, newGross)) * 100) / 100);
-  const method = ['CASH', 'BANK', 'MOBILE'].includes(String(body.refundMethod).toUpperCase()) ? String(body.refundMethod).toUpperCase() : null;
+  // "Paid from": the Bank & Cash account the refund leaves (Main Cash when none was chosen); it also sets the method.
+  const refundCash = await resolveCashAccount(c.env.DB, body.moneyAccountId ?? body.money_account_id, order.branch_id ?? null);
+  const method = refundCash.id
+    ? (refundCash.kind === 'BANK' ? 'BANK' : refundCash.kind === 'MOBILE_MONEY' ? 'MOBILE' : 'CASH')
+    : ['CASH', 'BANK', 'MOBILE'].includes(String(body.refundMethod).toUpperCase()) ? String(body.refundMethod).toUpperCase() : null;
   if (refund > 0 && !method) {
     return c.json({ message: `The customer has already paid ${refund.toFixed(2)} more than the remaining sale. Choose how it is refunded (cash, bank or mobile money).`, refundDue: refund, needs: 'refundMethod' }, 400);
   }
 
   const returnId = uuidv4();
   const stmts: any[] = [
-    c.env.DB.prepare('INSERT INTO sales_returns (id, return_number, sales_order_id, invoice_id, branch_id, customer_id, reason, return_value, refund_amount, refund_method, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-      .bind(returnId, `RET-${Date.now()}`, orderId, invoice.id, order.branch_id, order.customer_id || null, reason, value, refund, refund > 0 ? method : null, userId),
+    c.env.DB.prepare('INSERT INTO sales_returns (id, return_number, sales_order_id, invoice_id, branch_id, customer_id, reason, return_value, refund_amount, refund_method, created_by, money_account_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .bind(returnId, `RET-${Date.now()}`, orderId, invoice.id, order.branch_id, order.customer_id || null, reason, value, refund, refund > 0 ? method : null, userId, refund > 0 ? refundCash.id : null),
   ];
   const resaleable: Array<{ product_id: string; quantity: number }> = [];
   for (const l of picked) {
@@ -2963,7 +2998,7 @@ sales.post('/orders/:id/returns', requirePermissions(['manage_sales']), async (c
   }
   if (refund > 0) stmts.push(...(await prepareJournalEntryPosting(c, {
     ...jBase, description: `Refund to customer for ${order.order_number} (${method})`, referenceId: `${returnId}:refund`,
-    lines: [{ accountCode: '1020', debitAmount: refund, creditAmount: 0 }, { accountCode: '1010', debitAmount: 0, creditAmount: refund }],
+    lines: [{ accountCode: '1020', debitAmount: refund, creditAmount: 0 }, { accountCode: refundCash.code, debitAmount: 0, creditAmount: refund }],
   })).statements);
   stmts.push(createAuditLogStmt(c, 'SALES_RETURN', 'sales_returns', returnId, null, { orderId, reason, value, refund, method, lines: picked }));
 

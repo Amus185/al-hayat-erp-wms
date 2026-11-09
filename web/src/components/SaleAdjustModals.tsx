@@ -1,3 +1,4 @@
+import { MoneyAccountSelect } from './MoneyAccountSelect';
 import { useEffect, useState } from 'react';
 import { Modal } from './Modal';
 import { SearchableSelect } from './SearchableSelect';
@@ -70,7 +71,8 @@ export function ReturnModal({ order, onClose, onDone }: Props) {
   const [qty, setQty] = useState<Record<string, string>>({});
   const [cond, setCond] = useState<Record<string, string>>({});
   const [reason, setReason] = useState('');
-  const [method, setMethod] = useState('CASH');
+  const [method] = useState('CASH');
+  const [refundFrom, setRefundFrom] = useState('');
   const [saving, setSaving] = useState(false);
   useEffect(() => { apiGet<any>(`/sales/orders/${order.id}/returns`).then(setInfo).catch((e) => { addToast('error', e?.message); onClose(); }); /* eslint-disable-next-line */ }, []);
 
@@ -79,7 +81,7 @@ export function ReturnModal({ order, onClose, onDone }: Props) {
     if (!lines.length) { addToast('error', 'Enter the quantity being returned.'); return; }
     if (reason.trim().length < 3) { addToast('error', 'Please write the reason for the return.'); return; }
     setSaving(true);
-    try { const r: any = await apiPost(`/sales/orders/${order.id}/returns`, { reason, lines, refundMethod: method }); addToast('success', r?.message || 'Return recorded'); onDone(); }
+    try { const r: any = await apiPost(`/sales/orders/${order.id}/returns`, { reason, lines, refundMethod: method, moneyAccountId: refundFrom || undefined }); addToast('success', r?.message || 'Return recorded'); onDone(); }
     catch (e: any) { addToast('error', e?.message); } finally { setSaving(false); }
   };
 
@@ -104,8 +106,7 @@ export function ReturnModal({ order, onClose, onDone }: Props) {
           </table>
           <label className="form-field" style={{ marginTop: 12 }}><span className="form-field__label">Reason *</span>
             <input className="form-input" id="return-reason" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. faulty, wrong size, customer changed mind" /></label>
-          <label className="form-field"><span className="form-field__label">If money must be refunded, pay it by</span>
-            <select className="form-select" value={method} onChange={(e) => setMethod(e.target.value)}><option value="CASH">Cash</option><option value="BANK">Bank</option><option value="MOBILE">Mobile money</option></select></label>
+          <MoneyAccountSelect id="refund-from" label="Refund paid from" value={refundFrom} onChange={setRefundFrom} branchId={order.branch_id ?? null} />
           {info.returns.length > 0 && (
             <div style={{ marginTop: 12 }}><strong>Earlier returns</strong>
               <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>{info.returns.map((r) => (

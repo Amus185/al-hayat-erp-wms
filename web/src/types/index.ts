@@ -514,6 +514,9 @@ export interface PaymentSummary {
 }
 
 export interface InvoicePayment {
+  /** Bank & Cash account the money went through ("Main Cash" when none was chosen) */
+  money_account_name?: string | null;
+  money_account_id?: string | null;
   id: string;
   invoice_id: string;
   amount: number;
@@ -552,6 +555,9 @@ export interface PurchaseInvoice {
 }
 
 export interface PurchaseInvoicePayment {
+  /** Bank & Cash account the money went through ("Main Cash" when none was chosen) */
+  money_account_name?: string | null;
+  money_account_id?: string | null;
   id: string;
   purchase_invoice_id: string;
   amount: number;

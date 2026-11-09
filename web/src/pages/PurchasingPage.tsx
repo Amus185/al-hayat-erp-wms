@@ -1,3 +1,4 @@
+import { MoneyAccountSelect } from '../components/MoneyAccountSelect';
 import { refreshAfterSave } from '../utils/afterSave';
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -82,7 +83,7 @@ function PaymentHistoryTable({ payments }: { payments: PurchaseInvoicePayment[] 
         <tr style={{ background: '#f0f7f0' }}>
           <th style={{ padding: '6px 10px', textAlign: 'left', fontWeight: 600, color: '#066006' }}>Date</th>
           <th style={{ padding: '6px 10px', textAlign: 'left', fontWeight: 600, color: '#066006' }}>Amount</th>
-          <th style={{ padding: '6px 10px', textAlign: 'left', fontWeight: 600, color: '#066006' }}>Method</th>
+          <th style={{ padding: '6px 10px', textAlign: 'left', fontWeight: 600, color: '#066006' }}>Paid from</th>
           <th style={{ padding: '6px 10px', textAlign: 'left', fontWeight: 600, color: '#066006' }}>Recorded By</th>
           <th style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 600, color: '#066006' }}>Balance After</th>
         </tr>
@@ -92,7 +93,7 @@ function PaymentHistoryTable({ payments }: { payments: PurchaseInvoicePayment[] 
           <tr key={p.id} style={{ borderBottom: '1px solid #edf1ed' }}>
             <td style={{ padding: '6px 10px' }}>{p.payment_date}</td>
             <td style={{ padding: '6px 10px', fontWeight: 600, color: '#0b8f08' }}>{fmt(p.amount)}</td>
-            <td style={{ padding: '6px 10px' }}>{p.payment_method.replace('_', ' ')}</td>
+            <td style={{ padding: '6px 10px' }}>{p.money_account_name || p.payment_method.replace('_', ' ')}</td>
             <td style={{ padding: '6px 10px', color: '#667066' }}>{p.recorded_by_name || '—'}</td>
             <td style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 600, color: Number(p.running_balance) > 0 ? '#b45309' : '#0b8f08' }}>
               {fmt(p.running_balance)}
@@ -178,6 +179,7 @@ export function PurchasingPage() {
   // Supplier payment modal
   const [isPaymentOpen, setIsPaymentOpen] = useState(false);
   const [paymentTargetPO, setPaymentTargetPO] = useState<any>(null);
+  const [payFromId, setPayFromId] = useState('');
   const [paymentForm, setPaymentForm] = useState({
     amount: '',
     paymentMethod: 'CASH' as PaymentMethod,
@@ -325,6 +327,7 @@ export function PurchasingPage() {
       await apiPost(`/purchasing/invoices/${invoiceId}/payments`, {
         amount,
         paymentMethod: paymentForm.paymentMethod,
+        moneyAccountId: payFromId || undefined,
         paymentDate: paymentForm.paymentDate,
         notes: paymentForm.notes || undefined,
       });
@@ -956,16 +959,8 @@ export function PurchasingPage() {
               onChange={(val) => setPaymentForm(prev => ({ ...prev, amount: val }))}
               required
             />
-            <div className="form-field">
-              <label className="form-field__label">Payment Method</label>
-              <select
-                className="form-select"
-                value={paymentForm.paymentMethod}
-                onChange={(e) => setPaymentForm(prev => ({ ...prev, paymentMethod: e.target.value as PaymentMethod }))}
-              >
-                {PAYMENT_METHODS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
-              </select>
-            </div>
+            <MoneyAccountSelect id="poPayFrom" label="Paid from" value={payFromId} onChange={setPayFromId}
+              branchId={(paymentTargetPO || selectedPO)?.branch_id ?? null} amount={Number(paymentForm.amount) || 0} />
             <InputField
               label="Payment Date"
               id="poPayDate"

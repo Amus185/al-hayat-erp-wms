@@ -1642,6 +1642,14 @@ export async function ensureMoneyAccounts(pool: Pool) {
       );
       CREATE UNIQUE INDEX IF NOT EXISTS money_accounts_name_uq ON money_accounts (lower(name));
       CREATE INDEX IF NOT EXISTS idx_money_accounts_branch ON money_accounts (branch_id);
+      -- Which account each payment went through ("Paid from" / "Received into"). NULL = Main Cash.
+      ALTER TABLE customer_payments ADD COLUMN IF NOT EXISTS money_account_id TEXT REFERENCES money_accounts(id);
+      ALTER TABLE invoice_payments ADD COLUMN IF NOT EXISTS money_account_id TEXT REFERENCES money_accounts(id);
+      ALTER TABLE purchase_invoice_payments ADD COLUMN IF NOT EXISTS money_account_id TEXT REFERENCES money_accounts(id);
+      ALTER TABLE expenses ADD COLUMN IF NOT EXISTS money_account_id TEXT REFERENCES money_accounts(id);
+      ALTER TABLE employee_advances ADD COLUMN IF NOT EXISTS money_account_id TEXT REFERENCES money_accounts(id);
+      ALTER TABLE sales_returns ADD COLUMN IF NOT EXISTS money_account_id TEXT REFERENCES money_accounts(id);
+      ALTER TABLE sales_orders ADD COLUMN IF NOT EXISTS installation_money_account_id TEXT REFERENCES money_accounts(id);
     `);
     await client.query('CREATE TABLE IF NOT EXISTS app_migrations (name TEXT PRIMARY KEY, ran_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP)');
     const done = await client.query("SELECT 1 FROM app_migrations WHERE name = 'money_accounts_v1'");

@@ -421,7 +421,8 @@ export async function postInstallationPayoutJournalEntry(
   c: any,
   order: { id: string; order_number: string; branch_id?: string },
   amount: number,
-  userId?: string
+  userId?: string,
+  cashCode = '1010',
 ) {
   if (amount <= 0) return null;
   return createAndPostJournalEntry(c, {
@@ -432,7 +433,7 @@ export async function postInstallationPayoutJournalEntry(
     userId,
     lines: [
       { accountCode: '2050', debitAmount: amount, creditAmount: 0 },
-      { accountCode: '1010', debitAmount: 0, creditAmount: amount },
+      { accountCode: cashCode, debitAmount: 0, creditAmount: amount },
     ],
   });
 }
@@ -457,7 +458,9 @@ function customerPaymentJournalParams(
   order: { id: string; order_number: string; branch_id?: string | null },
   userId?: string | null,
   prefetchedFiscalPeriodId?: string | null,
-  prefetchedCoaMap?: Map<string, { id: string; normal_balance: string }>
+  prefetchedCoaMap?: Map<string, { id: string; normal_balance: string }>,
+  /** Bank & Cash account the money came into (ledger code); Main Cash by default. */
+  cashCode = '1010',
 ): PostJournalParams {
   const refId = (payment.id && payment.id !== order.id) ? payment.id : `${order.id}-pay`;
   return {
@@ -470,7 +473,7 @@ function customerPaymentJournalParams(
     prefetchedFiscalPeriodId,
     prefetchedCoaMap,
     lines: [
-      { accountCode: '1010', debitAmount: payment.amount, creditAmount: 0 },
+      { accountCode: cashCode, debitAmount: payment.amount, creditAmount: 0 },
       { accountCode: '1020', debitAmount: 0, creditAmount: payment.amount },
     ],
   };
@@ -483,7 +486,7 @@ function customerPaymentJournalParams(
  */
 export async function prepareExpenseJournal(
   c: any,
-  expense: { id: string; title: string; amount: number; category: string; expense_date: string; branch_id?: string | null; payment_method?: string | null },
+  expense: { id: string; title: string; amount: number; category: string; expense_date: string; branch_id?: string | null; payment_method?: string | null; cash_code?: string | null },
   userId?: string | null,
   skipIdempotency = false
 ) {
@@ -501,7 +504,7 @@ export async function prepareExpenseJournal(
     userId,
     lines: [
       { accountCode: expenseCode, debitAmount: expense.amount, creditAmount: 0 },
-      { accountCode: payable ? '2010' : '1010', debitAmount: 0, creditAmount: expense.amount },
+      { accountCode: payable ? '2010' : (expense.cash_code || '1010'), debitAmount: 0, creditAmount: expense.amount },
     ],
   });
 }

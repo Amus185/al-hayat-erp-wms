@@ -1,3 +1,4 @@
+import { MoneyAccountSelect } from './MoneyAccountSelect';
 import { useEffect, useMemo, useState } from 'react';
 import { ShoppingCart, Plus, Trash2, Loader2, Wrench, Info, AlertTriangle, CreditCard, DollarSign, Wallet, Store, Truck, Package } from 'lucide-react';
 import { getViewBranch, apiGet, apiPost } from '../api/client';
@@ -122,7 +123,8 @@ export function CreateSalesOrderModal({ isOpen, onClose, onOrderCreated }: Creat
   // Sale Type: CASH_SALE vs DEBT_SALE
   const [saleType, setSaleType] = useState<'CASH' | 'DEBT'>('CASH');
   const [initialDeposit, setInitialDeposit] = useState<number>(0);
-  const [depositPaymentMethod, setDepositPaymentMethod] = useState<'CASH' | 'CARD' | 'BANK_TRANSFER'>('CASH');
+  const [depositPaymentMethod] = useState<'CASH' | 'CARD' | 'BANK_TRANSFER'>('CASH');
+  const [intoId, setIntoId] = useState('');
 
   // Service Installation Fee states
   const [hasInstallationFee, setHasInstallationFee] = useState(false);
@@ -411,6 +413,7 @@ export function CreateSalesOrderModal({ isOpen, onClose, onOrderCreated }: Creat
       isCreditSale: isCredit,
       initialDeposit: isCredit ? effectiveDeposit : 0,
       depositPaymentMethod,
+      moneyAccountId: intoId || undefined,
       lines: lines.map((l) => ({
         productId: l.productId,
         quantity: Number(l.quantity),
@@ -443,7 +446,7 @@ export function CreateSalesOrderModal({ isOpen, onClose, onOrderCreated }: Creat
       // Cash sale: create and complete in full
       const order = await apiPost<any>('/sales/orders', payload);
       try {
-        await apiPost(`/sales/orders/${order.id}/complete`, { isCreditSale: false });
+        await apiPost(`/sales/orders/${order.id}/complete`, { isCreditSale: false, moneyAccountId: intoId || undefined });
         addToast('success', 'Sale completed in full. Inventory deducted and payment recorded.');
         onOrderCreated?.(order);
         onClose();
@@ -877,18 +880,7 @@ export function CreateSalesOrderModal({ isOpen, onClose, onOrderCreated }: Creat
                 />
               </div>
               <div>
-                <label style={{ fontSize: '12px', color: '#78350f', fontWeight: 600, display: 'block', marginBottom: '4px' }}>
-                  Deposit Payment Method
-                </label>
-                <select
-                  value={depositPaymentMethod}
-                  onChange={(e) => setDepositPaymentMethod(e.target.value as any)}
-                  style={{ width: '100%', padding: '6px 10px', borderRadius: '4px', border: '1px solid #fcd34d' }}
-                >
-                  <option value="CASH">Cash</option>
-                  <option value="CARD">Card / POS</option>
-                  <option value="BANK_TRANSFER">Bank Transfer</option>
-                </select>
+                <MoneyAccountSelect id="depositInto" label="Deposit received into" value={intoId} onChange={setIntoId} branchId={branchId || null} />
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
                 <span style={{ fontSize: '12px', color: '#78350f' }}>Remaining Unpaid Balance:</span>
@@ -900,6 +892,13 @@ export function CreateSalesOrderModal({ isOpen, onClose, onOrderCreated }: Creat
             <p style={{ fontSize: '12px', color: '#92400e', margin: '10px 0 0 0' }}>
               Sold furniture quantities will be immediately deducted from the warehouse inventory upon order creation.
             </p>
+          </div>
+        )}
+
+        {/* Cash sale: where the money goes */}
+        {saleType !== 'DEBT' && (
+          <div style={{ maxWidth: 420 }}>
+            <MoneyAccountSelect id="saleInto" label="Money received into" value={intoId} onChange={setIntoId} branchId={branchId || null} />
           </div>
         )}
 

@@ -6,6 +6,7 @@
 //   repaid in cash or bank        Dr 1010 Cash              / Cr 1080 Employee Advances
 //   repaid by salary deduction    Dr 6090 Salaries & Wages  / Cr 1080 Employee Advances
 // Deleting an entry reverses its journal entry.
+import { resolveCashAccount } from '../services/money';
 import { Hono } from 'hono';
 import { Env, uuidv4 } from '../db';
 import { authMiddleware } from '../middleware/auth';
@@ -214,7 +215,13 @@ employees.post('/:id/advances', async (c) => {
   const kind = body.kind === 'REPAYMENT' ? 'REPAYMENT' : 'ADVANCE';
   const amount = round2(Number(body.amount));
   if (!Number.isFinite(amount) || amount <= 0) return c.json({ error: 'Enter an amount greater than zero' }, 400);
-  const method = ['CASH', 'BANK', 'SALARY_DEDUCTION'].includes(body.method) ? body.method : 'CASH';
+  // "Paid from" (advance) / "Received into" (repayment): a Bank & Cash account of the employee's branch.
+  // A repayment deducted from salary moves no money.
+  const deducted = body.method === 'SALARY_DEDUCTION';
+  const cash = await resolveCashAccount(db, deducted ? undefined : (body.moneyAccountId ?? body.money_account_id), emp.branch_id ?? null);
+  const method = deducted ? 'SALARY_DEDUCTION'
+    : cash.id ? (cash.kind === 'CASH' ? 'CASH' : 'BANK') // the table only knows CASH / BANK: ZAAD, eDahab and banks are BANK
+    : ['CASH', 'BANK'].includes(body.method) ? body.method : 'CASH';
   if (kind === 'ADVANCE' && method === 'SALARY_DEDUCTION') return c.json({ error: 'An advance is paid in cash or by bank' }, 400);
   const entryDate = /^\d{4}-\d{2}-\d{2}$/.test(String(body.entry_date ?? '')) ? body.entry_date : new Date().toISOString().slice(0, 10);
   const balance = round2(Number(emp.advance_balance));
@@ -224,8 +231,8 @@ employees.post('/:id/advances', async (c) => {
 
   const advId = uuidv4();
   const userId = c.get('jwtPayload')?.sub ?? null;
-  const debit = kind === 'ADVANCE' ? 'coa-1080' : method === 'SALARY_DEDUCTION' ? 'coa-6090' : 'coa-1010';
-  const credit = kind === 'ADVANCE' ? 'coa-1010' : 'coa-1080';
+  const debit = kind === 'ADVANCE' ? 'coa-1080' : method === 'SALARY_DEDUCTION' ? 'coa-6090' : cash.code;
+  const credit = kind === 'ADVANCE' ? cash.code : 'coa-1080';
   const label = kind === 'ADVANCE' ? 'Salary advance' : method === 'SALARY_DEDUCTION' ? 'Advance deducted from salary' : 'Advance repaid';
   const posting = await prepareJournalEntryPosting(c, {
     description: `${label}: ${emp.full_name}`,
@@ -242,8 +249,8 @@ employees.post('/:id/advances', async (c) => {
   if (!posting.statements.length) return c.json({ error: 'Payroll accounts were not found in the chart of accounts' }, 422);
 
   const stmts: any[] = [
-    db.prepare(`INSERT INTO employee_advances (id, employee_id, kind, amount, entry_date, method, notes, journal_entry_id, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .bind(advId, id, kind, amount, entryDate, method, text(body.notes, 500), (posting as any).entryId ?? null, userId),
+    db.prepare(`INSERT INTO employee_advances (id, employee_id, kind, amount, entry_date, method, notes, journal_entry_id, created_by, money_account_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .bind(advId, id, kind, amount, entryDate, method, text(body.notes, 500), (posting as any).entryId ?? null, userId, cash.id),
   ];
   if (kind === 'REPAYMENT') {
     // Guard against two repayments racing past the balance.
@@ -253,7 +260,7 @@ employees.post('/:id/advances', async (c) => {
     `).bind(id).mustAffect('Repayment is more than the remaining advance balance'));
   }
   stmts.push(...posting.statements);
-  stmts.push(createAuditLogStmt(c, kind === 'ADVANCE' ? 'EMPLOYEE_ADVANCE' : 'EMPLOYEE_REPAYMENT', 'employees', id, null, { amount, method, entry_date: entryDate }));
+  stmts.push(createAuditLogStmt(c, kind === 'ADVANCE' ? 'EMPLOYEE_ADVANCE' : 'EMPLOYEE_REPAYMENT', 'employees', id, null, { amount, method, entry_date: entryDate, account: cash.name }));
   await db.batch(stmts);
   return c.json(await db.prepare('SELECT * FROM employee_advances WHERE id = ?').bind(advId).first(), 201);
 });

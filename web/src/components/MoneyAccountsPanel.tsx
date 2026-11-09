@@ -1,3 +1,4 @@
+import { forgetMoneyAccountOptions } from './MoneyAccountSelect';
 import { useEffect, useMemo, useState } from 'react';
 import { ArrowLeftRight, Banknote, Building2, Landmark, Plus, Smartphone } from 'lucide-react';
 import { apiGet, apiPatch, apiPost } from '../api/client';
@@ -42,7 +43,7 @@ export function MoneyAccountsPanel() {
   const [lines, setLines] = useState<Line[] | null>(null);
   const [showClosed, setShowClosed] = useState(false);
 
-  const load = () => apiGet<any>('/accounting/money-accounts').then(setData).catch((e) => { addToast('error', e?.message); setData({ accounts: [], total: 0, byKind: { BANK: 0, MOBILE_MONEY: 0, CASH: 0 } }); });
+  const load = () => { forgetMoneyAccountOptions(); return apiGet<any>('/accounting/money-accounts').then(setData).catch((e) => { addToast('error', e?.message); setData({ accounts: [], total: 0, byKind: { BANK: 0, MOBILE_MONEY: 0, CASH: 0 } }); }); };
   useEffect(() => {
     load();
     apiGet<any>('/accounting/money-accounts/providers').then((p) => setProviders(p.providers)).catch(() => {});

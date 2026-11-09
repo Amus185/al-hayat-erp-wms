@@ -1,3 +1,4 @@
+import { MoneyAccountSelect } from '../components/MoneyAccountSelect';
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   Users, Phone, Mail, MapPin, Plus, Search, ShoppingBag, DollarSign, X,
@@ -239,6 +240,7 @@ export function CustomersPage() {
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
   const [paymentCustomerId, setPaymentCustomerId] = useState('');
   const [paymentAllocation, setPaymentAllocation] = useState<'ACCOUNT' | 'INVOICE' | 'MANUAL_DEBT'>('ACCOUNT');
+  const [payIntoId, setPayIntoId] = useState('');
   const [paymentForm, setPaymentForm] = useState({
     amount: '',
     paymentMethod: 'CASH' as PaymentMethod,
@@ -481,6 +483,7 @@ export function CustomersPage() {
         manualDebtId: paymentAllocation === 'MANUAL_DEBT' ? paymentForm.manualDebtId : undefined,
         amount: amt,
         paymentMethod: paymentForm.paymentMethod,
+        moneyAccountId: payIntoId || undefined,
         notes: paymentForm.notes.trim() || undefined,
       });
 
@@ -1524,18 +1527,7 @@ export function CustomersPage() {
                 required
               />
 
-              <div className="form-field">
-                <label className="form-field__label">Payment Method *</label>
-                <select
-                  className="form-select"
-                  value={paymentForm.paymentMethod}
-                  onChange={(e) => setPaymentForm(prev => ({ ...prev, paymentMethod: e.target.value as PaymentMethod }))}
-                >
-                  {PAYMENT_METHODS.map(m => (
-                    <option key={m.value} value={m.value}>{m.label}</option>
-                  ))}
-                </select>
-              </div>
+              <MoneyAccountSelect id="custPayInto" label="Received into" value={payIntoId} onChange={setPayIntoId} />
             </div>
 
             <TextareaField
@@ -1622,7 +1614,7 @@ export function CustomersPage() {
                   {fmt(currentReceipt.amount)}
                 </div>
                 <div style={{ fontSize: '12px', color: '#15803d' }}>
-                  Method: {currentReceipt.payment_method.replace('_', ' ')}
+                  {(currentReceipt as any).money_account_name ? `Into: ${(currentReceipt as any).money_account_name}` : `Method: ${currentReceipt.payment_method.replace('_', ' ')}`}
                 </div>
               </div>
 

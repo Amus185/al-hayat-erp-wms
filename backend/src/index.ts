@@ -33,6 +33,9 @@ import { PgAdapter } from './pg-client';
 import { getAuthSecret, isAllowedOrigin, isProductionRuntime } from './security-config';
 import { authFor } from './auth';
 import { poolOf } from './services/auth-sessions';
+import { authMiddleware } from './middleware/auth';
+import type { Env } from './db';
+import { registerMoneyAccountOptions } from './routes/money-accounts';
 import { ensurePostgresInit } from './init-postgres';
 
 const app = new Hono();
@@ -163,6 +166,11 @@ app.route('/api/v1/notifications', notifications);
 app.route('/api/v1/audit', audit);
 app.route('/api/v1/files', files);
 app.route('/api/v1/accounting', accounting);
+// Bank & Cash accounts to choose on a payment (any signed-in user; see routes/money-accounts.ts)
+const moneyAccountOptions = new Hono<{ Bindings: Env }>();
+moneyAccountOptions.use('/*', authMiddleware);
+registerMoneyAccountOptions(moneyAccountOptions);
+app.route('/api/v1/money-accounts', moneyAccountOptions);
 app.route('/api/v1/expenses', expenses);
 app.route('/api/v1/assets', assets);
 app.route('/api/v1/deliveries', deliveries);
