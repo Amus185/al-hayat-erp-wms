@@ -6,6 +6,8 @@ import { authMiddleware, requirePermissions, isAdminUser } from '../middleware/a
 import { has } from '../services/privacy';
 import { costInStatements, unitCosts } from '../services/costing';
 import { levelPlanner, restoreToLevels } from '../services/price-levels';
+import { resolveSaleLevel, levelPriceMap, checkCredit, CreditLimitError } from '../services/sales-rules';
+import { registerSalesExtra } from './sales-extra';
 import { resolveBranchScope, resolveLoc, locBranch, resolveWriteBranch, branchSql, inScope, ScopeError, customerVisibleSql, hasAllBranchAccess, type BranchScope } from '../services/branch-scope';
 import { logAudit, createAuditLogStmt } from '../services/audit';
 import { releaseReservationsStmt, returnWebQuantityStmt } from '../services/storefront';
@@ -1548,6 +1550,23 @@ sales.post('/orders', requirePermissions(['manage_sales']), async (c) => {
   const seenProducts = new Set<string>();
   const webPrices = new Map<string, number>();
   for (const r of ((webRows as any)?.results || []) as any[]) webPrices.set(r.product_id, Number(r.unit_price));
+  // A quotation being converted keeps the prices and discounts the customer was quoted.
+  let quote: any = null;
+  const quoteLines = new Map<string, { price: number; discount: number; quantity: number }>();
+  if (body.quotationId) {
+    quote = await c.env.DB.prepare('SELECT * FROM quotations WHERE id = ?').bind(String(body.quotationId)).first();
+    if (!quote || (writeScope.kind === 'BRANCH' && quote.branch_id !== writeScope.branchId)) return c.json({ message: 'Quotation not found.' }, 404);
+    if (quote.converted_order_id || quote.status === 'CONVERTED') return c.json({ message: 'This quotation was already turned into a sale.' }, 409);
+    if (quote.status === 'CANCELLED') return c.json({ message: 'This quotation was cancelled.' }, 400);
+    if (quote.valid_until && new Date(quote.valid_until).getTime() < Date.now()) return c.json({ message: 'This quotation has expired. Make a new one at today\'s prices.' }, 400);
+    if (quote.branch_id !== body.branchId) return c.json({ message: 'This quotation belongs to another branch.' }, 400);
+    if ((quote.customer_id || null) !== (body.customerId || null)) return c.json({ message: 'The sale must be for the customer on the quotation.' }, 400);
+    const { results: ql } = await c.env.DB.prepare('SELECT product_id, quantity, unit_price, discount_amount FROM quotation_lines WHERE quotation_id = ?').bind(quote.id).all();
+    for (const l of (ql || []) as any[]) quoteLines.set(l.product_id, { price: Number(l.unit_price), discount: Number(l.discount_amount || 0), quantity: Number(l.quantity) });
+  }
+  // Selling price level (from the customer; the Owner may choose another on this sale).
+  const saleLevelId = quote ? (quote.price_level_id ?? null) : await resolveSaleLevel(c, body.priceLevelId, body.customerId);
+  const levelPrices = await levelPriceMap(c.env.DB, quote ? null : saleLevelId, lineProductIds);
   const productsById = new Map<string, any>((((productRows as any)?.results || []) as any[]).map((r) => [r.id, r]));
   for (let i = 0; i < body.lines.length; i++) {
     const line = body.lines[i];
@@ -1571,7 +1590,14 @@ sales.post('/orders', requirePermissions(['manage_sales']), async (c) => {
     // Only a website request being converted keeps the price the customer was quoted.
     line.unitPrice = webPrices.has(line.productId) ? webPrices.get(line.productId)! : Number(product.selling_price || 0);
     line.priceBreakdown = null;
-    if (!webPrices.has(line.productId) && pricePlanner.has(line.productId)) {
+    const quoted = quoteLines.get(line.productId);
+    if (quoted) {
+      line.unitPrice = quoted.price;
+      // The quoted discount belongs to the quoted quantity; it shrinks with a smaller quantity.
+      line.discountAmount = Math.round(quoted.discount * Math.min(1, line.quantity / Math.max(1, quoted.quantity)) * 100) / 100;
+    } else if (levelPrices.has(line.productId) && !webPrices.has(line.productId)) {
+      line.unitPrice = levelPrices.get(line.productId)!;
+    } else if (!webPrices.has(line.productId) && pricePlanner.has(line.productId)) {
       const t = pricePlanner.take(line.productId, line.quantity, false);
       if (Number.isFinite(t.unitPrice)) { line.unitPrice = Math.round(t.unitPrice * 10000) / 10000; line.priceBreakdown = t.breakdown; }
     }
@@ -1662,6 +1688,22 @@ sales.post('/orders', requirePermissions(['manage_sales']), async (c) => {
   const grandTotal = netTotal + installFee;
   const deposit = Math.min(grandTotal, initialDeposit);
   const remaining = Math.max(0, grandTotal - deposit);
+
+  // Level and quotation of the sale (the quotation is kept and marked as converted, once).
+  if (saleLevelId || quote) stmts.push(c.env.DB.prepare('UPDATE sales_orders SET price_level_id = ?, quotation_id = ? WHERE id = ?').bind(saleLevelId, quote?.id ?? null, id));
+  if (quote) {
+    stmts.push(c.env.DB.prepare("UPDATE quotations SET status = 'CONVERTED', converted_order_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND converted_order_id IS NULL").bind(id, quote.id).mustAffect('This quotation was already turned into a sale.'));
+  }
+  // Credit control: a credit sale may not take the customer over their limit (the Owner can approve it).
+  if (isCreditSale) {
+    try {
+      const approved = await checkCredit(c, body.customerId, remaining, Boolean(body.creditOverride));
+      if (approved) stmts.push(createAuditLogStmt(c, 'CREDIT_LIMIT_OVERRIDE', 'sales_orders', id, null, { note: approved, order_number: orderNumber }));
+    } catch (e) {
+      if (e instanceof CreditLimitError) return c.json({ message: e.message, code: 'CREDIT_LIMIT', credit: e.credit }, 400);
+      throw e;
+    }
+  }
 
   let invoiceId = uuidv4();
   let receiptNumber: string | null = null;
@@ -2800,6 +2842,8 @@ sales.patch('/orders/:id', requirePermissions(['manage_sales']), async (c) => {
     if (!Array.isArray(body.lines) || body.lines.length === 0) return c.json({ message: 'A sale needs at least one product line.' }, 400);
     const seen = new Set<string>();
     const editPlanner = await levelPlanner(c.env.DB, body.lines.map((l: any) => l.productId));
+    const editLevel = ((await c.env.DB.prepare('SELECT price_level_id FROM sales_orders WHERE id = ?').bind(orderId).first()) as any)?.price_level_id ?? null;
+    const editLevelPrices = await levelPriceMap(c.env.DB, editLevel, body.lines.map((l: any) => l.productId).filter(Boolean));
     for (let i = 0; i < body.lines.length; i++) {
       const l = body.lines[i];
       if (!l.productId) return c.json({ message: `Line ${i + 1}: choose a product.` }, 400);
@@ -2810,7 +2854,8 @@ sales.patch('/orders/:id', requirePermissions(['manage_sales']), async (c) => {
       if (!pr) return c.json({ message: `Line ${i + 1}: that product does not exist.` }, 400);
       // Always the product's current selling price (price levels: oldest first); a price from the client is ignored.
       l.unitPrice = Number(pr.selling_price || 0); l.priceBreakdown = null;
-      if (editPlanner.has(l.productId)) {
+      if (editLevelPrices.has(l.productId)) l.unitPrice = editLevelPrices.get(l.productId)!;
+      else if (editPlanner.has(l.productId)) {
         const t = editPlanner.take(l.productId, l.quantity, false);
         if (Number.isFinite(t.unitPrice)) { l.unitPrice = Math.round(t.unitPrice * 10000) / 10000; l.priceBreakdown = t.breakdown; }
       }
@@ -3101,5 +3146,7 @@ sales.get('/price-adjustments', async (c) => {
     above: rows.filter((r) => r.adjustment > 0).reduce((a, r) => a + Number(r.adjustment_total), 0),
   });
 });
+
+registerSalesExtra(sales);
 
 export default sales;

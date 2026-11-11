@@ -78,6 +78,10 @@ export async function ensureRoadmap(pool: Pool) {
         ON CONFLICT (id) DO NOTHING;
       ALTER TABLE sales_orders ADD COLUMN IF NOT EXISTS price_level_id TEXT REFERENCES selling_price_levels(id);
 
+      -- 13. Credit control: the limit is customers.credit_limit (0 = no limit); days before an invoice is overdue
+      ALTER TABLE customers ADD COLUMN IF NOT EXISTS credit_days INTEGER NOT NULL DEFAULT 30;
+      ALTER TABLE customers ADD COLUMN IF NOT EXISTS price_level_id TEXT REFERENCES selling_price_levels(id);
+
       -- 11. Quotations
       ALTER TABLE quotations ADD COLUMN IF NOT EXISTS converted_order_id TEXT;
       ALTER TABLE quotations ADD COLUMN IF NOT EXISTS price_level_id TEXT REFERENCES selling_price_levels(id);
