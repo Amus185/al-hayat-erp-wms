@@ -1,11 +1,11 @@
 import { MoneyAccountSelect } from '../components/MoneyAccountSelect';
 import { useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   ShoppingCart, ArrowLeft, Plus, Trash2, Loader2, Wrench, Info,
   AlertTriangle, CreditCard, DollarSign, Store, Truck, Package
 } from 'lucide-react';
-import { getViewBranch, apiGet, apiPost } from '../api/client';
+import { getViewBranch, apiGet, apiPost, ApiError } from '../api/client';
 import { FormField, InputField, TextareaField } from '../components/FormField';
 import { SearchableSelect } from '../components/SearchableSelect';
 import { useProductCatalog } from '../utils/productCatalog';
@@ -75,6 +75,8 @@ export function CreateSalesOrderPage() {
   // Products are searched on the server as the user types (every product
   // reachable); their stock rows come along for the availability hints.
   const catalog = useProductCatalog({ withStock: true, status: 'active' });
+  // Prices that replace the regular one on this sale: the customer's price level, or a quotation's prices.
+  const [fixedPrices, setFixedPrices] = useState<Record<string, number>>({});
   const products = useMemo<ProductLine[]>(() => catalog.items
     .filter((p) => p.is_active !== 0)
     .map((p) => ({
@@ -82,12 +84,12 @@ export function CreateSalesOrderPage() {
       sku: p.sku,
       barcode: p.barcode,
       name: p.name,
-      sellingPrice: Number(p.selling_price) || 0,
-      priceSteps: p.price_steps || [],
+      sellingPrice: fixedPrices[p.id] ?? (Number(p.selling_price) || 0),
+      priceSteps: fixedPrices[p.id] !== undefined ? [] : (p.price_steps || []),
       productType: p.product_type || 'STANDARD',
       priceTiers: p.price_tiers || [],
       groupItems: p.group_items || [],
-    })), [catalog.items]);
+    })), [catalog.items, fixedPrices]);
   const inventoryStocks = catalog.stockRows as StockRecord[];
 
   // SweetAlert modal for stock limitation
@@ -156,6 +158,56 @@ export function CreateSalesOrderPage() {
   }[]>([]);
 
   const [submittingAction, setSubmittingAction] = useState<'complete' | 'draft' | null>(null);
+
+  // Price level and credit of the chosen customer; a quotation being turned into a sale.
+  const { isAdmin } = useAuth();
+  const [params] = useSearchParams();
+  const quotationId = params.get('quotation') || '';
+  const [quote, setQuote] = useState<any>(null);
+  const [credit, setCredit] = useState<any>(null);
+  const [levels, setLevels] = useState<{ id: string; name: string; is_default: number; is_active: number }[]>([]);
+  const [levelOverride, setLevelOverride] = useState('');
+  useEffect(() => { apiGet<any>('/sales/price-levels').then((d) => setLevels((d.levels || []).filter((l: any) => Number(l.is_active) === 1))).catch(() => {}); }, []);
+  useEffect(() => {
+    setCredit(null); setLevelOverride('');
+    if (!customerId) return;
+    let live = true;
+    apiGet<any>(`/sales/customers/${customerId}/credit`).then((d) => { if (live) setCredit(d); }).catch(() => {});
+    return () => { live = false; };
+  }, [customerId]);
+  const activeLevelId = quote ? (quote.price_level_id || '') : (levelOverride || credit?.price_level_id || '');
+  const activeLevel = levels.find((l) => l.id === activeLevelId);
+  useEffect(() => {
+    if (quote) return; // a quotation keeps its own prices
+    if (!activeLevelId || Number(activeLevel?.is_default) === 1) { setFixedPrices({}); return; }
+    let live = true;
+    apiGet<any>(`/sales/price-levels/${activeLevelId}/prices`).then((d) => { if (live) setFixedPrices(d.prices || {}); }).catch(() => {});
+    return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeLevelId, quote]);
+  // When the prices of the sale change (another customer / level), the lines follow.
+  useEffect(() => {
+    if (quote) return;
+    setLines((prev) => prev.map((l) => {
+      const pr = products.find((p) => p.id === l.productId);
+      if (!pr) return l;
+      const r = priceForQty(pr.priceSteps, pr.sellingPrice, Math.max(1, l.quantity));
+      return Math.abs(r.unitPrice - l.unitPrice) < 0.00005 ? l : { ...l, unitPrice: r.unitPrice, priceNote: r.note, discount: Math.min(l.discount, r.unitPrice * l.quantity) };
+    }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fixedPrices]);
+  useEffect(() => {
+    if (!quotationId) return;
+    apiGet<any>(`/sales/quotations/${quotationId}`).then((q) => {
+      if (q.status !== 'SENT' && q.status !== 'DRAFT') { addToast('error', `This quotation is ${String(q.status).toLowerCase()} and cannot be turned into a sale.`); navigate('/sales'); return; }
+      setQuote(q);
+      if (q.customer_id) { setCustomers((prev) => [{ id: q.customer_id, name: q.customer, phone: q.customer_phone }, ...prev.filter((c) => c.id !== q.customer_id)]); setCustomerId(q.customer_id); }
+      setBranchId(q.branch_id);
+      setFixedPrices(Object.fromEntries(q.lines.map((l: any) => [l.product_id, l.unit_price])));
+      setLines(q.lines.map((l: any) => ({ productId: l.product_id, sku: l.sku, name: l.product_name, quantity: l.quantity, unitPrice: l.unit_price, discount: l.discount_amount, priceReason: '', fulfillmentType: 'PICKUP' as const })));
+    }).catch((e) => { addToast('error', e?.message); navigate('/sales'); });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [quotationId]);
   const narrow = useNarrow();
 
   useEffect(() => {
@@ -371,7 +423,7 @@ export function CreateSalesOrderPage() {
   const effectiveDeposit = saleType === 'DEBT' ? Math.min(grandTotalOrder, Math.max(0, Number(initialDeposit || 0))) : grandTotalOrder;
   const remainingDebtBalance = Math.max(0, grandTotalOrder - effectiveDeposit);
 
-  const handleSubmit = async (completeNow: boolean) => {
+  const handleSubmit = async (completeNow: boolean, creditOverride = false): Promise<void> => {
     if (submittingAction) return;
     if (!customerId) {
       addToast('error', 'Please select a customer');
@@ -408,6 +460,9 @@ export function CreateSalesOrderPage() {
       initialDeposit: isCredit ? effectiveDeposit : 0,
       depositPaymentMethod,
       moneyAccountId: intoId || undefined,
+      quotationId: quote?.id || undefined,
+      priceLevelId: !quote && isAdmin && levelOverride ? levelOverride : undefined,
+      creditOverride: creditOverride || undefined,
       lines: lines.map((l) => ({
         productId: l.productId,
         quantity: Number(l.quantity),
@@ -445,6 +500,12 @@ export function CreateSalesOrderPage() {
         throw completeErr;
       }
     } catch (err: any) {
+      // Over the credit limit: the Owner may approve this one sale (it is written to the audit log).
+      if (err instanceof ApiError && err.body?.code === 'CREDIT_LIMIT' && isAdmin && !creditOverride
+        && window.confirm(`${err.message}\n\nApprove this sale anyway? Your approval is recorded.`)) {
+        setSubmittingAction(null);
+        return handleSubmit(completeNow, true);
+      }
       addToast('error', err?.message || 'Failed to submit sales order');
     } finally {
       setSubmittingAction(null);
@@ -553,6 +614,37 @@ export function CreateSalesOrderPage() {
                 </div>
               ) : null}
             </FormField>
+
+            {quote && (
+              <div id="quote-banner" style={{ fontSize: 12, background: '#eff6ff', border: '1px solid #bfdbfe', color: '#1e3a8a', borderRadius: 8, padding: '8px 10px' }}>
+                From quotation <strong>{quote.quotation_number}</strong>: the quoted prices and discounts are kept. Valid until {new Date(quote.valid_until).toLocaleDateString()}.
+              </div>
+            )}
+            {customerId && !quote && (credit || levels.length > 1) && (
+              <div id="customer-terms" style={{ fontSize: 12, background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: '8px 10px', display: 'grid', gap: 6 }}>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <span>Price level: <strong>{activeLevel?.name || 'Retail'}</strong></span>
+                  {isAdmin && levels.length > 1 && (
+                    <select id="sale-level" className="form-select" style={{ width: 'auto', padding: '2px 26px 2px 8px', fontSize: 12, minHeight: 0 }} value={levelOverride || credit?.price_level_id || levels.find((l) => Number(l.is_default) === 1)?.id || ''} onChange={(e) => setLevelOverride(e.target.value)}>
+                      {levels.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+                    </select>
+                  )}
+                </div>
+                {credit && credit.credit_limit > 0 && (
+                  <div style={{ color: credit.over_limit ? '#b91c1c' : '#334155' }}>
+                    Credit limit ${credit.credit_limit.toFixed(2)} · owes ${credit.outstanding.toFixed(2)} · can still take <strong>${Math.max(0, credit.available).toFixed(2)}</strong> on credit
+                  </div>
+                )}
+                {credit && credit.overdue_invoices > 0 && (
+                  <div style={{ color: '#b91c1c', display: 'flex', gap: 4, alignItems: 'center' }}>
+                    <AlertTriangle size={12} /> {credit.overdue_invoices} overdue invoice{credit.overdue_invoices > 1 ? 's' : ''}: ${credit.overdue_amount.toFixed(2)}, up to {credit.oldest_overdue_days} days late
+                  </div>
+                )}
+                {saleType === 'DEBT' && credit && credit.credit_limit > 0 && remainingDebtBalance > Math.max(0, credit.available) + 0.005 && (
+                  <div style={{ color: '#b91c1c', fontWeight: 600 }}>This sale leaves ${remainingDebtBalance.toFixed(2)} unpaid: over the limit. Take a larger deposit{isAdmin ? ', or approve it when saving' : ', or ask the Owner'}.</div>
+                )}
+              </div>
+            )}
 
             {/* Payment Terms Selector */}
             <div>

@@ -17,6 +17,7 @@ import { LoadingSpinner } from '../components/LoadingSpinner';
 import { ListToolbar } from '../components/ListToolbar';
 import { useColumnChooser } from '../components/ColumnChooser';
 import { StatusTabs } from '../components/StatusTabs';
+import { QuotationsPanel } from '../components/SalesExtraPanels';
 import { SearchableSelect } from '../components/SearchableSelect';
 import { useOpenParam, useServerList } from '../utils/serverList';
 import { searchCustomers } from '../utils/lookups';
@@ -201,6 +202,7 @@ export function SalesPage() {
 
   // Cancellation Modal
   const [adjust, setAdjust] = useState<'edit' | 'return' | null>(null);
+  const [showQuotes, setShowQuotes] = useState(false);
   const [isCancelModalOpen, setIsCancelModalOpen] = useState(false);
   const [cancellingOrderId, setCancellingOrderId] = useState<string | null>(null);
   const [cancellationReason, setCancellationReason] = useState('');
@@ -752,6 +754,13 @@ export function SalesPage() {
             </button>
           )}
         </div>
+      </section>
+
+      <section className="panel" style={{ marginBottom: 16 }}>
+        <details id="quotations-section" open={showQuotes} onToggle={(e) => setShowQuotes((e.target as HTMLDetailsElement).open)}>
+          <summary style={{ cursor: 'pointer', fontWeight: 700 }}>Quotations</summary>
+          <div style={{ marginTop: 12 }}>{showQuotes && <QuotationsPanel />}</div>
+        </details>
       </section>
 
       <section className="panel">

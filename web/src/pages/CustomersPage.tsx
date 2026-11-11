@@ -23,6 +23,7 @@ import { confirmAction } from '../utils/swal';
 import type { PaymentMethod } from '../types';
 import { DownloadDocButton } from '../components/DownloadDocButton';
 import { downloadPaymentReceipt, downloadStatement } from '../utils/documents';
+import { CustomerCreditBox } from '../components/SalesExtraPanels';
 
 // ── Interface Definitions ───────────────────────────────────────────
 interface Customer {
@@ -1134,6 +1135,7 @@ export function CustomersPage() {
 
           return (
             <div>
+              {(selectedLedgerCustomer?.id || ledgerData.customer?.id) && <CustomerCreditBox customerId={(selectedLedgerCustomer?.id || ledgerData.customer?.id) as string} />}
               {/* Ledger Header Card with Running Balance */}
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '14px', marginBottom: '16px' }}>
                 <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '10px', padding: '14px' }}>

@@ -9,6 +9,7 @@ import { ListToolbar } from '../components/ListToolbar';
 import { useServerList } from '../utils/serverList';
 import { confirmAction } from '../utils/swal';
 import { PriceLevelsPanel } from '../components/PriceLevelsPanel';
+import { ProductLevelPrices } from '../components/SalesExtraPanels';
 import { useColumnChooser } from '../components/ColumnChooser';
 import { BulkBar, selectionColumn, useSelection } from '../components/BulkBar';
 import { searchProducts } from '../utils/lookups';
@@ -1454,6 +1455,8 @@ export function ProductsPage() {
                   apiGet<any[]>(`/products/${editingProduct.id}/price-history`).then((h) => setPriceHistory(h || [])).catch(() => {});
                 }} />
             )}
+
+            <ProductLevelPrices productId={editingProduct.id} regularPrice={Number(editingProduct.selling_price) || 0} isOwner={isOwner} />
 
             {/* Grouped Product Bundle Components */}
             {editingProduct.product_type === 'GROUPED' && (

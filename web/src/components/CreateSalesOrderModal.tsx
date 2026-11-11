@@ -13,6 +13,7 @@ import { useToast } from '../contexts/ToastContext';
 import { PriceAdjustment, confirmFarPrice } from './PriceAdjustment';
 import { SaleLineCards, useNarrow } from './SaleLineCards';
 import { priceForQty, type PriceStep } from '../utils/priceLevels';
+import { useCustomerTerms } from '../utils/customerTerms';
 
 interface Customer {
   id: string;
@@ -77,6 +78,9 @@ export function CreateSalesOrderModal({ isOpen, onClose, onOrderCreated }: Creat
   // Products are searched on the server as the user types (every product
   // reachable); their stock rows come along for the availability hints.
   const catalog = useProductCatalog({ withStock: true, status: 'active', enabled: isOpen });
+  const [customerId, setCustomerId] = useState('');
+  // The customer's price level replaces the regular price of the products it covers.
+  const { credit, prices: fixedPrices } = useCustomerTerms(customerId);
   const products = useMemo<ProductLine[]>(() => catalog.items
     .filter((p) => p.is_active !== 0)
     .map((p) => ({
@@ -84,12 +88,12 @@ export function CreateSalesOrderModal({ isOpen, onClose, onOrderCreated }: Creat
       sku: p.sku,
       barcode: p.barcode,
       name: p.name,
-      sellingPrice: Number(p.selling_price) || 0,
-      priceSteps: p.price_steps || [],
+      sellingPrice: fixedPrices[p.id] ?? (Number(p.selling_price) || 0),
+      priceSteps: fixedPrices[p.id] !== undefined ? [] : (p.price_steps || []),
       productType: p.product_type || 'STANDARD',
       priceTiers: p.price_tiers || [],
       groupItems: p.group_items || [],
-    })), [catalog.items]);
+    })), [catalog.items, fixedPrices]);
   const inventoryStocks = catalog.stockRows as StockRecord[];
 
   // SweetAlert modal for stock limitation
@@ -108,7 +112,6 @@ export function CreateSalesOrderModal({ isOpen, onClose, onOrderCreated }: Creat
   });
 
   // Form states
-  const [customerId, setCustomerId] = useState('');
   // Sales are recorded under the branch the person works from (the server decides and enforces it).
   // Company-level people (the Owner) have no branch of their own: they use the branch they are
   // viewing, or must choose one. Nobody gets "the first branch in the list" by accident.
@@ -162,6 +165,15 @@ export function CreateSalesOrderModal({ isOpen, onClose, onOrderCreated }: Creat
   }[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const narrow = useNarrow();
+  useEffect(() => {
+    setLines((prev) => prev.map((l) => {
+      const pr = products.find((p) => p.id === l.productId);
+      if (!pr) return l;
+      const r = priceForQty(pr.priceSteps, pr.sellingPrice, Math.max(1, l.quantity));
+      return Math.abs(r.unitPrice - l.unitPrice) < 0.00005 ? l : { ...l, unitPrice: r.unitPrice, priceNote: r.note, discount: Math.min(l.discount, r.unitPrice * l.quantity) };
+    }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fixedPrices]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -511,6 +523,13 @@ export function CreateSalesOrderModal({ isOpen, onClose, onOrderCreated }: Creat
                 <span style={{ fontWeight: 600, color: Number(selectedCustomerObj.outstanding_balance) > 0 ? '#b45309' : '#0b8f08' }}>
                   ${Number(selectedCustomerObj.outstanding_balance).toFixed(2)}
                 </span>
+              </div>
+            )}
+            {credit && (credit.price_level_id || credit.credit_limit > 0 || credit.overdue_invoices > 0) && (
+              <div id="modal-customer-terms" style={{ fontSize: 12, marginTop: 4, color: credit.over_limit || credit.overdue_invoices > 0 ? '#b91c1c' : '#475569' }}>
+                {Object.keys(fixedPrices).length > 0 ? 'Special price level for this customer. ' : ''}
+                {credit.credit_limit > 0 ? `Credit limit $${credit.credit_limit.toFixed(2)}, can still take $${Math.max(0, credit.available).toFixed(2)}. ` : ''}
+                {credit.overdue_invoices > 0 ? `Overdue: $${credit.overdue_amount.toFixed(2)} (${credit.oldest_overdue_days} days late).` : ''}
               </div>
             )}
           </div>
