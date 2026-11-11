@@ -8,20 +8,15 @@ export interface MoneyAccountOption {
 
 const KIND: Record<MoneyAccountOption['kind'], string> = { CASH: 'Cash', BANK: 'Banks', MOBILE_MONEY: 'Mobile money / transfer' };
 const REMEMBER = 'ah_money_account';
-const cache = new Map<string, Promise<MoneyAccountOption[]>>();
 const money = (n: number) => `${Number(n) < 0 ? '-' : ''}$${Math.abs(Number(n || 0)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 /** Open Bank & Cash accounts usable for a payment of `branchId` (its own + company-wide). */
 export function loadMoneyAccountOptions(branchId?: string | null): Promise<MoneyAccountOption[]> {
-  const key = branchId || '';
-  if (!cache.has(key)) {
-    const p = apiGet<MoneyAccountOption[]>('/money-accounts/options', branchId ? { branch_id: branchId } : undefined).catch((e) => { cache.delete(key); throw e; });
-    cache.set(key, p);
-  }
-  return cache.get(key)!;
+  // Always fresh: balances change with every payment, so the list is never kept from an earlier look.
+  return apiGet<MoneyAccountOption[]>('/money-accounts/options', branchId ? { branch_id: branchId } : undefined);
 }
 /** After accounts change (registered, closed), forget the cached list. */
-export const forgetMoneyAccountOptions = () => cache.clear();
+export const forgetMoneyAccountOptions = () => {};
 
 /**
  * "Paid from" / "Received into": the one dropdown for every payment. Lists the Bank & Cash
