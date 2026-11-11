@@ -1647,6 +1647,12 @@ export async function ensureMoneyAccounts(pool: Pool) {
       ALTER TABLE invoice_payments ADD COLUMN IF NOT EXISTS money_account_id TEXT REFERENCES money_accounts(id);
       ALTER TABLE purchase_invoice_payments ADD COLUMN IF NOT EXISTS money_account_id TEXT REFERENCES money_accounts(id);
       ALTER TABLE expenses ADD COLUMN IF NOT EXISTS money_account_id TEXT REFERENCES money_accounts(id);
+      -- Expenses choose their expense account from the chart of accounts; an expense can be owed and paid later.
+      ALTER TABLE expenses ADD COLUMN IF NOT EXISTS expense_account_id TEXT REFERENCES chart_of_accounts(id);
+      ALTER TABLE expenses ADD COLUMN IF NOT EXISTS reference TEXT;
+      ALTER TABLE expenses ADD COLUMN IF NOT EXISTS paid_at TIMESTAMP WITH TIME ZONE;
+      -- Days a supplier gives us to pay (for the payables ageing report).
+      ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS payment_terms_days INTEGER NOT NULL DEFAULT 30;
       ALTER TABLE employee_advances ADD COLUMN IF NOT EXISTS money_account_id TEXT REFERENCES money_accounts(id);
       ALTER TABLE sales_returns ADD COLUMN IF NOT EXISTS money_account_id TEXT REFERENCES money_accounts(id);
       ALTER TABLE sales_orders ADD COLUMN IF NOT EXISTS installation_money_account_id TEXT REFERENCES money_accounts(id);

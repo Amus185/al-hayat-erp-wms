@@ -1,3 +1,5 @@
+import { BulkExpenses, type ExpenseAccount } from '../components/BulkExpenses';
+import { Modal } from '../components/Modal';
 import { MoneyAccountSelect } from '../components/MoneyAccountSelect';
 import { useState, useEffect, useCallback } from 'react';
 import { Receipt, Plus, Search, X, Edit2, Trash2, DollarSign, TrendingDown, Filter } from 'lucide-react';
@@ -19,6 +21,10 @@ interface Expense {
   payment_method: string;
   money_account_id?: string | null;
   money_account_name?: string | null;
+  expense_account_id?: string | null;
+  expense_account_code?: string | null;
+  expense_account_name?: string | null;
+  reference?: string | null;
   notes?: string;
   recorded_by_name?: string;
   created_at: string;
@@ -42,10 +48,11 @@ const CAT_COLORS: Record<string, string> = {
   'Office Supplies': '#0891b2', Insurance: '#65a30d', 'Taxes & Fees': '#9333ea', Other: '#6b7280',
 };
 
-const emptyForm = { title: '', amount: '', category: 'Other', expense_date: new Date().toISOString().slice(0, 10), branch_id: '', payment_method: 'CASH', money_account_id: '', notes: '' };
+const isOwed = (e: { payment_method: string }) => ['CREDIT', 'ON_ACCOUNT', 'UNPAID', 'PAYABLE'].includes(String(e.payment_method).toUpperCase());
+const emptyForm = { title: '', amount: '', category: 'Other', expense_date: new Date().toISOString().slice(0, 10), branch_id: '', payment_method: 'CASH', money_account_id: '', expense_account_id: '', owed: false, notes: '' };
 
 export function ExpensesPage() {
-  const { isAdmin } = useAuth();
+  const { isAdmin, branchId } = useAuth();
   const { addToast } = useToast();
   // Expenses: searched, filtered, sorted and paged on the server; the totals
   // and the category breakdown cover everything that matches the filters.
@@ -62,6 +69,19 @@ export function ExpensesPage() {
   const [showModal, setShowModal] = useState(false);
   const [editExpense, setEditExpense] = useState<Expense | null>(null);
   const [accountChanged, setAccountChanged] = useState(false);
+  const [expAccounts, setExpAccounts] = useState<ExpenseAccount[]>([]);
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [payFor, setPayFor] = useState<Expense | null>(null);
+  const [payFrom, setPayFrom] = useState('');
+  const [paying, setPaying] = useState(false);
+  useEffect(() => { apiGet<ExpenseAccount[]>('/expenses/accounts').then((a) => setExpAccounts(a || [])).catch(() => {}); }, []);
+  const payOwed = async () => {
+    if (!payFor) return;
+    if (!payFrom) { addToast('error', 'Choose the account you are paying from.'); return; }
+    setPaying(true);
+    try { await apiPost(`/expenses/${payFor.id}/pay`, { moneyAccountId: payFrom }); addToast('success', `${payFor.title} paid.`); setPayFor(null); load(); }
+    catch (err: any) { addToast('error', err?.message); } finally { setPaying(false); }
+  };
   const [form, setForm] = useState<typeof emptyForm>(emptyForm);
   const [saving, setSaving] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
@@ -90,7 +110,7 @@ export function ExpensesPage() {
     setForm({
       title: e.title, amount: String(e.amount), category: e.category,
       expense_date: e.expense_date, branch_id: e.branch_id || '',
-      payment_method: e.payment_method, money_account_id: e.money_account_id || '', notes: e.notes || '',
+      payment_method: e.payment_method, money_account_id: e.money_account_id || '', expense_account_id: e.expense_account_id || '', owed: isOwed(e), notes: e.notes || '',
     });
     setShowModal(true);
   };
@@ -105,8 +125,12 @@ export function ExpensesPage() {
         branch_id: form.branch_id || undefined,
         notes: form.notes || undefined,
         // On an edit, the account is only sent when the person changed it (never moved by itself).
-        moneyAccountId: editExpense && !accountChanged ? undefined : (form.money_account_id || undefined),
+        moneyAccountId: form.owed || (editExpense && !accountChanged) ? undefined : (form.money_account_id || undefined),
+        expenseAccountId: form.expense_account_id || (editExpense ? '' : undefined),
+        // New expense not paid yet: it is owed (Accounts Payable) until "Pay" is used.
+        payment_method: editExpense ? form.payment_method : (form.owed ? 'UNPAID' : form.payment_method),
       };
+      delete (payload as any).owed; delete (payload as any).expense_account_id;
       delete (payload as any).money_account_id;
       if (editExpense) {
         await apiPatch(`/expenses/${editExpense.id}`, payload);
@@ -142,6 +166,7 @@ export function ExpensesPage() {
           <h2 style={{ margin: 0, fontSize: '22px', fontWeight: 700, color: '#111827' }}>Expenses</h2>
           <p style={{ margin: '4px 0 0', color: '#6b7280', fontSize: '14px' }}>{list.total.toLocaleString()} records · ${totalAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} total</p>
         </div>
+        <button type="button" className="btn btn-secondary" id="bulk-expenses-open" onClick={() => setBulkOpen(true)} style={{ marginLeft: 'auto' }}>Enter several</button>
         <button
           onClick={openCreate}
           style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 18px', background: '#dc2626', color: '#fff', border: 'none', borderRadius: '8px', fontWeight: 600, fontSize: '14px', cursor: 'pointer' }}
@@ -236,7 +261,11 @@ export function ExpensesPage() {
                 <div style={{ fontWeight: 600, color: '#111827', fontSize: '14px' }}>{expense.title}</div>
                 <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginTop: '2px' }}>
                   <span style={{ fontSize: '12px', padding: '1px 8px', borderRadius: '10px', background: `${CAT_COLORS[expense.category] || '#6b7280'}18`, color: CAT_COLORS[expense.category] || '#6b7280', fontWeight: 500 }}>{expense.category}</span>
-                  <span style={{ fontSize: '12px', color: '#9ca3af' }}>{expense.money_account_name || expense.payment_method.replace('_', ' ')}</span>
+                  {expense.expense_account_code && <span style={{ fontSize: '12px', color: '#6b7280' }}>{expense.expense_account_code} {expense.expense_account_name}</span>}
+                  {isOwed(expense)
+                    ? <span style={{ fontSize: '12px', padding: '1px 8px', borderRadius: '10px', background: '#fef3c7', color: '#92400e', fontWeight: 600 }}>Not paid yet</span>
+                    : <span style={{ fontSize: '12px', color: '#9ca3af' }}>{expense.money_account_name || expense.payment_method.replace('_', ' ')}</span>}
+                  {expense.reference && <span style={{ fontSize: '12px', color: '#9ca3af' }}>Ref {expense.reference}</span>}
                   {expense.branch_name && <span style={{ fontSize: '12px', color: '#9ca3af' }}>{expense.branch_name}</span>}
                   {expense.recorded_by_name && <span style={{ fontSize: '12px', color: '#9ca3af' }}>by {expense.recorded_by_name}</span>}
                 </div>
@@ -253,6 +282,7 @@ export function ExpensesPage() {
 
               {/* Actions */}
               <div style={{ display: 'flex', gap: '10px', flexShrink: 0 }}>
+                {isOwed(expense) && <button className="btn btn-primary btn-sm pay-expense" onClick={() => { setPayFrom(''); setPayFor(expense); }}>Pay</button>}
                 <button onClick={() => openEdit(expense)} style={{ padding: '6px 8px', border: '1px solid #e5e7eb', borderRadius: '6px', background: '#fff', cursor: 'pointer', color: '#6b7280', display: 'flex', alignItems: 'center' }}><Edit2 size={13} /></button>
                 <button onClick={() => setDeleteConfirm(expense.id)} style={{ padding: '6px 8px', border: '1px solid #fee2e2', borderRadius: '6px', background: '#fff', cursor: 'pointer', color: '#dc2626', display: 'flex', alignItems: 'center' }}><Trash2 size={13} /></button>
               </div>
@@ -265,6 +295,14 @@ export function ExpensesPage() {
           onPageChange={list.setPage} onPageSizeChange={list.setPageSize} pageSizeOptions={[25, 50, 100]} />
       )}
 
+      <BulkExpenses open={bulkOpen} onClose={() => setBulkOpen(false)} onSaved={load} accounts={expAccounts} branches={branches} fixedBranchId={isAdmin ? null : (branchId ?? null)} />
+      <Modal isOpen={!!payFor} onClose={() => !paying && setPayFor(null)} title={payFor ? `Pay: ${payFor.title}` : ''} width="sm"
+        footer={<div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', width: '100%' }}>
+          <button type="button" className="btn btn-secondary" onClick={() => setPayFor(null)} disabled={paying}>Cancel</button>
+          <button type="button" className="btn btn-primary" id="confirm-pay-expense" onClick={payOwed} disabled={paying}>{paying ? 'Paying…' : `Pay $${Number(payFor?.amount || 0).toFixed(2)}`}</button>
+        </div>}>
+        {payFor && <MoneyAccountSelect id="payExpenseFrom" label="Paid from" value={payFrom} onChange={setPayFrom} mustChoose branchId={(payFor as any).branch_id ?? null} amount={Number(payFor.amount)} />}
+      </Modal>
       {/* Modal */}
       {showModal && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
@@ -292,13 +330,29 @@ export function ExpensesPage() {
                   {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
                 </select>
               </div>
+              {/* Expense account from the chart of accounts */}
+              <div style={{ gridColumn: '1 / -1' }}>
+                <label style={{ display: 'block', fontSize: '13px', fontWeight: 500, color: '#374151', marginBottom: '4px' }}>Expense account</label>
+                <select id="expenseAccount" className="form-select" value={form.expense_account_id} onChange={e => setForm(p => ({ ...p, expense_account_id: e.target.value }))}>
+                  <option value="">Automatic (from the category)</option>
+                  {expAccounts.map(a => <option key={a.id} value={a.id}>{a.code} {a.name}</option>)}
+                </select>
+              </div>
+              {!editExpense && (
+                <div>
+                  <label style={{ display: 'block', fontSize: '13px', fontWeight: 500, color: '#374151', marginBottom: '4px' }}>Payment</label>
+                  <select id="expenseOwed" className="form-select" value={form.owed ? 'OWED' : 'PAID'} onChange={e => setForm(p => ({ ...p, owed: e.target.value === 'OWED' }))}>
+                    <option value="PAID">Paid now</option><option value="OWED">Not paid yet (owed)</option>
+                  </select>
+                </div>
+              )}
               {/* Date */}
               <div>
                 <label style={{ display: 'block', fontSize: '13px', fontWeight: 500, color: '#374151', marginBottom: '4px' }}>Date <span style={{ color: '#dc2626' }}>*</span></label>
                 <input type="date" value={form.expense_date} onChange={e => setForm(p => ({ ...p, expense_date: e.target.value }))} style={{ width: '100%', padding: '10px 12px', border: '1px solid #e5e7eb', borderRadius: '8px', fontSize: '14px', outline: 'none', boxSizing: 'border-box' }} />
               </div>
               {/* Paid from: a Bank & Cash account of the expense's branch */}
-              <div>
+              <div style={{ display: form.owed ? 'none' : undefined }}>
                 <MoneyAccountSelect id="expensePaidFrom" label="Paid from" value={form.money_account_id}
                   onChange={(v, auto) => { setForm(p => ({ ...p, money_account_id: v })); if (!auto) setAccountChanged(true); }}
                   defaultTo={editExpense ? 'main' : 'remembered'}

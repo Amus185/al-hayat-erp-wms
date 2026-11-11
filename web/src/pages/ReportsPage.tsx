@@ -1,4 +1,5 @@
 import { DiscountsReport } from '../components/DiscountsReport';
+import { PayablesAgeing, StockAgeing } from '../components/AgeingReports';
 import { useEffect, useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import {
@@ -135,9 +136,9 @@ export function ReportsPage() {
   // Operational reports for everyone with report access; valuation needs cost access, comparing
   // branches is company-level, and the Finance reports need accounting access.
   const reportMenus = [
-    { label: 'Inventory', items: [{ key: 'low-stock', label: 'Stock Risk' }, ...(canCosts ? [{ key: 'inv-valuation', label: 'Inventory Valuation' }] : [])] },
+    { label: 'Inventory', items: [{ key: 'low-stock', label: 'Stock Risk' }, { key: 'stock-ageing', label: 'Stock Ageing' },...(canCosts ? [{ key: 'inv-valuation', label: 'Inventory Valuation' }] : [])] },
     { label: 'Sales', items: [...(myBranch ? [] : [{ key: 'branch-perf', label: 'Branch Performance' }]), { key: 'sales-profit', label: canCosts ? 'Sales & Profit' : 'Sales Activity' }, { key: 'quote-conversion', label: 'Quote Conversion' }, ...(canFinance ? [{ key: 'discounts', label: 'Discounts Given' }] : [])] },
-    { label: 'Purchasing', items: [{ key: 'supplier-perf', label: 'Supplier Scorecards' }] },
+    { label: 'Purchasing', items: [{ key: 'supplier-perf', label: 'Supplier Scorecards' }, ...(canCosts ? [{ key: 'payables-ageing', label: 'Payables Ageing' }] : [])] },
     ...(canFinance ? [{ label: 'Finance', items: [{ key: 'receivables', label: 'Receivables & Cash Flow' }] }] : []),
   ];
 
@@ -803,6 +804,8 @@ export function ReportsPage() {
           {/* SUBVIEW 5: QUOTE CONVERSION */}
           {/* ========================================================================= */}
           {activeTab === 'discounts' && canFinance && <DiscountsReport days={days} />}
+          {activeTab === 'stock-ageing' && <StockAgeing warehouseId={selectedWarehouse} categoryId={selectedCategory} />}
+          {activeTab === 'payables-ageing' && canCosts && <PayablesAgeing />}
 
           {activeTab === 'quote-conversion' && (
             <div>

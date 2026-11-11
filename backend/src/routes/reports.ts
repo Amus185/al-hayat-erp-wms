@@ -26,6 +26,66 @@ function getDaysParam(c: any): number {
 }
 
 // 1. Low Stock Risk
+// Stock ageing: how long the units on hand have been in each location, from real receipt dates.
+// Stock leaves oldest first (first in, first out), so the units still on hand are the ones
+// received most recently: they are matched to the newest receipts. Units with no receipt
+// record are shown as such, never guessed.
+// ?warehouseId=&branchId=&categoryId=
+reports.get('/stock-ageing', async (c) => {
+  const loc = await resolveLoc(c);
+  const where: string[] = ['s.quantity_on_hand > 0']; const params: any[] = [];
+  if (loc.kind === 'BRANCH') { where.push('s.branch_id = ?'); params.push(loc.branchId); }
+  else if (loc.kind === 'WAREHOUSE') { where.push('s.warehouse_id = ?'); params.push(loc.warehouseId); }
+  else {
+    if (c.req.query('warehouseId')) { where.push('s.warehouse_id = ?'); params.push(c.req.query('warehouseId')); }
+    if (c.req.query('branchId')) { where.push('s.branch_id = ?'); params.push(c.req.query('branchId')); }
+  }
+  if (c.req.query('categoryId')) { where.push('p.category_id = ?'); params.push(c.req.query('categoryId')); }
+  const { results: stock } = await c.env.DB.prepare(`
+    SELECT s.product_id, s.warehouse_id, s.branch_id, s.quantity_on_hand, p.name AS product_name, p.sku, COALESCE(p.cost_price, 0) AS cost_price,
+           COALESCE(w.name, b.name) AS location_name, CASE WHEN s.warehouse_id IS NOT NULL THEN 'Warehouse' ELSE 'Branch' END AS location_type
+    FROM inventory_stock s JOIN products p ON p.id = s.product_id
+    LEFT JOIN warehouses w ON w.id = s.warehouse_id LEFT JOIN branches b ON b.id = s.branch_id
+    WHERE ${where.join(' AND ')} ORDER BY p.name LIMIT 5000
+  `).bind(...params).all();
+  const rowsIn = (stock || []) as any[];
+  const ids = [...new Set(rowsIn.map((r) => r.product_id))];
+  const receipts = new Map<string, Array<{ qty: number; at: string }>>();
+  if (ids.length) {
+    const { results: tx } = await c.env.DB.prepare(`
+      SELECT product_id, quantity, created_at,
+             COALESCE(destination_warehouse_id, dest_warehouse_id) AS wh, COALESCE(destination_branch_id, dest_branch_id) AS br
+      FROM inventory_transactions
+      WHERE quantity > 0 AND product_id IN (${ids.map(() => '?').join(', ')})
+      ORDER BY created_at DESC
+    `).bind(...ids).all();
+    for (const t of (tx || []) as any[]) {
+      const key = `${t.product_id}|${t.wh || ''}|${t.br || ''}`;
+      const list = receipts.get(key) || []; list.push({ qty: Number(t.quantity), at: t.created_at }); receipts.set(key, list);
+    }
+  }
+  const now = Date.now();
+  const bucketOf = (days: number) => days <= 30 ? 'd0_30' : days <= 60 ? 'd31_60' : days <= 90 ? 'd61_90' : days <= 180 ? 'd91_180' : 'd180_plus';
+  const totals: any = { quantity: 0, d0_30: 0, d31_60: 0, d61_90: 0, d91_180: 0, d180_plus: 0, unknown: 0 };
+  const rows = rowsIn.map((r) => {
+    let left = Number(r.quantity_on_hand);
+    const out: any = { product_id: r.product_id, product_name: r.product_name, sku: r.sku, location_name: r.location_name, location_type: r.location_type,
+      quantity: left, cost_price: Number(r.cost_price), d0_30: 0, d31_60: 0, d61_90: 0, d91_180: 0, d180_plus: 0, unknown: 0, oldest_receipt: null as string | null, days_in_stock: null as number | null };
+    for (const rc of receipts.get(`${r.product_id}|${r.warehouse_id || ''}|${r.branch_id || ''}`) || []) {
+      if (left <= 0) break;
+      const take = Math.min(left, rc.qty); left -= take;
+      const days = Math.max(0, Math.floor((now - new Date(rc.at).getTime()) / 86_400_000));
+      out[bucketOf(days)] += take;
+      out.oldest_receipt = rc.at; out.days_in_stock = days; // newest first, so the last one taken is the oldest
+    }
+    out.unknown = left;
+    out.category = out.unknown === out.quantity ? 'No receipt record' : out.days_in_stock <= 30 ? '0–30 days' : out.days_in_stock <= 60 ? '31–60 days' : out.days_in_stock <= 90 ? '61–90 days' : out.days_in_stock <= 180 ? '91–180 days' : 'Over 180 days';
+    for (const k of Object.keys(totals)) totals[k] += out[k];
+    return out;
+  }).sort((a, b) => (b.days_in_stock ?? -1) - (a.days_in_stock ?? -1));
+  return c.json({ rows, totals });
+});
+
 reports.get('/low-stock', async (c) => {
   const payload = c.get('jwtPayload');
   const scopedBranchId = isAdminUser(payload) ? null : payload.branch_id;

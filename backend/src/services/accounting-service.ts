@@ -486,11 +486,13 @@ function customerPaymentJournalParams(
  */
 export async function prepareExpenseJournal(
   c: any,
-  expense: { id: string; title: string; amount: number; category: string; expense_date: string; branch_id?: string | null; payment_method?: string | null; cash_code?: string | null },
+  expense: { id: string; title: string; amount: number; category: string; expense_date: string; branch_id?: string | null; payment_method?: string | null; cash_code?: string | null; expense_code?: string | null },
   userId?: string | null,
   skipIdempotency = false
 ) {
-  const expenseCode = ['Rent', 'Salaries', 'Utilities', 'Maintenance'].includes(String(expense.category).trim()) ? '6010' : '6050';
+  // The expense account chosen from the chart of accounts; otherwise the old rule by category.
+  const expenseCode = expense.expense_code
+    || (['Rent', 'Salaries', 'Utilities', 'Maintenance'].includes(String(expense.category).trim()) ? '6010' : '6050');
   const method = String(expense.payment_method || 'CASH').toUpperCase();
   const payable = ['CREDIT', 'ON_ACCOUNT', 'UNPAID', 'PAYABLE'].includes(method);
 

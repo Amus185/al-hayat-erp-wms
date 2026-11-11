@@ -924,6 +924,49 @@ purchasing.get('/invoices/:id/payments', async (c) => {
 // PURCHASING FINANCIAL SUMMARY — for dashboard
 // NEW ENDPOINT — GET /purchasing/summary
 // ──────────────────────────────────────────────────────────────────────
+// Accounts payable ageing: what we owe suppliers, by how long it is overdue (as of a date).
+// Due date = invoice date + the supplier's payment terms (30 days unless set).
+// ?supplierId=&asOf=YYYY-MM-DD&branch_id=   Needs cost access (supplier money).
+purchasing.get('/payables-ageing', requirePermissions([PERM.COSTS]), async (c) => {
+  const asOf = /^\d{4}-\d{2}-\d{2}$/.test(c.req.query('asOf') || '') ? c.req.query('asOf')! : new Date().toISOString().slice(0, 10);
+  const supplierId = c.req.query('supplierId') || '';
+  const { results } = await c.env.DB.prepare(`
+    SELECT pi.id, pi.invoice_number, pi.issued_at, po.po_number, po.id AS po_id, s.id AS supplier_id, s.name AS supplier_name,
+           COALESCE(s.payment_terms_days, 30) AS terms, b.name AS branch_name,
+           (pi.total_amount - COALESCE(pi.discount_amount, 0)) AS total,
+           COALESCE((SELECT SUM(pip.amount) FROM purchase_invoice_payments pip WHERE pip.purchase_invoice_id = pi.id AND pip.payment_date::date <= ?::date), 0) AS paid
+    FROM purchase_invoices pi
+    JOIN purchase_orders po ON po.id = pi.purchase_order_id
+    JOIN suppliers s ON s.id = po.supplier_id
+    LEFT JOIN branches b ON b.id = po.branch_id
+    WHERE pi.status <> 'CANCELLED' AND po.status <> 'CANCELLED' AND pi.issued_at::date <= ?::date
+      ${supplierId ? 'AND s.id = ?' : ''} ${await poScope(c)}
+    ORDER BY pi.issued_at
+  `).bind(...(supplierId ? [asOf, asOf, supplierId] : [asOf, asOf])).all();
+  const BUCKETS = ['current', 'd1_30', 'd31_60', 'd61_90', 'd90_plus'] as const;
+  const bucketOf = (overdue: number) => overdue <= 0 ? 'current' : overdue <= 30 ? 'd1_30' : overdue <= 60 ? 'd31_60' : overdue <= 90 ? 'd61_90' : 'd90_plus';
+  const r2 = (n: number) => Math.round(n * 100) / 100;
+  const bySupplier = new Map<string, any>();
+  const invoices: any[] = [];
+  const end = new Date(`${asOf}T00:00:00Z`).getTime();
+  for (const r of (results || []) as any[]) {
+    const balance = r2(Number(r.total) - Number(r.paid));
+    if (balance <= 0.005) continue;
+    const issued = new Date(r.issued_at); const due = new Date(Date.UTC(issued.getUTCFullYear(), issued.getUTCMonth(), issued.getUTCDate() + Number(r.terms)));
+    const overdue = Math.floor((end - due.getTime()) / 86_400_000);
+    const bucket = bucketOf(overdue);
+    invoices.push({ id: r.id, po_id: r.po_id, invoice_number: r.invoice_number, po_number: r.po_number, supplier_id: r.supplier_id, supplier_name: r.supplier_name, branch_name: r.branch_name,
+      issued_at: r.issued_at, due_date: due.toISOString().slice(0, 10), days_overdue: Math.max(0, overdue), total: r2(Number(r.total)), paid: r2(Number(r.paid)), balance, bucket });
+    const g = bySupplier.get(r.supplier_id) || { supplier_id: r.supplier_id, supplier_name: r.supplier_name, current: 0, d1_30: 0, d31_60: 0, d61_90: 0, d90_plus: 0, total: 0 };
+    g[bucket] = r2(g[bucket] + balance); g.total = r2(g.total + balance);
+    bySupplier.set(r.supplier_id, g);
+  }
+  const suppliers = [...bySupplier.values()].sort((a, b) => b.total - a.total);
+  const totals: any = { total: 0 }; for (const k of BUCKETS) totals[k] = 0;
+  for (const g of suppliers) { for (const k of BUCKETS) totals[k] = r2(totals[k] + g[k]); totals.total = r2(totals.total + g.total); }
+  return c.json({ asOf, suppliers, invoices, totals });
+});
+
 purchasing.get('/summary', async (c) => {
   const { results: invoices } = await c.env.DB.prepare(`
     SELECT pi.id, pi.total_amount, COALESCE(pi.discount_amount, 0) AS discount_amount, pi.status,
