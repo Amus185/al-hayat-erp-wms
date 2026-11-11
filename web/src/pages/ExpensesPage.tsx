@@ -49,7 +49,7 @@ const CAT_COLORS: Record<string, string> = {
 };
 
 const isOwed = (e: { payment_method: string }) => ['CREDIT', 'ON_ACCOUNT', 'UNPAID', 'PAYABLE'].includes(String(e.payment_method).toUpperCase());
-const emptyForm = { title: '', amount: '', category: 'Other', expense_date: new Date().toISOString().slice(0, 10), branch_id: '', payment_method: 'CASH', money_account_id: '', expense_account_id: '', owed: false, notes: '' };
+const emptyForm = { title: '', amount: '', category: 'Other', expense_date: new Date().toISOString().slice(0, 10), branch_id: '', payment_method: 'CASH', money_account_id: '', expense_account_id: '', class_id: '', owed: false, notes: '' };
 
 export function ExpensesPage() {
   const { isAdmin, branchId } = useAuth();
@@ -75,6 +75,9 @@ export function ExpensesPage() {
   const [payFrom, setPayFrom] = useState('');
   const [paying, setPaying] = useState(false);
   useEffect(() => { apiGet<ExpenseAccount[]>('/expenses/accounts').then((a) => setExpAccounts(a || [])).catch(() => {}); }, []);
+  const [classes, setClasses] = useState<{ id: string; name: string }[]>([]);
+  const [classRequired, setClassRequired] = useState(false);
+  useEffect(() => { apiGet<any>('/expenses/classes').then((d) => { setClasses(d.classes || []); setClassRequired(!!d.required); }).catch(() => {}); }, []);
   const payOwed = async () => {
     if (!payFor) return;
     if (!payFrom) { addToast('error', 'Choose the account you are paying from.'); return; }
@@ -110,7 +113,7 @@ export function ExpensesPage() {
     setForm({
       title: e.title, amount: String(e.amount), category: e.category,
       expense_date: e.expense_date, branch_id: e.branch_id || '',
-      payment_method: e.payment_method, money_account_id: e.money_account_id || '', expense_account_id: e.expense_account_id || '', owed: isOwed(e), notes: e.notes || '',
+      payment_method: e.payment_method, money_account_id: e.money_account_id || '', expense_account_id: e.expense_account_id || '', class_id: (e as any).class_id || '', owed: isOwed(e), notes: e.notes || '',
     });
     setShowModal(true);
   };
@@ -127,10 +130,11 @@ export function ExpensesPage() {
         // On an edit, the account is only sent when the person changed it (never moved by itself).
         moneyAccountId: form.owed || (editExpense && !accountChanged) ? undefined : (form.money_account_id || undefined),
         expenseAccountId: form.expense_account_id || (editExpense ? '' : undefined),
+        classId: form.class_id || (editExpense ? '' : undefined),
         // New expense not paid yet: it is owed (Accounts Payable) until "Pay" is used.
         payment_method: editExpense ? form.payment_method : (form.owed ? 'UNPAID' : form.payment_method),
       };
-      delete (payload as any).owed; delete (payload as any).expense_account_id;
+      delete (payload as any).owed; delete (payload as any).expense_account_id; delete (payload as any).class_id;
       delete (payload as any).money_account_id;
       if (editExpense) {
         await apiPatch(`/expenses/${editExpense.id}`, payload);
@@ -338,6 +342,15 @@ export function ExpensesPage() {
                   {expAccounts.map(a => <option key={a.id} value={a.id}>{a.code} {a.name}</option>)}
                 </select>
               </div>
+              {classes.length > 0 && (
+                <div style={{ gridColumn: '1 / -1' }}>
+                  <label style={{ display: 'block', fontSize: '13px', fontWeight: 500, color: '#374151', marginBottom: '4px' }}>Class{classRequired ? ' *' : ''}</label>
+                  <select id="expenseClass" className="form-select" value={form.class_id} onChange={e => setForm(p => ({ ...p, class_id: e.target.value }))}>
+                    <option value="">{classRequired ? '— choose —' : 'No class'}</option>
+                    {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  </select>
+                </div>
+              )}
               {!editExpense && (
                 <div>
                   <label style={{ display: 'block', fontSize: '13px', fontWeight: 500, color: '#374151', marginBottom: '4px' }}>Payment</label>

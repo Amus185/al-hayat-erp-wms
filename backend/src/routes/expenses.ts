@@ -282,6 +282,12 @@ expenses.patch('/:id', requirePermissions(['expenses.manage']), async (c) => {
     fields.push('expense_account_id = ?'); vals.push(acc?.id ?? null);
   }
 
+  if ((body as any).classId !== undefined) {
+    const cid = (body as any).classId ? String((body as any).classId) : null;
+    if (cid && !(await c.env.DB.prepare('SELECT 1 FROM accounting_classes WHERE id = ?').bind(cid).first())) return c.json({ message: 'That class does not exist.' }, 400);
+    (body as any).class_id = cid; fields.push('class_id = ?'); vals.push(cid);
+  }
+
   if (!fields.length) return c.json({ message: 'No fields to update.' }, 400);
   if (body.amount !== undefined && !(Number(body.amount) > 0)) return c.json({ message: 'Amount must be greater than 0.' }, 400);
 
@@ -293,7 +299,7 @@ expenses.patch('/:id', requirePermissions(['expenses.manage']), async (c) => {
   // Financial fields changed: reverse the posted journal and post the new one.
   const ex = existing as any;
   const updated = { ...ex, ...body };
-  const financialChange = ['amount', 'category', 'expense_date', 'branch_id', 'payment_method', 'money_account_id', 'expense_account_id']
+  const financialChange = ['amount', 'category', 'expense_date', 'branch_id', 'payment_method', 'money_account_id', 'expense_account_id', 'class_id']
     .some((k) => (body as any)[k] !== undefined && String((body as any)[k]) !== String(ex[k]));
   if (financialChange) {
     const userId = c.get('jwtPayload').sub;

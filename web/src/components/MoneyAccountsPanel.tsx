@@ -12,7 +12,7 @@ type Kind = 'BANK' | 'MOBILE_MONEY' | 'CASH';
 interface Account {
   id: string; name: string; kind: Kind; provider: string | null; account_number: string | null; account_holder: string | null;
   currency: string; account_code: string; branch_id: string | null; branch_name: string | null; is_active: number;
-  balance: number; last_movement: string | null; notes: string | null;
+  balance: number; foreign_balance?: number | null; currency_rate?: number | null; last_movement: string | null; notes: string | null;
 }
 interface Line { entry_date: string; description: string; money_in: number; money_out: number; balance: number; entry_number: string; reference_type: string; branch_name: string | null }
 
@@ -21,7 +21,7 @@ const KIND_ICON: Record<Kind, typeof Landmark> = { BANK: Landmark, MOBILE_MONEY:
 const OTHER = '__other';
 const money = (n: number) => `$${Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const today = () => new Date().toISOString().slice(0, 10);
-const EMPTY = { kind: 'BANK' as Kind, provider: '', otherProvider: '', name: '', account_number: '', account_holder: '', branchId: '', openingAmount: '', openingSource: 'NEW_MONEY', openingDate: today(), notes: '' };
+const EMPTY = { kind: 'BANK' as Kind, provider: '', otherProvider: '', name: '', account_number: '', account_holder: '', branchId: '', openingAmount: '', openingSource: 'NEW_MONEY', openingDate: today(), notes: '', currency: 'USD' };
 
 /**
  * Accounting → Bank & Cash (like Odoo's Bank and Cash journals). Each account is its own ledger
@@ -34,6 +34,7 @@ export function MoneyAccountsPanel() {
   const [data, setData] = useState<{ accounts: Account[]; total: number; byKind: Record<Kind, number> } | null>(null);
   const [providers, setProviders] = useState<Record<Kind, string[]>>({ BANK: [], MOBILE_MONEY: [], CASH: [] });
   const [branches, setBranches] = useState<{ id: string; name: string }[]>([]);
+  const [currencies, setCurrencies] = useState<{ code: string; name: string; rate: number | null }[]>([]);
   const [newOpen, setNewOpen] = useState(false);
   const [form, setForm] = useState(EMPTY);
   const [moveOpen, setMoveOpen] = useState(false);
@@ -47,6 +48,7 @@ export function MoneyAccountsPanel() {
   useEffect(() => {
     load();
     apiGet<any>('/accounting/money-accounts/providers').then((p) => setProviders(p.providers)).catch(() => {});
+    apiGet<any>('/accounting/currencies').then((d) => setCurrencies(d.currencies || [])).catch(() => {});
     if (canManage) apiGet<any[]>('/branches').then((b) => setBranches((b || []).map((x) => ({ id: x.id, name: x.name })))).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -70,6 +72,7 @@ export function MoneyAccountsPanel() {
       const made: any = await apiPost('/accounting/money-accounts', {
         kind: form.kind, provider: providerName, name: form.name.trim() || providerName,
         account_number: form.account_number, account_holder: form.account_holder, branchId: form.branchId || null, notes: form.notes,
+        currency: form.currency,
         opening: amount > 0 ? { amount, source: form.openingSource, date: form.openingDate } : undefined,
       });
       addToast('success', `${made.name} registered (${made.account_code}). Balance ${money(made.balance)}.`);
@@ -141,6 +144,7 @@ export function MoneyAccountsPanel() {
                     </div>
                   </div>
                   <div style={{ fontSize: 22, fontWeight: 800, color: a.balance < 0 ? '#b91c1c' : '#0f172a' }}>{money(a.balance)}</div>
+                  {a.currency !== 'USD' && a.foreign_balance != null && <div className="mm-sub" style={{ display: 'block', marginTop: -6 }}>{Number(a.foreign_balance).toLocaleString()} {a.currency}{a.currency_rate ? ` · today's rate ${Number(a.currency_rate).toLocaleString()}` : ''}</div>}
                   <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
                     <span className="mm-sub" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><Building2 size={12} />{a.branch_name || 'Whole company'}</span>
                     <span className="mm-sub" style={{ display: 'inline' }}>· {a.account_code} · {a.currency}</span>
@@ -198,7 +202,11 @@ export function MoneyAccountsPanel() {
               <option value="">Whole company</option>
               {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
             </select></label>
-          <label className="form-field"><span className="form-field__label">Money in it today (USD)</span>
+          <label className="form-field"><span className="form-field__label">Currency</span>
+            <select className="form-select" id="ma-currency" {...set('currency')}>
+              {(currencies.length ? currencies : [{ code: 'USD', name: 'US Dollar', rate: 1 }]).map((c) => <option key={c.code} value={c.code} disabled={!c.rate}>{c.name} ({c.code}){!c.rate ? ' — set its rate in Currencies first' : ''}</option>)}
+            </select></label>
+          <label className="form-field"><span className="form-field__label">Money in it today ({form.currency})</span>
             <input className="form-input" id="ma-opening" type="number" min="0" step="0.01" {...set('openingAmount')} placeholder="0.00" /></label>
           {Number(form.openingAmount) > 0 && (
             <label className="form-field" style={{ gridColumn: '1 / -1' }}><span className="form-field__label">Where does this money come from?</span>

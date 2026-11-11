@@ -1,5 +1,6 @@
 import { refreshAfterSave } from '../utils/afterSave';
 import { MoneyAccountsPanel } from '../components/MoneyAccountsPanel';
+import { BankReconciliation, ClassesPanel, ComparePeriods, CurrenciesPanel } from '../components/FinanceExtraPanels';
 import { useEffect, useState, useCallback } from 'react';
 import {
   BookOpen, BarChart3, FileText, Scale, TrendingUp, Building2,
@@ -599,7 +600,7 @@ export function AccountingPage() {
   // ─── Tab definitions ────────────────────────────────────────────
   const workspaceMenus = [
     { label: 'Dashboard', items: [{ key: 'dashboard', label: 'KPI Overview' }] },
-    { label: 'Accounting', items: [{ key: 'money', label: 'Bank & Cash' }, { key: 'journal', label: 'Journal Entries' }, { key: 'ledger', label: 'General Ledger' }, { key: 'trial-balance', label: 'Journal Items & Trial Balance' }, { key: 'coa', label: 'Chart of Accounts' }] },
+    { label: 'Accounting', items: [{ key: 'money', label: 'Bank & Cash' }, { key: 'journal', label: 'Journal Entries' }, { key: 'ledger', label: 'General Ledger' }, { key: 'trial-balance', label: 'Journal Items & Trial Balance' }, { key: 'coa', label: 'Chart of Accounts' }, { key: 'reconcile', label: 'Bank Reconciliation' }, { key: 'compare', label: 'Compare Periods' }, { key: 'classes', label: 'Classes' }, { key: 'currencies', label: 'Currencies' }] },
     { label: 'Reporting', items: [{ key: 'income', label: 'Income Statement' }, { key: 'balance-sheet', label: 'Balance Sheet' }, { key: 'cash-flow', label: 'Cash Flow' }, { key: 'equity', label: 'Executive Summary' }] },
     { label: 'Management', items: [{ key: 'inventory', label: 'Physical Inventory Counts' }, { key: 'depreciation', label: 'Asset Depreciation' }, { key: 'opening', label: 'Opening Balances' }, { key: 'journal', label: 'Year-End Closing' }] },
   ];
@@ -865,7 +866,7 @@ export function AccountingPage() {
         }}>
           {[
             { label: 'Dashboard', items: [{ key: 'dashboard', label: 'KPI Overview' }] },
-            { label: 'Accounting', items: [{ key: 'money', label: 'Bank & Cash' }, { key: 'journal', label: 'Journal Entries' }, { key: 'ledger', label: 'General Ledger' }, { key: 'trial-balance', label: 'Journal Items & Trial Balance' }, { key: 'coa', label: 'Chart of Accounts' }] },
+            { label: 'Accounting', items: [{ key: 'money', label: 'Bank & Cash' }, { key: 'journal', label: 'Journal Entries' }, { key: 'ledger', label: 'General Ledger' }, { key: 'trial-balance', label: 'Journal Items & Trial Balance' }, { key: 'coa', label: 'Chart of Accounts' }, { key: 'reconcile', label: 'Bank Reconciliation' }, { key: 'compare', label: 'Compare Periods' }, { key: 'classes', label: 'Classes' }, { key: 'currencies', label: 'Currencies' }] },
             { label: 'Reporting', items: [{ key: 'income', label: 'Income Statement' }, { key: 'balance-sheet', label: 'Balance Sheet' }, { key: 'cash-flow', label: 'Cash Flow' }, { key: 'equity', label: 'Executive Summary' }] },
             { label: 'Management', items: [{ key: 'inventory', label: 'Physical Inventory Counts' }, { key: 'depreciation', label: 'Asset Depreciation' }, { key: 'opening', label: 'Opening Balances' }] },
           ].map((menu) => {
@@ -939,6 +940,10 @@ export function AccountingPage() {
         <div>
           {/* ── DASHBOARD ──────────────────────────────────────────── */}
           {activeTab === 'money' && <MoneyAccountsPanel />}
+          {activeTab === 'reconcile' && <BankReconciliation />}
+          {activeTab === 'compare' && <ComparePeriods />}
+          {activeTab === 'classes' && <ClassesPanel />}
+          {activeTab === 'currencies' && <CurrenciesPanel />}
 
           {activeTab === 'dashboard' && (
             <div>
