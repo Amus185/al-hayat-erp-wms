@@ -24,8 +24,9 @@ expenses.get('/', requirePermissions(['view_reports']), async (c) => {
 
   let query = `
     SELECT e.*, b.name AS branch_name, u.full_name AS recorded_by_name, CASE WHEN e.payment_method IN ('CREDIT','ON_ACCOUNT','UNPAID','PAYABLE') THEN NULL ELSE COALESCE(ma.name, 'Main Cash') END AS money_account_name,
-           ea.code AS expense_account_code, ea.name AS expense_account_name
+           ea.code AS expense_account_code, ea.name AS expense_account_name, cls.name AS class_name
     FROM expenses e
+    LEFT JOIN accounting_classes cls ON cls.id = e.class_id
     LEFT JOIN money_accounts ma ON ma.id = e.money_account_id
     LEFT JOIN chart_of_accounts ea ON ea.id = e.expense_account_id
     LEFT JOIN branches b ON b.id = e.branch_id
@@ -153,21 +154,36 @@ async function buildExpense(c: any, body: any, userId: string, label = '') {
   const owed = isOwed(body.payment_method);
   const cash = await resolveCashAccount(c.env.DB, owed ? undefined : (body.moneyAccountId ?? body.money_account_id), branchId ?? null);
   const method = owed ? 'UNPAID' : methodFor(cash, body.payment_method || 'CASH');
+  // Class tracking: the chosen class, else the expense account's default class; required when management says so.
+  let classId: string | null = typeof (body.classId ?? body.class_id) === 'string' && String(body.classId ?? body.class_id).trim() ? String(body.classId ?? body.class_id).trim() : null;
+  if (classId && !(await c.env.DB.prepare('SELECT 1 FROM accounting_classes WHERE id = ? AND is_active = 1').bind(classId).first())) throw new ScopeError(400, `${at}that class does not exist.`);
+  if (!classId && account) classId = ((await c.env.DB.prepare('SELECT default_class_id FROM chart_of_accounts WHERE id = ?').bind(account.id).first()) as any)?.default_class_id ?? null;
+  if (!classId) {
+    const req = await c.env.DB.prepare("SELECT value FROM app_settings WHERE key = 'class_required'").first() as any;
+    if (req?.value === true || req?.value === 'true') throw new ScopeError(400, `${at}choose a class (management requires a class on every expense).`);
+  }
   const journal = await prepareExpenseJournal(c, {
     id, title: body.title.trim(), amount, category, expense_date: body.expense_date, branch_id: branchId,
-    payment_method: method, cash_code: cash.code, expense_code: account?.code ?? null,
+    payment_method: method, cash_code: cash.code, expense_code: account?.code ?? null, class_id: classId,
   }, userId);
   const stmts = [
     c.env.DB.prepare(`
-      INSERT INTO expenses (id, title, amount, category, expense_date, branch_id, payment_method, notes, recorded_by, money_account_id, expense_account_id, reference, paid_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ${owed ? 'NULL' : 'CURRENT_TIMESTAMP'})
+      INSERT INTO expenses (id, title, amount, category, expense_date, branch_id, payment_method, notes, recorded_by, money_account_id, expense_account_id, reference, class_id, paid_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ${owed ? 'NULL' : 'CURRENT_TIMESTAMP'})
     `).bind(id, body.title.trim(), amount, category, body.expense_date, branchId, method, body.notes || null, userId,
-      owed ? null : cash.id, account?.id ?? null, typeof body.reference === 'string' && body.reference.trim() ? body.reference.trim().slice(0, 120) : null),
+      owed ? null : cash.id, account?.id ?? null, typeof body.reference === 'string' && body.reference.trim() ? body.reference.trim().slice(0, 120) : null, classId),
     createAuditLogStmt(c, 'EXPENSE_CREATE', 'expenses', id, null, { title: body.title, amount, category, branch_id: branchId, account: account?.code ?? null, owed }),
     ...journal.statements,
   ];
   return { id, stmts };
 }
+
+// Classes to choose from on an expense, and whether one is required.
+expenses.get('/classes', requirePermissions(['expenses.manage']), async (c) => {
+  const { results } = await c.env.DB.prepare('SELECT id, name FROM accounting_classes WHERE is_active = 1 ORDER BY name').all();
+  const s = await c.env.DB.prepare("SELECT value FROM app_settings WHERE key = 'class_required'").first() as any;
+  return c.json({ classes: results || [], required: s?.value === true || s?.value === 'true' });
+});
 
 // Expense accounts to choose from (anyone who records expenses; the chart itself needs accounting access).
 expenses.get('/accounts', requirePermissions(['expenses.manage']), async (c) => {
@@ -293,7 +309,7 @@ expenses.patch('/:id', requirePermissions(['expenses.manage']), async (c) => {
     const repost = await prepareExpenseJournal(c, {
       id, title: updated.title, amount: Number(updated.amount), category: updated.category,
       expense_date: updated.expense_date, branch_id: updated.branch_id, payment_method: updated.payment_method,
-      cash_code: await cashCodeOf(c.env.DB, updated.money_account_id ?? null), expense_code: (updated as any).__expense_code,
+      cash_code: await cashCodeOf(c.env.DB, updated.money_account_id ?? null), expense_code: (updated as any).__expense_code, class_id: updated.class_id ?? null,
     }, userId, true);
     stmts.push(...repost.statements);
   }

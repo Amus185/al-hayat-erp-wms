@@ -25,6 +25,8 @@ export interface PostJournalParams {
   // Re-posting after a reversal in the same batch (the old entry is still
   // POSTED when this is prepared, so the duplicate guard must be skipped).
   skipIdempotency?: boolean;
+  /** Accounting class (class tracking); optional. */
+  classId?: string | null;
 }
 
 // ─── Task 3: Bounded in-memory CoA cache (5-minute TTL) ───────────────────────
@@ -106,6 +108,29 @@ export async function fetchCoaMapForCodes(
  * If a caller wants to cache it, they must implement explicit invalidation
  * tied to period rollover — leave that decision to the application layer.
  */
+const foreignMemo = new WeakMap<object, Promise<Map<string, { currency: string; rate: number }>>>();
+/** Ledger accounts of money accounts held in a non-base currency, with today's rate (once per request). */
+function foreignAccounts(c: any, db: any): Promise<Map<string, { currency: string; rate: number }>> {
+  const load = async () => {
+    const m = new Map<string, { currency: string; rate: number }>();
+    try {
+      const { results } = await db.prepare(`
+        SELECT ma.coa_account_id, ma.currency, cur.rate FROM money_accounts ma JOIN currencies cur ON cur.code = ma.currency
+        WHERE cur.is_base = 0 AND cur.rate IS NOT NULL AND cur.rate > 0`).all();
+      for (const r of (results || []) as any[]) m.set(r.coa_account_id, { currency: r.currency, rate: Number(r.rate) });
+    } catch { /* tables not created yet on a very first start */ }
+    return m;
+  };
+  const key = c?.req?.raw;
+  if (!key || typeof key !== 'object') return load();
+  let p = foreignMemo.get(key);
+  if (!p) { p = load(); foreignMemo.set(key, p); }
+  return p;
+}
+function foreignPart(f: { currency: string; rate: number } | undefined, baseAmount: number): [string | null, number | null, number | null] {
+  return f ? [f.currency, Math.round(baseAmount * f.rate * 100) / 100, f.rate] : [null, null, null];
+}
+
 const fiscalPeriodMemo = new WeakMap<object, Map<string, Promise<string | null>>>();
 /** fetchOpenFiscalPeriodId, remembered for the rest of this request only (never across requests). */
 function requestFiscalPeriodId(c: any, db: any, entryDate: string): Promise<string | null> {
@@ -283,6 +308,8 @@ export async function prepareJournalEntryPosting(
   }
 
   const stmts: any[] = [];
+  // Money accounts kept in another currency (e.g. SLSH): their lines also keep the original amount and rate.
+  const foreign = await foreignAccounts(c, db);
 
   // 1. Insert Journal Entry (status = 'POSTED')
   stmts.push(
@@ -291,8 +318,8 @@ export async function prepareJournalEntryPosting(
         `INSERT INTO journal_entries (
         id, entry_number, fiscal_period_id, entry_date, description,
         reference_type, reference_id, branch_id, status,
-        total_debit, total_credit, created_by, posted_by, posted_at, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'POSTED', ?, ?, ?, ?, ?, ?, ?)`
+        total_debit, total_credit, created_by, posted_by, posted_at, created_at, updated_at, class_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'POSTED', ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
         entryId,
@@ -309,7 +336,8 @@ export async function prepareJournalEntryPosting(
         params.userId || null,
         now,
         now,
-        now
+        now,
+        params.classId || null
       )
   );
 
@@ -322,8 +350,9 @@ export async function prepareJournalEntryPosting(
     db
       .prepare(
         `INSERT INTO journal_entry_lines (
-        id, journal_entry_id, account_id, description, debit_amount, credit_amount, branch_id, line_order
-      ) VALUES ${resolvedLines.map(() => '(?, ?, ?, ?, ?, ?, ?, ?)').join(', ')}`
+        id, journal_entry_id, account_id, description, debit_amount, credit_amount, branch_id, line_order,
+        orig_currency, orig_amount, exchange_rate
+      ) VALUES ${resolvedLines.map(() => '(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').join(', ')}`
       )
       .bind(...resolvedLines.flatMap((line) => [
         line.lineId,
@@ -334,6 +363,7 @@ export async function prepareJournalEntryPosting(
         line.creditAmount,
         line.branchId,
         line.lineOrder,
+        ...foreignPart(foreign.get(line.accountId), line.debitAmount + line.creditAmount),
       ]))
   );
 
@@ -486,7 +516,7 @@ function customerPaymentJournalParams(
  */
 export async function prepareExpenseJournal(
   c: any,
-  expense: { id: string; title: string; amount: number; category: string; expense_date: string; branch_id?: string | null; payment_method?: string | null; cash_code?: string | null; expense_code?: string | null },
+  expense: { id: string; title: string; amount: number; category: string; expense_date: string; branch_id?: string | null; payment_method?: string | null; cash_code?: string | null; expense_code?: string | null; class_id?: string | null },
   userId?: string | null,
   skipIdempotency = false
 ) {
@@ -498,6 +528,7 @@ export async function prepareExpenseJournal(
 
   return prepareJournalEntryPosting(c, {
     skipIdempotency,
+    classId: expense.class_id ?? null,
     description: `Expense Paid: ${expense.title} (${expense.category})`,
     referenceType: 'EXPENSE',
     referenceId: expense.id,

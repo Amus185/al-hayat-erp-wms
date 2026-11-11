@@ -1,3 +1,4 @@
+import { ensureRoadmap } from './init-roadmap';
 import { Pool } from 'pg';
 import { migrateAuthSchema } from './auth';
 import { backfillIdentities } from './services/identity';
@@ -735,6 +736,7 @@ export async function ensurePostgresInit(pool: Pool) {
   await ensureRoleSeparation(pool);
   await ensureSalesTransfers(pool);
   await ensureMoneyAccounts(pool);
+  await ensureRoadmap(pool);
 }
 
 /**

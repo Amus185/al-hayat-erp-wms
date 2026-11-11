@@ -51,14 +51,16 @@ function requireCompanyView(c: any) {
 
 const LIST_SQL = (scopeSql: string) => `
   SELECT ma.*, coa.code AS account_code, b.name AS branch_name,
-         COALESCE(bal.balance, 0) AS balance, bal.last_movement
+         COALESCE(bal.balance, 0) AS balance, bal.last_movement, bal.foreign_balance, cur.rate AS currency_rate
   FROM money_accounts ma
   JOIN chart_of_accounts coa ON coa.id = ma.coa_account_id
   LEFT JOIN branches b ON b.id = ma.branch_id
   LEFT JOIN LATERAL (
-    SELECT SUM(gl.debit_amount - gl.credit_amount) AS balance, MAX(gl.entry_date) AS last_movement
-    FROM general_ledger gl WHERE gl.account_id = ma.coa_account_id${scopeSql}
-  ) bal ON TRUE`;
+    SELECT SUM(gl.debit_amount - gl.credit_amount) AS balance, MAX(gl.entry_date) AS last_movement,
+           SUM(CASE WHEN l.orig_amount IS NULL THEN 0 WHEN gl.debit_amount > 0 THEN l.orig_amount ELSE -l.orig_amount END) AS foreign_balance
+    FROM general_ledger gl JOIN journal_entry_lines l ON l.id = gl.id WHERE gl.account_id = ma.coa_account_id${scopeSql}
+  ) bal ON TRUE
+  LEFT JOIN currencies cur ON cur.code = ma.currency`;
 
 export function registerMoneyAccounts(app: any) {
   app.get('/money-accounts/providers', (c: any) => c.json({ kinds: MONEY_KINDS, providers: MONEY_PROVIDERS }));
@@ -70,7 +72,7 @@ export function registerMoneyAccounts(app: any) {
     const own = scope.kind === 'BRANCH' ? ' WHERE (ma.branch_id IS NULL OR ma.branch_id = ?)' : '';
     const { results } = await c.env.DB.prepare(`${LIST_SQL(scopeSql)}${own} ORDER BY ma.is_active DESC, coa.code`)
       .bind(...(scope.kind === 'BRANCH' ? [scope.branchId] : [])).all();
-    const rows = ((results || []) as any[]).map((r) => ({ ...r, balance: round2(Number(r.balance || 0)) }));
+    const rows = ((results || []) as any[]).map((r) => ({ ...r, balance: round2(Number(r.balance || 0)), foreign_balance: r.currency && r.currency !== 'USD' ? round2(Number(r.foreign_balance || 0)) : null, currency_rate: r.currency_rate === null || r.currency_rate === undefined ? null : Number(r.currency_rate) }));
     const active = rows.filter((r) => Number(r.is_active) === 1);
     const total = round2(active.reduce((a, r) => a + r.balance, 0));
     const byKind = Object.fromEntries(MONEY_KINDS.map((k) => [k, round2(active.filter((r) => r.kind === k).reduce((a, r) => a + r.balance, 0))]));
@@ -92,8 +94,15 @@ export function registerMoneyAccounts(app: any) {
     if (await c.env.DB.prepare('SELECT id FROM money_accounts WHERE lower(name) = lower(?)').bind(name).first()) {
       return c.json({ message: `An account named "${name}" already exists. Give this one a different name (e.g. "${name} – USD 2").` }, 409);
     }
+    // Currency of the account: the base currency, or another one with a rate set (e.g. SLSH).
+    const currency = String(body.currency || 'USD').toUpperCase();
+    const cur = await c.env.DB.prepare('SELECT code, is_base, rate FROM currencies WHERE code = ? AND is_active = 1').bind(currency).first() as any;
+    if (!cur) return c.json({ message: 'That currency is not set up.' }, 400);
+    const fx = Number(cur.is_base) === 1 ? 1 : Number(cur.rate);
+    if (!(fx > 0)) return c.json({ message: `Set the exchange rate of ${currency} first (Accounting → Currencies).` }, 400);
+    // The opening amount is typed in the account's own currency; the books record it in the base currency.
     const opening = body.opening && Number(body.opening.amount) > 0 ? {
-      amount: round2(Number(body.opening.amount)),
+      amount: round2(Number(body.opening.amount) / fx),
       source: body.opening.source === 'NEW_MONEY' ? 'NEW_MONEY' : 'MAIN_CASH',
       date: text(body.opening.date, 10) || today(),
     } : null;
@@ -123,8 +132,8 @@ export function registerMoneyAccounts(app: any) {
     const stmts: any[] = [
       c.env.DB.prepare(`
         INSERT INTO money_accounts (id, name, kind, provider, account_number, account_holder, currency, coa_account_id, branch_id, notes, created_by)
-        VALUES (?, ?, ?, ?, ?, ?, 'USD', ?, ?, ?, ?)
-      `).bind(id, name, kind, provider, text(body.account_number ?? body.accountNumber, 60), text(body.account_holder ?? body.accountHolder, 120), coaId, branchId, text(body.notes, 500), userId),
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).bind(id, name, kind, provider, text(body.account_number ?? body.accountNumber, 60), text(body.account_holder ?? body.accountHolder, 120), currency, coaId, branchId, text(body.notes, 500), userId),
       createAuditLogStmt(c, 'MONEY_ACCOUNT_CREATE', 'money_accounts', id, null, { name, kind, provider, code, branchId, opening }),
     ];
     try {
@@ -140,6 +149,11 @@ export function registerMoneyAccounts(app: any) {
           ],
         });
         stmts.push(...posting.statements);
+        // An account in another currency keeps the amount as typed (the account did not exist when the entry was prepared).
+        if (fx !== 1 && posting.entryId) {
+          stmts.push(c.env.DB.prepare('UPDATE journal_entry_lines SET orig_currency = ?, orig_amount = ?, exchange_rate = ? WHERE journal_entry_id = ? AND account_id = ?')
+            .bind(currency, round2(Number(body.opening.amount)), fx, posting.entryId, coaId));
+        }
       }
       await c.env.DB.batch(stmts);
     } catch (err) {

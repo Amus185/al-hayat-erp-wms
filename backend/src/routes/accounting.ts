@@ -5,6 +5,7 @@ import { createAuditLogStmt } from '../services/audit';
 import { prepareJournalReversal, prepareJournalEntryPosting, prepareOpeningStock, fetchOpenFiscalPeriodId, reconcileMissingReceiptJournalEntries, reconcileMissingSalesJournalEntries } from '../services/accounting-service';
 import { resolveBranchScope, branchSql, inScope, assertAllBranchAccess, resolveWriteBranch, ScopeError, accountingPayload, type BranchScope } from '../services/branch-scope';
 import { registerMoneyAccounts } from './money-accounts';
+import { registerFinanceExtra } from './finance-extra';
 import { csvResponse, dateRange, likeTerm, listRequest, pagedResponse, pagedRows, type ListOptions } from '../services/listing';
 
 // Every report below is computed from journal lines restricted to the caller's
@@ -38,6 +39,7 @@ accounting.use('/*', async (c, next) => {
 
 // Bank & Cash accounts (cash drawers, banks, ZAAD / eDahab / Dahabshiil): routes/money-accounts.ts
 registerMoneyAccounts(accounting);
+registerFinanceExtra(accounting);
 
 /** Every Bank & Cash account is cash: the original 1010 (Main Cash) and its 1010-NN siblings. */
 const CASH_CODE_SQL = (alias: string) => `(${alias}.code = '1010' OR ${alias}.code LIKE '1010-%')`;
