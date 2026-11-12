@@ -1,3 +1,4 @@
+import { lotsInStatement, checkLotCodes } from '../services/lots';
 import { resolveCashAccount, methodFor, requireChosenAccount } from '../services/money';
 import { Hono } from 'hono';
 import { Env, uuidv4 } from '../db';
@@ -599,6 +600,8 @@ purchasing.post('/receipts', requirePermissions(['manage_purchasing']), async (c
     batchValue += (qty * netUnitCost);
   }
 
+  await checkLotCodes(c.env.DB, body.lines.map((l: any) => ({ productId: l.productId, quantity: Number(l.quantityReceived), code: l.batchCode || null, serials: Array.isArray(l.serials) ? l.serials : null })));
+
   // Cost before this receipt, for the Owner's alert. (Prices are changed only in Products.)
   const productInfo = new Map<string, any>();
   // Pre-flight: existing stock rows
@@ -668,6 +671,8 @@ purchasing.post('/receipts', requirePermissions(['manage_purchasing']), async (c
       VALUES (?, ?, 'PURCHASE_RECEIPT', ?, 'WAREHOUSE', ?, ?, 'GOODS_RECEIPT', ?, ?)
     `).bind(uuidv4(), line.productId, qty, warehouseId, line.warehouseLocationId || null, receiptId, userId));
 
+    // Serial numbers / batches of tracked products (typed ones, or numbered automatically).
+    stmts.push(lotsInStatement(c.env.DB, { productId: line.productId, quantity: qty, code: line.batchCode || null, serials: Array.isArray(line.serials) ? line.serials : null, warehouseId, sourceType: 'GOODS_RECEIPT', sourceId: receiptId, tag: receiptNumber.slice(-6) }));
     // Running-average cost: computed from stock on hand BEFORE these units are added.
     stmts.push(...costInStatements(c.env.DB, { productId: line.productId, quantity: qty, unitCost: netUnitCost, source: 'PURCHASE_RECEIPT', referenceId: receiptId, userId }));
     // A product sold by price levels: these goods become a new level (sold after the older ones),

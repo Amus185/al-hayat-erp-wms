@@ -1,3 +1,4 @@
+import { registerInventoryExtra } from './stock-extra';
 import { Hono } from 'hono';
 import { Env, uuidv4 } from '../db';
 import { authMiddleware, requirePermissions } from '../middleware/auth';
@@ -349,5 +350,7 @@ inventory.post('/adjust', requirePermissions(['manage_inventory']), async (c) =>
   const { results } = await c.env.DB.prepare('SELECT * FROM inventory_transactions WHERE id = ?').bind(txId).all();
   return c.json(results[0], 201);
 });
+
+registerInventoryExtra(inventory);
 
 export default inventory;

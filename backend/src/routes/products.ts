@@ -1,3 +1,4 @@
+import { registerProductExtra } from './stock-extra';
 import { resolveCashAccount, requireChosenAccount } from '../services/money';
 import { Hono } from 'hono';
 import { Env, uuidv4 } from '../db';
@@ -1071,5 +1072,7 @@ products.delete('/:id', requireAdmin, async (c) => {
 
   return c.json({ success: true });
 });
+
+registerProductExtra(products);
 
 export default products;

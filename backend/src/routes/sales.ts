@@ -8,6 +8,7 @@ import { costInStatements, unitCosts } from '../services/costing';
 import { levelPlanner, restoreToLevels } from '../services/price-levels';
 import { resolveSaleLevel, levelPriceMap, checkCredit, CreditLimitError } from '../services/sales-rules';
 import { registerSalesExtra } from './sales-extra';
+import { lotsOutStatement, lotsBackStatement } from '../services/lots';
 import { resolveBranchScope, resolveLoc, locBranch, resolveWriteBranch, branchSql, inScope, ScopeError, customerVisibleSql, hasAllBranchAccess, type BranchScope } from '../services/branch-scope';
 import { logAudit, createAuditLogStmt } from '../services/audit';
 import { releaseReservationsStmt, returnWebQuantityStmt } from '../services/storefront';
@@ -1718,6 +1719,8 @@ sales.post('/orders', requirePermissions(['manage_sales']), async (c) => {
         VALUES (?, ?, 'SALE_ISSUE', ?, 'BRANCH', ?, 'INVOICE', ?, ?)
       `).bind(uuidv4(), req.productId, -req.quantity, body.branchId, invoiceId, userId));
     }
+    // Serial numbers / batches: the oldest lots of tracked products leave with this sale.
+    stmts.push(lotsOutStatement(c.env.DB, { lines: invReqs, referenceType: 'INVOICE', referenceId: invoiceId, userId }));
 
     // 2. Create invoice
     const invStatus = remaining <= 0 ? 'PAID' : (deposit > 0 ? 'PARTIALLY_PAID' : 'UNPAID');
@@ -1967,6 +1970,7 @@ sales.post('/orders/:id/invoice', requirePermissions(['manage_sales']), async (c
         VALUES (?, ?, 'SALE_ISSUE', ?, 'BRANCH', ?, 'INVOICE', ?, ?)
       `).bind(uuidv4(), req.productId, -qty, branchId, invoiceId, userId));
     }
+    stmts.push(lotsOutStatement(c.env.DB, { lines: invReqs, referenceType: 'INVOICE', referenceId: invoiceId, userId }));
 
     // Flip order to INVOICED
     stmts.push(c.env.DB.prepare("UPDATE sales_orders SET status = 'INVOICED' WHERE id = ?").bind(orderId));
@@ -2233,6 +2237,7 @@ sales.post('/orders/:id/complete', requirePermissions(['manage_sales']), async (
         VALUES (?, ?, 'SALE_ISSUE', ?, 'BRANCH', ?, 'INVOICE', ?, ?)
       `).bind(uuidv4(), req.productId, -qty, branchId, invoiceId, userId));
     }
+    stmts.push(lotsOutStatement(c.env.DB, { lines: invReqs, referenceType: 'INVOICE', referenceId: invoiceId, userId }));
 
     // Finalize order status
     stmts.push(c.env.DB.prepare("UPDATE sales_orders SET status = ?, is_credit_sale = ? WHERE id = ?").bind(orderFinalStatus, isCreditSale || !isFullPay ? 1 : 0, orderId));
@@ -2722,6 +2727,7 @@ sales.post('/orders/:id/cancel', requirePermissions(['manage_sales']), async (c)
 
   // Cancel invoice if exists
   if (invoice) {
+    stmts.push(lotsBackStatement(c.env.DB, { referenceType: 'INVOICE', referenceId: invoice.id, userId }));
     stmts.push(c.env.DB.prepare(`
       UPDATE invoices
       SET status = 'CANCELLED', cancelled_by = ?, cancelled_at = CURRENT_TIMESTAMP

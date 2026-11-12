@@ -1,3 +1,4 @@
+import { registerReportExtra } from './stock-extra';
 import { Hono } from 'hono';
 import { Env } from '../db';
 import { authMiddleware, requirePermissions, isAdminUser } from '../middleware/auth';
@@ -677,5 +678,7 @@ reports.get('/receivables', requirePermissions(['accounting.view']), async (c, n
     invoices: formattedInvoices
   });
 });
+
+registerReportExtra(reports);
 
 export default reports;
