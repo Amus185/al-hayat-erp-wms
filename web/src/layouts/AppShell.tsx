@@ -27,6 +27,7 @@ import {
   Globe,
   Sparkles,
   Contact,
+  Settings,
 } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { useAuth } from '../contexts/AuthContext';
@@ -60,6 +61,7 @@ const navItems = [
   { label: 'Audit Log', path: '/audit', icon: FileClock, permission: 'view_reports', adminOnly: true },
   { label: 'Employees', path: '/employees', icon: Contact, permission: 'manage_users|employees.manage|payroll.view' },
   { label: 'Users', path: '/users', icon: Users, permission: 'manage_users', adminOnly: true },
+  { label: 'Settings', path: '/settings', icon: Settings, permission: '', adminOnly: true },
 ];
 
 // Map route prefixes → { section, title } for the topbar heading
@@ -84,6 +86,7 @@ const pageTitles: Record<string, { section: string; title: string }> = {
   '/assistant':     { section: 'Help',                   title: 'Assistant' },
   '/audit':         { section: 'Compliance',             title: 'Audit Log' },
   '/users':         { section: 'Administration',         title: 'Users & Permissions' },
+  '/settings':      { section: 'Administration',         title: 'Settings' },
 };
 
 function usePageTitle() {

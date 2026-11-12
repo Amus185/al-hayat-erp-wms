@@ -8,10 +8,19 @@ import { DataTable, type Column } from '../components/DataTable';
 import { StatusBadge } from '../components/StatusBadge';
 import { PageSkeleton } from '../components/LoadingSpinner';
 import type { SalesFinancialSummary, PurchasingFinancialSummary } from '../types';
+import { WIDGETS, DEFAULT_WIDGETS, SalesTodayWidget, TargetsWidget, CreditWatchWidget, AttendanceWidget, CustomizeDashboard } from '../components/DashboardWidgets';
+import { Settings2 } from 'lucide-react';
 
 export function DashboardPage() {
   // Stock value only with cost access (Owner decision D4).
-  const canCosts = useAuth().hasPermission('costs.view');
+  const { hasPermission } = useAuth();
+  const canCosts = hasPermission('costs.view');
+  // Each person arranges their own dashboard; blocks are limited to what their access allows.
+  const available = WIDGETS.filter((w) => !w.perm || w.perm(hasPermission));
+  const [chosen, setChosen] = useState<string[] | null>(null);
+  const [customizing, setCustomizing] = useState(false);
+  useEffect(() => { apiGet<any>('/settings/preferences/dashboard').then((d) => setChosen(d?.value?.widgets || DEFAULT_WIDGETS)).catch(() => setChosen(DEFAULT_WIDGETS)); }, []);
+  const order = (chosen || DEFAULT_WIDGETS).filter((id) => available.some((w) => w.id === id));
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [metrics, setMetrics] = useState({
@@ -146,8 +155,8 @@ export function DashboardPage() {
   const fmtCcy = (n: number) =>
     new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(n);
 
-  return (
-    <div className="dashboard">
+  const blocks: Record<string, React.ReactNode> = {
+    'inventory-cards': (<>
       {/* Inventory Metric Cards */}
       <section className="metric-grid">
         {canCosts && <MetricCard
@@ -176,6 +185,8 @@ export function DashboardPage() {
         />
       </section>
 
+    </>),
+    'finance-cards': (<>
       {/* Financial Metric Cards */}
       {(salesSummary || purchasingSummary) && (
         <section className="metric-grid">
@@ -208,9 +219,13 @@ export function DashboardPage() {
         </section>
       )}
 
-      {/* Main Work Grid */}
-      <section className="work-grid">
-        <div className="panel panel--wide">
+    </>),
+    'sales-today': <section className="work-grid"><SalesTodayWidget /></section>,
+    'targets': <section className="work-grid"><TargetsWidget /></section>,
+    'credit-watch': <section className="work-grid"><CreditWatchWidget /></section>,
+    'attendance-today': <section className="work-grid"><AttendanceWidget /></section>,
+    'low-stock': <section className="work-grid">
+        <div className="panel panel--wide" style={{ gridColumn: '1 / -1' }}>
           <div className="panel__header">
             <div>
               <p>Inventory Risk</p>
@@ -228,8 +243,10 @@ export function DashboardPage() {
           />
         </div>
 
+    </section>,
+    'alerts': <section className="work-grid">
         {/* Realtime Alerts Panel */}
-        <div className="panel">
+        <div className="panel" style={{ gridColumn: '1 / -1' }}>
           <div className="panel__header">
             <div>
               <p>Alerts</p>
@@ -247,6 +264,8 @@ export function DashboardPage() {
           </ul>
         </div>
 
+    </section>,
+    'transfers': <section className="work-grid">
         {/* Active Transfers Queue */}
         <div className="panel panel--wide" style={{ gridColumn: '1 / -1' }}>
           <div className="panel__header">
@@ -266,7 +285,16 @@ export function DashboardPage() {
             emptyMessage="No transfers in queue"
           />
         </div>
-      </section>
+    </section>,
+  };
+
+  return (
+    <div className="dashboard">
+      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+        <button type="button" className="btn btn-secondary btn-sm" id="customize-dashboard" onClick={() => setCustomizing(true)}><Settings2 size={14} /> Customize</button>
+      </div>
+      {order.map((id) => <div key={id} data-widget={id} style={{ display: 'contents' }}>{blocks[id]}</div>)}
+      <CustomizeDashboard open={customizing} onClose={() => setCustomizing(false)} available={available} value={order} onSaved={setChosen} />
     </div>
   );
 }

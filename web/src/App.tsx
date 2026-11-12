@@ -19,6 +19,7 @@ import { SalesPage } from './pages/SalesPage';
 import { CreateSalesOrderPage } from './pages/CreateSalesOrderPage';
 import { ReportsPage } from './pages/ReportsPage';
 import { AuditPage } from './pages/AuditPage';
+import { SettingsPage } from './pages/SettingsPage';
 import { UsersPage } from './pages/UsersPage';
 import { AccountingPage } from './pages/AccountingPage';
 import { CustomersPage } from './pages/CustomersPage';
@@ -125,6 +126,7 @@ export function App() {
             {/* Admin-only routes */}
             <Route element={<AdminRoute />}>
               <Route path="/audit" element={<AuditPage />} />
+              <Route path="/settings" element={<SettingsPage />} />
               <Route path="/assets" element={<AssetsPage />} />
             </Route>
             
