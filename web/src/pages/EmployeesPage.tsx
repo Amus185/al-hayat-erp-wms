@@ -1,3 +1,4 @@
+import { AttendancePanel, CommissionsPanel, PayrollPanel } from '../components/HrPanels';
 import { MoneyAccountSelect } from '../components/MoneyAccountSelect';
 import { refreshAfterSave } from '../utils/afterSave';
 import { useEffect, useRef, useState } from 'react';
@@ -49,7 +50,7 @@ function Photo({ emp, small }: { emp: Pick<Employee, 'photo_key' | 'full_name'>;
 export function EmployeesPage() {
   const { addToast } = useToast();
   const { hasPermission, isAdmin } = useAuth();
-  const [tab, setTab] = useState<'EMPLOYEES' | 'VEHICLES'>('EMPLOYEES');
+  const [tab, setTab] = useState<'EMPLOYEES' | 'VEHICLES' | 'ATTENDANCE' | 'COMMISSIONS' | 'PAYROLL'>('EMPLOYEES');
   // Pay is shown only with payroll access (Owner decision D3); the server enforces the same.
   const canPay = hasPermission('payroll.view');
   const canManagePay = hasPermission('payroll.manage');
@@ -184,9 +185,16 @@ export function EmployeesPage() {
       <div className="status-tabs" role="tablist" id="people-tabs" style={{ marginBottom: 12 }}>
         <button type="button" role="tab" aria-selected={tab === 'EMPLOYEES'} className={`status-tab${tab === 'EMPLOYEES' ? ' status-tab--active' : ''}`} onClick={() => setTab('EMPLOYEES')}>Employees</button>
         <button type="button" role="tab" id="tab-vehicles" aria-selected={tab === 'VEHICLES'} className={`status-tab${tab === 'VEHICLES' ? ' status-tab--active' : ''}`} onClick={() => setTab('VEHICLES')}>Company Vehicles</button>
+        {canEdit || canManagePay ? <button type="button" role="tab" id="tab-attendance" aria-selected={tab === 'ATTENDANCE'} className={`status-tab${tab === 'ATTENDANCE' ? ' status-tab--active' : ''}`} onClick={() => setTab('ATTENDANCE')}>Attendance</button> : null}
+        {canPay && <button type="button" role="tab" id="tab-commissions" aria-selected={tab === 'COMMISSIONS'} className={`status-tab${tab === 'COMMISSIONS' ? ' status-tab--active' : ''}`} onClick={() => setTab('COMMISSIONS')}>Commissions</button>}
+        {canPay && <button type="button" role="tab" id="tab-payroll" aria-selected={tab === 'PAYROLL'} className={`status-tab${tab === 'PAYROLL' ? ' status-tab--active' : ''}`} onClick={() => setTab('PAYROLL')}>Payroll</button>}
       </div>
 
-      {tab === 'VEHICLES' ? <VehiclesPanel /> : (
+      {tab === 'ATTENDANCE' && <div className="panel" style={{ padding: 12 }}><AttendancePanel /></div>}
+      {tab === 'COMMISSIONS' && <div className="panel" style={{ padding: 12 }}><CommissionsPanel /></div>}
+      {tab === 'PAYROLL' && <div className="panel" style={{ padding: 12 }}><PayrollPanel /></div>}
+
+      {tab === 'ATTENDANCE' || tab === 'COMMISSIONS' || tab === 'PAYROLL' ? null : tab === 'VEHICLES' ? <VehiclesPanel /> : (
 
       <div className="panel" style={{ padding: '12px' }}>
         <StatusTabs id="emp-status" value={list.filters.status} counts={list.counts} onChange={(v) => list.setFilter('status', v)}
