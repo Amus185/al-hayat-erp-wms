@@ -550,7 +550,7 @@ purchasing.post('/receipts', requirePermissions(['manage_purchasing']), async (c
 
   // Fetch all PO lines with current received counts
   const { results: poLines } = await c.env.DB.prepare(`
-    SELECT pol.*, p.name AS product_name,
+    SELECT pol.*, p.name AS product_name, p.tracking,
       COALESCE(pol.quantity_received, (
         SELECT COALESCE(SUM(grl.quantity_received), 0)
         FROM goods_receipt_lines grl

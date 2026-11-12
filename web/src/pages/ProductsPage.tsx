@@ -10,6 +10,7 @@ import { useServerList } from '../utils/serverList';
 import { confirmAction } from '../utils/swal';
 import { PriceLevelsPanel } from '../components/PriceLevelsPanel';
 import { ProductLevelPrices } from '../components/SalesExtraPanels';
+import { ProductVariantsAndTracking } from '../components/StockExtraPanels';
 import { useColumnChooser } from '../components/ColumnChooser';
 import { BulkBar, selectionColumn, useSelection } from '../components/BulkBar';
 import { searchProducts } from '../utils/lookups';
@@ -1457,6 +1458,7 @@ export function ProductsPage() {
             )}
 
             <ProductLevelPrices productId={editingProduct.id} regularPrice={Number(editingProduct.selling_price) || 0} isOwner={isOwner} />
+            {(editingProduct.product_type || 'STANDARD') === 'STANDARD' && <ProductVariantsAndTracking productId={editingProduct.id} isOwner={isOwner} tracking={(editingProduct as any).tracking} onChanged={() => list.refresh()} />}
 
             {/* Grouped Product Bundle Components */}
             {editingProduct.product_type === 'GROUPED' && (

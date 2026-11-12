@@ -11,6 +11,7 @@ import { FormField, InputField } from '../components/FormField';
 import { SearchInput } from '../components/SearchInput';
 import { SearchableSelect } from '../components/SearchableSelect';
 import { Tabs } from '../components/Tabs';
+import { LotsPanel } from '../components/StockExtraPanels';
 // Loading is handled inline by DataTable
 import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -62,7 +63,7 @@ export function InventoryPage() {
   const { addToast } = useToast();
   const { hasPermission, branchId: myBranch } = useAuth();
 
-  const [activeTab, setActiveTab] = useState<'stock' | 'transactions'>('stock');
+  const [activeTab, setActiveTab] = useState<'stock' | 'transactions' | 'lots'>('stock');
   // Both lists page, search, filter and sort on the server (every record reachable).
   const stockList = useServerList<InventoryStock>('/inventory/stock', {
     key: 'inventory-stock',
@@ -316,6 +317,7 @@ export function InventoryPage() {
   const tabItems = [
     { key: 'stock', label: 'Stock Ledger' },
     { key: 'transactions', label: 'Ledger Audit / History' },
+    { key: 'lots', label: 'Serials & Batches' },
   ];
 
   const { columns: shown_stockColumns, chooser: chooser_stockColumns } = useColumnChooser('inventory-stock', stockColumns, []);
@@ -351,7 +353,8 @@ export function InventoryPage() {
         <Tabs tabs={tabItems} activeTab={activeTab} onTabChange={(key: any) => setActiveTab(key)} />
       </section>
 
-      <section className="panel">
+      {activeTab === 'lots' && <section className="panel"><LotsPanel /></section>}
+      <section className="panel" style={activeTab === 'lots' ? { display: 'none' } : undefined}>
         {activeTab === 'stock' ? (
           <>
             <ListToolbar

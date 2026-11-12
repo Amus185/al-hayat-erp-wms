@@ -173,6 +173,7 @@ export function PurchasingPage() {
   const [warehouses, setWarehouses] = useState<any[]>([]);
   const [selectedWHId, setSelectedWHId] = useState('');
   const [receiptLines, setReceiptLines] = useState<Record<string, number>>({});
+  const [lotCodes, setLotCodes] = useState<Record<string, string>>({});
   const [receiptLocations, setReceiptLocations] = useState<Record<string, string>>({});
   const [locationsList, setLocationsList] = useState<any[]>([]);
 
@@ -262,6 +263,7 @@ export function PurchasingPage() {
 
   // ── Goods receipt ────────────────────────────────────────────────
   const handleCreateReceipt = async (e?: React.FormEvent) => {
+
     if (e) e.preventDefault();
     if (!selectedPO) return;
     const targetWHId = selectedWHId || selectedPO.warehouse_id || (warehouses[0]?.id);
@@ -272,6 +274,9 @@ export function PurchasingPage() {
         productId: l.product_id,
         quantityReceived: Number(receiptLines[l.product_id] || 0),
         warehouseLocationId: receiptLocations[l.product_id] || undefined,
+        // Tracked products: the batch code, or the serial numbers (one per line); empty = numbered automatically.
+        ...(l.tracking === 'BATCH' && (lotCodes[l.product_id] || '').trim() ? { batchCode: lotCodes[l.product_id].trim() } : {}),
+        ...(l.tracking === 'SERIAL' && (lotCodes[l.product_id] || '').trim() ? { serials: lotCodes[l.product_id].split(/[\n,]+/).map((x: string) => x.trim()).filter(Boolean) } : {}),
       }))
       .filter((l: any) => l.quantityReceived > 0);
 
@@ -375,7 +380,7 @@ export function PurchasingPage() {
         details.lines?.forEach((l: any) => {
           initialReceipt[l.product_id] = l.quantity_ordered - (l.quantity_received || 0);
         });
-        setReceiptLines(initialReceipt);
+        setReceiptLines(initialReceipt); setLotCodes({});
       } else {
         setSelectedPO(po);
       }
@@ -727,6 +732,11 @@ export function PurchasingPage() {
                                 <strong>{line.product_name}</strong>
                                 <br />
                                 <span style={{ color: '#667066', fontSize: '11px', fontFamily: 'monospace' }}>{line.variant_sku}</span>
+                                {isReceivable && remaining > 0 && (line.tracking === 'BATCH' || line.tracking === 'SERIAL') && (
+                                  line.tracking === 'BATCH'
+                                    ? <input className="form-input receipt-lot" style={{ marginTop: 6, maxWidth: 220, minHeight: 30, padding: '4px 8px', fontSize: 12 }} placeholder="Batch code (empty = automatic)" value={lotCodes[line.product_id] || ''} onChange={(e) => setLotCodes((p) => ({ ...p, [line.product_id]: e.target.value }))} />
+                                    : <textarea className="form-input receipt-lot" rows={2} style={{ marginTop: 6, maxWidth: 260, padding: '4px 8px', fontSize: 12 }} placeholder="Serial numbers, one per line (empty = automatic)" value={lotCodes[line.product_id] || ''} onChange={(e) => setLotCodes((p) => ({ ...p, [line.product_id]: e.target.value }))} />
+                                )}
                               </td>
                               <td style={{ padding: '10px 12px', textAlign: 'center', fontWeight: 600 }}>{ordered}</td>
                               <td style={{ padding: '10px 12px', textAlign: 'center', color: received > 0 ? '#16a34a' : '#64748b', fontWeight: 600 }}>
