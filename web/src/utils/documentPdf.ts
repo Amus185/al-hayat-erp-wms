@@ -30,6 +30,8 @@ export interface DocumentSpec {
   extra?: { title: string; rows: Pair[] };
   footer?: string;
   fileName: string;
+  /** Internal or supplier documents: the customer terms and conditions are not printed. */
+  noTerms?: boolean;
 }
 
 export const money = (n: unknown) =>
@@ -202,7 +204,7 @@ async function buildDocument(spec: DocumentSpec, layoutIn?: DocumentLayout) {
     y = pairs(spec.extra.rows, M + 2, y + 6) + 4;
   }
   // ── Terms and conditions (Owner's text) ──
-  if (layout.terms) {
+  if (layout.terms && !spec.noTerms) {
     doc.setFontSize(fz(8));
     const lines = doc.splitTextToSize(layout.terms, W - 2 * M - 4) as string[];
     room(10 + lines.length * 3.6); block('Terms and conditions');

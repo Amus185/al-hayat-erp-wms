@@ -255,7 +255,7 @@ purchasing.get('/orders', async (c) => {
 purchasing.get('/orders/:id', async (c) => {
   const id = c.req.param('id');
   const po = await c.env.DB.prepare(`
-    SELECT po.*, s.name AS supplier_name,
+    SELECT po.*, s.name AS supplier_name, s.phone AS supplier_phone,
       COALESCE(NULLIF(po.total_amount, 0), (SELECT COALESCE(SUM(line_total), 0) FROM purchase_order_lines WHERE purchase_order_id = po.id), 0) AS total_amount
     FROM purchase_orders po
     JOIN suppliers s ON s.id = po.supplier_id

@@ -5,6 +5,8 @@ import { DataTable, type Column } from './DataTable';
 import { Modal } from './Modal';
 import { SearchableSelect } from './SearchableSelect';
 import { MoneyAccountSelect } from './MoneyAccountSelect';
+import { DownloadDocButton } from './DownloadDocButton';
+import { downloadPayslip } from '../utils/documents';
 import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -182,7 +184,11 @@ export function PayrollPanel() {
     { key: 'other_deductions', label: 'Other deductions', render: (l) => draft && canManage ? <button className="btn btn--secondary btn--sm" onClick={() => edit(l, 'other_deductions', 'Other deductions')}>{l.other_deductions > 0 ? `-${money(l.other_deductions)}` : 'Add'}</button> : (l.other_deductions > 0 ? `-${money(l.other_deductions)}` : '—') },
     { key: 'advance_deduction', label: 'Advance taken back', render: (l) => draft && canManage ? <button className="btn btn--secondary btn--sm" onClick={() => edit(l, 'advance_deduction', 'Advance to take back')}>{l.advance_deduction > 0 ? `-${money(l.advance_deduction)}` : '—'}</button> : (l.advance_deduction > 0 ? `-${money(l.advance_deduction)}` : '—') },
     { key: 'net', label: 'Net pay', render: (l) => <strong>{money(l.net)}</strong> },
-    { key: 'status', label: '', render: (l) => l.status === 'PAID' ? <span style={{ color: '#066006', fontWeight: 700 }}>Paid</span> : (!draft && canManage && l.net > 0 ? <button className="btn btn--primary btn--sm" onClick={() => setPayOpen({ lineIds: [l.id], total: l.net })}>Pay</button> : null) },
+    { key: 'status', label: '', render: (l) => (
+      <span style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+        {l.status === 'PAID' ? <span style={{ color: '#066006', fontWeight: 700 }}>Paid</span> : (!draft && canManage && l.net > 0 ? <button className="btn btn--primary btn--sm" onClick={() => setPayOpen({ lineIds: [l.id], total: l.net })}>Pay</button> : null)}
+        <DownloadDocButton iconOnly label={`Download payslip ${l.full_name}`} make={() => downloadPayslip(run, l)} />
+      </span>) },
   ];
   const runCols: Column<any>[] = [
     { key: 'period', label: 'Month', render: (r) => <strong>{new Date(`${r.period}-01T00:00:00`).toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}</strong> },

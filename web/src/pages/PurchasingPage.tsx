@@ -21,7 +21,7 @@ import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
 import type { PaymentMethod, PurchaseInvoicePayment, PaymentSummary } from '../types';
 import { DownloadDocButton } from '../components/DownloadDocButton';
-import { downloadPurchaseInvoice } from '../utils/documents';
+import { downloadPurchaseInvoice, downloadSupplierPayment } from '../utils/documents';
 import { useOpenParam, useServerList } from '../utils/serverList';
 
 // ── Local types ────────────────────────────────────────────────────
@@ -73,7 +73,7 @@ const PAYMENT_METHODS: { value: PaymentMethod; label: string }[] = [
 ];
 
 // ── Payment History sub-component ──────────────────────────────────
-function PaymentHistoryTable({ payments }: { payments: PurchaseInvoicePayment[] }) {
+function PaymentHistoryTable({ payments, po, invoiceNumber }: { payments: PurchaseInvoicePayment[]; po?: any; invoiceNumber?: string }) {
   if (!payments.length) {
     return <p style={{ color: '#667066', fontSize: '13px', fontStyle: 'italic' }}>No payments recorded yet.</p>;
   }
@@ -86,6 +86,7 @@ function PaymentHistoryTable({ payments }: { payments: PurchaseInvoicePayment[] 
           <th style={{ padding: '6px 10px', textAlign: 'left', fontWeight: 600, color: '#066006' }}>Paid from</th>
           <th style={{ padding: '6px 10px', textAlign: 'left', fontWeight: 600, color: '#066006' }}>Recorded By</th>
           <th style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 600, color: '#066006' }}>Balance After</th>
+          <th style={{ padding: '6px 10px' }} />
         </tr>
       </thead>
       <tbody>
@@ -97,6 +98,9 @@ function PaymentHistoryTable({ payments }: { payments: PurchaseInvoicePayment[] 
             <td style={{ padding: '6px 10px', color: '#667066' }}>{p.recorded_by_name || '—'}</td>
             <td style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 600, color: Number(p.running_balance) > 0 ? '#b45309' : '#0b8f08' }}>
               {fmt(p.running_balance)}
+            </td>
+            <td style={{ padding: '4px 6px', textAlign: 'right' }}>
+              <DownloadDocButton iconOnly label="Download payment voucher" make={() => downloadSupplierPayment(p, po, invoiceNumber || '')} />
             </td>
           </tr>
         ))}
@@ -928,7 +932,7 @@ export function PurchasingPage() {
                   </button>
                   {showHistory && (
                     <div style={{ marginTop: '10px' }}>
-                      <PaymentHistoryTable payments={poInvoice.payments || []} />
+                      <PaymentHistoryTable payments={poInvoice.payments || []} po={selectedPO} invoiceNumber={poInvoice?.invoice_number || `PI-${selectedPO.po_number}`} />
                     </div>
                   )}
                 </div>

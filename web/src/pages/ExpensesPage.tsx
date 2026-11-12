@@ -7,6 +7,8 @@ import { apiGet, apiPost, apiPatch, apiDelete } from '../api/client';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { useServerList } from '../utils/serverList';
+import { DownloadDocButton } from '../components/DownloadDocButton';
+import { downloadExpenseVoucher } from '../utils/documents';
 import { ListToolbar } from '../components/ListToolbar';
 import { Pagination } from '../components/Pagination';
 
@@ -286,6 +288,7 @@ export function ExpensesPage() {
 
               {/* Actions */}
               <div style={{ display: 'flex', gap: '10px', flexShrink: 0 }}>
+                <DownloadDocButton iconOnly label={`Download expense voucher ${expense.title}`} make={() => downloadExpenseVoucher(expense)} />
                 {isOwed(expense) && <button className="btn btn-primary btn-sm pay-expense" onClick={() => { setPayFrom(''); setPayFor(expense); }}>Pay</button>}
                 <button onClick={() => openEdit(expense)} style={{ padding: '6px 8px', border: '1px solid #e5e7eb', borderRadius: '6px', background: '#fff', cursor: 'pointer', color: '#6b7280', display: 'flex', alignItems: 'center' }}><Edit2 size={13} /></button>
                 <button onClick={() => setDeleteConfirm(expense.id)} style={{ padding: '6px 8px', border: '1px solid #fee2e2', borderRadius: '6px', background: '#fff', cursor: 'pointer', color: '#dc2626', display: 'flex', alignItems: 'center' }}><Trash2 size={13} /></button>

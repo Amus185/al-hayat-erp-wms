@@ -100,6 +100,7 @@ export function downloadPurchaseInvoice(data: any) {
     ],
     footer: `Purchase invoice for goods received into stock. ${COMPANY_NAME}`,
     fileName: `Purchase-Invoice-${safeName(inv.invoice_number)}`,
+    noTerms: true,
   });
 }
 
@@ -176,5 +177,114 @@ export function downloadStatement(ledger: any) {
     },
     totals: [{ label: 'BALANCE DUE', value: money(balance), strong: true }],
     fileName: `Statement-${safeName(c.name || 'customer')}-${new Date().toISOString().slice(0, 10)}`,
+  });
+}
+
+/** Supplier payment voucher: one payment from the purchase invoice's payment history. */
+export function downloadSupplierPayment(p: any, po: any, invoiceNumber: string) {
+  const number = `PV-${String(p.id).slice(0, 8).toUpperCase()}`;
+  return downloadDocument({
+    title: 'PAYMENT VOUCHER',
+    numberLine: `Voucher # ${number}`,
+    issuer: [po?.branch_name || po?.warehouse_name],
+    left: [
+      ['Payment Date', dateTime(p.payment_date || p.created_at)],
+      ['Voucher Number', number],
+      ['Paid To', po?.supplier_name],
+      ['Supplier Phone', po?.supplier_phone],
+      ['Purchase Order', po?.po_number],
+      ['Supplier Invoice', invoiceNumber],
+    ],
+    right: [
+      ['Paid From', p.money_account_name || method(p.payment_method)],
+      ['Amount Paid', money(p.amount)],
+      ['Balance After', money(p.running_balance)],
+    ],
+    table: {
+      head: ['TYPE', 'DESCRIPTION', 'PAID FROM', 'AMOUNT'],
+      rows: [['PAYMENT', `Payment for invoice ${invoiceNumber}`, p.money_account_name || method(p.payment_method), money(p.amount)]],
+      align: ['left', 'left', 'left', 'right'],
+      widths: [26, 0, 36, 30],
+    },
+    totals: [{ label: 'TOTAL PAID', value: money(p.amount), strong: true }],
+    extra: (p.recorded_by_name || p.notes)
+      ? { title: 'Additional Details:', rows: [['Paid By', p.recorded_by_name], ['Notes', p.notes]].filter(([, v]) => v) as [string, string][] }
+      : undefined,
+    footer: `Payment to supplier. ${COMPANY_NAME}`,
+    fileName: `Payment-Voucher-${safeName(number)}`,
+    noTerms: true,
+  });
+}
+
+/** Expense voucher: one expense as listed in Expenses. */
+export function downloadExpenseVoucher(e: any) {
+  const number = e.reference ? String(e.reference) : `EXP-${String(e.id).slice(0, 8).toUpperCase()}`;
+  const owed = ['CREDIT', 'ON_ACCOUNT', 'UNPAID', 'PAYABLE'].includes(String(e.payment_method || '').toUpperCase());
+  const account = e.expense_account_code ? `${e.expense_account_code} ${e.expense_account_name || ''}`.trim() : e.category;
+  return downloadDocument({
+    title: 'EXPENSE VOUCHER',
+    numberLine: `Voucher # ${number}`,
+    issuer: [e.branch_name],
+    left: [
+      ['Expense Date', dateOnly(e.expense_date)],
+      ['Voucher Number', number],
+      ['Description', e.title],
+      ['Category', e.category],
+      ['Expense Account', account],
+      ...(e.class_name ? [['Class', e.class_name] as [string, string]] : []),
+    ],
+    right: [
+      ['Status', owed ? 'Not paid yet' : 'Paid'],
+      ['Paid From', owed ? 'Owed (Accounts Payable)' : (e.money_account_name || method(e.payment_method))],
+      ...(e.paid_at && !owed ? [['Paid On', dateOnly(e.paid_at)] as [string, string]] : []),
+      ['Amount', money(e.amount)],
+    ],
+    table: {
+      head: ['ACCOUNT', 'DESCRIPTION', 'AMOUNT'],
+      rows: [[account || '', e.title || '', money(e.amount)]],
+      align: ['left', 'left', 'right'],
+      widths: [50, 0, 30],
+    },
+    totals: [{ label: 'TOTAL', value: money(e.amount), strong: true }],
+    extra: (e.recorded_by_name || e.notes)
+      ? { title: 'Additional Details:', rows: [['Recorded By', e.recorded_by_name], ['Notes', e.notes]].filter(([, v]) => v) as [string, string][] }
+      : undefined,
+    footer: `Expense voucher. ${COMPANY_NAME}`,
+    fileName: `Expense-${safeName(number)}`,
+    noTerms: true,
+  });
+}
+
+/** Payslip: one employee's line of a payroll run. */
+export function downloadPayslip(run: any, l: any) {
+  const monthName = new Date(`${run.period}-01T00:00:00`).toLocaleDateString('en-GB', { month: 'long', year: 'numeric' });
+  const number = `PS-${run.period}-${String(l.employee_id || l.id).slice(0, 6).toUpperCase()}`;
+  const rows: string[][] = [['Basic salary', money(l.basic)]];
+  if (l.attendance_deduction > 0) rows.push([`Absent days (${l.absent_days})`, `-${money(l.attendance_deduction)}`]);
+  if (l.commission > 0) rows.push(['Sales commission', money(l.commission)]);
+  if (l.additions > 0) rows.push(['Bonus / additions', money(l.additions)]);
+  if (l.other_deductions > 0) rows.push(['Other deductions', `-${money(l.other_deductions)}`]);
+  if (l.advance_deduction > 0) rows.push(['Salary advance repaid', `-${money(l.advance_deduction)}`]);
+  return downloadDocument({
+    title: 'PAYSLIP',
+    numberLine: `Payslip # ${number}`,
+    issuer: [l.branch_name],
+    left: [
+      ['Employee', l.full_name],
+      ['Position', l.position],
+      ['Branch', l.branch_name || 'Company'],
+      ['Pay Period', monthName],
+    ],
+    right: [
+      ['Status', l.status === 'PAID' ? 'Paid' : run.status === 'DRAFT' ? 'Draft (not approved)' : 'Approved, not paid yet'],
+      ...(l.paid_at ? [['Paid On', dateOnly(l.paid_at)] as [string, string]] : []),
+      ['Net Pay', money(l.net)],
+    ],
+    table: { head: ['ITEM', 'AMOUNT'], rows, align: ['left', 'right'], widths: [0, 40] },
+    totals: [{ label: 'NET PAY', value: money(l.net), strong: true }],
+    extra: l.notes ? { title: 'Commission Details:', rows: [['', l.notes]] } : undefined,
+    footer: `Payslip for ${monthName}. ${COMPANY_NAME}`,
+    fileName: `Payslip-${safeName(l.full_name || 'employee')}-${run.period}`,
+    noTerms: true,
   });
 }
