@@ -272,6 +272,7 @@ employees.delete('/:id/advances/:advId', async (c) => {
   if (!(await findEmployee(c, id))) return c.json({ error: 'Employee not found' }, 404);
   const row = await db.prepare('SELECT * FROM employee_advances WHERE id = ? AND employee_id = ?').bind(advId, id).first() as any;
   if (!row) return c.json({ error: 'Entry not found' }, 404);
+  if (row.payroll_run_id) return c.json({ error: 'This was taken from a salary in a payroll run; it stays with that payroll' }, 409);
   if (row.kind === 'ADVANCE') {
     const bal = await db.prepare(`SELECT total_advances - total_repaid AS b FROM (${BALANCES}) x WHERE employee_id = ?`).bind(id).first() as any;
     if (round2(Number(bal?.b ?? 0) - Number(row.amount)) < 0) {

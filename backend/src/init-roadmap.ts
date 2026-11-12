@@ -133,6 +133,7 @@ export async function ensureRoadmap(pool: Pool) {
         updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
         UNIQUE (employee_id, work_date)
       );
+      ALTER TABLE employee_advances ADD COLUMN IF NOT EXISTS payroll_run_id TEXT;
       CREATE TABLE IF NOT EXISTS commission_rules (
         id TEXT PRIMARY KEY, employee_id TEXT REFERENCES employees(id) ON DELETE CASCADE,
         kind TEXT NOT NULL CHECK (kind IN ('PERCENT_REVENUE', 'FIXED_PER_SALE', 'PERCENT_PRODUCT', 'FIXED_PER_UNIT')),
