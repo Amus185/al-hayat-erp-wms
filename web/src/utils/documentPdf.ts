@@ -232,8 +232,38 @@ async function buildDocument(spec: DocumentSpec, layoutIn?: DocumentLayout) {
   return doc;
 }
 
+// While a Print button is running, the same document builders print instead of downloading.
+let printTarget: { win: Window | null } | null = null;
+
+/** Runs `make` (which calls downloadDocument) so that the document is printed instead of saved. */
+export async function printWith(make: () => Promise<unknown>): Promise<void> {
+  // Phones cannot print from a hidden frame: open the tab now, while the tap still counts (popup blockers).
+  const phone = typeof window !== 'undefined' && (window.matchMedia?.('(pointer: coarse)').matches || window.innerWidth < 760);
+  const win = phone ? window.open('', '_blank') : null;
+  if (win) win.document.write('<p style="font-family:sans-serif;padding:24px">Preparing the document…</p>');
+  printTarget = { win };
+  try { await make(); } catch (e) { win?.close(); throw e; } finally { printTarget = null; }
+}
+
+function printPdf(doc: any, win: Window | null) {
+  doc.autoPrint();
+  const url = URL.createObjectURL(doc.output('blob'));
+  if (win) { win.location.href = url; setTimeout(() => URL.revokeObjectURL(url), 120_000); return; }
+  const frame = document.createElement('iframe');
+  frame.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden';
+  frame.src = url;
+  frame.onload = () => {
+    try { frame.contentWindow?.focus(); frame.contentWindow?.print(); }
+    catch { window.open(url, '_blank'); }
+    setTimeout(() => { frame.remove(); URL.revokeObjectURL(url); }, 120_000);
+  };
+  document.body.appendChild(frame);
+}
+
 export async function downloadDocument(spec: DocumentSpec): Promise<void> {
+  const target = printTarget;
   const doc = await buildDocument(spec);
+  if (target) { printPdf(doc, target.win); return; }
   doc.save(spec.fileName.endsWith('.pdf') ? spec.fileName : `${spec.fileName}.pdf`);
 }
 
