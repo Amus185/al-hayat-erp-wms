@@ -139,7 +139,7 @@ export function registerFinanceExtra(app: any) {
     if (!cur) return c.json({ message: 'Currency not found.' }, 404);
     if (Number(cur.is_base) === 1) return c.json({ message: 'The base currency always has the rate 1.' }, 400);
     const rate = Number((await c.req.json().catch(() => ({}))).rate);
-    if (!Number.isFinite(rate) || rate <= 0) return c.json({ message: 'Enter how many units of this currency equal 1 US dollar (e.g. 8500).' }, 400);
+    if (!Number.isFinite(rate) || rate <= 0) return c.json({ message: 'Enter how many units of this currency equal 1 US dollar (e.g. 11800).' }, 400);
     const userId = c.get('jwtPayload').sub;
     await c.env.DB.batch([
       c.env.DB.prepare('UPDATE currencies SET rate = ?, updated_at = CURRENT_TIMESTAMP WHERE code = ?').bind(rate, code),

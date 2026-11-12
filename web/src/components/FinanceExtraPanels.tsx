@@ -142,7 +142,7 @@ export function CurrenciesPanel() {
   useEffect(() => { load(); }, [load]);
   const save = async (code: string) => {
     const rate = Number(rates[code]);
-    if (!(rate > 0)) { addToast('error', 'Enter how many units equal 1 US dollar, e.g. 8500.'); return; }
+    if (!(rate > 0)) { addToast('error', 'Enter how many units equal 1 US dollar, e.g. 11800.'); return; }
     try { await apiPut(`/accounting/currencies/${code}/rate`, { rate }); addToast('success', `1 USD = ${rate.toLocaleString()} ${code} from now on.`); setRates((p) => ({ ...p, [code]: '' })); load(); } catch (e: any) { addToast('error', e?.message); }
   };
   const hist: Column<any>[] = [
@@ -163,7 +163,7 @@ export function CurrenciesPanel() {
                 <div style={{ fontSize: 18, fontWeight: 800, margin: '4px 0' }}>{c.rate ? `1 USD = ${Number(c.rate).toLocaleString()} ${c.code}` : <span style={{ color: '#b45309' }}>No rate set yet</span>}</div>
                 {canManage && (
                   <div style={{ display: 'flex', gap: 8 }}>
-                    <input className="form-input" id={`rate-${c.code}`} type="number" min="0" step="any" placeholder="New rate, e.g. 8500" value={rates[c.code] || ''} onChange={(e) => setRates((p) => ({ ...p, [c.code]: e.target.value }))} />
+                    <input className="form-input" id={`rate-${c.code}`} type="number" min="0" step="any" placeholder="New rate, e.g. 11800" value={rates[c.code] || ''} onChange={(e) => setRates((p) => ({ ...p, [c.code]: e.target.value }))} />
                     <button className="btn btn--primary" id={`rate-save-${c.code}`} onClick={() => save(c.code)}>Set rate</button>
                   </div>
                 )}
