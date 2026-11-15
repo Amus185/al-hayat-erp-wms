@@ -51,8 +51,12 @@ before(async () => {
 
   // Expenses, employees, manufactures.
   const today = new Date().toISOString().slice(0, 10);
-  ids.eHQ = (await t.api('POST', '/expenses', { title: `HQ rent ${tag}`, amount: 50, category: 'RENT', expense_date: today, payment_method: 'CASH' }, hq.token)).body?.id;
-  ids.eCL = (await t.api('POST', '/expenses', { title: `CL rent ${tag}`, amount: 60, category: 'RENT', expense_date: today, payment_method: 'CASH' }, cl.token)).body?.id;
+  // Branch staff record expenses from the list the Owner gave their branch.
+  const rentType = (await t.api('POST', '/expenses/types', { name: `Rent ${tag}`, category: 'RENT' })).body.id;
+  await t.api('PUT', '/expenses/types/assignments', { branchId: HQ, typeIds: [rentType] });
+  await t.api('PUT', '/expenses/types/assignments', { branchId: CL, typeIds: [rentType] });
+  ids.eHQ = (await t.api('POST', '/expenses', { expenseTypeId: rentType, title: `HQ rent ${tag}`, amount: 50, expense_date: today, payment_method: 'CASH' }, hq.token)).body?.id;
+  ids.eCL = (await t.api('POST', '/expenses', { expenseTypeId: rentType, title: `CL rent ${tag}`, amount: 60, expense_date: today, payment_method: 'CASH' }, cl.token)).body?.id;
   ids.empHQ = (await t.api('POST', '/employees', { full_name: `HQ Person ${tag}`, branch_id: HQ })).body.id;
   ids.empCL = (await t.api('POST', '/employees', { full_name: `CL Person ${tag}`, branch_id: CL })).body.id;
   ids.jHQ = (await t.api('POST', '/manufacturing/jobs', { title: `HQ job ${tag}`, items: [{ name: 'Frame', price: 10 }] }, hq.token)).body.id;

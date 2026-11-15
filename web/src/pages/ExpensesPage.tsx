@@ -8,11 +8,15 @@ import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { useServerList } from '../utils/serverList';
 import { DownloadDocButton } from '../components/DownloadDocButton';
+import { ExpenseListPanel } from '../components/ExpenseListPanel';
 import { downloadExpenseVoucher } from '../utils/documents';
 import { ListToolbar } from '../components/ListToolbar';
 import { Pagination } from '../components/Pagination';
 
 interface Expense {
+  expense_type_id?: string | null;
+  expense_type_name?: string | null;
+  warehouse_id?: string | null;
   id: string;
   title: string;
   amount: number;
@@ -50,8 +54,9 @@ const CAT_COLORS: Record<string, string> = {
   'Office Supplies': '#0891b2', Insurance: '#65a30d', 'Taxes & Fees': '#9333ea', Other: '#6b7280',
 };
 
+const OTHER = '__other';
 const isOwed = (e: { payment_method: string }) => ['CREDIT', 'ON_ACCOUNT', 'UNPAID', 'PAYABLE'].includes(String(e.payment_method).toUpperCase());
-const emptyForm = { title: '', amount: '', category: 'Other', expense_date: new Date().toISOString().slice(0, 10), branch_id: '', payment_method: 'CASH', money_account_id: '', expense_account_id: '', class_id: '', owed: false, notes: '' };
+const emptyForm = { title: '', amount: '', category: 'Other', expense_date: new Date().toISOString().slice(0, 10), branch_id: '', payment_method: 'CASH', money_account_id: '', expense_account_id: '', class_id: '', expense_type_id: '', owed: false, notes: '' };
 
 export function ExpensesPage() {
   const { isAdmin, branchId } = useAuth();
@@ -77,6 +82,12 @@ export function ExpensesPage() {
   const [payFrom, setPayFrom] = useState('');
   const [paying, setPaying] = useState(false);
   useEffect(() => { apiGet<ExpenseAccount[]>('/expenses/accounts').then((a) => setExpAccounts(a || [])).catch(() => {}); }, []);
+  // The expenses this person may record (staff: their branch / warehouse list; Owner: the whole list).
+  const [types, setTypes] = useState<{ id: string; name: string; category: string; class_id: string | null }[] | null>(null);
+  const [manager, setManager] = useState(false);
+  const [listOpen, setListOpen] = useState(false);
+  const loadTypes = () => apiGet<any>('/expenses/types').then((d) => { setTypes(d.types || []); setManager(!!d.manager); }).catch(() => setTypes([]));
+  useEffect(() => { loadTypes(); }, []);
   const [classes, setClasses] = useState<{ id: string; name: string }[]>([]);
   const [classRequired, setClassRequired] = useState(false);
   useEffect(() => { apiGet<any>('/expenses/classes').then((d) => { setClasses(d.classes || []); setClassRequired(!!d.required); }).catch(() => {}); }, []);
@@ -115,28 +126,35 @@ export function ExpensesPage() {
     setForm({
       title: e.title, amount: String(e.amount), category: e.category,
       expense_date: e.expense_date, branch_id: e.branch_id || '',
-      payment_method: e.payment_method, money_account_id: e.money_account_id || '', expense_account_id: e.expense_account_id || '', class_id: (e as any).class_id || '', owed: isOwed(e), notes: e.notes || '',
+      payment_method: e.payment_method, money_account_id: e.money_account_id || '', expense_account_id: e.expense_account_id || '', class_id: (e as any).class_id || '', expense_type_id: (e as any).expense_type_id || (manager ? OTHER : ''), owed: isOwed(e), notes: e.notes || '',
     });
     setShowModal(true);
   };
 
+  const isOther = form.expense_type_id === OTHER;
+  const canSave = !!form.amount && (isOther ? !!form.title.trim() && !!form.category : !!form.expense_type_id);
   const handleSave = async () => {
-    if (!form.title.trim() || !form.amount || !form.category) return;
+    if (!canSave) { addToast('error', isOther ? 'Enter the description and category.' : 'Choose the expense.'); return; }
     setSaving(true);
     try {
+      const chosenType = isOther ? null : (types || []).find((t) => t.id === form.expense_type_id);
       const payload = {
         ...form,
+        // From the list: the title, category and account come with the expense.
+        expenseTypeId: chosenType ? chosenType.id : undefined,
+        title: chosenType ? (editExpense && editExpense.expense_type_id === chosenType.id ? form.title : chosenType.name) : form.title,
         amount: parseFloat(form.amount),
         branch_id: form.branch_id || undefined,
         notes: form.notes || undefined,
         // On an edit, the account is only sent when the person changed it (never moved by itself).
         moneyAccountId: form.owed || (editExpense && !accountChanged) ? undefined : (form.money_account_id || undefined),
-        expenseAccountId: form.expense_account_id || (editExpense ? '' : undefined),
-        classId: form.class_id || (editExpense ? '' : undefined),
+        expenseAccountId: isOther ? (form.expense_account_id || (editExpense ? '' : undefined)) : undefined,
+        classId: manager ? (form.class_id || (editExpense ? '' : undefined)) : undefined,
+        category: isOther ? form.category : undefined,
         // New expense not paid yet: it is owed (Accounts Payable) until "Pay" is used.
         payment_method: editExpense ? form.payment_method : (form.owed ? 'UNPAID' : form.payment_method),
       };
-      delete (payload as any).owed; delete (payload as any).expense_account_id; delete (payload as any).class_id;
+      delete (payload as any).owed; delete (payload as any).expense_account_id; delete (payload as any).class_id; delete (payload as any).expense_type_id;
       delete (payload as any).money_account_id;
       if (editExpense) {
         await apiPatch(`/expenses/${editExpense.id}`, payload);
@@ -172,7 +190,8 @@ export function ExpensesPage() {
           <h2 style={{ margin: 0, fontSize: '22px', fontWeight: 700, color: '#111827' }}>Expenses</h2>
           <p style={{ margin: '4px 0 0', color: '#6b7280', fontSize: '14px' }}>{list.total.toLocaleString()} records · ${totalAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} total</p>
         </div>
-        <button type="button" className="btn btn-secondary" id="bulk-expenses-open" onClick={() => setBulkOpen(true)} style={{ marginLeft: 'auto' }}>Enter several</button>
+        {manager && <button type="button" className={`btn ${listOpen ? 'btn-primary' : 'btn-secondary'}`} id="expense-list-open" onClick={() => setListOpen((v) => !v)} style={{ marginLeft: 'auto' }}>Expense list</button>}
+        <button type="button" className="btn btn-secondary" id="bulk-expenses-open" onClick={() => setBulkOpen(true)} style={manager ? undefined : { marginLeft: 'auto' }}>Enter several</button>
         <button
           onClick={openCreate}
           style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 18px', background: '#dc2626', color: '#fff', border: 'none', borderRadius: '8px', fontWeight: 600, fontSize: '14px', cursor: 'pointer' }}
@@ -180,6 +199,8 @@ export function ExpensesPage() {
           <Plus size={16} /> Record Expense
         </button>
       </div>
+
+      {manager && listOpen && <ExpenseListPanel categories={CATEGORIES} accounts={expAccounts} classes={classes} onChanged={loadTypes} />}
 
       {/* Stat cards */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '16px', marginBottom: '24px' }}>
@@ -302,7 +323,7 @@ export function ExpensesPage() {
           onPageChange={list.setPage} onPageSizeChange={list.setPageSize} pageSizeOptions={[25, 50, 100]} />
       )}
 
-      <BulkExpenses open={bulkOpen} onClose={() => setBulkOpen(false)} onSaved={load} accounts={expAccounts} branches={branches} fixedBranchId={isAdmin ? null : (branchId ?? null)} />
+      <BulkExpenses open={bulkOpen} onClose={() => setBulkOpen(false)} onSaved={load} types={types || []} branches={branches} fixedBranchId={manager ? null : (branchId ?? null)} chooseBranch={manager} />
       <Modal isOpen={!!payFor} onClose={() => !paying && setPayFor(null)} title={payFor ? `Pay: ${payFor.title}` : ''} width="sm"
         footer={<div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', width: '100%' }}>
           <button type="button" className="btn btn-secondary" onClick={() => setPayFor(null)} disabled={paying}>Cancel</button>
@@ -320,33 +341,46 @@ export function ExpensesPage() {
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
-              {/* Title */}
+              {/* The expense, from the list the Owner gave this branch / warehouse */}
               <div style={{ gridColumn: '1 / -1' }}>
-                <label style={{ display: 'block', fontSize: '13px', fontWeight: 500, color: '#374151', marginBottom: '4px' }}>Title <span style={{ color: '#dc2626' }}>*</span></label>
-                <input value={form.title} onChange={e => setForm(p => ({ ...p, title: e.target.value }))} placeholder="e.g. Monthly Office Rent" style={{ width: '100%', padding: '10px 12px', border: '1px solid #e5e7eb', borderRadius: '8px', fontSize: '14px', outline: 'none', boxSizing: 'border-box' }} />
+                <label style={{ display: 'block', fontSize: '13px', fontWeight: 500, color: '#374151', marginBottom: '4px' }}>Expense <span style={{ color: '#dc2626' }}>*</span></label>
+                {types && types.length === 0 && !manager ? (
+                  <p id="no-expense-list" style={{ margin: 0, fontSize: 13, color: '#b45309' }}>No expenses are set for your {branchId ? 'branch' : 'warehouse'} yet. Ask the Owner or the accountant to add them in Expenses → Expense list.</p>
+                ) : (
+                  <select id="expenseType" className="form-select" value={form.expense_type_id} onChange={e => { const t = (types || []).find((x) => x.id === e.target.value); setForm(p => ({ ...p, expense_type_id: e.target.value, category: t ? t.category : p.category, class_id: t ? (t.class_id || '') : p.class_id })); }}>
+                    <option value="">— choose —</option>
+                    {(types || []).map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                    {manager && <option value={OTHER}>Other (not on the list)…</option>}
+                  </select>
+                )}
+                {form.expense_type_id && !isOther && <span style={{ fontSize: 12, color: '#6b7280' }}>Category: {form.category}</span>}
               </div>
+              {isOther && (<>
+                <div style={{ gridColumn: '1 / -1' }}>
+                  <label style={{ display: 'block', fontSize: '13px', fontWeight: 500, color: '#374151', marginBottom: '4px' }}>Description <span style={{ color: '#dc2626' }}>*</span></label>
+                  <input className="form-input" value={form.title} onChange={e => setForm(p => ({ ...p, title: e.target.value }))} placeholder="e.g. One-off repair" />
+                </div>
+                <div>
+                  <label style={{ display: 'block', fontSize: '13px', fontWeight: 500, color: '#374151', marginBottom: '4px' }}>Category <span style={{ color: '#dc2626' }}>*</span></label>
+                  <select className="form-select" value={form.category} onChange={e => setForm(p => ({ ...p, category: e.target.value }))}>
+                    {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label style={{ display: 'block', fontSize: '13px', fontWeight: 500, color: '#374151', marginBottom: '4px' }}>Expense account</label>
+                  <select id="expenseAccount" className="form-select" value={form.expense_account_id} onChange={e => setForm(p => ({ ...p, expense_account_id: e.target.value }))}>
+                    <option value="">Automatic (from the category)</option>
+                    {expAccounts.map(a => <option key={a.id} value={a.id}>{a.code} {a.name}</option>)}
+                  </select>
+                </div>
+              </>)}
               {/* Amount */}
               <div>
                 <label style={{ display: 'block', fontSize: '13px', fontWeight: 500, color: '#374151', marginBottom: '4px' }}>Amount ($) <span style={{ color: '#dc2626' }}>*</span></label>
-                <input type="number" min="0" step="0.01" value={form.amount} onChange={e => setForm(p => ({ ...p, amount: e.target.value }))} placeholder="0.00" style={{ width: '100%', padding: '10px 12px', border: '1px solid #e5e7eb', borderRadius: '8px', fontSize: '14px', outline: 'none', boxSizing: 'border-box' }} />
+                <input type="number" min="0" step="0.01" id="expenseAmount" className="form-input" value={form.amount} onChange={e => setForm(p => ({ ...p, amount: e.target.value }))} placeholder="0.00" />
               </div>
-              {/* Category */}
-              <div>
-                <label style={{ display: 'block', fontSize: '13px', fontWeight: 500, color: '#374151', marginBottom: '4px' }}>Category <span style={{ color: '#dc2626' }}>*</span></label>
-                <select value={form.category} onChange={e => setForm(p => ({ ...p, category: e.target.value }))} style={{ width: '100%', padding: '10px 12px', border: '1px solid #e5e7eb', borderRadius: '8px', fontSize: '14px', background: '#fff', boxSizing: 'border-box' }}>
-                  {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
-                </select>
-              </div>
-              {/* Expense account from the chart of accounts */}
-              <div style={{ gridColumn: '1 / -1' }}>
-                <label style={{ display: 'block', fontSize: '13px', fontWeight: 500, color: '#374151', marginBottom: '4px' }}>Expense account</label>
-                <select id="expenseAccount" className="form-select" value={form.expense_account_id} onChange={e => setForm(p => ({ ...p, expense_account_id: e.target.value }))}>
-                  <option value="">Automatic (from the category)</option>
-                  {expAccounts.map(a => <option key={a.id} value={a.id}>{a.code} {a.name}</option>)}
-                </select>
-              </div>
-              {classes.length > 0 && (
-                <div style={{ gridColumn: '1 / -1' }}>
+              {manager && classes.length > 0 && (
+                <div>
                   <label style={{ display: 'block', fontSize: '13px', fontWeight: 500, color: '#374151', marginBottom: '4px' }}>Class{classRequired ? ' *' : ''}</label>
                   <select id="expenseClass" className="form-select" value={form.class_id} onChange={e => setForm(p => ({ ...p, class_id: e.target.value }))}>
                     <option value="">{classRequired ? '— choose —' : 'No class'}</option>
@@ -375,7 +409,7 @@ export function ExpensesPage() {
                   branchId={form.branch_id || null} amount={Number(form.amount) || 0} />
               </div>
               {/* Branch */}
-              {isAdmin && branches.length > 0 && (
+              {manager && branches.length > 0 && (
                 <div>
                   <label style={{ display: 'block', fontSize: '13px', fontWeight: 500, color: '#374151', marginBottom: '4px' }}>Branch</label>
                   <select value={form.branch_id} onChange={e => setForm(p => ({ ...p, branch_id: e.target.value }))} style={{ width: '100%', padding: '10px 12px', border: '1px solid #e5e7eb', borderRadius: '8px', fontSize: '14px', background: '#fff', boxSizing: 'border-box' }}>
@@ -393,7 +427,7 @@ export function ExpensesPage() {
 
             <div style={{ display: 'flex', gap: '10px', marginTop: '24px', justifyContent: 'flex-end' }}>
               <button onClick={() => setShowModal(false)} style={{ padding: '10px 18px', border: '1px solid #e5e7eb', borderRadius: '8px', background: '#fff', cursor: 'pointer', fontWeight: 500 }}>Cancel</button>
-              <button onClick={handleSave} disabled={saving || !form.title.trim() || !form.amount || !form.category} style={{ padding: '10px 20px', background: '#dc2626', color: '#fff', border: 'none', borderRadius: '8px', fontWeight: 600, cursor: 'pointer', opacity: saving || !form.title.trim() || !form.amount ? 0.6 : 1 }}>
+              <button id="expenseSave" onClick={handleSave} disabled={saving || !canSave} style={{ padding: '10px 20px', background: '#dc2626', color: '#fff', border: 'none', borderRadius: '8px', fontWeight: 600, cursor: 'pointer', opacity: saving || !canSave ? 0.6 : 1 }}>
                 {saving ? 'Saving...' : editExpense ? 'Save Changes' : 'Record Expense'}
               </button>
             </div>

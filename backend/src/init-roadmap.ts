@@ -59,6 +59,24 @@ export async function ensureRoadmap(pool: Pool) {
       );
       CREATE INDEX IF NOT EXISTS idx_bank_statement_account ON bank_statement_lines (money_account_id, line_date);
 
+      -- Expense list: the Owner / accountant keep the company's list of expenses and choose
+      -- which ones each branch or warehouse may record.
+      CREATE TABLE IF NOT EXISTS expense_types (
+        id TEXT PRIMARY KEY, name TEXT NOT NULL, category TEXT NOT NULL,
+        expense_account_id TEXT REFERENCES chart_of_accounts(id), class_id TEXT REFERENCES accounting_classes(id),
+        is_active INTEGER NOT NULL DEFAULT 1, created_by TEXT,
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS expense_types_name_uq ON expense_types (lower(name));
+      CREATE TABLE IF NOT EXISTS expense_type_locations (
+        id TEXT PRIMARY KEY, expense_type_id TEXT NOT NULL REFERENCES expense_types(id) ON DELETE CASCADE,
+        branch_id TEXT REFERENCES branches(id) ON DELETE CASCADE, warehouse_id TEXT REFERENCES warehouses(id) ON DELETE CASCADE,
+        CHECK ((branch_id IS NULL) <> (warehouse_id IS NULL))
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS expense_type_locations_uq ON expense_type_locations (expense_type_id, COALESCE(branch_id, ''), COALESCE(warehouse_id, ''));
+      ALTER TABLE expenses ADD COLUMN IF NOT EXISTS expense_type_id TEXT REFERENCES expense_types(id);
+      ALTER TABLE expenses ADD COLUMN IF NOT EXISTS warehouse_id TEXT REFERENCES warehouses(id);
+
       -- 9. Selling price levels (Retail = the product's own price; others are set per product)
       CREATE TABLE IF NOT EXISTS selling_price_levels (
         id TEXT PRIMARY KEY, name TEXT NOT NULL, sort_order INTEGER NOT NULL DEFAULT 0,
